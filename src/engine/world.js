@@ -413,6 +413,9 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   // ---------- trees ----------
   const treePts = [];
   function blocked(x, z) {
+    // onRoad covers ALL roads — without it a tree offset from one street can
+    // land in the middle of a crossing street
+    if (onRoad(x, z)) return true;
     for (const bb of bldBoxes) if (x > bb[0] - 1.2 && x < bb[1] + 1.2 && z > bb[2] - 1.2 && z < bb[3] + 1.2) return true;
     for (const k of ['pen', 'coop', 'shed', 'barn'])
       if (Math.hypot(x - SREC[k][0], z - SREC[k][1]) < (k === 'pen' ? 7 : 4.5)) return true;
