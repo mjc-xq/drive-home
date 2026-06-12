@@ -15,6 +15,10 @@ export function toolAfterScoop(lvl, total) {
   return lvl;
 }
 
+// Two instanced pools of POOP_MAX; spawning stops 2 short of the combined cap.
+export const POOP_MAX = 34;
+export const POOP_ACTIVE_CAP = POOP_MAX * 2 - 2;
+
 const critterMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 });
 
 function buildPig() {
@@ -101,7 +105,6 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
   }
 
   // --- poop: two instanced pools because r128 per-instance color is unreliable ---
-  const POOP_MAX = 34;
   const poopGeoB = new THREE.IcosahedronGeometry(0.26, 0); poopGeoB.scale(1, 0.62, 1);
   const poopBrown = new THREE.InstancedMesh(poopGeoB, new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 1 }), POOP_MAX);
   const poopPale = new THREE.InstancedMesh(poopGeoB, new THREE.MeshStandardMaterial({ color: 0xb9bda4, roughness: 1 }), POOP_MAX);
@@ -113,7 +116,7 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
   const poopM = new THREE.Matrix4();
 
   function spawnPoop(a) {
-    if (POOPS.length >= POOP_MAX * 2 - 2) return;
+    if (POOPS.length >= POOP_ACTIVE_CAP) return;
     const pale = a.kind === 'duck';
     const mesh = pale ? poopPale : poopBrown;
     let idx = -1;

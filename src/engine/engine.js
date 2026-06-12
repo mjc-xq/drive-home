@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp } from './coords.js';
 import { buildWorld } from './world.js';
-import { createAnimals, createCharacter, TOOLS, toolAfterScoop } from './animals.js';
+import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
 import { createCar, loadRealCar, CARSPECS } from './car.js';
+import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
@@ -16,9 +17,15 @@ export function createEngine({ canvas, ui, emit }) {
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const toast = (html, ms) => emit('toast', { html, ms: ms || 1800 });
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
+  // ?lite : no shadows + 1x pixel ratio — for older phones and for headless
+  //         verification, where software WebGL grinds at 1-5 fps otherwise.
+  // ?nocar: skip the GLB swap (fast test loop; procedural car stays).
+  const flags = new URLSearchParams(location.search);
+  const LITE = flags.has('lite');
+
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xc8d6da);
@@ -44,10 +51,13 @@ export function createEngine({ canvas, ui, emit }) {
   const animals = createAnimals(scene, { terrainAt, SREC, onPoopChange: () => { scoopHudDirty = true; } });
   const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
   const CHAR = createCharacter(scene, SREC);
-  const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / 24)));
+  const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
 
   const car = createCar(scene);
-  loadRealCar(car, carGlbUrl, () => toast('Using fallback car model'));
+  if (!flags.has('nocar')) {
+    installDracoDecoder();
+    loadRealCar(car, carGlbUrl, () => toast('Using fallback car model'));
+  }
   let showT = 0;
 
   function showCarCard() {
