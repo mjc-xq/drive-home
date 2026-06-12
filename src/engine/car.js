@@ -1,0 +1,149 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DracoShim } from './draco-shim.js';
+
+// Maps the GLB's +Z length onto nose-forward +X. If a future model swap makes
+// the chase cam show headlights instead of taillights, flip this.
+export const CARYAW = -Math.PI / 2;
+
+export const CARSPECS = [
+  { name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', color: 0xe02818, css: '#e02818' },
+  { name: 'SV-10 GIALLO', spec: '5.2L V10 · 640 HP · AWD', color: 0xf2c500, css: '#f2c500' }
+];
+
+// Procedural supercar — stays in the scene as the fallback if the GLB fails.
+export function createCar(scene) {
+  const car = { x: 0, z: 0, yaw: 0, speed: 0, steer: 0, group: new THREE.Group(), wheels: [], fronts: [], bodyMat: null, red: true };
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe02818, metalness: .45, roughness: .26 });
+  car.bodyMat = bodyMat;
+  const carbon = new THREE.MeshStandardMaterial({ color: 0x141518, metalness: .3, roughness: .5 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x0c0e12, metalness: .5, roughness: .08 });
+  const s = new THREE.Shape();
+  s.moveTo(2.32, 0.10);
+  s.quadraticCurveTo(2.44, 0.26, 2.2, 0.44);
+  s.quadraticCurveTo(1.3, 0.64, 0.0, 0.74);
+  s.quadraticCurveTo(-1.3, 0.83, -2.16, 0.84);
+  s.quadraticCurveTo(-2.38, 0.62, -2.3, 0.34);
+  s.lineTo(-2.12, 0.16); s.lineTo(1.95, 0.12); s.closePath();
+  const hull = new THREE.ExtrudeGeometry(s, { depth: 1.84, curveSegments: 10, bevelEnabled: true, bevelThickness: 0.09, bevelSize: 0.09, bevelSegments: 3 });
+  hull.translate(0, 0, -0.92);
+  const hullM = new THREE.Mesh(hull, bodyMat); hullM.castShadow = true; car.group.add(hullM);
+  const c = new THREE.Shape();
+  c.moveTo(0.95, 0.60);
+  c.quadraticCurveTo(0.45, 0.98, 0.1, 1.06);
+  c.quadraticCurveTo(-0.3, 1.11, -0.6, 1.08);
+  c.quadraticCurveTo(-1.0, 0.96, -1.18, 0.72);
+  c.closePath();
+  const can = new THREE.ExtrudeGeometry(c, { depth: 1.38, curveSegments: 8, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 2 });
+  can.translate(0, 0, -0.69);
+  const canM = new THREE.Mesh(can, glass); canM.castShadow = true; car.group.add(canM);
+  for (let i = 0; i < 3; i++) {
+    const lv = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.035, 1.2), carbon);
+    lv.position.set(-1.32 - i * 0.24, 0.85, 0); car.group.add(lv);
+  }
+  for (const [fx, fz] of [[1.42, 0.96], [1.42, -0.96], [-1.38, 1.0], [-1.38, -1.0]]) {
+    const fl = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.3, 0.18), bodyMat);
+    fl.position.set(fx, 0.52, fz); car.group.add(fl);
+  }
+  const sp = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.05, 2.02), carbon);
+  sp.position.set(2.05, 0.10, 0); car.group.add(sp);
+  const df = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.16, 1.78), carbon);
+  df.position.set(-2.06, 0.18, 0); car.group.add(df);
+  for (const z of [-0.5, 0, 0.5]) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.22, 0.03), carbon);
+    fin.position.set(-2.06, 0.18, z); car.group.add(fin);
+  }
+  for (const sgn of [1, -1]) {
+    const rk = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.14, 0.1), carbon);
+    rk.position.set(0, 0.16, 1.0 * sgn); car.group.add(rk);
+    const intake = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.34, 0.1), carbon);
+    intake.rotation.y = 0.18 * sgn;
+    intake.position.set(-0.78, 0.52, 0.99 * sgn); car.group.add(intake);
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.16),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdde6f2, emissiveIntensity: .9 }));
+    hl.rotation.y = -0.5 * sgn; hl.position.set(2.16, 0.5, 0.6 * sgn); car.group.add(hl);
+    const mr = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.18), bodyMat);
+    mr.position.set(0.78, 0.78, 1.02 * sgn); car.group.add(mr);
+    const ex = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.16, 8), carbon);
+    ex.rotation.z = Math.PI / 2; ex.position.set(-2.3, 0.3, 0.3 * sgn); car.group.add(ex);
+  }
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.07, 1.9),
+    new THREE.MeshStandardMaterial({ color: 0x3a0000, emissive: 0xc11a0a, emissiveIntensity: 0.75 }));
+  tl.position.set(-2.31, 0.64, 0); car.group.add(tl);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 1.96), bodyMat);
+  wing.position.set(-2.0, 1.06, 0); car.group.add(wing);
+  for (const sgn of [1, -1]) {
+    const ep = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, 0.04), carbon);
+    ep.position.set(-2.0, 0.93, 0.94 * sgn); car.group.add(ep);
+  }
+  const tireG = new THREE.CylinderGeometry(0.37, 0.37, 0.32, 22); tireG.rotateX(Math.PI / 2);
+  const ringG = new THREE.CylinderGeometry(0.22, 0.22, 0.33, 12); ringG.rotateX(Math.PI / 2);
+  const spokeG = new THREE.BoxGeometry(0.07, 0.36, 0.34);
+  const tireM = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: .85 });
+  const rimM = new THREE.MeshStandardMaterial({ color: 0xc6cbd3, metalness: .9, roughness: .25 });
+  for (const [wx, wz, front] of [[1.42, 0.86, 1], [1.42, -0.86, 1], [-1.38, 0.9, 0], [-1.38, -0.9, 0]]) {
+    const grp = new THREE.Group(); grp.position.set(wx, 0.37, wz);
+    const spinner = new THREE.Group();
+    spinner.add(new THREE.Mesh(tireG, tireM));
+    spinner.add(new THREE.Mesh(ringG, rimM));
+    for (let i = 0; i < 5; i++) {
+      const sk = new THREE.Mesh(spokeG, rimM);
+      sk.rotation.z = i * Math.PI * 2 / 5; spinner.add(sk);
+    }
+    spinner.children[0].castShadow = true;
+    grp.add(spinner);
+    car.group.add(grp); car.wheels.push(spinner);
+    if (front) car.fronts.push(grp);
+  }
+  car.group.visible = false;
+  scene.add(car.group);
+  return car;
+}
+
+// Swap in the real Ferrari 458 (Draco GLB decoded on the main thread by
+// DracoShim). On ANY failure — load error, decode error, or hang — the
+// procedural car stays and onFallback fires exactly once so the UI can toast.
+export function loadRealCar(car, url, onFallback) {
+  let settled = false;
+  const fail = err => {
+    if (settled) return;
+    settled = true;
+    console.warn('car model failed, using fallback', err);
+    if (onFallback) onFallback(err);
+  };
+  // r128's GLTFLoader never rejects when the draco callback doesn't fire, so a
+  // decode failure would otherwise hang silently with no fallback toast.
+  const timer = setTimeout(() => fail(new Error('car model load timed out')), 20000);
+  try {
+    DracoShim.onError = e => { clearTimeout(timer); fail(e); };
+    const gl = new GLTFLoader();
+    gl.setDRACOLoader(DracoShim);
+    gl.load(url, g => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const m = g.scene;
+      m.traverse(o => { if (o.isMesh) o.castShadow = true; });
+      const body = m.getObjectByName('body');
+      if (body && body.material) {
+        car.paint = body.material;
+        car.paint.color.setHex(car.red ? CARSPECS[0].color : CARSPECS[1].color);
+        car.paint.metalness = 0.6; car.paint.roughness = 0.32;
+      }
+      const gls = m.getObjectByName('glass');
+      if (gls && gls.material) {
+        gls.material.color.setHex(0x14181d);
+        gls.material.transparent = true; gls.material.opacity = 0.94;
+        gls.material.metalness = 0.6; gls.material.roughness = 0.1;
+      }
+      car.wheelsGLB = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']
+        .map(n => m.getObjectByName(n)).filter(Boolean);
+      const inner = new THREE.Group();
+      inner.rotation.y = CARYAW;
+      inner.add(m);
+      for (const ch of [...car.group.children]) ch.visible = false;
+      car.group.add(inner);
+      car.glb = true;
+    }, undefined, err => { clearTimeout(timer); fail(err); });
+  } catch (e) { clearTimeout(timer); fail(e); }
+}
