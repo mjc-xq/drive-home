@@ -306,7 +306,7 @@ export function createEngine({ canvas, ui, emit }) {
     setInside(false);
     for (const s of labelSprites) s.visible = false;
     CHAR.group.visible = true;
-    CHAR.x = SREC.shed[0] - 2.5; CHAR.z = SREC.shed[1] - 2.5;
+    CHAR.x = SREC.shed[0] - 2.5; CHAR.z = SREC.shed[1] + 2.5; // SW of shed, clear of the house box
     CHAR.yaw = Math.atan2(SREC.pen[0] - CHAR.x, SREC.pen[1] - CHAR.z);
     camYawS = CHAR.yaw;
     audio.ensure();

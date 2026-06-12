@@ -379,11 +379,15 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       g.translate(cx, y0, cz);
       sanct.push({ g, color: new THREE.Color(color) });
     };
-    // shed (iguana) — closest to the house
+    // shed (iguana) — tucked against the house's south corner
     {
       const [x, z] = SREC.shed, y = terrainAt(x, z) - 0.15;
-      addBox(x, z, GRID_ANG, 2.6, 2.0, 2.2, y, 0x8e8b82);
-      gPrism(x, z, GRID_ANG, 2.6, 2.2, y + 2.0, 0.55, 0.25, 0x6f6c64);
+      addBox(x, z, GRID_ANG, 2.6, 2.0, 2.2, y, 0x8a6f54);
+      gPrism(x, z, GRID_ANG, 2.6, 2.2, y + 2.0, 0.55, 0.25, 0x4a5d3f);
+      // door + basking step on the yard-facing side (away from the house)
+      const sn = [Math.sin(GRID_ANG), Math.cos(GRID_ANG)];
+      addBox(x + sn[0] * 1.13, z + sn[1] * 1.13, GRID_ANG, 0.9, 1.5, 0.06, y + 0.05, 0xf0ece2);
+      addBox(x + sn[0] * 1.55, z + sn[1] * 1.55, GRID_ANG, 1.0, 0.1, 0.7, y, 0x9a7c5a);
       bldBoxes.push([x - 1.8, x + 1.8, z - 1.6, z + 1.6, y + 3.2]);
     }
     // duck structure — middle yard, blue-gray roof
