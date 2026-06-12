@@ -328,8 +328,10 @@ export function createEngine({ canvas, ui, emit }) {
     let jx = clamp(inp2.jx + inp2.kx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     const mag = Math.min(1, Math.hypot(jx, jy));
     if (mag > 0.08) {
+      // camera sits at CHAR - f*dist looking along +f, so screen-right is
+      // (-cos, +sin); the old (+cos, -sin) strafe was mirrored left/right
       const fX = Math.sin(camYawS), fZ = Math.cos(camYawS);
-      const rX = Math.cos(camYawS), rZ = -Math.sin(camYawS);
+      const rX = -Math.cos(camYawS), rZ = Math.sin(camYawS);
       let mx = rX * jx - fX * jy, mz = rZ * jx - fZ * jy;
       const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
       CHAR.yaw = Math.atan2(mx, mz);
