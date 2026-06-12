@@ -46,6 +46,3 @@ if (typeof exports === 'object' && typeof module === 'object')
     else if (typeof exports === 'object')
       exports["DracoDecoderModule"] = DracoDecoderModule;
     
-// ESM wrapper appended at build-bootstrap time (file is otherwise the verbatim three.js r128 asm.js decoder)
-export { DracoDecoderModule };
-export default DracoDecoderModule;

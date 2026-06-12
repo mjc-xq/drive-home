@@ -1,24 +1,35 @@
 import * as THREE from 'three';
-import DracoDecoderModule from '../vendor/draco_decoder.js';
 
 // Main-thread Draco decode, mirroring the official r128 worker logic.
 // The Claude-app artifact webview blocks Workers, WASM and eval, so the stock
 // DRACOLoader silently fails there — this shim is the reason the Ferrari
 // loads at all. Keep it worker-free.
 //
-// r128's GLTFLoader passes no error callback to decodeDracoFile, so failures
-// are surfaced through the assignable `onError` hook instead.
+// globalThis.DracoDecoderModule must be installed first (see draco-install.js
+// in the browser; the Node verify script installs it via vm). r128's
+// GLTFLoader passes no error callback to decodeDracoFile, so failures are
+// surfaced through the assignable `onError` hook instead.
 export const DracoShim = {
   _modP: null,
   onError: null,
   _mod() {
-    if (!this._modP) this._modP = new Promise(res => { DracoDecoderModule({ onModuleLoaded: m => res(m) }); });
+    if (!this._modP) this._modP = new Promise((res, rej) => {
+      if (typeof globalThis.DracoDecoderModule !== 'function') {
+        rej(new Error('DracoDecoderModule is not installed'));
+        return;
+      }
+      // The Emscripten module is itself thenable (its then() re-invokes the
+      // callback with the module), so resolving with it bare sends the promise
+      // machinery into an infinite PromiseResolveThenableJob loop — the tab
+      // "crash". Wrap it, like the official DRACOLoader's resolve({draco}).
+      globalThis.DracoDecoderModule({ onModuleLoaded: m => res({ draco: m }) });
+    });
     return this._modP;
   },
   preload() { this._mod(); return this; },
   dispose() { return this; },
   decodeDracoFile(buffer, callback, attributeIDs, attributeTypes) {
-    this._mod().then(draco => {
+    this._mod().then(({ draco }) => {
       const TYPES = { Float32Array, Int8Array, Int16Array, Int32Array, Uint8Array, Uint16Array, Uint32Array };
       const dt = AT => AT === Float32Array ? draco.DT_FLOAT32 : AT === Int8Array ? draco.DT_INT8 :
         AT === Int16Array ? draco.DT_INT16 : AT === Int32Array ? draco.DT_INT32 :
