@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { merge, critterBuilder, makeRand } from './geom.js';
 import { clamp } from './coords.js';
+import { loadPigPrototype, loadPoopGeometry } from './models.js';
+import pigUrl from '../assets/pig.glb';
+import poopUrl from '../assets/poop.glb';
+
+// Facing correction for the GLB pig (radians). Tune if the model drives
+// sideways/backwards relative to its motion.
+const PIG_YAW = Math.PI / 2;
 
 export const TOOLS = [
   { name: '🥄 Trowel', r: 1.15, cap: 6 },
@@ -74,7 +81,7 @@ function buildIguana() {
   return b.build();
 }
 
-export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
+export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopChange }) {
   const rand = makeRand(8341);
   const pigGeo = buildPig(), duckGeo = buildDuck(), iguanaGeo = buildIguana();
   const ANIMALS = [];
@@ -84,7 +91,7 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
     m.castShadow = true; m.scale.set(scale, scale, scale);
     scene.add(m);
     const a = {
-      kind, mesh: m, hx, hz, x: hx, z: hz, tx: hx, tz: hz, yaw: rand() * 6.28,
+      kind, mesh: m, scale, hx, hz, x: hx, z: hz, tx: hx, tz: hz, yaw: rand() * 6.28,
       wanderR, speed, wait: rand() * 3, bob: rand() * 6.28, poopT: 5 + rand() * 10, r: 0.55 * scale
     };
     ANIMALS.push(a);
@@ -105,6 +112,21 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
     a.hx = SREC.shed[0] - 1.6; a.hz = SREC.shed[1] - 1.4; a.poopT = 20 + rand() * 15;
   }
 
+  // Swap the procedural pigs for the black GLB pig once it loads (fallback
+  // stays on failure). Each pig keeps its own scale; the inner mesh carries the
+  // model-facing correction so the group can still steer by yaw.
+  loadPigPrototype(pigUrl, PIG_YAW, proto => {
+    for (const a of ANIMALS) {
+      if (a.kind !== 'pig') continue;
+      scene.remove(a.mesh);
+      const grp = new THREE.Group();
+      grp.add(proto.clone());
+      grp.scale.setScalar(a.scale);
+      scene.add(grp);
+      a.mesh = grp;
+    }
+  });
+
   // --- poop: two instanced pools because r128 per-instance color is unreliable ---
   const poopGeoB = new THREE.IcosahedronGeometry(0.26, 0); poopGeoB.scale(1, 0.62, 1);
   const poopBrown = new THREE.InstancedMesh(poopGeoB, new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 1 }), POOP_MAX);
@@ -113,6 +135,11 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
   for (let i = 0; i < POOP_MAX; i++) { poopBrown.setMatrixAt(i, ZERO); poopPale.setMatrixAt(i, ZERO); }
   poopBrown.instanceMatrix.needsUpdate = poopPale.instanceMatrix.needsUpdate = true;
   scene.add(poopBrown, poopPale);
+  // Swap both pools to the emoji-poop GLB once it loads (existing per-instance
+  // transforms are preserved). The merged geometry carries its own face colors.
+  loadPoopGeometry(poopUrl, (geo, mat) => {
+    for (const m of [poopBrown, poopPale]) { m.geometry = geo; m.material = mat; }
+  });
   const POOPS = [];
   const poopM = new THREE.Matrix4();
 
@@ -164,6 +191,32 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
         a.poopT = a.kind === 'pig' ? 9 + rand() * 11 : a.kind === 'duck' ? 8 + rand() * 10 : 26 + rand() * 18;
       }
     }
+    resolveCritters();
+  }
+
+  // Keep the (now chunky) pigs out of their barn and from piling into each
+  // other. Pigs push off any structure box; every critter separates from peers.
+  function resolveCritters() {
+    for (const a of ANIMALS) {
+      if (a.kind !== 'pig') continue;
+      for (const bb of bldBoxes) {
+        if (a.x > bb[0] - a.r && a.x < bb[1] + a.r && a.z > bb[2] - a.r && a.z < bb[3] + a.r) {
+          const pl = [a.x - (bb[0] - a.r), (bb[1] + a.r) - a.x, a.z - (bb[2] - a.r), (bb[3] + a.r) - a.z];
+          const m = Math.min(...pl);
+          if (m === pl[0]) a.x = bb[0] - a.r; else if (m === pl[1]) a.x = bb[1] + a.r;
+          else if (m === pl[2]) a.z = bb[2] - a.r; else a.z = bb[3] + a.r;
+        }
+      }
+    }
+    for (let i = 0; i < ANIMALS.length; i++) for (let j = i + 1; j < ANIMALS.length; j++) {
+      const a = ANIMALS[i], b = ANIMALS[j];
+      const dx = b.x - a.x, dz = b.z - a.z, d2 = dx * dx + dz * dz, rr = a.r + b.r;
+      if (d2 < rr * rr && d2 > 1e-6) {
+        const d = Math.sqrt(d2), push = (rr - d) / 2, ux = dx / d, uz = dz / d;
+        a.x -= ux * push; a.z -= uz * push; b.x += ux * push; b.z += uz * push;
+      }
+    }
+    for (const a of ANIMALS) { a.mesh.position.x = a.x; a.mesh.position.z = a.z; }
   }
 
   // Seed ~7 droppings so the yard starts dirty.

@@ -73,7 +73,7 @@ export function createEngine({ canvas, ui, emit }) {
   const audio = createAudio();
 
   let scoopHudDirty = false;
-  const animals = createAnimals(scene, { terrainAt, SREC, onPoopChange: () => { scoopHudDirty = true; } });
+  const animals = createAnimals(scene, { terrainAt, SREC, bldBoxes, onPoopChange: () => { scoopHudDirty = true; } });
   const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
   const CHAR = createCharacter(scene, SREC);
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
