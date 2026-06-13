@@ -100,8 +100,9 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
     a.hx = SREC.coop[0]; a.hz = SREC.coop[1] + 1.5;
   }
   {
-    const a = spawnAnimal('iguana', iguanaGeo, SREC.shed[0] + 1.6, SREC.shed[1] + 1.4, 1.5, 0.22, 1);
-    a.hx = SREC.shed[0] + 1.6; a.hz = SREC.shed[1] + 1.4; a.poopT = 20 + rand() * 15;
+    // bask in the open yard on the shed's door side (away from the house)
+    const a = spawnAnimal('iguana', iguanaGeo, SREC.shed[0] - 1.6, SREC.shed[1] - 1.4, 1.5, 0.22, 1);
+    a.hx = SREC.shed[0] - 1.6; a.hz = SREC.shed[1] - 1.4; a.poopT = 20 + rand() * 15;
   }
 
   // --- poop: two instanced pools because r128 per-instance color is unreliable ---
@@ -174,9 +175,8 @@ export function createAnimals(scene, { terrainAt, SREC, onPoopChange }) {
 
 // The walking keeper (poppy cap) with the three swappable scooper tools.
 export function createCharacter(scene, SREC) {
-  // spawn south-west of the shed: with the shed at the house's south corner,
-  // -2.5 in z would put the keeper inside the house collision box
-  const CHAR = { x: SREC.shed[0] - 2.5, z: SREC.shed[1] + 2.5, yaw: Math.PI, group: new THREE.Group(), scoops: [], lvl: 0, bag: 0, total: 0, bob: 0 };
+  // spawn in the open yard on the shed's door side, clear of the house box
+  const CHAR = { x: SREC.shed[0] - 2.5, z: SREC.shed[1] - 2.5, yaw: Math.PI, group: new THREE.Group(), scoops: [], lvl: 0, bag: 0, total: 0, bob: 0 };
   const b = critterBuilder();
   b.addBox(0.16, 0.34, 0.13, 0, 0.17, 0.1, 0x33424e); b.addBox(0.16, 0.34, 0.13, 0, 0.17, -0.1, 0x33424e);
   b.addBox(0.34, 0.42, 0.26, 0, 0.56, 0, 0x3f6b6b);

@@ -14,7 +14,6 @@ export default function App() {
   const [mode, setMode] = useState('explore');
   const [subline, setSubline] = useState('Hayward, CA');
   const [inside, setInside] = useState(false);
-  const [rings, setRings] = useState({ got: 0, total: 6 });
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [carColor, setCarColor] = useState('#e02818');
   const [toast, setToast] = useState({ html: '', show: false });
@@ -29,7 +28,6 @@ export default function App() {
         case 'mode': setMode(p); break;
         case 'subline': setSubline(p); break;
         case 'inside': setInside(p); break;
-        case 'rings': setRings(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'carColor': setCarColor(p); break;
         case 'carCard':
@@ -94,7 +92,6 @@ export default function App() {
         {mode === 'drive' && (
           <div id="hud">
             <div id="speedo"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
-            <div id="ringsHud" className="chip">⬡ {rings.got} / {rings.total}</div>
             <button id="exitBtn" className="btn" onClick={() => eng().exitDrive()}>Exit ✕</button>
             <button id="carColor" aria-label="Change car color" style={{ background: carColor }} onClick={() => eng().toggleCarColor()} />
             <button id="camBtn" className="btn" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>

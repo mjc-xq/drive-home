@@ -51,7 +51,24 @@ export function createEngine({ canvas, ui, emit }) {
   scene.add(sun);
 
   const world = buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GRID_ANG, aerialUrl });
-  const { onRoad, house, bldBoxes, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites } = world;
+  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites } = world;
+
+  // Car-vs-building test: a point is solid only when it's inside an actual
+  // footprint polygon (AABB prefilter keeps it cheap). This is what lets the
+  // car drive off-road, across intersections and between houses freely.
+  function insideBuilding(x, z) {
+    for (const b of bldPolys) {
+      const bb = b.bb;
+      if (x < bb[0] || x > bb[1] || z < bb[2] || z > bb[3]) continue;
+      const p = b.p; let inside = false;
+      for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+        const xi = p[i][0], zi = p[i][1], xj = p[j][0], zj = p[j][1];
+        if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+      }
+      if (inside) return true;
+    }
+    return false;
+  }
 
   const audio = createAudio();
 
@@ -82,7 +99,6 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   // ---------- checkpoint rings + street view billboards ----------
-  const RINGS = []; let ringsGot = 0, driveT0 = 0;
   const SVBOARDS = [];
   function addStreetViewBoard(name, r, mid, m) {
     const info = SV_MANIFEST[name];
@@ -136,15 +152,10 @@ export function createEngine({ canvas, ui, emit }) {
       if (!byName[r.n] || byName[r.n].len < len) byName[r.n] = { len, r };
     }
     const names = Object.keys(byName).sort((a, b) => byName[b].len - byName[a].len).slice(0, 6);
-    const tor = new THREE.TorusGeometry(2.4, 0.22, 10, 28);
-    const tm = new THREE.MeshStandardMaterial({ color: 0xd94f1e, emissive: 0x9c2d08, emissiveIntensity: .7 });
+    // Checkpoint rings removed — drive mode is free-roam now. The street-view
+    // billboards still mark these six streets.
     for (const n of names) {
       const r = byName[n].r, mid = Math.floor(r.p.length / 2), m = W(r.p[mid]);
-      const mesh = new THREE.Mesh(tor, tm.clone());
-      mesh.position.set(m[0], terrainAt(m[0], m[1]) + 2.6, m[1]);
-      mesh.visible = false;
-      scene.add(mesh);
-      RINGS.push({ mesh, x: m[0], z: m[1], got: false });
       addStreetViewBoard(n, r, mid, m);
     }
   }
@@ -360,7 +371,7 @@ export function createEngine({ canvas, ui, emit }) {
     setInside(false);
     for (const s of labelSprites) s.visible = false;
     CHAR.group.visible = true;
-    CHAR.x = SREC.shed[0] - 2.5; CHAR.z = SREC.shed[1] + 2.5; // SW of shed, clear of the house box
+    CHAR.x = SREC.shed[0] - 2.5; CHAR.z = SREC.shed[1] - 2.5; // shed's door side, clear of the house box
     CHAR.yaw = Math.atan2(SREC.pen[0] - CHAR.x, SREC.pen[1] - CHAR.z);
     camYawS = CHAR.yaw;
     audio.ensure();
@@ -472,21 +483,17 @@ export function createEngine({ canvas, ui, emit }) {
     car.speed = 0; car.group.visible = true;
     camOrbit.yaw = 0; camOrbit.pitch = 0;
     showT = 2.8;
-    ringsGot = 0; driveT0 = performance.now();
-    for (const r of RINGS) { r.got = false; r.mesh.visible = true; r.mesh.scale.set(1, 1, 1); }
     for (const b of SVBOARDS) b.visible = true;
-    emit('rings', { got: 0, total: RINGS.length });
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
     showCarCard();
-    toast(`Collect the ${RINGS.length} rings!`);
+    toast('Free roam — drive anywhere!', 2200);
   }
   function exitDrive() {
     setMode('explore');
     camera.up.set(0, 1, 0);
     hideJoy();
     car.group.visible = false;
-    for (const r of RINGS) r.mesh.visible = false;
     for (const b of SVBOARDS) b.visible = false;
     for (const s of labelSprites) s.visible = true;
     inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
@@ -539,14 +546,13 @@ export function createEngine({ canvas, ui, emit }) {
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     let nx = car.x + fx * car.speed * dt, nz = car.z + fz * car.speed * dt;
     const rad = 1.25;
-    for (const bb of bldBoxes) {
-      if (nx > bb[0] - rad && nx < bb[1] + rad && nz > bb[2] - rad && nz < bb[3] + rad) {
-        const pl = [nx - (bb[0] - rad), (bb[1] + rad) - nx, nz - (bb[2] - rad), (bb[3] + rad) - nz];
-        const m = Math.min(...pl);
-        if (m === pl[0]) nx = bb[0] - rad; else if (m === pl[1]) nx = bb[1] + rad;
-        else if (m === pl[2]) nz = bb[2] - rad; else nz = bb[3] + rad;
-        car.speed *= -0.22;
-      }
+    // buildings are solid only at their real footprint; slide along the wall
+    // instead of stopping dead so you can scrape past a corner.
+    if (insideBuilding(nx, nz)) {
+      if (!insideBuilding(nx, car.z)) nz = car.z;
+      else if (!insideBuilding(car.x, nz)) nx = car.x;
+      else { nx = car.x; nz = car.z; }
+      car.speed *= -0.22;
     }
     for (const t of treePts) {
       const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.75 + rad;
@@ -582,19 +588,6 @@ export function createEngine({ canvas, ui, emit }) {
     } else {
       for (const w of car.wheels) w.rotation.z -= spin;
       for (const f of car.fronts) f.rotation.y = car.steer * 1.6;
-    }
-    for (const r of RINGS) {
-      if (r.got) continue;
-      r.mesh.rotation.y = now * 0.0012;
-      if (Math.hypot(car.x - r.x, car.z - r.z) < 4.2) {
-        r.got = true; ringsGot++; audio.blip();
-        r.mesh.visible = false;
-        emit('rings', { got: ringsGot, total: RINGS.length });
-        if (ringsGot === RINGS.length) {
-          const secs = ((performance.now() - driveT0) / 1000).toFixed(1);
-          toast(`All rings! ${secs}s 🏁`, 3200);
-        }
-      }
     }
     if (showT > 0) {
       // showcase orbit on entry; any input skips it
@@ -704,7 +697,6 @@ export function createEngine({ canvas, ui, emit }) {
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
 
   emit('subline', `Hayward, CA · ${S.creek ? S.creek.n + ' · ' : ''}sanctuary: 5 🐷 2 🦆 1 🦎`);
-  emit('rings', { got: 0, total: RINGS.length });
   emit('carColor', CARSPECS[0].css);
   applyCam();
   renderer.render(scene, camera);
@@ -744,7 +736,7 @@ export function createEngine({ canvas, ui, emit }) {
   window.__dahill = {
     api,
     state: () => ({
-      mode, buildings: S.buildings.length, rings: ringsGot, ringTotal: RINGS.length,
+      mode, buildings: S.buildings.length,
       poops: POOPS.length, car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), speed: +car.speed.toFixed(1), glb: !!car.glb },
       char: { x: +CHAR.x.toFixed(1), z: +CHAR.z.toFixed(1), bag: CHAR.bag, total: CHAR.total, lvl: CHAR.lvl }
     })

@@ -160,6 +160,13 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   const house = { meshes: [], roof: null, bbox: null, baseY: 0 };
   const wallBase = new THREE.Color(0xe6dfd2);
   const bldBoxes = [];
+  // Per-building footprint polygons (world frame) for car collision. The car
+  // is blocked only where the building ACTUALLY is, not across its bounding
+  // box — packed/irregular footprints would otherwise wall off roads and the
+  // gaps between houses. bldBoxes (AABB) stays for the cheaper camera/tree/board
+  // checks. rectPoly turns an axis-aligned box into a 4-corner solid.
+  const bldPolys = [];
+  const rectPoly = (x0, x1, z0, z1) => bldPolys.push({ p: [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], bb: [x0, x1, z0, z1] });
   const WHITE = new THREE.Color(1, 1, 1);
   for (const b of S.buildings) {
     const poly = b.p.map(W);
@@ -170,6 +177,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     const gabled = !!b.r;
     const wallH = (gabled ? Math.max(2.4, b.h * 0.8) : b.h) + 0.5;
     bldBoxes.push([minx - 0.4, maxx + 0.4, minz - 0.4, maxz + 0.4, base + wallH + 3]);
+    bldPolys.push({ p: poly, bb: [minx, maxx, minz, maxz] });
     const ex = footprintGeom(b.p, wallH, W).toNonIndexed(); ex.translate(0, base, 0);
     const parts = splitTops(ex);
     const roofGs = [];
@@ -384,11 +392,13 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       const [x, z] = SREC.shed, y = terrainAt(x, z) - 0.15;
       addBox(x, z, GRID_ANG, 2.6, 2.0, 2.2, y, 0x8a6f54);
       gPrism(x, z, GRID_ANG, 2.6, 2.2, y + 2.0, 0.55, 0.25, 0x4a5d3f);
-      // door + basking step on the yard-facing side (away from the house)
+      // door + basking step on the yard-facing side. The shed now sits just off
+      // the house's back door, so the open yard is on the -GRID_ANG-normal side.
       const sn = [Math.sin(GRID_ANG), Math.cos(GRID_ANG)];
-      addBox(x + sn[0] * 1.13, z + sn[1] * 1.13, GRID_ANG, 0.9, 1.5, 0.06, y + 0.05, 0xf0ece2);
-      addBox(x + sn[0] * 1.55, z + sn[1] * 1.55, GRID_ANG, 1.0, 0.1, 0.7, y, 0x9a7c5a);
+      addBox(x - sn[0] * 1.13, z - sn[1] * 1.13, GRID_ANG, 0.9, 1.5, 0.06, y + 0.05, 0xf0ece2);
+      addBox(x - sn[0] * 1.55, z - sn[1] * 1.55, GRID_ANG, 1.0, 0.1, 0.7, y, 0x9a7c5a);
       bldBoxes.push([x - 1.8, x + 1.8, z - 1.6, z + 1.6, y + 3.2]);
+      rectPoly(x - 1.8, x + 1.8, z - 1.6, z + 1.6);
     }
     // duck structure — middle yard, blue-gray roof
     {
@@ -397,6 +407,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       gPrism(x, z, GRID_ANG, 3.0, 2.4, y + 1.15, 0.85, 0.3, 0x7d93a0);
       addBox(x, z - 1.7, GRID_ANG, 0.9, 0.08, 1.4, y + 0.18, 0x9a7c5a); // ramp
       bldBoxes.push([x - 1.9, x + 1.9, z - 1.7, z + 1.7, y + 2.6]);
+      rectPoly(x - 1.9, x + 1.9, z - 1.7, z + 1.7);
     }
     // barn (pigs) — near the creek
     {
@@ -409,6 +420,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       const sgn = Math.sign(n1[0] * (SREC.pen[0] - x) + n1[1] * (SREC.pen[1] - z)) || 1;
       addBox(x + n1[0] * 2.01 * sgn, z + n1[1] * 2.01 * sgn, GRID_ANG, 1.4, 1.7, 0.1, y + 0.1, 0xf0ece2);
       bldBoxes.push([x - 3, x + 3, z - 2.6, z + 2.6, y + 4.4]);
+      rectPoly(x - 3, x + 3, z - 2.6, z + 2.6);
     }
     const sm = new THREE.Mesh(merge(sanct), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .92 }));
     sm.castShadow = sm.receiveShadow = true; scene.add(sm);
@@ -545,7 +557,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   else buildLabels();
 
   return {
-    aerialMat, onRoad, house, bldBoxes, treePts, creekPtsW,
+    aerialMat, onRoad, house, bldBoxes, bldPolys, treePts, creekPtsW,
     frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites
   };
 }
