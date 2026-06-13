@@ -31,7 +31,13 @@ export function createEngine({ canvas, ui, emit }) {
   const flags = new URLSearchParams(location.search);
   const LITE = flags.has('lite');
 
+  // Upgraded to three r184. The scene's colours and light intensities were all
+  // hand-tuned under r128's un-managed, linear-output pipeline, so opt back out
+  // of r152+ colour management and keep linear output to preserve that look;
+  // the lights are re-scaled below for r155+ physically-correct units.
+  THREE.ColorManagement.enabled = false;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE, powerPreference: 'high-performance' });
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -40,8 +46,10 @@ export function createEngine({ canvas, ui, emit }) {
   scene.fog = new THREE.Fog(0xd2dcd6, 460, 1200);
   const camera = new THREE.PerspectiveCamera(46, 1, 0.6, 3000);
 
-  scene.add(new THREE.HemisphereLight(0xd8e8f6, 0xa39a85, 0.6));
-  const sun = new THREE.DirectionalLight(0xfff1d8, 0.95);
+  // r155+ uses physically-correct light units; ×π restores the r128 legacy
+  // brightness these intensities were tuned for.
+  scene.add(new THREE.HemisphereLight(0xd8e8f6, 0xa39a85, 0.6 * Math.PI));
+  const sun = new THREE.DirectionalLight(0xfff1d8, 0.95 * Math.PI);
   sun.position.set(-185, 240, 150);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
