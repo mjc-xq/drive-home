@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp } from './coords.js';
+import { merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
 import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, VEHICLES } from './car.js';
@@ -108,8 +109,62 @@ export function createEngine({ canvas, ui, emit }) {
   // otherwise Drew bumps obstacles that aren't there. Pre-filter them out.
   const sancCx = (SREC.pen[0] + SREC.coop[0] + SREC.shed[0]) / 3;
   const sancCz = (SREC.pen[1] + SREC.coop[1] + SREC.shed[1]) / 3;
-  const SCOOP_CLEAR_R = 30;
+  const SCOOP_CLEAR_R = 22;          // backyard-property radius (grass yard); photoreal beyond
   const scoopTrees = treePts.filter(t => Math.hypot(t[0] - sancCx, t[1] - sancCz) > SCOOP_CLEAR_R);
+
+  // Crisp grass lawn for the scoop yard: the flattened sanctuary is a blurry
+  // photogrammetry smear up close, so cover it with a clean procedural lawn that
+  // fades into the photoreal neighborhood beyond — high-quality + usable ground.
+  let scoopGrass = null;
+  {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+    const cx2 = cv.getContext('2d'); cx2.fillStyle = '#4f6e38'; cx2.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 2600; i++) {
+      cx2.fillStyle = `rgba(${52 + (Math.random() * 60 | 0)},${82 + (Math.random() * 64 | 0)},${36 + (Math.random() * 44 | 0)},0.5)`;
+      cx2.fillRect(Math.random() * 128, Math.random() * 128, 1.4, 3.2);
+    }
+    const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const gR = SCOOP_CLEAR_R + 2, geo = new THREE.CircleGeometry(gR, 80); geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+      uniforms: { map: { value: tex }, rInv: { value: 1 / gR } },
+      vertexShader: `varying vec2 vUv; varying float vR;
+        void main(){ vUv = uv * 22.0; vR = length(position.xz);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+      fragmentShader: `uniform sampler2D map; uniform float rInv; varying vec2 vUv; varying float vR;
+        void main(){ float a = 1.0 - smoothstep(0.62, 1.0, vR * rInv);
+          gl_FragColor = vec4(texture2D(map, vUv).rgb, a); }`
+    });
+    scoopGrass = new THREE.Mesh(geo, mat);
+    scoopGrass.position.set(sancCx, terrainAt(sancCx, sancCz) + 0.05, sancCz);
+    scoopGrass.renderOrder = 2; scoopGrass.visible = false; scoopGrass.frustumCulled = false;
+    scene.add(scoopGrass);
+  }
+
+  // Wood fence ring marking the backyard property line (procedural, Scoop only).
+  let scoopFence = null;
+  {
+    const parts = [], woodC = new THREE.Color(0x8a6f49), railC = new THREE.Color(0x9c8259);
+    const Rf = SCOOP_CLEAR_R, Np = 60;
+    for (let i = 0; i < Np; i++) {
+      const a0 = i / Np * Math.PI * 2, a1 = (i + 1) / Np * Math.PI * 2;
+      const x0 = sancCx + Math.cos(a0) * Rf, z0 = sancCz + Math.sin(a0) * Rf;
+      const x1 = sancCx + Math.cos(a1) * Rf, z1 = sancCz + Math.sin(a1) * Rf;
+      const py = terrainAt(x0, z0);
+      const post = new THREE.BoxGeometry(0.13, 1.15, 0.13).toNonIndexed(); post.translate(x0, py + 0.57, z0);
+      parts.push({ g: post, color: woodC });
+      const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, len = Math.hypot(x1 - x0, z1 - z0), yaw = Math.atan2(x1 - x0, z1 - z0), my = terrainAt(mx, mz);
+      for (const ry of [0.42, 0.9]) {
+        const rail = new THREE.BoxGeometry(0.05, 0.09, len * 1.04).toNonIndexed();
+        rail.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw)); rail.translate(mx, my + ry, mz);
+        parts.push({ g: rail, color: railC });
+      }
+    }
+    scoopFence = new THREE.Mesh(merge(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .85 }));
+    scoopFence.castShadow = true; scoopFence.visible = false; scoopFence.frustumCulled = false;
+    scene.add(scoopFence);
+  }
   // Building collision for Scoop: drop the small sanctuary props (coop/shed/barn)
   // that sit inside the cleared zone — they're hidden under the photoreal, so
   // colliding with them = bumping nothing. Keep the house + anything large.
@@ -236,7 +291,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (rawTileY(cx, cz) == null) return;        // wait until sanctuary tiles are streamed
     const gy = terrainAt(cx, cz);                // flatten TO the reliable ground height (not a coarse tile)
     const g = p3dtiles.group; g.updateWorldMatrix(true, false);
-    const R = 32, N = 56, pos = [], idx = [], v = new THREE.Vector3();
+    const R = SCOOP_CLEAR_R + 4, N = 56, pos = [], idx = [], v = new THREE.Vector3();   // flatten a touch past the yard edge
     g.worldToLocal(v.set(cx, gy, cz)); pos.push(v.x, v.y, v.z);
     for (let i = 0; i <= N; i++) {
       const a = i / N * Math.PI * 2;
@@ -590,6 +645,8 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('explore');
     camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
     if (groundPatch) groundPatch.visible = false;
+    if (scoopGrass) scoopGrass.visible = false;
+    if (scoopFence) scoopFence.visible = false;
     marker.visible = false;
     if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
@@ -636,10 +693,9 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.x = nx; CHAR.z = nz;
       CHAR.bob += dt * 10 * mag;
     } else CHAR.bob += dt * 1.5;
-    // ride the real photoreal ground (canopy-skipped + clamped), low-passed smooth
-    const cyr = actorGroundY(CHAR.x, CHAR.z, CHAR.groundY);
-    CHAR.groundY = CHAR.groundY == null ? cyr : CHAR.groundY + (cyr - CHAR.groundY) * Math.min(1, dt * 6);
-    const cy = CHAR.groundY;
+    // Stand on the procedural yard ground (terrain) — reliable, never sinks into
+    // the photoreal. The grass lawn + the actor are both at this height.
+    const cy = terrainAt(CHAR.x, CHAR.z);
     CHAR.group.position.set(CHAR.x, cy + (CHAR.drew ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05), CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
     if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
@@ -673,17 +729,15 @@ export function createEngine({ canvas, ui, emit }) {
     if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
     if (POOPS.length > 0) spotless = false;
     if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
-    // small clean patch right under Drew — just calms the melt at his feet; the
-    // 3D photoreal home (houses, trees) shows all around it.
-    if (groundPatch) {
-      const show = !!(p3dtiles && p3dtiles.holder.visible);
-      groundPatch.visible = show;
-      if (show) { groundPatch.scale.setScalar(0.62); groundPatch.position.set(CHAR.x, cy + 0.04, CHAR.z); }
-    }
-    // follow cam — lower/closer now that the scoop yard is flattened clear of
-    // trees, so Drew reads big and easy to track; photoreal stays 3D further out.
+    // the procedural grass yard + fence are the backyard in Scoop (crisp); the
+    // aerial patch is for Drive only.
+    if (groundPatch) groundPatch.visible = false;
+    if (scoopGrass) scoopGrass.visible = true;
+    if (scoopFence) scoopFence.visible = true;
+    // follow cam — high/back enough to see the photoreal neighborhood beyond the
+    // grass yard, while Drew + poop stay readable on the lawn.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const dist = (9.5 + scPitch * 4) * szoom, h = (8 + scPitch * 6) * Math.max(0.75, szoom);
+    const dist = (15 + scPitch * 4) * szoom, h = (15 + scPitch * 6) * Math.max(0.75, szoom);
     camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
     const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
