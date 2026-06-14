@@ -35,6 +35,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   // before TilesFadePlugin so the fade still wraps the final material.
   const tileGain = { value: opts.tileGain ?? 0.82 };
   tiles.tileGain = tileGain;
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
   tiles.registerPlugin({
     name: 'DAHILL_LOOK',
     processTileModel(scene) {
@@ -42,7 +43,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
         if (!o.isMesh || o.isBatchedMesh) return;
         const src = o.material;
         const map = src && src.map ? src.map : null;
-        if (map) map.colorSpace = THREE.NoColorSpace;
+        if (map) { map.colorSpace = THREE.NoColorSpace; map.anisotropy = maxAniso; }   // sharp roads/roofs at grazing angles
         const m = new THREE.MeshBasicMaterial({ map, side: THREE.FrontSide });
         m.toneMapped = false;
         m.color.setScalar(tileGain.value);

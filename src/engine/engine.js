@@ -37,9 +37,12 @@ export function createEngine({ canvas, ui, emit }) {
   THREE.ColorManagement.enabled = false;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.5 : 2));
+  // render at up to 2x even on phones (sharper edges/text; framebuffer cost is small
+  // next to tile memory, which the lruCache caps separately). LITE stays at 1x.
+  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+  const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xc8d6da);
   scene.fog = new THREE.Fog(0xd2dcd6, 460, 1200);
@@ -51,9 +54,11 @@ export function createEngine({ canvas, ui, emit }) {
   const sun = new THREE.DirectionalLight(0xfff1d8, 0.95 * Math.PI);
   sun.position.set(-185, 240, 150);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);
+  sun.shadow.mapSize.set(2048, 2048);   // 2048 on mobile too: sharper car/keeper/animal shadows
   const sc2 = sun.shadow.camera;
-  sc2.left = -300; sc2.right = 300; sc2.top = 300; sc2.bottom = -300; sc2.far = 900;
+  // tighter frustum (±170 vs ±300) ~= 3× the texel density where shadows actually
+  // land (the scoop sanctuary + driveway); distant procedural shadows aren't missed.
+  sc2.left = -170; sc2.right = 170; sc2.top = 170; sc2.bottom = -170; sc2.far = 900;
   sun.shadow.bias = -0.0009;
   scene.add(sun);
 
