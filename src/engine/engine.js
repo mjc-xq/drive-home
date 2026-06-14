@@ -247,7 +247,13 @@ export function createEngine({ canvas, ui, emit }) {
     const tA = terrainAt(x, z);
     if (!p3dtiles || !p3dtiles.holder.visible) return tA;
     const y = rawTileY(x, z, (prevY != null ? prevY : tA) + 3);   // first surface below the actor = road
-    return y == null ? tA : clamp(y, tA - 2, tA + 2);
+    if (y == null) return prevY != null ? prevY : tA;             // tile not streamed yet: hold height
+    // Far from the procedural neighborhood the terrain grid (±340 m) is just a
+    // clamped edge value, so don't tie the car to it — ride the real photoreal
+    // road directly. Inside the neighborhood, clamp to topology so the car can
+    // never climb a photogrammetry tree.
+    if (x * x + z * z > 330 * 330) return y;
+    return clamp(y, tA - 2, tA + 2);
   }
   // One-shot vertical align: sample a ring of down-rays in the open yard/street
   // (radius 14 m, away from the house roof), take the median tile height, and
@@ -440,6 +446,7 @@ export function createEngine({ canvas, ui, emit }) {
   const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
   const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0 };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
+  let lastLookT = -1e9;   // last manual look-drag time (ms); suppresses scoop follow-cam briefly
   let shiftLock = false, moveMag = 0, azVel = 0, poVel = 0;
 
   function hideJoy() {
@@ -515,6 +522,7 @@ export function createEngine({ canvas, ui, emit }) {
       } else {
         camYawS -= dx * LOOK_SENS;
         scPitch = clamp(scPitch + dy * PITCH_SENS, -0.3, 0.8);
+        lastLookT = performance.now();   // pause follow-cam while the player looks
       }
       return;
     }
@@ -666,6 +674,16 @@ export function createEngine({ canvas, ui, emit }) {
       let mx = rX * jx - fX * jy, mz = rZ * jx - fZ * jy;
       const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
       if (!shiftLock) CHAR.yaw = Math.atan2(mx, mz); // else keep facing camera, strafe
+      // Roblox-style follow cam: gently trail the camera behind the avatar's
+      // heading so the LEFT stick leads and the camera follows — instead of the
+      // look-drag defining where "forward" is (the user's "camera also controls
+      // direction" complaint). A manual right-side look pauses this for ~1s.
+      if (!shiftLock && now - lastLookT > 1000) {
+        let dyaw = CHAR.yaw - camYawS;
+        while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
+        while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+        camYawS += dyaw * Math.min(1, dt * 2.2);
+      }
       const sp = 4.4 * mag;
       let nx = CHAR.x + mx * sp * dt, nz = CHAR.z + mz * sp * dt;
       const rad = 0.42;
@@ -799,11 +817,21 @@ export function createEngine({ canvas, ui, emit }) {
   let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
   let camMode = 0;
   let camInit = false;
-  const CAMNAMES = ['Chase', 'High', 'Top-down'];
+  // Drive cameras. Default "Cruise" is the high chase the user likes: well above
+  // the melty ground-level photogrammetry, a little behind the car, looking DOWN
+  // THE ROAD AHEAD (ahead = metres in front to aim at). "Close" is the low
+  // cinematic chase; "Top-down" looks straight down, heading-up.
+  const DRIVE_CAMS = [
+    // high + steep like the top-down (so it stays ABOVE the melty ground-level
+    // photogrammetry), but pulled a little behind and aimed well down the road.
+    { name: 'Cruise', dist: 9, h: 34, ahead: 18, drone: true, topdown: false },
+    { name: 'Close', dist: 11, h: 5, ahead: 5, drone: false, topdown: false },
+    { name: 'Top-down', dist: 0, h: 52, ahead: 0, drone: true, topdown: true },
+  ];
   function cycleCamera() {
-    camMode = (camMode + 1) % 3; camInit = false;
-    if (camMode !== 2) camera.up.set(0, 1, 0);
-    toast('Camera: ' + CAMNAMES[camMode], 1100);
+    camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
+    if (!DRIVE_CAMS[camMode].topdown) camera.up.set(0, 1, 0);
+    toast('Camera: ' + DRIVE_CAMS[camMode].name, 1100);
   }
   // Scoop camera presets [dist, height] — cycled with the 🎥 button.
   const SCOOP_CAMS = [
@@ -892,7 +920,11 @@ export function createEngine({ canvas, ui, emit }) {
         car.speed *= -0.25;
       }
     }
-    const lim = 314;
+    // Roam far across the streamed Google tiles. The procedural neighborhood (and
+    // its collision) only spans ~±340 m; past that the car rides the real
+    // photoreal road directly (see actorGroundY), so the only bound is a generous
+    // sanity ring at the metro scale where the flat-earth frame stays accurate.
+    const lim = 4000;
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= -0.2; }
     car.x = nx; car.z = nz;
     // Ride the real photoreal ROAD surface (canopy-skipped + clamped to topology),
@@ -934,7 +966,7 @@ export function createEngine({ canvas, ui, emit }) {
       cx2 = car.x + (cx2 - car.x) * g; cy2 = yC + 1.0 + (cy2 - yC - 1.0) * g; cz2 = car.z + (cz2 - car.z) * g;
       camera.position.set(cx2, cy2, cz2);
       camera.lookAt(car.x, yC + 0.7, car.z);
-    } else if (camMode === 2) {
+    } else if (DRIVE_CAMS[camMode].topdown) {
       const camT = _camT.set(car.x, yC + 52 * czoom, car.z);
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, Math.min(1, dt * 5));
@@ -942,19 +974,18 @@ export function createEngine({ canvas, ui, emit }) {
       camera.up.set(fx, 0, fz); // heading-up top-down
       camera.lookAt(car.x, yC, car.z);
     } else {
+      const CAM = DRIVE_CAMS[camMode];
       camera.up.set(0, 1, 0);
       if (now - camOrbit.t > 1400 && Math.abs(car.speed) > 2) camOrbit.yaw *= Math.exp(-dt * 2.2);
       const a = car.yaw + Math.PI + camOrbit.yaw;
-      // camMode 0 = drone-follow (high/back, where the photoreal reads clean);
-      // camMode 1 = low chase (closer, more cinematic but shows photogrammetry melt)
-      const dist = (camMode === 1 ? 11 : 24) * czoom, h = ((camMode === 1 ? 5 : 22) + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
-      // hold the drone at a STATIC altitude: slow-smooth the ground reference so
-      // small terrain rolls don't bob the camera (camMode 1 stays snappy).
-      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * (camMode === 1 ? 6 : 1.2));
+      const dist = CAM.dist * czoom, h = (CAM.h + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
+      // hold a STATIC altitude (drone cams): slow-smooth the ground ref so terrain
+      // rolls don't bob the high cam; the low Close cam snaps to the ground.
+      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * (CAM.drone ? 1.2 : 6));
       const camT = _camT.set(car.x + Math.sin(a) * dist, camGroundRef + h, car.z + Math.cos(a) * dist);
-      // only the low chase collides with geometry; the drone flies above the melt
-      // (resolveCam against melty tile blobs would yank it down onto the car).
-      if (camMode === 1) {
+      // the low Close cam collides with geometry; the high cams fly above the melt
+      // (resolveCam against melty tile blobs would yank them down onto the car).
+      if (!CAM.drone) {
         const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
         if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
       }
@@ -962,7 +993,9 @@ export function createEngine({ canvas, ui, emit }) {
       camV.lerp(camT, Math.min(1, dt * 4.6));
       camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.3);
       camera.position.copy(camV);
-      camera.lookAt(car.x, yC + 1.0, car.z);
+      // look DOWN THE ROAD: aim a point ahead of the car along its heading, so you
+      // see where you're going instead of the roof of your own car.
+      camera.lookAt(car.x + fx * CAM.ahead, yC + 1.0, car.z + fz * CAM.ahead);
     }
     if (ui.mph) ui.mph.textContent = Math.round(Math.abs(car.speed) * 2.237);
     audio.engineUpdate(car.speed, 36);
