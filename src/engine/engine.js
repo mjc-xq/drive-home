@@ -9,14 +9,6 @@ import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
 
-// Real Street View photos for the drive level, baked at build time by
-// scripts/fetch_streetview.py (runtime fetches would die in the offline
-// artifact webview). Streets absent from the manifest get no billboard.
-const SV_IMGS = import.meta.glob('../assets/streetview/*.jpg', { eager: true, query: '?url', import: 'default' });
-const SV_MANIFEST = Object.values(
-  import.meta.glob('../assets/streetview/manifest.json', { eager: true, import: 'default' })
-)[0] || {};
-
 // The whole game lives here, imperative three.js — React only renders the HUD.
 // Communication: engine -> UI via emit(type, payload) for low-frequency state,
 // and direct DOM writes through `ui` refs for per-frame values (mph, compass
@@ -106,67 +98,9 @@ export function createEngine({ canvas, ui, emit }) {
     showCarCard();
   }
 
-  // ---------- checkpoint rings + street view billboards ----------
-  const SVBOARDS = [];
-  function addStreetViewBoard(name, r, mid, m) {
-    const info = SV_MANIFEST[name];
-    const url = info && SV_IMGS['../assets/streetview/' + info.file];
-    if (!url) return;
-    const a = W(r.p[Math.max(0, mid - 1)]), b = W(r.p[Math.min(r.p.length - 1, mid + 1)]);
-    let dx = b[0] - a[0], dz = b[1] - a[1]; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
-    const off = r.w / 2 + 3.4;
-    let bx = 0, bz = 0;
-    for (const s of [1, -1]) {
-      bx = m[0] - dz * off * s; bz = m[1] + dx * off * s;
-      if (!onRoad(bx, bz) && !bldBoxes.some(bb => bx > bb[0] - 1 && bx < bb[1] + 1 && bz > bb[2] - 1 && bz < bb[3] + 1)) break;
-    }
-    const g = new THREE.Group();
-    const postMat = new THREE.MeshStandardMaterial({ color: 0x6e5340, roughness: 1 });
-    for (const px of [-1.45, 1.45]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.35, 0.12), postMat);
-      leg.position.set(px, 0.67, 0); g.add(leg);
-    }
-    // photo + caption strip composited onto a canvas once the (inlined data
-    // URI) image decodes — unlit so the photo reads true at any sun angle
-    const tex = new THREE.Texture();
-    tex.minFilter = THREE.LinearFilter;
-    const img = new Image();
-    img.onload = () => {
-      const cv = document.createElement('canvas'); cv.width = 640; cv.height = 440;
-      const c = cv.getContext('2d');
-      c.drawImage(img, 0, 0, 640, 400);
-      c.fillStyle = '#10151c'; c.fillRect(0, 400, 640, 40);
-      c.fillStyle = '#f5efe2'; c.font = '600 22px system-ui, sans-serif';
-      c.fillText(name.toUpperCase(), 12, 428);
-      c.fillStyle = '#9fb2c5'; c.font = '15px system-ui, sans-serif'; c.textAlign = 'right';
-      c.fillText('Street View © Google ' + (info.date || ''), 628, 427);
-      tex.image = cv; tex.needsUpdate = true;
-    };
-    img.src = url;
-    const pane = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 2.27),
-      new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
-    pane.position.y = 2.3; g.add(pane);
-    g.position.set(bx, terrainAt(bx, bz), bz);
-    g.rotation.y = Math.atan2(m[0] - bx, m[1] - bz);
-    g.visible = false;
-    scene.add(g);
-    SVBOARDS.push(g);
-  }
-  {
-    const byName = {};
-    for (const r of S.roads) {
-      if (!r.n || ['residential', 'tertiary'].indexOf(r.k) < 0) continue;
-      let len = 0; for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); len += Math.hypot(b[0] - a[0], b[1] - a[1]); }
-      if (!byName[r.n] || byName[r.n].len < len) byName[r.n] = { len, r };
-    }
-    const names = Object.keys(byName).sort((a, b) => byName[b].len - byName[a].len).slice(0, 6);
-    // Checkpoint rings removed — drive mode is free-roam now. The street-view
-    // billboards still mark these six streets.
-    for (const n of names) {
-      const r = byName[n].r, mid = Math.floor(r.p.length / 2), m = W(r.p[mid]);
-      addStreetViewBoard(n, r, mid, m);
-    }
-  }
+  // (Street-view photo billboards removed — they read as odd roadside signs.
+  //  Real street imagery now lives on the buildings: photoreal Google 3D Tiles
+  //  when enabled, the procedural facade texture otherwise.)
 
   // ---------- dollhouse roof ----------
   let insideOpen = false, roofAnim = 0; // 0 closed -> 1 open
@@ -509,7 +443,6 @@ export function createEngine({ canvas, ui, emit }) {
     car.speed = 0; car.group.visible = true;
     camOrbit.yaw = 0; camOrbit.pitch = 0;
     showT = 2.8;
-    for (const b of SVBOARDS) b.visible = true;
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
     showCarCard();
@@ -520,7 +453,6 @@ export function createEngine({ canvas, ui, emit }) {
     camera.up.set(0, 1, 0);
     hideJoy();
     car.group.visible = false;
-    for (const b of SVBOARDS) b.visible = false;
     for (const s of labelSprites) s.visible = true;
     inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
     audio.engineStop();
