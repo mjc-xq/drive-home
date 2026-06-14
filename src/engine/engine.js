@@ -51,7 +51,57 @@ export function createEngine({ canvas, ui, emit }) {
   scene.add(sun);
 
   const world = buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GRID_ANG, aerialUrl });
-  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat } = world;
+  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat, staticGroup } = world;
+
+  // ---------- photoreal Google 3D Tiles (default; ?flat disables) ----------
+  // Streams the real, textured neighborhood — every house, fence, tree — and
+  // hides the procedural staticGroup once tiles arrive. The procedural world
+  // stays the collision + fallback (offline / no key / load failure). Geo:
+  // anchor the tileset to the house centroid's lat/lon (origin of the local
+  // frame). LAT0/LON0 = the geocode origin; C is the house centroid (orig E/N).
+  let p3dtiles = null;
+  const DEG = Math.PI / 180;
+  // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
+  // yOffset lifts the photoreal world so its ground meets the procedural terrain
+  // (the car/keeper ride procedural terrainAt, so the two must share a height).
+  const P3DT = { yOffset: 32, spin: 0 };
+  const applyP3DT = () => {
+    if (!p3dtiles || !p3dtiles.holder) return;
+    p3dtiles.holder.position.y = P3DT.yOffset;
+    p3dtiles.holder.rotation.y = P3DT.spin * DEG;
+  };
+  // Raycast the photoreal ground straight down through the world origin and lift
+  // the holder so it matches the procedural terrain height there — auto-aligns
+  // the geoid/ellipsoid gap instead of hand-tuning yOffset.
+  const _ray = new THREE.Raycaster();
+  function alignP3DT() {
+    if (!p3dtiles || !p3dtiles.holder) return false;
+    _ray.set(new THREE.Vector3(0, 2000, 0), new THREE.Vector3(0, -1, 0));
+    _ray.far = 4000;
+    const hit = _ray.intersectObject(p3dtiles.group, true)[0];
+    if (!hit) return false;
+    P3DT.yOffset += terrainAt(0, 0) - hit.point.y; applyP3DT();
+    return true;
+  }
+  if (!flags.has('flat')) {
+    const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
+    const houseLat = (LAT0 + C[1] / 110540) * DEG;
+    const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
+    import('./tiles3d.js').then(({ createPhotorealTiles }) => {
+      p3dtiles = createPhotorealTiles(scene, camera, renderer, {
+        lat: houseLat, lon: houseLon, errorTarget: 18
+      });
+      if (!p3dtiles) return;
+      applyP3DT();
+      let hidden = false, tries = 0;
+      // hide the procedural world once real tile geometry arrives, and snap the
+      // vertical alignment off the first tiles that cover the origin.
+      p3dtiles.addEventListener('load-model', () => {
+        if (!hidden) { hidden = true; staticGroup.visible = false; emit('photoreal', true); }
+        if (tries < 8) { tries++; alignP3DT(); }
+      });
+    }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
+  }
 
   // Car-vs-building test: a point is solid only when it's inside an actual
   // footprint polygon (AABB prefilter keeps it cheap). This is what lets the
@@ -595,6 +645,7 @@ export function createEngine({ canvas, ui, emit }) {
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
     if (ui.box) { ui.box.style.width = w + 'px'; ui.box.style.height = h + 'px'; }
     camera.aspect = w / h; camera.updateProjectionMatrix();
+    if (p3dtiles) p3dtiles.setResolutionFromRenderer(camera, renderer);
   }
 
   // ---------- loop ----------
@@ -638,6 +689,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
+    if (p3dtiles) { camera.updateMatrixWorld(); p3dtiles.update(); }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
@@ -700,8 +752,12 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
+    p3dt: P3DT,                       // mutate {yOffset,spin} then call nudge()
+    nudge: applyP3DT,
+    tiles: () => p3dtiles,
+    setProcedural: (on) => { staticGroup.visible = on; },
     state: () => ({
-      mode, buildings: S.buildings.length,
+      mode, buildings: S.buildings.length, photoreal: !!p3dtiles && !staticGroup.visible,
       poops: POOPS.length, car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), speed: +car.speed.toFixed(1), glb: !!car.glb },
       char: { x: +CHAR.x.toFixed(1), z: +CHAR.z.toFixed(1), bag: CHAR.bag, total: CHAR.total, lvl: CHAR.lvl }
     })

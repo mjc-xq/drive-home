@@ -10,6 +10,14 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   const rand = makeRand(1840);
   const T = S.terrain, TN = T.n, TH = T.half, TSTEP = (2 * TH) / (TN - 1);
 
+  // All procedural ground + buildings + props go in staticGroup so photoreal
+  // 3D-tile mode can hide them in one toggle (collision arrays are separate
+  // data, so hiding visuals never affects driving/scooping). Labels, the house
+  // ring and the dollhouse interior stay parented to the scene directly.
+  const staticGroup = new THREE.Group();
+  scene.add(staticGroup);
+  const sadd = o => { staticGroup.add(o); return o; };
+
   const aerialTex = new THREE.TextureLoader().load(aerialUrl);
   aerialTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   aerialTex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -33,7 +41,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx); g.computeVertexNormals();
     const m = new THREE.Mesh(g, aerialMat);
-    m.receiveShadow = true; scene.add(m);
+    m.receiveShadow = true; sadd(m);
   }
 
   // ---------- creek (animated flowing water) ----------
@@ -122,7 +130,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
           gl_FragColor = vec4(col, alpha);
         }`
     });
-    scene.add(new THREE.Mesh(g, waterMat));
+    sadd(new THREE.Mesh(g, waterMat));
   }
 
   // ---------- streets (crisp ribbons over the aerial) ----------
@@ -153,7 +161,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setIndex(idx); g.computeVertexNormals();
     const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color, roughness: .96, side: THREE.DoubleSide, transparent: true, opacity: op }));
-    m.receiveShadow = true; scene.add(m);
+    m.receiveShadow = true; sadd(m);
   }
   buildRoads(r => r.k === 'residential' || r.k === 'tertiary', 0.18, 0x76777b, 0.92);
   buildRoads(r => r.k === 'service', 0.13, 0xa39f96, 0.85);
@@ -261,11 +269,11 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       house.bbox = [minx, maxx, minz, maxz]; house.baseY = base; house.c = [cx, cz];
       house.wallH = wallH; house.rects = b.r;
       const wm = new THREE.Mesh(parts.side, new THREE.MeshStandardMaterial({ color: 0xf7f0e3, roughness: .8 }));
-      wm.castShadow = wm.receiveShadow = true; scene.add(wm); house.meshes.push(wm);
+      wm.castShadow = wm.receiveShadow = true; sadd(wm); house.meshes.push(wm);
       const rg = roofGs.length ? merge(roofGs.map(g => ({ g, color: WHITE }))) : parts.top;
       const rm = new THREE.Mesh(rg, new THREE.MeshStandardMaterial(
         { color: 0xdf5524, roughness: .62, emissive: 0x3a1205, emissiveIntensity: .4, side: THREE.DoubleSide, transparent: true }));
-      rm.castShadow = true; scene.add(rm); house.meshes.push(rm); house.roof = rm;
+      rm.castShadow = true; sadd(rm); house.meshes.push(rm); house.roof = rm;
     } else {
       const wc = wallBase.clone().offsetHSL((rand() - 0.5) * 0.015, (rand() - 0.5) * 0.04, (rand() - 0.5) * 0.05);
       ctxWalls.push({ g: parts.side, color: wc });
@@ -319,12 +327,12 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   }
   {
     const wallsMesh = new THREE.Mesh(merge(ctxWalls), facadeMat());
-    wallsMesh.castShadow = wallsMesh.receiveShadow = true; scene.add(wallsMesh);
+    wallsMesh.castShadow = wallsMesh.receiveShadow = true; sadd(wallsMesh);
     const topsMesh = new THREE.Mesh(merge(ctxTops, uvAt), aerialMat);
-    topsMesh.castShadow = topsMesh.receiveShadow = true; scene.add(topsMesh);
+    topsMesh.castShadow = topsMesh.receiveShadow = true; sadd(topsMesh);
     const facMesh = new THREE.Mesh(merge(FACADE),
       new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .35, metalness: .15 }));
-    scene.add(facMesh);
+    sadd(facMesh);
   }
 
   // ---------- interior (dollhouse) ----------
@@ -475,7 +483,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
         yard.push({ g, color: new THREE.Color(i ? 0x3a5a3c : 0x44484e) });
       }
       const ym = new THREE.Mesh(merge(yard), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }));
-      ym.castShadow = true; scene.add(ym);
+      ym.castShadow = true; sadd(ym);
     }
   }
 
@@ -530,7 +538,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       rectPoly(x - 3, x + 3, z - 2.6, z + 2.6);
     }
     const sm = new THREE.Mesh(merge(sanct), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .92 }));
-    sm.castShadow = sm.receiveShadow = true; scene.add(sm);
+    sm.castShadow = sm.receiveShadow = true; sadd(sm);
   }
 
   // ---------- trees ----------
@@ -599,7 +607,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       M.compose(Pp.set(p[0], y + (2.3 + 1.2) * s, p[1]), Q, Sc.set(s, s, s));
       if (i % 2 === 0) canA.setMatrixAt(ia++, M); else canB.setMatrixAt(ib++, M);
     });
-    for (const m of [trunk, canA, canB]) { m.instanceMatrix.needsUpdate = true; m.castShadow = true; scene.add(m); }
+    for (const m of [trunk, canA, canB]) { m.instanceMatrix.needsUpdate = true; m.castShadow = true; sadd(m); }
   }
 
   // ---------- house ring + labels ----------
@@ -665,6 +673,6 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
 
   return {
     aerialMat, onRoad, house, bldBoxes, bldPolys, treePts, creekPtsW, waterMat,
-    frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites
+    frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, staticGroup
   };
 }
