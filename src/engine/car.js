@@ -11,9 +11,17 @@ export const CARSPECS = [
   { name: 'SV-10 GIALLO', spec: '5.2L V10 · 640 HP · AWD', color: 0xf2c500, css: '#f2c500' }
 ];
 
+// Fixed-slot vehicle roster: index = the order the swap button cycles through,
+// regardless of which GLB finishes loading first. credit feeds the car card.
+export const VEHICLES = [
+  { slot: 0, name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', credit: 'Ferrari 458 · vicent091036' },
+  { slot: 1, name: 'TRAIL XSE', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: 'Toyota RAV4' },
+  { slot: 2, name: 'GLIDE LE', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: 'Toyota Sienna' }
+];
+
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.
 export function createCar(scene) {
-  const car = { x: 0, z: 0, yaw: 0, speed: 0, steer: 0, group: new THREE.Group(), wheels: [], fronts: [], bodyMat: null, red: true };
+  const car = { x: 0, z: 0, yaw: 0, speed: 0, steer: 0, group: new THREE.Group(), wheels: [], fronts: [], bodyMat: null, red: true, models: [], modelIdx: 0, userPicked: false };
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe02818, metalness: .45, roughness: .26 });
   car.bodyMat = bodyMat;
   const carbon = new THREE.MeshStandardMaterial({ color: 0x141518, metalness: .3, roughness: .5 });
@@ -141,8 +149,7 @@ export function loadRealCar(car, url, onFallback) {
       const inner = new THREE.Group();
       inner.rotation.y = CARYAW;
       inner.add(m);
-      for (const ch of [...car.group.children]) ch.visible = false;
-      car.group.add(inner);
+      registerVehicle(car, inner, 0, VEHICLES[0]);
       car.glb = true;
     }, undefined, err => { clearTimeout(timer); fail(err); });
   } catch (e) { clearTimeout(timer); fail(e); }
@@ -152,7 +159,7 @@ export function loadRealCar(car, url, onFallback) {
 // metres sitting on the ground centred on origin, optionally paint it near-black
 // (skipping glass/lights/chrome), and place it at (x,y,z)+yaw under `parent`.
 export function loadParkedCar(parent, url, opts = {}, onReady) {
-  const { x = 0, y = 0, z = 0, yaw = 0, length = 4.6, black = true } = opts;
+  const { x = 0, y = 0, z = 0, yaw = 0, length = 4.6, black = true, flip = false } = opts;
   new GLTFLoader().load(url, g => {
     const inner = g.scene;
     inner.updateMatrixWorld(true);
@@ -178,8 +185,77 @@ export function loadParkedCar(parent, url, opts = {}, onReady) {
     const grp = new THREE.Group();
     grp.add(inner);
     grp.position.set(x, y, z);
-    grp.rotation.y = yaw;
+    grp.rotation.y = yaw + (flip ? Math.PI : 0);   // some GLBs' nose runs the opposite way
     parent.add(grp);
     if (onReady) onReady(grp);
   }, undefined, err => console.warn('parked car failed', url, err));
+}
+
+// ---- Drivable vehicle roster ------------------------------------------------
+// Each driven model is one group parented under car.group, stored at a FIXED
+// slot so cycle order is stable no matter which GLB resolves first. Exactly one
+// model (or, until any loads, the procedural fallback) is visible at a time.
+function registerVehicle(car, group, slot, meta) {
+  group.visible = false;
+  car.group.add(group);
+  car.models[slot] = { group, ...meta };
+  // retire the procedural fallback meshes the moment any real model arrives
+  for (const ch of car.group.children) {
+    if (!car.models.some(m => m && m.group === ch)) ch.visible = false;
+  }
+  // until the user picks, show the lowest loaded slot (Ferrari if present)
+  if (!car.userPicked) {
+    const first = car.models.findIndex(Boolean);
+    car.modelIdx = first;
+    for (const m of car.models) if (m) m.group.visible = false;
+    car.models[first].group.visible = true;
+  }
+}
+
+// Advance to the next loaded vehicle; returns its meta (or null if none loaded).
+export function cycleVehicle(car) {
+  const loaded = car.models.map((m, i) => (m ? i : -1)).filter(i => i >= 0);
+  if (!loaded.length) return null;
+  car.userPicked = true;
+  const next = loaded[(loaded.indexOf(car.modelIdx) + 1) % loaded.length];
+  car.modelIdx = next;
+  for (const m of car.models) if (m) m.group.visible = false;
+  car.models[next].group.visible = true;
+  return car.models[next];
+}
+
+// Load a plain (non-Draco) car GLB as a swappable DRIVEN vehicle: normalize to
+// ~`length` m, centre on the origin sitting on the ground, optionally paint it
+// near-black, rotate its nose to +X (`spin`, default CARYAW), and register it at
+// `slot`. Fails soft — the roster simply keeps whatever else loaded.
+export function loadDrivableCar(car, url, slot, opts = {}) {
+  const { length = 4.6, black = true, flip = false, meta = {} } = opts;
+  const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z
+  new GLTFLoader().load(url, g => {
+    const m = g.scene;
+    m.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(m), size = new THREE.Vector3();
+    box.getSize(size);
+    const s = length / (Math.max(size.x, size.z) || 1);
+    m.traverse(o => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      if (!black || !o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mm of mats) {
+        const nm = ((mm.name || '') + (o.name || '')).toLowerCase();
+        if (mm.color && !/glass|light|tail|head|lamp|mirror|chrome|window|plate|signal|amber/.test(nm)) {
+          mm.color.setHex(0x17191d);
+          if (mm.metalness !== undefined) mm.metalness = 0.45;
+          if (mm.roughness !== undefined) mm.roughness = 0.5;
+        }
+      }
+    });
+    m.scale.setScalar(s);
+    m.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s);
+    const inner = new THREE.Group();
+    inner.rotation.y = spin;
+    inner.add(m);
+    registerVehicle(car, inner, slot, meta);
+  }, undefined, err => console.warn('drivable car failed', url, err));
 }

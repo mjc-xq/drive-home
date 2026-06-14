@@ -56,9 +56,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* ---- action cluster (drive + scoop) : exit top-right, others stacked under ---- */
 #exitBtn,#exitScoop{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #camBtn,#shiftLock{position:absolute;top:calc(64px + var(--safe-t));right:calc(12px + var(--safe-r))}
-#carColor{position:absolute;top:64px;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r));
-  width:46px;height:46px;padding:0;border-radius:12px;border:1px solid var(--line);background:#d62a1e;
-  cursor:pointer;box-shadow:var(--shadow)}
+#carSwap{position:absolute;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #shiftLock.on{background:var(--poppy);border-color:transparent}
 
 /* ---- speedometer (bottom-right) ---- */

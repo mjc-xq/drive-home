@@ -6,3 +6,8 @@ scripts/_cache/
 .env
 .env.*
 !.env.example
+
+# local verification artifacts
+.playwright-mcp/
+veh-*.jpeg
+parked-look*.jpeg

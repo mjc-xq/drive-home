@@ -3,7 +3,7 @@ import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp } from './coords.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
-import { createCar, loadRealCar, loadParkedCar, CARSPECS } from './car.js';
+import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, CARSPECS, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
@@ -125,6 +125,7 @@ export function createEngine({ canvas, ui, emit }) {
     const explore = mode === 'explore';
     if (p3dtiles) p3dtiles.holder.visible = explore;
     staticGroup.visible = !(explore && p3dtiles && tilesReady);
+    if (ring) ring.visible = explore;            // the house marker reads as an orange band at ground level
   }
   if (!flags.has('flat')) {
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
@@ -189,6 +190,9 @@ export function createEngine({ canvas, ui, emit }) {
   if (!flags.has('nocar')) {
     installDracoDecoder();
     loadRealCar(car, carGlbUrl, () => toast('Using fallback car model'));
+    // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
+    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, meta: VEHICLES[1] });   // GLB nose runs -Z
+    loadDrivableCar(car, siennaUrl, 2, { length: 5.1, flip: false, meta: VEHICLES[2] }); // GLB nose runs +Z
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
@@ -196,29 +200,27 @@ export function createEngine({ canvas, ui, emit }) {
     const ux = house.c[0] - frontPt[0], uz = house.c[1] - frontPt[1];
     const ul = Math.hypot(ux, uz) || 1, u = [ux / ul, uz / ul], perp = [-u[1], u[0]];
     const carYaw = Math.atan2(-u[0], -u[1]);            // nose toward the street
-    const park = (url, side, len) => {
+    const park = (url, side, len, flip) => {
       const cx = frontPt[0] + u[0] * 7 + perp[0] * side * 2.4;
       const cz = frontPt[1] + u[1] * 7 + perp[1] * side * 2.4;
-      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black: true });
+      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black: true, flip });
       const hl = len / 2, hw = 1.05;                    // footprint collider (vs the driven car)
       bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
     };
-    park(rav4Url, 1, 4.6);
-    park(siennaUrl, -1, 5.1);
+    park(rav4Url, 1, 4.6, false);     // RAV4 nose runs +Z → carYaw already faces it to the street
+    park(siennaUrl, -1, 5.1, true);   // Sienna nose runs -Z → flip 180° to face the street
   }
   let showT = 0;
 
   function showCarCard() {
-    const cs = CARSPECS[car.red ? 0 : 1];
-    emit('carCard', { name: cs.name, spec: cs.spec });
+    const v = car.models[car.modelIdx];
+    const meta = v && v.name ? v : { name: CARSPECS[0].name, spec: CARSPECS[0].spec, credit: 'Ferrari 458 · vicent091036' };
+    emit('carCard', { name: meta.name, spec: meta.spec, credit: meta.credit || '' });
   }
-  function toggleCarColor() {
-    car.red = !car.red;
-    const cs = CARSPECS[car.red ? 0 : 1];
-    car.bodyMat.color.setHex(cs.color);
-    if (car.paint) car.paint.color.setHex(cs.color);
-    emit('carColor', cs.css);
+  function cycleCar() {
+    if (!cycleVehicle(car)) { toast('Only one vehicle loaded'); return; }
     showCarCard();
+    audio.blip();
   }
 
   // (Street-view photo billboards removed — they read as odd roadside signs.
@@ -785,7 +787,6 @@ export function createEngine({ canvas, ui, emit }) {
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
 
   emit('subline', `Hayward, CA · ${S.creek ? S.creek.n + ' · ' : ''}sanctuary: 5 🐷 2 🦆 1 🦎`);
-  emit('carColor', CARSPECS[0].css);
   applyCam();
   renderer.render(scene, camera);
   emit('ready');
@@ -817,7 +818,7 @@ export function createEngine({ canvas, ui, emit }) {
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
     toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
-    focusHouse, cycleCamera, toggleCarColor, dispose,
+    focusHouse, cycleCamera, cycleCar, dispose,
     get mode() { return mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging

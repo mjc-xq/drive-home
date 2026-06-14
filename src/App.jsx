@@ -15,9 +15,8 @@ export default function App() {
   const [subline, setSubline] = useState('Hayward, CA');
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
-  const [carColor, setCarColor] = useState('#e02818');
   const [toast, setToast] = useState({ html: '', show: false });
-  const [carCard, setCarCard] = useState({ name: '', spec: '', show: false });
+  const [carCard, setCarCard] = useState({ name: '', spec: '', credit: '', show: false });
   const toastTimer = useRef(0);
   const cardTimer = useRef(0);
 
@@ -29,9 +28,8 @@ export default function App() {
         case 'subline': setSubline(p); break;
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
-        case 'carColor': setCarColor(p); break;
         case 'carCard':
-          setCarCard({ name: p.name, spec: p.spec, show: true });
+          setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
           clearTimeout(cardTimer.current);
           cardTimer.current = setTimeout(() => setCarCard(c => ({ ...c, show: false })), 3200);
           break;
@@ -92,7 +90,7 @@ export default function App() {
           <div id="hud">
             <div id="speedo"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
             <button id="exitBtn" className="btn" onClick={() => eng().exitDrive()}>Exit ✕</button>
-            <button id="carColor" aria-label="Change car color" style={{ background: carColor }} onClick={() => eng().toggleCarColor()} />
+            <button id="carSwap" className="btn icon" aria-label="Change vehicle" onClick={() => eng().cycleCar()}>🚗</button>
             <button id="camBtn" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
           </div>
         )}
@@ -101,7 +99,7 @@ export default function App() {
           <p>
             {carCard.spec}
             <br />
-            <span style={{ opacity: .5, fontSize: 10, letterSpacing: '.04em' }}>Ferrari 458 · vicent091036 · three.js</span>
+            <span style={{ opacity: .5, fontSize: 10, letterSpacing: '.04em' }}>{carCard.credit ? `${carCard.credit} · three.js` : 'three.js'}</span>
           </p>
         </div>
         {mode === 'scoop' && (
