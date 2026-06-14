@@ -1,0 +1,12 @@
+{
+  "name": "1840 Dahill Lane",
+  "short_name": "1840 Dahill",
+  "description": "Drive and explore a photoreal 3D model of the neighborhood.",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#1a1d22",
+  "theme_color": "#1a1d22",
+  "start_url": "/",
+  "scope": "/"
+}

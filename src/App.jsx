@@ -73,7 +73,7 @@ export default function App() {
             </div>
             <div id="btns">
               <button id="findBtn" className="btn" onClick={() => eng().focusHouse(true)}>Find my house</button>
-              <button id="driveBtn" className="btn" onClick={() => eng().enterDrive()}>Drive 🏎️</button>
+              <button id="driveBtn" className="btn primary" onClick={() => eng().enterDrive()}>Drive 🏎️</button>
               <button id="scoopBtn" className="btn" onClick={() => eng().enterScoop()}>Scoop 💩</button>
             </div>
             <div id="hint" className="chip">
@@ -93,7 +93,7 @@ export default function App() {
             <div id="speedo"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
             <button id="exitBtn" className="btn" onClick={() => eng().exitDrive()}>Exit ✕</button>
             <button id="carColor" aria-label="Change car color" style={{ background: carColor }} onClick={() => eng().toggleCarColor()} />
-            <button id="camBtn" className="btn" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
+            <button id="camBtn" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
           </div>
         )}
         <div id="carCard" className={carCard.show ? 'show' : ''}>
@@ -109,7 +109,7 @@ export default function App() {
             <div id="toolChip" className="chip">{scoopHud.name} <span>{scoopHud.bag}/{scoopHud.cap}</span></div>
             <div id="pooHud" className="chip">💩 {scoopHud.total} scooped · yard {scoopHud.clean}% ✨</div>
             <button id="exitScoop" className="btn" onClick={() => eng().exitScoop()}>Exit ✕</button>
-            <button id="shiftLock" className={'btn' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
+            <button id="shiftLock" className={'btn icon' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
             <div id="lookHint" className="chip">left side to move · drag to look · scroll/pinch zoom · 🔒 shift-lock</div>
           </div>
         )}
