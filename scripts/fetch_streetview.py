@@ -26,9 +26,19 @@ COSLAT = math.cos(math.radians(LAT0))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "src", "assets", "streetview")
 
-KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
-if not KEY:
-    sys.exit("set GOOGLE_MAPS_API_KEY (never hardcode it in the repo)")
+def _load_key():
+    for var in ("GOOGLE_MAPS_API_KEY", "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY"):
+        if os.environ.get(var):
+            return os.environ[var]
+    env = os.path.join(ROOT, ".env.local")
+    if os.path.exists(env):
+        for line in open(env):
+            if line.startswith("NEXT_PUBLIC_GOOGLE_MAPS_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    sys.exit("set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local (never hardcode in the repo)")
+
+
+KEY = _load_key()
 
 
 def en_to_ll(e, n):
