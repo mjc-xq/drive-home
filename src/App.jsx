@@ -127,8 +127,10 @@ export default function App() {
             <button id="exitScoop" className="btn" onClick={() => eng().exitScoop()}>Exit ✕</button>
             <button id="shiftLock" className={'btn icon' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
             <button id="scoopCam" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleScoopCamera()}>🎥</button>
+            <button id="danceBtn" className="btn icon" aria-label="Dance" onClick={() => eng().dance()}>🕺</button>
+            <button id="jumpBtn" className="btn primary icon" aria-label="Jump" onClick={() => eng().jump()}>🦘</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
-            <div id="lookHint" className="chip">left side to move · drag to look · scroll/pinch zoom · 🔒 shift-lock</div>
+            <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · 🕺 dance · 🔒 shift-lock</div>
           </div>
         )}
         <div id="joy" ref={el => (uiRefs.current.joy = el)}><div id="knob" ref={el => (uiRefs.current.knob = el)} /></div>

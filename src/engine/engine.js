@@ -119,6 +119,12 @@ export function createEngine({ canvas, ui, emit }) {
     new THREE.MeshBasicMaterial({ color: 0xd94f1e, depthTest: false, transparent: true, opacity: 0.92 }));
   carMarker.rotation.x = Math.PI; carMarker.renderOrder = 20; carMarker.visible = false; carMarker.frustumCulled = false;
   scene.add(carMarker);
+  // Compost pin: a green pin over the compost bin shown while the keeper is carrying
+  // poop, so the empty-here loop is obvious (drawn through walls from anywhere).
+  const compostMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
+    new THREE.MeshBasicMaterial({ color: 0x3a7d44, depthTest: false, transparent: true, opacity: 0.92 }));
+  compostMarker.rotation.x = Math.PI; compostMarker.renderOrder = 20; compostMarker.visible = false; compostMarker.frustumCulled = false;
+  scene.add(compostMarker);
 
   // Scoop renders the procedural world, so Drew collides with every visible
   // procedural tree (they sit along the streets, clear of the backyard sanctuary).
@@ -633,6 +639,7 @@ export function createEngine({ canvas, ui, emit }) {
         toast(shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
       }
       if (mode === 'scoop' && (e.key === 'e' || e.key === 'E') && nearCar) { driveFromScoop(); e.preventDefault(); return; }
+      if (mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;
       if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = -1;
@@ -695,7 +702,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) groundPatch.visible = false;
     if (scoopGrass) scoopGrass.visible = false;
     if (scoopFence) scoopFence.visible = false;
-    marker.visible = false; carMarker.visible = false;
+    marker.visible = false; carMarker.visible = false; compostMarker.visible = false;
     if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of labelSprites) s.visible = true;
@@ -754,7 +761,13 @@ export function createEngine({ canvas, ui, emit }) {
     // Stand on the procedural yard ground (terrain) — reliable, never sinks into
     // the photoreal. The grass lawn + the actor are both at this height.
     const cy = terrainAt(CHAR.x, CHAR.z);
-    CHAR.group.position.set(CHAR.x, cy + (CHAR.drew ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05), CHAR.z);
+    // jump arc: integrate vertical velocity under gravity; land back on the ground
+    if (CHAR.vy !== 0 || CHAR.airY > 0) {
+      CHAR.airY += CHAR.vy * dt; CHAR.vy -= 22 * dt;
+      if (CHAR.airY <= 0) { CHAR.airY = 0; CHAR.vy = 0; }
+    }
+    const bobY = (CHAR.airY > 0 || CHAR.drew) ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05;
+    CHAR.group.position.set(CHAR.x, cy + CHAR.airY + bobY, CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
     if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
     // always-on-top marker so Drew is never lost behind a real tree
@@ -780,9 +793,14 @@ export function createEngine({ canvas, ui, emit }) {
         } else pushScoopHud();
       }
     }
-    if (COMPOST && CHAR.bag > 0 && Math.hypot(CHAR.x - COMPOST[0], CHAR.z - COMPOST[1]) < 2.3) {
-      CHAR.bag = 0; bagWarned = false; audio.sfxChime([392, 523]); pushScoopHud();
-      toast('Composted ♻️');
+    if (COMPOST) {
+      // green pin over the bin whenever you're carrying — makes the dump-off obvious
+      compostMarker.visible = CHAR.bag > 0;
+      if (compostMarker.visible) compostMarker.position.set(COMPOST[0], terrainAt(COMPOST[0], COMPOST[1]) + 3.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, COMPOST[1]);
+      if (CHAR.bag > 0 && Math.hypot(CHAR.x - COMPOST[0], CHAR.z - COMPOST[1]) < 3) {
+        const dumped = CHAR.bag; CHAR.bag = 0; bagWarned = false; audio.sfxChime([392, 523]); pushScoopHud();
+        toast('Composted ' + dumped + ' ♻️');
+      }
     }
     if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
     if (POOPS.length > 0) spotless = false;
@@ -1220,6 +1238,15 @@ export function createEngine({ canvas, ui, emit }) {
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
     toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
+    // hop: only from the ground; a keyboard Space also jumps (wired in onKeyDown)
+    jump: () => { if (mode === 'scoop' && CHAR.airY <= 0 && CHAR.vy === 0) { CHAR.vy = 8.5; if (audio.blip) audio.blip(); } },
+    // random little celebration (rigged Drew only)
+    dance: () => {
+      if (mode !== 'scoop' || !CHAR.drew) return;
+      const moves = ['dance', 'cheer'];
+      CHAR.drew.react(moves[Math.floor(Math.random() * moves.length)]);
+      if (audio.blip) audio.blip();
+    },
     focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, dispose,
     get mode() { return mode; }
   };

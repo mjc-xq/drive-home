@@ -11,9 +11,9 @@ import poopUrl from '../assets/poop.glb';
 const PIG_YAW = Math.PI / 2;
 
 export const TOOLS = [
-  { name: '🥄 Trowel', r: 1.15, cap: 6 },
-  { name: '🥄 Big Scoop', r: 1.8, cap: 14 },
-  { name: '🦾 MEGA Shovel', r: 2.7, cap: 40 }
+  { name: '🥄 Trowel', r: 1.6, cap: 16 },
+  { name: '🥄 Big Scoop', r: 2.3, cap: 32 },
+  { name: '🦾 MEGA Shovel', r: 3.2, cap: 80 }
 ];
 
 // Pure progression rule: lifetime total scooped unlocks bigger tools.
@@ -249,7 +249,7 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
 // The walking keeper (poppy cap) with the three swappable scooper tools.
 export function createCharacter(scene, SREC) {
   // spawn in the open yard on the shed's door side, clear of the house box
-  const CHAR = { x: SREC.shed[0] - 2.5, z: SREC.shed[1] - 2.5, yaw: Math.PI, group: new THREE.Group(), scoops: [], lvl: 0, bag: 0, total: 0, bob: 0 };
+  const CHAR = { x: SREC.shed[0] - 2.5, z: SREC.shed[1] - 2.5, yaw: Math.PI, group: new THREE.Group(), scoops: [], lvl: 0, bag: 0, total: 0, bob: 0, vy: 0, airY: 0 };
   const b = critterBuilder();
   b.addBox(0.16, 0.34, 0.13, 0, 0.17, 0.1, 0x33424e); b.addBox(0.16, 0.34, 0.13, 0, 0.17, -0.1, 0x33424e);
   b.addBox(0.34, 0.42, 0.26, 0, 0.56, 0, 0x3f6b6b);
