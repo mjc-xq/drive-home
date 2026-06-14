@@ -11,6 +11,7 @@ export default function App() {
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
+  const [picking, setPicking] = useState(true);   // start menu: pick a mode before playing
   const [mode, setMode] = useState('explore');
   const [subline, setSubline] = useState('Hayward, CA');
   const [shiftLock, setShiftLock] = useState(false);
@@ -64,6 +65,19 @@ export default function App() {
         id="scene" ref={canvasRef} tabIndex={0}
         aria-label="Interactive 3D model of 1840 Dahill Lane with drivable neighborhood"
       />
+      {ready && picking && (
+        <div id="startMenu">
+          <div className="startCard">
+            <h1><em>1840</em> Dahill Lane</h1>
+            <p>Choose how to explore</p>
+            <div className="startBtns">
+              <button className="btn primary" onClick={() => setPicking(false)}>🛰️ Explore</button>
+              <button className="btn primary" onClick={() => { setPicking(false); eng().enterDrive(); }}>🏎️ Drive</button>
+              <button className="btn primary" onClick={() => { setPicking(false); eng().enterScoop(); }}>💩 Scoop</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div id="ui" ref={el => (uiRefs.current.box = el)} className={mode}>
         {mode === 'explore' && (
           <>
@@ -110,6 +124,7 @@ export default function App() {
             <div id="pooHud" className="chip">💩 {scoopHud.total} scooped · yard {scoopHud.clean}% ✨</div>
             <button id="exitScoop" className="btn" onClick={() => eng().exitScoop()}>Exit ✕</button>
             <button id="shiftLock" className={'btn icon' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
+            <button id="scoopCam" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleScoopCamera()}>🎥</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
             <div id="lookHint" className="chip">left side to move · drag to look · scroll/pinch zoom · 🔒 shift-lock</div>
           </div>

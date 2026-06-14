@@ -107,9 +107,11 @@ export function createEngine({ canvas, ui, emit }) {
   // Cleared scoop zone: the sanctuary is flattened clear of photoreal trees, so
   // the keeper must NOT collide with the (now-invisible) procedural trees in it —
   // otherwise Drew bumps obstacles that aren't there. Pre-filter them out.
-  const sancCx = (SREC.pen[0] + SREC.coop[0] + SREC.shed[0]) / 3;
-  const sancCz = (SREC.pen[1] + SREC.coop[1] + SREC.shed[1]) / 3;
-  const SCOOP_CLEAR_R = 22;          // backyard-property radius (grass yard); photoreal beyond
+  // Yard centre + radius cover the user's backyard PROPERTY: behind the house all
+  // the way to the creek (creek ~x-33, house at origin) — so the flat/procedural
+  // area is the real property; photoreal streams beyond it.
+  const sancCx = -16, sancCz = -10;
+  const SCOOP_CLEAR_R = 25;
   const scoopTrees = treePts.filter(t => Math.hypot(t[0] - sancCx, t[1] - sancCz) > SCOOP_CLEAR_R);
 
   // The scoop backyard: a disc of the REAL procedural ground — true topology
@@ -747,10 +749,10 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) groundPatch.visible = false;
     if (scoopGrass) scoopGrass.visible = true;
     if (scoopFence) scoopFence.visible = true;
-    // follow cam — fairly top-down over the backyard so the yard fills the view
-    // (Drew + poop clear) and the photoreal only frames the edges, not a wall.
+    // follow cam — preset (Overhead / Angled / Close), cycled with the 🎥 button.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const dist = (10 + scPitch * 5) * szoom, h = (19 + scPitch * 6) * Math.max(0.75, szoom);
+    const SC = SCOOP_CAMS[scCam];
+    const dist = (SC.dist + scPitch * 5) * szoom, h = (SC.h + scPitch * 6) * Math.max(0.75, szoom);
     camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
     const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
@@ -819,6 +821,17 @@ export function createEngine({ canvas, ui, emit }) {
     camMode = (camMode + 1) % 3; camInit = false;
     if (camMode !== 2) camera.up.set(0, 1, 0);
     toast('Camera: ' + CAMNAMES[camMode], 1100);
+  }
+  // Scoop camera presets [dist, height] — cycled with the 🎥 button.
+  const SCOOP_CAMS = [
+    { name: 'Overhead', dist: 10, h: 19 },
+    { name: 'Angled', dist: 16, h: 12 },
+    { name: 'Close', dist: 9, h: 6 }
+  ];
+  let scCam = 0;
+  function cycleScoopCamera() {
+    scCam = (scCam + 1) % SCOOP_CAMS.length; camInit = false;
+    toast('Camera: ' + SCOOP_CAMS[scCam].name, 1100);
   }
   // March the subject->camera segment and pull the camera in before it would
   // enter a building below that building's roofline.
@@ -1087,7 +1100,7 @@ export function createEngine({ canvas, ui, emit }) {
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
     toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
-    focusHouse, cycleCamera, cycleCar, driveFromScoop, dispose,
+    focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, dispose,
     get mode() { return mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging

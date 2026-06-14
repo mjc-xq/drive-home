@@ -56,9 +56,21 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* ---- action cluster (drive + scoop) : exit top-right, others stacked under ---- */
 #exitBtn,#exitScoop{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #camBtn,#shiftLock{position:absolute;top:calc(64px + var(--safe-t));right:calc(12px + var(--safe-r))}
+#scoopCam{position:absolute;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #carSwap{position:absolute;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #getInCar{position:absolute;bottom:calc(118px + var(--safe-b));left:50%;transform:translateX(-50%);animation:popIn .2s ease}
 @keyframes popIn{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
+
+/* ---- start menu (pick a mode) ---- */
+#startMenu{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  background:rgba(18,22,26,.5);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);animation:fadeIn .25s ease}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.startCard{text-align:center;padding:26px 30px;border-radius:20px;background:var(--glass);border:1px solid var(--line);box-shadow:var(--shadow);max-width:90vw}
+.startCard h1{font-size:30px;font-weight:700;letter-spacing:.02em}
+.startCard h1 em{font-style:italic;color:var(--poppy)}
+.startCard p{opacity:.72;margin:6px 0 18px;font-size:13px}
+.startBtns{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.startBtns .btn{font-size:16px;padding:12px 20px}
 #shiftLock.on{background:var(--poppy);border-color:transparent}
 
 /* ---- speedometer (bottom-right) ---- */
