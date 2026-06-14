@@ -147,3 +147,39 @@ export function loadRealCar(car, url, onFallback) {
     }, undefined, err => { clearTimeout(timer); fail(err); });
   } catch (e) { clearTimeout(timer); fail(e); }
 }
+
+// Load a plain (non-Draco) car GLB (RAV4 / Sienna), normalize it to ~`length`
+// metres sitting on the ground centred on origin, optionally paint it near-black
+// (skipping glass/lights/chrome), and place it at (x,y,z)+yaw under `parent`.
+export function loadParkedCar(parent, url, opts = {}, onReady) {
+  const { x = 0, y = 0, z = 0, yaw = 0, length = 4.6, black = true } = opts;
+  new GLTFLoader().load(url, g => {
+    const inner = g.scene;
+    inner.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(inner), size = new THREE.Vector3();
+    box.getSize(size);
+    const s = length / (Math.max(size.x, size.z) || 1);
+    inner.traverse(o => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      if (!black || !o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        const nm = ((m.name || '') + (o.name || '')).toLowerCase();
+        if (m.color && !/glass|light|tail|head|lamp|mirror|chrome|window|plate|signal|amber/.test(nm)) {
+          m.color.setHex(0x17191d);
+          if (m.metalness !== undefined) m.metalness = 0.45;
+          if (m.roughness !== undefined) m.roughness = 0.5;
+        }
+      }
+    });
+    inner.scale.setScalar(s);
+    inner.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s);
+    const grp = new THREE.Group();
+    grp.add(inner);
+    grp.position.set(x, y, z);
+    grp.rotation.y = yaw;
+    parent.add(grp);
+    if (onReady) onReady(grp);
+  }, undefined, err => console.warn('parked car failed', url, err));
+}

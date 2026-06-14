@@ -3,11 +3,13 @@ import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp } from './coords.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
-import { createCar, loadRealCar, CARSPECS } from './car.js';
+import { createCar, loadRealCar, loadParkedCar, CARSPECS } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
+import rav4Url from '../assets/rav4.glb';
+import siennaUrl from '../assets/sienna.glb';
 
 // The whole game lives here, imperative three.js — React only renders the HUD.
 // Communication: engine -> UI via emit(type, payload) for low-frequency state,
@@ -187,6 +189,22 @@ export function createEngine({ canvas, ui, emit }) {
   if (!flags.has('nocar')) {
     installDracoDecoder();
     loadRealCar(car, carGlbUrl, () => toast('Using fallback car model'));
+  }
+  // Two black Toyotas parked in the driveway (part of the clean ground world;
+  // staticGroup, so they show at ground level, not over the photoreal aerial).
+  if (frontPt && !flags.has('nocar')) {
+    const ux = house.c[0] - frontPt[0], uz = house.c[1] - frontPt[1];
+    const ul = Math.hypot(ux, uz) || 1, u = [ux / ul, uz / ul], perp = [-u[1], u[0]];
+    const carYaw = Math.atan2(-u[0], -u[1]);            // nose toward the street
+    const park = (url, side, len) => {
+      const cx = frontPt[0] + u[0] * 7 + perp[0] * side * 2.4;
+      const cz = frontPt[1] + u[1] * 7 + perp[1] * side * 2.4;
+      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black: true });
+      const hl = len / 2, hw = 1.05;                    // footprint collider (vs the driven car)
+      bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
+    };
+    park(rav4Url, 1, 4.6);
+    park(siennaUrl, -1, 5.1);
   }
   let showT = 0;
 
