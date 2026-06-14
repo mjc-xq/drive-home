@@ -26,6 +26,31 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   tiles.registerPlugin(new GoogleCloudAuthPlugin({ apiToken: key, autoRefreshToken: true }));
   tiles.registerPlugin(new GLTFExtensionsPlugin({ dracoLoader: draco, ktxLoader: ktx2 }));
   tiles.registerPlugin(new TileCompressionPlugin());
+
+  // Look cohesion: photoreal tile textures already carry baked lighting, but as
+  // MeshStandard they get re-lit by the sun AND double sRGB-decoded (GLTFLoader
+  // forces baseColor to sRGB while the rest of the scene runs ColorManagement
+  // off). Both darken them. Treat tiles as an UNLIT backdrop: NoColorSpace map +
+  // MeshBasic + a small gain so they read like the bright aerial. Registered
+  // before TilesFadePlugin so the fade still wraps the final material.
+  const tileGain = { value: opts.tileGain ?? 1.3 };
+  tiles.tileGain = tileGain;
+  tiles.registerPlugin({
+    name: 'DAHILL_LOOK',
+    processTileModel(scene) {
+      scene.traverse(o => {
+        if (!o.isMesh || o.isBatchedMesh) return;
+        const src = o.material;
+        const map = src && src.map ? src.map : null;
+        if (map) map.colorSpace = THREE.NoColorSpace;
+        const m = new THREE.MeshBasicMaterial({ map, side: THREE.FrontSide });
+        m.toneMapped = false;
+        m.color.setScalar(tileGain.value);
+        o.material = m;
+      });
+      return Promise.resolve();
+    }
+  });
   tiles.registerPlugin(new TilesFadePlugin());
   tiles.registerPlugin(new ReorientationPlugin({
     lat: opts.lat, lon: opts.lon, height: opts.height ?? 0,
@@ -35,6 +60,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   tiles.setCamera(camera);
   tiles.setResolutionFromRenderer(camera, renderer);
   tiles.errorTarget = opts.errorTarget ?? 16;          // pixel error; higher = lighter
+  tiles.displayActiveTiles = true;                      // keep off-camera tiles for ground raycasts
 
   // ReorientationPlugin owns tiles.group's transform (anchors the lat/lon to
   // the origin), so the scene-space offset that aligns the photoreal ground to

@@ -70,17 +70,34 @@ export function createEngine({ canvas, ui, emit }) {
     p3dtiles.holder.position.y = P3DT.yOffset;
     p3dtiles.holder.rotation.y = P3DT.spin * DEG;
   };
-  // Raycast the photoreal ground straight down through the world origin and lift
-  // the holder so it matches the procedural terrain height there — auto-aligns
-  // the geoid/ellipsoid gap instead of hand-tuning yOffset.
-  const _ray = new THREE.Raycaster();
+  // ---- ground height authority ----
+  // groundAt(x,z) = the photoreal tile surface height under (x,z), via a cheap
+  // firstHitOnly down-ray; falls back to the procedural terrain until tiles load.
+  // This REPLACES terrainAt for ACTOR + CAMERA height only — collision stays on
+  // the data (bldPolys/treePts), so the invariant is untouched.
+  const _downRay = new THREE.Raycaster(); _downRay.firstHitOnly = true;
+  const _gO = new THREE.Vector3(), _gD = new THREE.Vector3(0, -1, 0), _gHits = [];
+  function groundAt(x, z, fallback) {
+    if (p3dtiles && p3dtiles.group.visible) {
+      _downRay.set(_gO.set(x, 600, z), _gD); _downRay.far = 1200; _gHits.length = 0;
+      p3dtiles.raycast(_downRay, _gHits);
+      if (_gHits.length) return _gHits[0].point.y;
+    }
+    return fallback != null ? fallback : terrainAt(x, z);
+  }
+  // Auto-align the photoreal world vertically: median of a ring of down-rays at
+  // the origin → lift the holder so the tile ground meets terrainAt(0,0).
   function alignP3DT() {
     if (!p3dtiles || !p3dtiles.holder) return false;
-    _ray.set(new THREE.Vector3(0, 2000, 0), new THREE.Vector3(0, -1, 0));
-    _ray.far = 4000;
-    const hit = _ray.intersectObject(p3dtiles.group, true)[0];
-    if (!hit) return false;
-    P3DT.yOffset += terrainAt(0, 0) - hit.point.y; applyP3DT();
+    const ys = [];
+    for (const [dx, dz] of [[0, 0], [4, 0], [-4, 0], [0, 4], [0, -4]]) {
+      _downRay.set(_gO.set(dx, 600, dz), _gD); _downRay.far = 1200; _gHits.length = 0;
+      p3dtiles.raycast(_downRay, _gHits);
+      if (_gHits.length) ys.push(_gHits[0].point.y);
+    }
+    if (ys.length < 3) return false;
+    ys.sort((a, b) => a - b);
+    P3DT.yOffset += terrainAt(0, 0) - ys[ys.length >> 1]; applyP3DT();
     return true;
   }
   if (!flags.has('flat')) {
@@ -89,16 +106,16 @@ export function createEngine({ canvas, ui, emit }) {
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
       p3dtiles = createPhotorealTiles(scene, camera, renderer, {
-        lat: houseLat, lon: houseLon, errorTarget: 18
+        lat: houseLat, lon: houseLon, errorTarget: 16
       });
       if (!p3dtiles) return;
       applyP3DT();
       let hidden = false, tries = 0;
-      // hide the procedural world once real tile geometry arrives, and snap the
-      // vertical alignment off the first tiles that cover the origin.
+      // hide the procedural world once real tile geometry arrives, and keep
+      // snapping the vertical alignment as origin tiles stream in/refine.
       p3dtiles.addEventListener('load-model', () => {
         if (!hidden) { hidden = true; staticGroup.visible = false; emit('photoreal', true); }
-        if (tries < 8) { tries++; alignP3DT(); }
+        if (tries < 24) { tries++; alignP3DT(); }
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
   }
@@ -123,7 +140,7 @@ export function createEngine({ canvas, ui, emit }) {
   const audio = createAudio();
 
   let scoopHudDirty = false;
-  const animals = createAnimals(scene, { terrainAt, SREC, bldBoxes, onPoopChange: () => { scoopHudDirty = true; } });
+  const animals = createAnimals(scene, { terrainAt: groundAt, SREC, bldBoxes, onPoopChange: () => { scoopHudDirty = true; } });
   const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
   const CHAR = createCharacter(scene, SREC);
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
@@ -421,7 +438,7 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.x = nx; CHAR.z = nz;
       CHAR.bob += dt * 10 * mag;
     } else CHAR.bob += dt * 1.5;
-    const cy = terrainAt(CHAR.x, CHAR.z);
+    const cy = groundAt(CHAR.x, CHAR.z);
     CHAR.group.position.set(CHAR.x, cy + Math.abs(Math.sin(CHAR.bob)) * 0.05, CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
     // scooping
@@ -457,7 +474,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (g < 1) { camT.set(CHAR.x + (camT.x - CHAR.x) * g, cy + 1.1 + (camT.y - cy - 1.1) * g, CHAR.z + (camT.z - CHAR.z) * g); }
     if (!camInit) { camV.copy(camT); camInit = true; }
     camV.lerp(camT, Math.min(1, dt * 6));
-    camV.y = Math.max(camV.y, terrainAt(camV.x, camV.z) + 1.2);
+    camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.2);
     camera.position.copy(camV);
     camera.lookAt(CHAR.x, cy + 1.0, CHAR.z);
   }
@@ -587,10 +604,10 @@ export function createEngine({ canvas, ui, emit }) {
     const lim = 314;
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= -0.2; }
     car.x = nx; car.z = nz;
-    const yC = terrainAt(car.x, car.z);
-    const yF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), yB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
+    const yC = groundAt(car.x, car.z);
+    const yF = groundAt(car.x + fx * 1.4, car.z + fz * 1.4), yB = groundAt(car.x - fx * 1.4, car.z - fz * 1.4);
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
-    const yR = terrainAt(car.x + rxv * 0.9, car.z + rzv * 0.9), yL = terrainAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
+    const yR = groundAt(car.x + rxv * 0.9, car.z + rzv * 0.9), yL = groundAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
     const pitch = Math.atan2(yB - yF, 2.8), roll = Math.atan2(yR - yL, 1.8);
     car.group.position.set(car.x, yC + 0.06, car.z);
     car.group.rotation.set(0, 0, 0);
@@ -608,7 +625,7 @@ export function createEngine({ canvas, ui, emit }) {
       // showcase orbit on entry; any input skips it
       showT -= dt;
       const a = car.yaw + 2.4 + (2.8 - showT) * 1.35;
-      let cx2 = car.x + Math.sin(a) * 6.6, cy2 = Math.max(yC + 1.7, terrainAt(cx2, car.z) + 1.2), cz2 = car.z + Math.cos(a) * 6.6;
+      let cx2 = car.x + Math.sin(a) * 6.6, cy2 = Math.max(yC + 1.7, groundAt(cx2, car.z) + 1.2), cz2 = car.z + Math.cos(a) * 6.6;
       const g = resolveCam(car.x, yC + 1.0, car.z, cx2, cy2, cz2); // don't orbit into real tiles
       cx2 = car.x + (cx2 - car.x) * g; cy2 = yC + 1.0 + (cy2 - yC - 1.0) * g; cz2 = car.z + (cz2 - car.z) * g;
       camera.position.set(cx2, cy2, cz2);
@@ -630,7 +647,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, Math.min(1, dt * 4.6));
-      camV.y = Math.max(camV.y, terrainAt(camV.x, camV.z) + 1.3);
+      camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.3);
       camera.position.copy(camV);
       camera.lookAt(car.x, yC + 1.0, car.z);
     }
