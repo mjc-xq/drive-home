@@ -275,6 +275,10 @@ export function createEngine({ canvas, ui, emit }) {
     P3DT.yOffset = clamp(P3DT.yOffset + adjust, 8, 56);
     applyP3DT();
     alignDone = true;
+    // The flatten shape's local coords were baked against the OLD holder offset;
+    // now that the offset moved, drop it so flattenScoopArea() rebuilds the
+    // clearing floor against the corrected matrix (else it drifts by `adjust`).
+    if (flatShape && p3dtiles.flatten) { try { p3dtiles.flatten.deleteShape(flatShape); } catch (e) { /* idempotent */ } flatShape = null; }
     return true;
   }
   // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
@@ -301,18 +305,29 @@ export function createEngine({ canvas, ui, emit }) {
   let flatShape = null;
   function flattenScoopArea() {
     if (flatShape || !p3dtiles || !p3dtiles.flatten || !p3dtiles.holder.visible) return;
-    const cx = (SREC.pen[0] + SREC.coop[0] + SREC.shed[0]) / 3;
-    const cz = (SREC.pen[1] + SREC.coop[1] + SREC.shed[1]) / 3;
+    const cx = sancCx, cz = sancCz;              // concentric with the grass yard + fence
     if (rawTileY(cx, cz) == null) return;        // wait until sanctuary tiles are streamed
-    const gy = terrainAt(cx, cz);                // flatten TO the reliable ground height (not a coarse tile)
     const g = p3dtiles.group; g.updateWorldMatrix(true, false);
-    const R = SCOOP_CLEAR_R + 4, N = 56, pos = [], idx = [], v = new THREE.Vector3();   // flatten a touch past the yard edge
-    g.worldToLocal(v.set(cx, gy, cz)); pos.push(v.x, v.y, v.z);
-    for (let i = 0; i <= N; i++) {
-      const a = i / N * Math.PI * 2;
-      g.worldToLocal(v.set(cx + Math.cos(a) * R, gy, cz + Math.sin(a) * R));
-      pos.push(v.x, v.y, v.z);
-      if (i > 0) idx.push(0, i, i + 1);
+    // Pancake onto the REAL topology (0.3 m below the grass, which sits at
+    // terrainAt+0.05), tessellated like the grass disc — so the clearing follows
+    // the yard's slope toward the creek instead of a flat pad that steps above
+    // the lawn where the ground falls away, and the grass always covers it.
+    // The flatten disc reaches WELL PAST the grass/fence (R+14 vs grass R+4): the
+    // extra ring pancakes the melty creek/property-line trees that would
+    // otherwise wall off the view right behind the fence, leaving flat open
+    // ground out to the neighborhood, where distant houses stay full 3D.
+    const R = SCOOP_CLEAR_R + 14, rings = 14, segs = 56, pos = [], idx = [], v = new THREE.Vector3();
+    const addV = (x, z) => { g.worldToLocal(v.set(x, terrainAt(x, z) - 0.3, z)); pos.push(v.x, v.y, v.z); };
+    addV(cx, cz);                                             // vertex 0 = centre
+    for (let r = 1; r <= rings; r++) {
+      const rad = R * r / rings;
+      for (let s = 0; s <= segs; s++) { const a = s / segs * Math.PI * 2; addV(cx + Math.cos(a) * rad, cz + Math.sin(a) * rad); }
+    }
+    const rowStart = r => 1 + (r - 1) * (segs + 1);
+    for (let s = 0; s < segs; s++) idx.push(0, rowStart(1) + s + 1, rowStart(1) + s);
+    for (let r = 1; r < rings; r++) {
+      const a = rowStart(r), b = rowStart(r + 1);
+      for (let s = 0; s < segs; s++) { idx.push(a + s, b + s, a + s + 1); idx.push(a + s + 1, b + s, b + s + 1); }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -334,11 +349,14 @@ export function createEngine({ canvas, ui, emit }) {
       let tries = 0;
       p3dtiles.addEventListener('load-model', () => {
         if (!tilesReady) { tilesReady = true; emit('photoreal', true); }
-        // align ONLY from the overhead Explore view (clean ground samples near the
-        // house); doing it from the Scoop backyard cam hits trees/roofs and yanks
-        // the whole photoreal off (floating actors). Flatten after it settles.
-        if (tries < 24 && mode === 'explore') { tries++; alignP3DT(); }
-        if (mode === 'explore') flattenScoopArea();   // build the clearing from the stable overhead view
+        // Align + flatten as the relevant tiles stream — in ANY mode. The start
+        // menu jumps straight to Scoop, so we can't wait for an Explore orbit:
+        // the scoop cam sits at the backyard and FORCES those exact sanctuary
+        // tiles to load, which is the best moment to pancake the clearing. The
+        // robust guards in alignP3DT (reject |adjust|>18, need 8 clean samples)
+        // keep a backyard-cam align from yanking the photoreal off.
+        if (tries < 24) { tries++; alignP3DT(); }
+        flattenScoopArea();           // self-gates on rawTileY + flatShape; builds once
         applyModeVisuals();          // hide procedural in explore once tiles are up
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
@@ -450,7 +468,18 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   let mode = 'explore';
-  const setMode = m => { mode = m; emit('mode', m); applyModeVisuals(); };
+  const setMode = m => {
+    mode = m;
+    // Scoop plays at ground level where the photoreal horizon turns to melt; pull
+    // the fog in close (haze color = background) so the distant photogrammetry
+    // dissolves softly instead of reading as a melty wall — the play area within
+    // ~35 m stays crisp. Other modes keep the far aerial fog.
+    if (scene.fog) {
+      if (m === 'scoop') { scene.fog.near = 38; scene.fog.far = 92; }
+      else { scene.fog.near = 460; scene.fog.far = 1200; }
+    }
+    emit('mode', m); applyModeVisuals();
+  };
   const ptrs = new Map(); let lastPinch = 0, lastMid = null, moved = 0;
   const lookPtrs = new Map();
   const camOrbit = { yaw: 0, pitch: 0, t: 0 };
@@ -824,9 +853,9 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Scoop camera presets [dist, height] — cycled with the 🎥 button.
   const SCOOP_CAMS = [
-    { name: 'Overhead', dist: 10, h: 19 },
-    { name: 'Angled', dist: 16, h: 12 },
-    { name: 'Close', dist: 9, h: 6 }
+    { name: 'Overhead', dist: 10, h: 19 },   // ~62° down: near top-down
+    { name: 'Angled', dist: 14, h: 15 },     // ~47° down: tilts past the melty horizon to the yard
+    { name: 'Close', dist: 9, h: 7.5 }       // ~40° down: low follow, still off the horizon
   ];
   let scCam = 0;
   function cycleScoopCamera() {
