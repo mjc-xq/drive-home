@@ -522,18 +522,36 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // March the subject->camera segment and pull the camera in before it would
   // enter a building below that building's roofline.
+  const _camRayO = new THREE.Vector3(), _camRayD = new THREE.Vector3();
+  const camRay = new THREE.Raycaster();
   function resolveCam(tx, ty, tz, px, py, pz) {
+    let g = 1;
+    // procedural buildings: march subject->camera, pull in before a wall
     const steps = 14;
     for (let s = 3; s <= steps; s++) {
       const f = s / steps;
       const x = tx + (px - tx) * f, y = ty + (py - ty) * f, z = tz + (pz - tz) * f;
       for (const bb of bldBoxes) {
         if (x > bb[0] && x < bb[1] && z > bb[2] && z < bb[3] && y < (bb[4] || 99)) {
-          return Math.max(0.2, (s - 1.5) / steps);
+          g = Math.max(0.2, (s - 1.5) / steps); s = steps + 1; break;
         }
       }
     }
-    return 1;
+    // photoreal tiles: raycast the same segment against the real (tall, dense)
+    // tile geometry — the procedural bldBoxes are hidden, so this is what keeps
+    // the chase/follow cam from burying itself in real trees & houses.
+    if (p3dtiles && p3dtiles.group.visible) {
+      _camRayD.set(px - tx, py - ty, pz - tz);
+      const dist = _camRayD.length();
+      if (dist > 0.05) {
+        _camRayD.multiplyScalar(1 / dist);
+        camRay.set(_camRayO.set(tx, ty, tz), _camRayD);
+        camRay.far = dist;
+        const hit = camRay.intersectObject(p3dtiles.group, true)[0];
+        if (hit) g = Math.min(g, Math.max(0.12, (hit.distance - 0.6) / dist));
+      }
+    }
+    return g;
   }
 
   function updateDrive(dt, now) {
@@ -602,8 +620,10 @@ export function createEngine({ canvas, ui, emit }) {
       // showcase orbit on entry; any input skips it
       showT -= dt;
       const a = car.yaw + 2.4 + (2.8 - showT) * 1.35;
-      const cx2 = car.x + Math.sin(a) * 6.6, cz2 = car.z + Math.cos(a) * 6.6;
-      camera.position.set(cx2, Math.max(yC + 1.7, terrainAt(cx2, cz2) + 1.2), cz2);
+      let cx2 = car.x + Math.sin(a) * 6.6, cy2 = Math.max(yC + 1.7, terrainAt(cx2, car.z) + 1.2), cz2 = car.z + Math.cos(a) * 6.6;
+      const g = resolveCam(car.x, yC + 1.0, car.z, cx2, cy2, cz2); // don't orbit into real tiles
+      cx2 = car.x + (cx2 - car.x) * g; cy2 = yC + 1.0 + (cy2 - yC - 1.0) * g; cz2 = car.z + (cz2 - car.z) * g;
+      camera.position.set(cx2, cy2, cz2);
       camera.lookAt(car.x, yC + 0.7, car.z);
     } else if (camMode === 2) {
       const camT = new THREE.Vector3(car.x, yC + 52 * czoom, car.z);
