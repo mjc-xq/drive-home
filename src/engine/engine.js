@@ -79,14 +79,18 @@ export function createEngine({ canvas, ui, emit }) {
   // the data (bldPolys/treePts), so the invariant is untouched.
   const _downRay = new THREE.Raycaster(); _downRay.firstHitOnly = true;
   const _gO = new THREE.Vector3(), _gD = new THREE.Vector3(0, -1, 0), _gHits = [];
-  function rawTileY(x, z) {
-    if (!p3dtiles || !p3dtiles.group.visible) return null;
-    _downRay.set(_gO.set(x, 600, z), _gD); _downRay.far = 1200; _gHits.length = 0;
+  function rawTileY(x, z, fromY) {
+    if (!p3dtiles || !p3dtiles.holder.visible) return null;
+    // Cast from `fromY` (default high). Casting from just above an actor skips
+    // tree canopies / eaves overhead, so we read the ROAD under them, not the
+    // canopy — that's what keeps the car from climbing trees.
+    const oy = fromY != null ? fromY : 600;
+    _downRay.set(_gO.set(x, oy, z), _gD); _downRay.far = oy + 700; _gHits.length = 0;
     p3dtiles.raycast(_downRay, _gHits);
     return _gHits.length ? _gHits[0].point.y : null;
   }
-  function groundAt(x, z, fallback) {
-    const y = rawTileY(x, z);
+  function groundAt(x, z, fallback, fromY) {
+    const y = rawTileY(x, z, fromY);
     if (y != null) return y;
     return fallback != null ? fallback : terrainAt(x, z);
   }
@@ -110,6 +114,16 @@ export function createEngine({ canvas, ui, emit }) {
     alignDone = true;
     return true;
   }
+  // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
+  // built (procedural) world at ground level (Drive/Scoop). The groundAt + camera
+  // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
+  // and never climb the bumpy photogrammetry mesh.
+  let tilesReady = false;
+  function applyModeVisuals() {
+    const explore = mode === 'explore';
+    if (p3dtiles) p3dtiles.holder.visible = explore;
+    staticGroup.visible = !(explore && p3dtiles && tilesReady);
+  }
   if (!flags.has('flat')) {
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
     const houseLat = (LAT0 + C[1] / 110540) * DEG;
@@ -120,12 +134,11 @@ export function createEngine({ canvas, ui, emit }) {
       });
       if (!p3dtiles) return;
       applyP3DT();
-      let hidden = false, tries = 0;
-      // hide the procedural world once real tile geometry arrives, and keep
-      // snapping the vertical alignment as origin tiles stream in/refine.
+      let tries = 0;
       p3dtiles.addEventListener('load-model', () => {
-        if (!hidden) { hidden = true; staticGroup.visible = false; emit('photoreal', true); }
+        if (!tilesReady) { tilesReady = true; emit('photoreal', true); }
         if (tries < 24) { tries++; alignP3DT(); }
+        applyModeVisuals();          // hide procedural in explore once tiles are up
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
   }
@@ -165,7 +178,7 @@ export function createEngine({ canvas, ui, emit }) {
   const audio = createAudio();
 
   let scoopHudDirty = false;
-  const animals = createAnimals(scene, { terrainAt: groundAt, SREC, bldBoxes, onPoopChange: () => { scoopHudDirty = true; } });
+  const animals = createAnimals(scene, { terrainAt, SREC, bldBoxes, onPoopChange: () => { scoopHudDirty = true; } });
   const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
   const CHAR = createCharacter(scene, SREC);
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
@@ -213,7 +226,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   let mode = 'explore';
-  const setMode = m => { mode = m; emit('mode', m); };
+  const setMode = m => { mode = m; emit('mode', m); applyModeVisuals(); };
   const ptrs = new Map(); let lastPinch = 0, lastMid = null, moved = 0;
   const lookPtrs = new Map();
   const camOrbit = { yaw: 0, pitch: 0, t: 0 };
@@ -570,7 +583,7 @@ export function createEngine({ canvas, ui, emit }) {
     // photoreal tiles: raycast the same segment against the real (tall, dense)
     // tile geometry — the procedural bldBoxes are hidden, so this is what keeps
     // the chase/follow cam from burying itself in real trees & houses.
-    if (p3dtiles && p3dtiles.group.visible) {
+    if (p3dtiles && p3dtiles.holder.visible) {
       _camRayD.set(px - tx, py - ty, pz - tz);
       const dist = _camRayD.length();
       if (dist > 0.05) {
@@ -730,7 +743,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
-    if (p3dtiles) { camera.updateMatrixWorld(); p3dtiles.update(); }
+    if (p3dtiles && mode === 'explore') { camera.updateMatrixWorld(); p3dtiles.update(); }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
