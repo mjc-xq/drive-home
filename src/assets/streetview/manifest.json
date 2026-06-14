@@ -1,1 +1,38 @@
-{}
+{
+ "Grove Way": {
+  "file": "sv_grove_way.jpg",
+  "heading": 58,
+  "date": "2019-06",
+  "copyright": "\u00a9 Google"
+ },
+ "Idena Avenue": {
+  "file": "sv_idena_avenue.jpg",
+  "heading": 194,
+  "date": "2024-11",
+  "copyright": "\u00a9 Google"
+ },
+ "Hill Avenue": {
+  "file": "sv_hill_avenue.jpg",
+  "heading": 53,
+  "date": "2025-04",
+  "copyright": "\u00a9 Google"
+ },
+ "Linden Street": {
+  "file": "sv_linden_street.jpg",
+  "heading": 144,
+  "date": "2025-04",
+  "copyright": "\u00a9 Google"
+ },
+ "B Street": {
+  "file": "sv_b_street.jpg",
+  "heading": 55,
+  "date": "2022-03",
+  "copyright": "\u00a9 Google"
+ },
+ "Moyers Street": {
+  "file": "sv_moyers_street.jpg",
+  "heading": 147,
+  "date": "2025-04",
+  "copyright": "\u00a9 Google"
+ }
+}
