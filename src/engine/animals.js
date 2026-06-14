@@ -143,6 +143,7 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
     for (const m of [poopBrown, poopPale]) { m.geometry = geo; m.material = mat; }
   });
   const POOPS = [];
+  const VANISH = [];        // poops mid scoop-pop animation (idx still reserved)
   const poopM = new THREE.Matrix4();
 
   function spawnPoop(a) {
@@ -150,24 +151,41 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
     const pale = a.kind === 'duck';
     const mesh = pale ? poopPale : poopBrown;
     let idx = -1;
-    const used = POOPS.filter(p => p.mesh === mesh).map(p => p.idx);
+    // skip indices still in use by a live poop OR one mid-vanish (else the pop
+    // animation would fight a freshly spawned poop on the same instance slot)
+    const used = [...POOPS, ...VANISH].filter(p => p.mesh === mesh).map(p => p.idx);
     for (let i = 0; i < POOP_MAX; i++) if (used.indexOf(i) < 0) { idx = i; break; }
     if (idx < 0) return;
     const x = a.x - Math.sin(a.yaw) * 0.55, z = a.z - Math.cos(a.yaw) * 0.55;
     const s = a.kind === 'pig' ? 1.25 : a.kind === 'iguana' ? 0.9 : 0.6;
-    poopM.makeScale(s, s, s); poopM.setPosition(x, terrainAt(x, z) + 0.12 * s, z);
+    const y = terrainAt(x, z) + 0.12 * s;
+    poopM.makeScale(s, s, s); poopM.setPosition(x, y, z);
     mesh.setMatrixAt(idx, poopM); mesh.instanceMatrix.needsUpdate = true;
-    POOPS.push({ mesh, idx, x, z });
+    POOPS.push({ mesh, idx, x, z, s, y });
     if (onPoopChange) onPoopChange();
   }
 
+  // Scoop juice: a quick squash-pop (scale up then poof to 0 with a hop) instead
+  // of snapping the instance to scale 0 — the core reward verb gets real feedback.
   function removePoop(p) {
-    p.mesh.setMatrixAt(p.idx, ZERO); p.mesh.instanceMatrix.needsUpdate = true;
     POOPS.splice(POOPS.indexOf(p), 1);
+    VANISH.push({ mesh: p.mesh, idx: p.idx, x: p.x, z: p.z, y: p.y, s: p.s || 0.8, t: 0 });
     if (onPoopChange) onPoopChange();
+  }
+  function tickVanish(dt) {
+    for (let i = VANISH.length - 1; i >= 0; i--) {
+      const v = VANISH[i]; v.t += dt;
+      const k = v.t / 0.16;
+      if (k >= 1) { v.mesh.setMatrixAt(v.idx, ZERO); v.mesh.instanceMatrix.needsUpdate = true; VANISH.splice(i, 1); continue; }
+      const m = k < 0.3 ? 1 + (k / 0.3) * 0.45 : 1.45 * (1 - (k - 0.3) / 0.7);  // 1 -> 1.45 -> 0
+      const sc = v.s * Math.max(0, m);
+      poopM.makeScale(sc, sc, sc); poopM.setPosition(v.x, v.y + Math.sin(k * Math.PI) * 0.35, v.z);
+      v.mesh.setMatrixAt(v.idx, poopM); v.mesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   function updateAnimals(dt, now) {
+    if (VANISH.length) tickVanish(dt);   // scoop-pop animations
     for (const a of ANIMALS) {
       if (a.wait > 0) { a.wait -= dt; }
       else {

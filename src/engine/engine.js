@@ -108,6 +108,12 @@ export function createEngine({ canvas, ui, emit }) {
     new THREE.MeshBasicMaterial({ color: 0xd94f1e, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
   navMarker.rotation.x = -Math.PI / 2; navMarker.renderOrder = 19; navMarker.visible = false; navMarker.frustumCulled = false;
   scene.add(navMarker);
+  // Scoop walk-to-drive cue: a tall poppy pin that floats high over the nearest
+  // parked car (drawn through walls) so the keeper can find it from the backyard.
+  const carMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
+    new THREE.MeshBasicMaterial({ color: 0xd94f1e, depthTest: false, transparent: true, opacity: 0.92 }));
+  carMarker.rotation.x = Math.PI; carMarker.renderOrder = 20; carMarker.visible = false; carMarker.frustumCulled = false;
+  scene.add(carMarker);
 
   // Scoop renders the procedural world, so Drew collides with every visible
   // procedural tree (they sit along the streets, clear of the backyard sanctuary).
@@ -676,7 +682,7 @@ export function createEngine({ canvas, ui, emit }) {
     camYawS = CHAR.yaw;
     audio.ensure();
     setTool(CHAR.lvl);
-    toast('Scoop the sanctuary poop! 💩<br><small>Empty your scoop at the green compost bin</small>', 2600);
+    toast('Scoop the sanctuary poop! 💩<br><small>Empty at the green compost bin · the 📍 pin marks a car you can drive</small>', 3200);
   }
   function exitScoop() {
     setMode('explore');
@@ -684,7 +690,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) groundPatch.visible = false;
     if (scoopGrass) scoopGrass.visible = false;
     if (scoopFence) scoopFence.visible = false;
-    marker.visible = false;
+    marker.visible = false; carMarker.visible = false;
     if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of labelSprites) s.visible = true;
@@ -786,7 +792,10 @@ export function createEngine({ canvas, ui, emit }) {
     // follow cam — preset (Overhead / Angled / Close), cycled with the 🎥 button.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
     const SC = SCOOP_CAMS[scCam];
-    const dist = (SC.dist + scPitch * 5) * szoom, h = (SC.h + scPitch * 6) * Math.max(0.75, szoom);
+    // vertical look = TILT only (raise/lower the camera height); pinch/scroll
+    // (szoom) is the sole distance control. Mirrors Drive (pitch->height, zoom->dist)
+    // instead of the old dolly that stacked scPitch into both dist AND szoom.
+    const dist = SC.dist * szoom, h = (SC.h + scPitch * 9) * Math.max(0.75, szoom);
     camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
     const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
@@ -794,10 +803,17 @@ export function createEngine({ canvas, ui, emit }) {
     camV.y = Math.max(camV.y, terrainAt(camV.x, camV.z) + 1.2);
     camera.position.copy(camV);
     camera.lookAt(CHAR.x, cy + 1.0, CHAR.z);
-    // walk-to-drive: prompt when Drew reaches a parked car in the driveway
-    let near = false;
-    for (const s of parkedSpots) if (Math.hypot(CHAR.x - s.x, CHAR.z - s.z) < 3.6) { near = true; break; }
+    // walk-to-drive: prompt when Drew reaches a parked car in the driveway, and
+    // float a pin over the nearest car so the handoff is discoverable from the yard.
+    let near = false, best = null, bestD = 1e9;
+    for (const s of parkedSpots) {
+      const d = Math.hypot(CHAR.x - s.x, CHAR.z - s.z);
+      if (d < 3.6) near = true;
+      if (d < bestD) { bestD = d; best = s; }
+    }
     if (near !== nearCar) { nearCar = near; emit('nearCar', near); }
+    carMarker.visible = !!best && !near;
+    if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
   }
   // hop from walking straight into driving (the car spawns at the driveway)
   function driveFromScoop() {
@@ -882,7 +898,8 @@ export function createEngine({ canvas, ui, emit }) {
   // March the subject->camera segment and pull the camera in before it would
   // enter a building below that building's roofline.
   const _camRayO = new THREE.Vector3(), _camRayD = new THREE.Vector3();
-  const camRay = new THREE.Raycaster();
+  const camRay = new THREE.Raycaster(); camRay.firstHitOnly = true;
+  const _camHits = [];
   function resolveCam(tx, ty, tz, px, py, pz) {
     let g = 1;
     // procedural buildings: march subject->camera, pull in before a wall
@@ -906,7 +923,12 @@ export function createEngine({ canvas, ui, emit }) {
         _camRayD.multiplyScalar(1 / dist);
         camRay.set(_camRayO.set(tx, ty, tz), _camRayD);
         camRay.far = dist;
-        const hit = camRay.intersectObject(p3dtiles.group, true)[0];
+        // tiles.raycast prunes by per-tile bounding volume + early-exits on the
+        // first hit — far cheaper than intersectObject(group, true), which tested
+        // every triangle of every loaded tile each frame.
+        _camHits.length = 0;
+        p3dtiles.raycast(camRay, _camHits);
+        const hit = _camHits[0];
         if (hit) g = Math.min(g, Math.max(0.12, (hit.distance - 0.6) / dist));
       }
     }
