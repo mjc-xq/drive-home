@@ -152,13 +152,9 @@ export function createEngine({ canvas, ui, emit }) {
   //  Real street imagery now lives on the buildings: photoreal Google 3D Tiles
   //  when enabled, the procedural facade texture otherwise.)
 
-  // ---------- dollhouse roof ----------
-  let insideOpen = false, roofAnim = 0; // 0 closed -> 1 open
-  function setInside(open) {
-    insideOpen = open;
-    emit('inside', open);
-    if (open) { ctl.gtx = house.c[0]; ctl.gtz = house.c[1]; ctl.gty = house.baseY + 3; ctl.gr = 30; ctl.gpo = 0.48; }
-  }
+  // "Look inside" (dollhouse) removed — keep the procedural interior hidden.
+  interiorGroup.visible = false;
+  const setInside = () => {}; // no-op stub for the remaining callers
 
   // ---------- controls (explore) ----------
   const ctl = {
@@ -289,7 +285,6 @@ export function createEngine({ canvas, ui, emit }) {
     if (e.pointerId === movePtr) hideJoy();
     lookPtrs.delete(e.pointerId);
     if (lookPtrs.size < 2) pinchD = 0;
-    if (mode === 'explore' && ptrs.size === 1 && moved < 6) tapAt(e.clientX, e.clientY);
     ptrs.delete(e.pointerId); lastPinch = 0; lastMid = null;
     if (!ptrs.size) canvas.classList.remove('dragging');
   }
@@ -314,13 +309,6 @@ export function createEngine({ canvas, ui, emit }) {
     ctl.gtx = clamp(ctl.gtx - rx * dx * s + fx * dy * s, -310, 310);
     ctl.gtz = clamp(ctl.gtz - rz * dx * s + fz * dy * s, -310, 310);
     ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3;
-  }
-
-  function tapAt(x, y) {
-    const r = canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
-    const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, camera);
-    if (rc.intersectObjects(house.meshes).length) setInside(!insideOpen);
   }
 
   function focusHouse(close) {
@@ -677,15 +665,6 @@ export function createEngine({ canvas, ui, emit }) {
     if (disposed) return;
     const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
     if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
-    // roof animation
-    const target = insideOpen ? 1 : 0;
-    roofAnim += (target - roofAnim) * Math.min(1, dt * 5);
-    if (house.roof) {
-      house.roof.position.y = roofAnim * 9;
-      house.roof.material.opacity = 1 - roofAnim * 0.92;
-      house.roof.material.emissiveIntensity = 0.4 * (1 - roofAnim);
-    }
-    interiorGroup.visible = roofAnim > 0.04 || mode === 'explore';
     updateAnimals(dt, now); // ambient life in every mode
     if (mode === 'drive') {
       updateDrive(dt, now);
@@ -764,7 +743,6 @@ export function createEngine({ canvas, ui, emit }) {
 
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
-    toggleInside: () => setInside(!insideOpen),
     toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
     focusHouse, cycleCamera, toggleCarColor, dispose,
     get mode() { return mode; }

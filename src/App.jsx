@@ -13,7 +13,6 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState('explore');
   const [subline, setSubline] = useState('Hayward, CA');
-  const [inside, setInside] = useState(false);
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [carColor, setCarColor] = useState('#e02818');
@@ -28,7 +27,6 @@ export default function App() {
         case 'ready': setReady(true); break;
         case 'mode': setMode(p); break;
         case 'subline': setSubline(p); break;
-        case 'inside': setInside(p); break;
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'carColor': setCarColor(p); break;
@@ -75,7 +73,6 @@ export default function App() {
             </div>
             <div id="btns">
               <button id="findBtn" className="btn" onClick={() => eng().focusHouse(true)}>Find my house</button>
-              <button id="insideBtn" className="btn" onClick={() => eng().toggleInside()}>{inside ? 'Close roof' : 'Peek inside'}</button>
               <button id="driveBtn" className="btn" onClick={() => eng().enterDrive()}>Drive 🏎️</button>
               <button id="scoopBtn" className="btn" onClick={() => eng().enterScoop()}>Scoop 💩</button>
             </div>
