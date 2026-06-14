@@ -13,3 +13,7 @@ veh-*.jpeg
 parked-look*.jpeg
 scoop-*.jpeg
 drive-*.jpeg
+
+# scratch screenshots at repo root (debug only)
+/*.jpeg
+/*.png
