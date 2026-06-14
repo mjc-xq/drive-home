@@ -9,10 +9,11 @@ export const CARYAW = -Math.PI / 2;
 // Fixed-slot vehicle roster: index = the order the swap button cycles through,
 // regardless of which GLB finishes loading first. credit feeds the car card;
 // VEHICLES[0] also doubles as the fallback card when no GLB has loaded yet.
+// Order = the cycle order; slot 0 is the DEFAULT driven vehicle (the minivan).
 export const VEHICLES = [
-  { slot: 0, name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', credit: 'Ferrari 458 · vicent091036' },
+  { slot: 0, name: 'GLIDE LE', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: 'Toyota Sienna' },
   { slot: 1, name: 'TRAIL XSE', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: 'Toyota RAV4' },
-  { slot: 2, name: 'GLIDE LE', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: 'Toyota Sienna' }
+  { slot: 2, name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', credit: 'Ferrari 458 · vicent091036' }
 ];
 
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.
@@ -148,8 +149,8 @@ export function loadRealCar(car, url, onFallback) {
         const inner = new THREE.Group();
         inner.rotation.y = CARYAW;
         inner.add(m);
-        registerVehicle(car, inner, 0, VEHICLES[0]);
-        if (car.models[0]) car.models[0].wheels = wheels;   // Ferrari wheels spin on X
+        registerVehicle(car, inner, 2, VEHICLES[2]);        // Ferrari is slot 2 now
+        if (car.models[2]) car.models[2].wheels = wheels;   // Ferrari wheels spin on X
         car.glb = true;
         settled = true;                                     // last: a throw above still hits fallback
         clearTimeout(timer);

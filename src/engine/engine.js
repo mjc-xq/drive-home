@@ -96,6 +96,42 @@ export function createEngine({ canvas, ui, emit }) {
   const carsGroup = new THREE.Group(); scene.add(carsGroup);
   const parkedSpots = [];
 
+  // Always-visible marker pin above the keeper (Scoop) — drawn on top of the
+  // photoreal so Drew is never lost behind a real tree blob.
+  const marker = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
+  marker.rotation.x = Math.PI; marker.renderOrder = 20; marker.visible = false; marker.frustumCulled = false;
+  scene.add(marker);
+
+  // Cleared scoop zone: the sanctuary is flattened clear of photoreal trees, so
+  // the keeper must NOT collide with the (now-invisible) procedural trees in it —
+  // otherwise Drew bumps obstacles that aren't there. Pre-filter them out.
+  const sancCx = (SREC.pen[0] + SREC.coop[0] + SREC.shed[0]) / 3;
+  const sancCz = (SREC.pen[1] + SREC.coop[1] + SREC.shed[1]) / 3;
+  const SCOOP_CLEAR_R = 30;
+  const scoopTrees = treePts.filter(t => Math.hypot(t[0] - sancCx, t[1] - sancCz) > SCOOP_CLEAR_R);
+  // Building collision for Scoop: drop the small sanctuary props (coop/shed/barn)
+  // that sit inside the cleared zone — they're hidden under the photoreal, so
+  // colliding with them = bumping nothing. Keep the house + anything large.
+  const scoopBldPolys = bldPolys.filter(b => {
+    const w = b.bb[1] - b.bb[0], h = b.bb[3] - b.bb[2];
+    const near = Math.hypot((b.bb[0] + b.bb[1]) / 2 - sancCx, (b.bb[2] + b.bb[3]) / 2 - sancCz) < SCOOP_CLEAR_R;
+    return !(near && Math.max(w, h) < 12);
+  });
+  function insideScoopBuilding(x, z) {
+    for (const b of scoopBldPolys) {
+      const bb = b.bb;
+      if (x < bb[0] || x > bb[1] || z < bb[2] || z > bb[3]) continue;
+      const p = b.p; let inside = false;
+      for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+        const xi = p[i][0], zi = p[i][1], xj = p[j][0], zj = p[j][1];
+        if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+      }
+      if (inside) return true;
+    }
+    return false;
+  }
+
   // ---------- photoreal Google 3D Tiles (default; ?flat disables) ----------
   // Streams the real, textured neighborhood — every house, fence, tree — and
   // hides the procedural staticGroup once tiles arrive. The procedural world
@@ -162,9 +198,11 @@ export function createEngine({ canvas, ui, emit }) {
       const y = rawTileY(Math.cos(a) * 14, Math.sin(a) * 14);
       if (y != null) ys.push(y);
     }
-    if (ys.length < 6) return false;          // wait until enough tiles loaded
+    if (ys.length < 8) return false;          // wait until enough clean samples
     ys.sort((a, b) => a - b);
-    P3DT.yOffset = clamp(P3DT.yOffset + (terrainAt(0, 0) - ys[ys.length >> 1]), -10, 90);
+    const adjust = terrainAt(0, 0) - ys[ys.length >> 1];
+    if (Math.abs(adjust) > 18) return false;  // garbage (rays hit roofs/voids/coarse tiles) — retry
+    P3DT.yOffset = clamp(P3DT.yOffset + adjust, 8, 56);
     applyP3DT();
     alignDone = true;
     return true;
@@ -185,20 +223,52 @@ export function createEngine({ canvas, ui, emit }) {
     carsGroup.visible = mode === 'drive' || mode === 'scoop';   // parked cars: ground modes only
     if (ring) ring.visible = mode === 'explore';   // marker only makes sense from the air
   }
+  // Clear the scoop yard: flatten the photoreal tiles over the sanctuary so the
+  // real trees/melt there are pancaked to the ground (a clean clearing to scoop
+  // in), while the photoreal neighborhood stays full 3D further out. The shape
+  // lives in tiles.group's local frame; we flatten DOWN (world-down in that
+  // frame) so anything above the terrain in the disc collapses to it.
+  let flatShape = null;
+  function flattenScoopArea() {
+    if (flatShape || !p3dtiles || !p3dtiles.flatten || !p3dtiles.holder.visible) return;
+    const cx = (SREC.pen[0] + SREC.coop[0] + SREC.shed[0]) / 3;
+    const cz = (SREC.pen[1] + SREC.coop[1] + SREC.shed[1]) / 3;
+    if (rawTileY(cx, cz) == null) return;        // wait until sanctuary tiles are streamed
+    const gy = terrainAt(cx, cz);                // flatten TO the reliable ground height (not a coarse tile)
+    const g = p3dtiles.group; g.updateWorldMatrix(true, false);
+    const R = 32, N = 56, pos = [], idx = [], v = new THREE.Vector3();
+    g.worldToLocal(v.set(cx, gy, cz)); pos.push(v.x, v.y, v.z);
+    for (let i = 0; i <= N; i++) {
+      const a = i / N * Math.PI * 2;
+      g.worldToLocal(v.set(cx + Math.cos(a) * R, gy, cz + Math.sin(a) * R));
+      pos.push(v.x, v.y, v.z);
+      if (i > 0) idx.push(0, i, i + 1);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    flatShape = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    const dir = new THREE.Vector3(0, -1, 0).transformDirection(new THREE.Matrix4().copy(g.matrixWorld).invert());
+    p3dtiles.flatten.addShape(flatShape, dir, { threshold: Infinity, thresholdMode: 'flatten', flattenRange: 0 });
+  }
   if (!flags.has('flat')) {
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
     const houseLat = (LAT0 + C[1] / 110540) * DEG;
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
       p3dtiles = createPhotorealTiles(scene, camera, renderer, {
-        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: 16
+        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: 10   // sharper tiles (was 16)
       });
       if (!p3dtiles) return;
       applyP3DT();
       let tries = 0;
       p3dtiles.addEventListener('load-model', () => {
         if (!tilesReady) { tilesReady = true; emit('photoreal', true); }
-        if (tries < 24) { tries++; alignP3DT(); }
+        // align ONLY from the overhead Explore view (clean ground samples near the
+        // house); doing it from the Scoop backyard cam hits trees/roofs and yanks
+        // the whole photoreal off (floating actors). Flatten after it settles.
+        if (tries < 24 && mode === 'explore') { tries++; alignP3DT(); }
+        if (mode === 'explore') flattenScoopArea();   // build the clearing from the stable overhead view
         applyModeVisuals();          // hide procedural in explore once tiles are up
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
@@ -251,8 +321,8 @@ export function createEngine({ canvas, ui, emit }) {
     installDracoDecoder();
     cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
     // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
-    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });   // GLB nose runs -Z; black baked into the GLB (keeps taillights)
-    loadDrivableCar(car, siennaUrl, 2, { length: 5.1, flip: true, black: false, meta: VEHICLES[2] }); // GLB nose runs -Z; black baked into the GLB (keeps taillights)
+    loadDrivableCar(car, siennaUrl, 0, { length: 5.1, flip: false, black: false, meta: VEHICLES[0] }); // minivan = default (slot 0)
+    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });    // RAV4 GLB nose runs -Z
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
@@ -520,6 +590,7 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('explore');
     camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
     if (groundPatch) groundPatch.visible = false;
+    marker.visible = false;
     if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of labelSprites) s.visible = true;
@@ -548,12 +619,12 @@ export function createEngine({ canvas, ui, emit }) {
       // collide against real building/structure footprints (not the oversized
       // AABBs) and slide along the wall — otherwise the house's AABB walls off
       // half the open lawn around the keeper's spawn.
-      if (insideBuilding(nx, nz)) {
-        if (!insideBuilding(nx, CHAR.z)) nz = CHAR.z;
-        else if (!insideBuilding(CHAR.x, nz)) nx = CHAR.x;
+      if (insideScoopBuilding(nx, nz)) {
+        if (!insideScoopBuilding(nx, CHAR.z)) nz = CHAR.z;
+        else if (!insideScoopBuilding(CHAR.x, nz)) nx = CHAR.x;
         else { nx = CHAR.x; nz = CHAR.z; }
       }
-      for (const t of treePts) {
+      for (const t of scoopTrees) {
         const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.55 + rad;
         if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = t[0] + dx / d * rr; nz = t[1] + dz / d * rr; }
       }
@@ -572,6 +643,10 @@ export function createEngine({ canvas, ui, emit }) {
     CHAR.group.position.set(CHAR.x, cy + (CHAR.drew ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05), CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
     if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
+    // always-on-top marker so Drew is never lost behind a real tree
+    marker.visible = true;
+    marker.position.set(CHAR.x, cy + 2.6 + Math.abs(Math.sin(now * 0.004)) * 0.22, CHAR.z);
+    marker.rotation.y = now * 0.003;
     // scooping
     const tool = TOOLS[CHAR.lvl];
     for (let i = POOPS.length - 1; i >= 0; i--) {
@@ -603,13 +678,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) {
       const show = !!(p3dtiles && p3dtiles.holder.visible);
       groundPatch.visible = show;
-      if (show) { groundPatch.scale.setScalar(0.28); groundPatch.position.set(CHAR.x, cy + 0.04, CHAR.z); }
+      if (show) { groundPatch.scale.setScalar(0.62); groundPatch.position.set(CHAR.x, cy + 0.04, CHAR.z); }
     }
-    // follow cam — high enough to clear the real backyard tree canopy (the
-    // sanctuary sits in a treed yard), so the photoreal reads clean instead of
-    // burying the camera in a blob. Flies over the melt, static-ish altitude.
+    // follow cam — lower/closer now that the scoop yard is flattened clear of
+    // trees, so Drew reads big and easy to track; photoreal stays 3D further out.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const dist = (14 + scPitch * 4) * szoom, h = (17 + scPitch * 6) * Math.max(0.75, szoom);
+    const dist = (9.5 + scPitch * 4) * szoom, h = (8 + scPitch * 6) * Math.max(0.75, szoom);
     camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
     const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
