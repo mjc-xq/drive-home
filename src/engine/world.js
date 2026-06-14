@@ -136,7 +136,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   }
 
   // ---------- streets (crisp ribbons over the aerial) ----------
-  function buildRoads(filter, lift, color, op) {
+  function buildRoads(filter, lift, color, op, wScale = 1) {
     const pos = [], idx = []; let vi = 0;
     for (const r of S.roads) {
       if (!filter(r)) continue;
@@ -148,7 +148,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
         if (k === r.p.length - 2) pts.push([bx, bz]);
       }
       if (pts.length < 2) continue;
-      const hw = r.w / 2;
+      const hw = r.w / 2 * wScale;
       for (let k = 0; k < pts.length; k++) {
         const p = pts[k], q = pts[Math.min(k + 1, pts.length - 1)], o = pts[Math.max(k - 1, 0)];
         let dx = q[0] - o[0], dz = q[1] - o[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
@@ -165,8 +165,8 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color, roughness: .96, side: THREE.DoubleSide, transparent: true, opacity: op }));
     m.receiveShadow = true; sadd(m);
   }
-  buildRoads(r => r.k === 'residential' || r.k === 'tertiary', 0.18, 0x76777b, 0.92);
-  buildRoads(r => r.k === 'service', 0.13, 0xa39f96, 0.85);
+  buildRoads(r => r.k === 'residential' || r.k === 'tertiary', 0.18, 0x53565c, 0.95, 0.72);
+  buildRoads(r => r.k === 'service', 0.13, 0x6f6c68, 0.88, 0.72);
 
   const { onRoad } = buildRoadMask(S.roads, W);
 
@@ -199,12 +199,12 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       const mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
       if (ox * (mx - cx) + oz * (mz - cz) < 0) { ox = -ox; oz = -oz; }
       const yaw = Math.atan2(ox, oz);
-      const n = Math.min(6, Math.floor((L - 1.8) / 2.3));
-      const start = (L - (n - 1) * 2.3) / 2;
+      const n = Math.min(3, Math.floor((L - 1.8) / 3.4));
+      const start = (L - (n - 1) * 3.4) / 2;
       for (const ry of rows) {
         if (ry + 0.6 > base + wallH) continue;
         for (let k = 0; k < n; k++) {
-          const d = start + k * 2.3;
+          const d = start + k * 3.4;
           if (i === bestEdge && ry === rows[0]) {
             if (Math.abs(d - L / 2) < 1.0) continue; // leave room for the door
             if (hasGarage && Math.abs(d - (L / 2 + garageOff)) < garageW / 2 + 0.55) continue;
@@ -232,6 +232,18 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
 
   const ctxWalls = [], ctxTops = [];
   const house = { meshes: [], roof: null, bbox: null, baseY: 0 };
+  // Real Hayward homes are stucco in varied tones with contrasting gray shingle
+  // roofs — uniform tan + washed roofs read as generic apartment blocks. Pick a
+  // per-house wall + roof from realistic palettes so each reads as its own home.
+  const WALL_PALETTE = [
+    0xf1ece1, 0xe7ddca, 0xd9cbb0, 0xcdbb9c, 0xe0d8c8, 0xcfd1c9,
+    0xc4ccce, 0xbcc6b6, 0xd8c3a4, 0xb9c2cb, 0xe6dcc0, 0xc9b8a6,
+    0xdfe0da, 0xc7b59a
+  ].map(h => new THREE.Color(h));
+  const ROOF_PALETTE = [
+    0x55565a, 0x6a6963, 0x4c4f54, 0x726a5e, 0x5e564c, 0x83807a,
+    0x615d57, 0x6f5d4c, 0x4a4b4f, 0x97603f   // mostly gray shingle, a couple browns/terracotta
+  ].map(h => new THREE.Color(h));
   const wallBase = new THREE.Color(0xe6dfd2);
   const bldBoxes = [];
   // Per-building footprint polygons (world frame) for car collision. The car
@@ -277,10 +289,13 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
         { color: 0xdf5524, roughness: .62, emissive: 0x3a1205, emissiveIntensity: .4, side: THREE.DoubleSide, transparent: true }));
       rm.castShadow = true; sadd(rm); house.meshes.push(rm); house.roof = rm;
     } else {
-      const wc = wallBase.clone().offsetHSL((rand() - 0.5) * 0.015, (rand() - 0.5) * 0.04, (rand() - 0.5) * 0.05);
+      const wc = WALL_PALETTE[Math.floor(rand() * WALL_PALETTE.length)].clone()
+        .offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.04);
       ctxWalls.push({ g: parts.side, color: wc });
-      ctxTops.push({ g: parts.top, color: WHITE });
-      for (const g of roofGs) ctxTops.push({ g, color: WHITE });
+      const rc = ROOF_PALETTE[Math.floor(rand() * ROOF_PALETTE.length)].clone()
+        .offsetHSL(0, (rand() - 0.5) * 0.03, (rand() - 0.5) * 0.05);
+      ctxTops.push({ g: parts.top, color: rc });
+      for (const g of roofGs) ctxTops.push({ g, color: rc });
     }
   }
   // ---- textured building sides ----
@@ -330,7 +345,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   {
     const wallsMesh = new THREE.Mesh(merge(ctxWalls), facadeMat());
     wallsMesh.castShadow = wallsMesh.receiveShadow = true; sadd(wallsMesh);
-    const topsMesh = new THREE.Mesh(merge(ctxTops, uvAt), aerialMat);
+    const topsMesh = new THREE.Mesh(merge(ctxTops), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .88 }));
     topsMesh.castShadow = topsMesh.receiveShadow = true; sadd(topsMesh);
     const facMesh = new THREE.Mesh(merge(FACADE),
       new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .35, metalness: .15 }));
