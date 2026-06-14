@@ -112,33 +112,46 @@ export function createEngine({ canvas, ui, emit }) {
   const SCOOP_CLEAR_R = 22;          // backyard-property radius (grass yard); photoreal beyond
   const scoopTrees = treePts.filter(t => Math.hypot(t[0] - sancCx, t[1] - sancCz) > SCOOP_CLEAR_R);
 
-  // Crisp grass lawn for the scoop yard: the flattened sanctuary is a blurry
-  // photogrammetry smear up close, so cover it with a clean procedural lawn that
-  // fades into the photoreal neighborhood beyond — high-quality + usable ground.
+  // The scoop backyard: a disc of the REAL procedural ground — true topology
+  // (terrainAt heights) + the aerial photo (uvAt on the shared terrain material),
+  // not a flat green pad. The photoreal neighborhood streams beyond it.
   let scoopGrass = null;
   {
-    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
-    const cx2 = cv.getContext('2d'); cx2.fillStyle = '#4f6e38'; cx2.fillRect(0, 0, 128, 128);
-    for (let i = 0; i < 2600; i++) {
-      cx2.fillStyle = `rgba(${52 + (Math.random() * 60 | 0)},${82 + (Math.random() * 64 | 0)},${36 + (Math.random() * 44 | 0)},0.5)`;
-      cx2.fillRect(Math.random() * 128, Math.random() * 128, 1.4, 3.2);
+    const R = SCOOP_CLEAR_R + 4, rings = 24, segs = 60, pos = [], uv = [], idx = [];
+    const addV = (x, z) => { pos.push(x, terrainAt(x, z) + 0.05, z); const t = uvAt(x, z); uv.push(t[0], t[1]); };
+    addV(sancCx, sancCz);                                   // vertex 0 = centre
+    for (let r = 1; r <= rings; r++) {
+      const rad = R * r / rings;
+      for (let s = 0; s <= segs; s++) { const a = s / segs * Math.PI * 2; addV(sancCx + Math.cos(a) * rad, sancCz + Math.sin(a) * rad); }
     }
-    const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    const gR = SCOOP_CLEAR_R + 2, geo = new THREE.CircleGeometry(gR, 80); geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
-      uniforms: { map: { value: tex }, rInv: { value: 1 / gR } },
-      vertexShader: `varying vec2 vUv; varying float vR;
-        void main(){ vUv = uv * 22.0; vR = length(position.xz);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `uniform sampler2D map; uniform float rInv; varying vec2 vUv; varying float vR;
-        void main(){ float a = 1.0 - smoothstep(0.62, 1.0, vR * rInv);
-          gl_FragColor = vec4(texture2D(map, vUv).rgb, a); }`
-    });
-    scoopGrass = new THREE.Mesh(geo, mat);
-    scoopGrass.position.set(sancCx, terrainAt(sancCx, sancCz) + 0.05, sancCz);
+    const rowStart = r => 1 + (r - 1) * (segs + 1);
+    for (let s = 0; s < segs; s++) idx.push(0, rowStart(1) + s + 1, rowStart(1) + s);
+    for (let r = 1; r < rings; r++) {
+      const a = rowStart(r), b = rowStart(r + 1);
+      for (let s = 0; s < segs; s++) { idx.push(a + s, b + s, a + s + 1); idx.push(a + s + 1, b + s, b + s + 1); }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    // lit aerial terrain material (matches the procedural ground) + a radial alpha
+    // fade at the rim so the yard blends into the photoreal neighborhood beyond.
+    const yardMat = aerialMat.clone();
+    yardMat.transparent = true; yardMat.depthWrite = false;
+    yardMat.onBeforeCompile = sh => {
+      sh.uniforms.uYC = { value: new THREE.Vector2(sancCx, sancCz) };
+      sh.uniforms.uYR = { value: R };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPy;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPy = (modelMatrix * vec4(transformed,1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPy; uniform vec2 uYC; uniform float uYR;')
+        .replace('#include <dithering_fragment>', 'gl_FragColor.a *= 1.0 - smoothstep(uYR * 0.72, uYR * 0.98, distance(vWPy.xz, uYC));\n#include <dithering_fragment>');
+    };
+    yardMat.customProgramCacheKey = () => 'scoopYard';
+    scoopGrass = new THREE.Mesh(geo, yardMat);
     scoopGrass.renderOrder = 2; scoopGrass.visible = false; scoopGrass.frustumCulled = false;
+    scoopGrass.receiveShadow = true;
     scene.add(scoopGrass);
   }
 
@@ -734,10 +747,10 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) groundPatch.visible = false;
     if (scoopGrass) scoopGrass.visible = true;
     if (scoopFence) scoopFence.visible = true;
-    // follow cam — high/back enough to see the photoreal neighborhood beyond the
-    // grass yard, while Drew + poop stay readable on the lawn.
+    // follow cam — fairly top-down over the backyard so the yard fills the view
+    // (Drew + poop clear) and the photoreal only frames the edges, not a wall.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const dist = (15 + scPitch * 4) * szoom, h = (15 + scPitch * 6) * Math.max(0.75, szoom);
+    const dist = (10 + scPitch * 5) * szoom, h = (19 + scPitch * 6) * Math.max(0.75, szoom);
     camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
     const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
