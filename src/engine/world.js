@@ -352,6 +352,52 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     sadd(facMesh);
   }
 
+  // ---------- front-yard fences & hedges ----------
+  // A block with bare verges reads as empty lots. For each home, find the
+  // street-facing edge and set a low hedge or wood fence on the yard line
+  // between the house and the road (never in the road, never walling it off).
+  {
+    const fenceParts = [], hedgeParts = [];
+    const woodC = new THREE.Color(0x8c7a58), hedgeC = new THREE.Color(0x46603c);
+    for (const b of S.buildings) {
+      if (b.house || rand() < 0.3) continue;                 // some lots left open
+      const poly = b.p.map(W);
+      let cx = 0, cz = 0; for (const p of poly) { cx += p[0]; cz += p[1]; } cx /= poly.length; cz /= poly.length;
+      // longest edge whose outward side reaches a street within a few metres
+      let best = null, bestScore = 0;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], q = poly[(i + 1) % poly.length];
+        const L = Math.hypot(q[0] - a[0], q[1] - a[1]);
+        if (L < 5) continue;
+        const dx = (q[0] - a[0]) / L, dz = (q[1] - a[1]) / L;
+        let ox = dz, oz = -dx;
+        const mx = (a[0] + q[0]) / 2, mz = (a[1] + q[1]) / 2;
+        if (ox * (mx - cx) + oz * (mz - cz) < 0) { ox = -ox; oz = -oz; }
+        let dist = 1; while (dist < 7 && !onRoad(mx + ox * dist, mz + oz * dist)) dist += 0.5;
+        if (dist >= 7) continue;                             // edge doesn't face a street
+        if (L > bestScore) { bestScore = L; best = { a, q, L, dx, dz, ox, oz, mx, mz, dist }; }
+      }
+      if (!best) continue;
+      const setback = Math.min(best.dist - 1.2, 3.0);        // sit in the yard, off the road
+      if (setback < 0.8) continue;                           // no room for a yard
+      const { mx, mz, dx, dz, ox, oz, L } = best;
+      const span = L * 0.72, yaw = Math.atan2(ox, oz);
+      const px = mx + ox * setback, pz = mz + oz * setback;
+      const my = terrainAt(px, pz);
+      if (rand() < 0.5) {
+        const g = new THREE.BoxGeometry(span, 0.82, 0.55).toNonIndexed();
+        g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw)); g.translate(px, my + 0.41, pz);
+        hedgeParts.push({ g, color: hedgeC.clone().offsetHSL(0, (rand() - 0.5) * 0.06, (rand() - 0.5) * 0.05) });
+      } else {
+        const g = new THREE.BoxGeometry(span, 0.95, 0.07).toNonIndexed();
+        g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw)); g.translate(px, my + 0.47, pz);
+        fenceParts.push({ g, color: woodC.clone().offsetHSL(0, 0, (rand() - 0.5) * 0.06) });
+      }
+    }
+    if (hedgeParts.length) { const m = new THREE.Mesh(merge(hedgeParts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .96 })); m.castShadow = true; sadd(m); }
+    if (fenceParts.length) { const m = new THREE.Mesh(merge(fenceParts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .82 })); m.castShadow = true; sadd(m); }
+  }
+
   // ---------- interior (dollhouse) ----------
   const floorY = house.baseY + 0.62;
   function rectXform(rect) {
