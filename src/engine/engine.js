@@ -307,7 +307,9 @@ export function createEngine({ canvas, ui, emit }) {
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
       p3dtiles = createPhotorealTiles(scene, camera, renderer, {
-        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: 10   // sharper tiles (was 16)
+        // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
+        // is the dominant iOS memory cost, and Drive can now roam far and stream more.
+        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: MOBILE ? 16 : 10
       });
       if (!p3dtiles) return;
       applyP3DT();
@@ -318,6 +320,14 @@ export function createEngine({ canvas, ui, emit }) {
         // street tiles stream (Explore/Drive only — Scoop never shows tiles).
         if (tries < 24) { tries++; alignP3DT(); }
         applyModeVisuals();          // hide procedural once tiles are up (Explore/Drive)
+      });
+      // surface auth/quota/referrer failures instead of silently falling back to
+      // the procedural world (a baked, referrer-blocked or over-quota key 403s here).
+      let warnedErr = false;
+      p3dtiles.addEventListener('load-error', e => {
+        if (warnedErr) return; warnedErr = true;
+        console.warn('[tiles3d] tile load error (check VITE_GOOGLE_MAPS_KEY restrictions/quota)', e && e.error);
+        if (!tilesReady) toast('Photoreal map unavailable — showing the built world', 2600);
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
   }
@@ -960,7 +970,7 @@ export function createEngine({ canvas, ui, emit }) {
     // photoreal road directly (see actorGroundY), so the only bound is a generous
     // sanity ring at the metro scale where the flat-earth frame stays accurate.
     const lim = 4000;
-    if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= -0.2; }
+    if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
     car.x = nx; car.z = nz;
     // Ride the real photoreal ROAD surface (canopy-skipped + clamped to topology),
     // low-passed so it's smooth — keeps the car (and its flat patch) sitting ON the
@@ -1061,9 +1071,19 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- loop ----------
   const dirV = new THREE.Vector3();
   let prev = performance.now();
-  let raf = 0;
+  let raf = 0, paused = false, ctxLost = false;
+  // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
+  // in view whenever the photoreal world is shown. Throttled; emits only on change.
+  const _attrTarget = []; let _attrStr = '', _attrT = 0;
+  function updateAttribution(now) {
+    if (now - _attrT < 500) return;
+    _attrT = now; _attrTarget.length = 0;
+    try { p3dtiles.getAttributions(_attrTarget); } catch (e) { return; }
+    const s = _attrTarget.filter(a => a && a.type === 'string').map(a => a.value).filter(Boolean).join(' · ');
+    if (s !== _attrStr) { _attrStr = s; emit('attribution', s); }
+  }
   function loop(now) {
-    if (disposed) return;
+    if (disposed || paused || ctxLost) return;
     const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
     if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
     updateAnimals(dt, now); // ambient life in every mode
@@ -1089,10 +1109,19 @@ export function createEngine({ canvas, ui, emit }) {
     }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
-    if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); p3dtiles.update(); }
+    if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); p3dtiles.update(); updateAttribution(now); }
+    else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
+  // iOS robustness: don't burn GPU/memory streaming tiles to a backgrounded tab,
+  // and survive a WebGL context loss instead of freezing on a black canvas.
+  function onVisibility() {
+    if (document.hidden) { if (!paused) { paused = true; cancelAnimationFrame(raf); } }
+    else if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); audio.ensure(); raf = requestAnimationFrame(loop); }
+  }
+  function onContextLost(e) { e.preventDefault(); ctxLost = true; cancelAnimationFrame(raf); }
+  function onContextRestored() { if (!disposed) location.reload(); }   // rebuild streamed GPU state via reload
 
   // ---------- wire up ----------
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -1102,6 +1131,9 @@ export function createEngine({ canvas, ui, emit }) {
   canvas.addEventListener('contextmenu', onContextMenu);
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('webglcontextlost', onContextLost, false);
+  canvas.addEventListener('webglcontextrestored', onContextRestored, false);
+  document.addEventListener('visibilitychange', onVisibility);
   addEventListener('keydown', onKeyDown);
   addEventListener('keyup', onKeyUp);
   addEventListener('resize', resize);
@@ -1129,6 +1161,9 @@ export function createEngine({ canvas, ui, emit }) {
     canvas.removeEventListener('contextmenu', onContextMenu);
     canvas.removeEventListener('dblclick', onDblClick);
     canvas.removeEventListener('wheel', onWheel);
+    canvas.removeEventListener('webglcontextlost', onContextLost);
+    canvas.removeEventListener('webglcontextrestored', onContextRestored);
+    document.removeEventListener('visibilitychange', onVisibility);
     removeEventListener('keydown', onKeyDown);
     removeEventListener('keyup', onKeyUp);
     removeEventListener('resize', resize);

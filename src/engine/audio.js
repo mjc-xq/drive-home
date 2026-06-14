@@ -6,7 +6,13 @@ export function createAudio() {
 
   function ensure() {
     try {
-      if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+      if (!AC) {
+        AC = new (window.AudioContext || window.webkitAudioContext)();
+        // iOS moves the context to 'interrupted'/'suspended' on a phone call,
+        // Siri, route change or backgrounding; auto-resume so audio doesn't go
+        // permanently silent for the rest of the session.
+        AC.onstatechange = () => { if (AC.state !== 'running') AC.resume().catch(() => {}); };
+      }
       AC.resume();
     } catch (e) { /* no audio is fine */ }
   }

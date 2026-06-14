@@ -73,6 +73,16 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .startBtns .btn{font-size:16px;padding:12px 20px}
 #shiftLock.on{background:var(--poppy);border-color:transparent}
 
+/* ---- Google 3D Tiles attribution (required when photoreal is shown) ---- */
+#credits{position:absolute;bottom:calc(9px + var(--safe-b));left:calc(62px + var(--safe-l));
+  display:flex;align-items:center;gap:5px;max-width:min(66vw,500px);padding:3px 8px;border-radius:8px;
+  background:rgba(18,21,26,.42);backdrop-filter:blur(6px) saturate(1.2);-webkit-backdrop-filter:blur(6px) saturate(1.2);
+  font-size:10px;line-height:1.2;font-weight:500;color:rgba(255,255,255,.92);
+  text-shadow:0 1px 2px rgba(0,0,0,.55);pointer-events:none;z-index:6}
+#credits svg{flex:0 0 auto;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
+#credits span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ui.drive #credits{bottom:calc(70px + var(--safe-b));left:calc(12px + var(--safe-l))}
+
 /* ---- speedometer (bottom-right) ---- */
 #speedo{position:absolute;bottom:calc(14px + var(--safe-b));right:calc(14px + var(--safe-r));
   padding:7px 18px;border-radius:14px;text-align:center;background:var(--glass);border:1px solid var(--line);
