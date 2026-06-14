@@ -103,6 +103,11 @@ export function createEngine({ canvas, ui, emit }) {
     new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
   marker.rotation.x = Math.PI; marker.renderOrder = 20; marker.visible = false; marker.frustumCulled = false;
   scene.add(marker);
+  // draw-to-drive target ring (Top-down view)
+  const navMarker = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.7, 28),
+    new THREE.MeshBasicMaterial({ color: 0xd94f1e, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
+  navMarker.rotation.x = -Math.PI / 2; navMarker.renderOrder = 19; navMarker.visible = false; navMarker.frustumCulled = false;
+  scene.add(navMarker);
 
   // Scoop renders the procedural world, so Drew collides with every visible
   // procedural tree (they sit along the streets, clear of the backyard sanctuary).
@@ -444,8 +449,22 @@ export function createEngine({ canvas, ui, emit }) {
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
   const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
-  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0 };
+  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0 };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
+  // Experimental "draw to drive": in the Top-down view, a drag projects the finger
+  // onto the ground and the car steers toward it + auto-throttles, so you trace its
+  // path with one finger. (Joystick/keyboard still drive the other camera views.)
+  let navPtr = null;
+  const _navRay = new THREE.Raycaster(), _navNDC = new THREE.Vector2();
+  const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
+  const driveTopDown = () => mode === 'drive' && DRIVE_CAMS[camMode] && DRIVE_CAMS[camMode].topdown;
+  function setNavFromPointer(clientX, clientY) {
+    const r = canvas.getBoundingClientRect();
+    _navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    _navRay.setFromCamera(_navNDC, camera);
+    _navPlane.constant = -(car && car.groundY != null ? car.groundY : 0);   // ground plane at the car's height
+    if (_navRay.ray.intersectPlane(_navPlane, _navHit)) { inp2.navX = _navHit.x; inp2.navZ = _navHit.z; inp2.navActive = true; }
+  }
   let lastLookT = -1e9;   // last manual look-drag time (ms); suppresses scoop follow-cam briefly
   let shiftLock = false, moveMag = 0, azVel = 0, poVel = 0;
 
@@ -457,6 +476,8 @@ export function createEngine({ canvas, ui, emit }) {
   function onPointerDown(e) {
     if (mode !== 'explore') {
       canvas.setPointerCapture(e.pointerId);
+      // Top-down "draw to drive": any drag steers the car to the finger.
+      if (driveTopDown()) { navPtr = e.pointerId; showT = 0; setNavFromPointer(e.clientX, e.clientY); return; }
       const VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
       // Roblox convention: a press in the lower-left region SPAWNS the
       // thumbstick under the thumb; everything else is camera look.
@@ -488,6 +509,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   function onPointerMove(e) {
     if (mode !== 'explore') {
+      if (e.pointerId === navPtr) { setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
       if (e.pointerId === movePtr) {
         let dx = e.clientX - joyBX, dy = e.clientY - joyBY;
         const d = Math.hypot(dx, dy), mx = 46;
@@ -547,6 +569,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function onPointerEnd(e) {
+    if (e.pointerId === navPtr) { navPtr = null; inp2.navActive = false; }   // release draw-to-drive: car coasts
     if (e.pointerId === movePtr) hideJoy();
     lookPtrs.delete(e.pointerId);
     if (lookPtrs.size < 2) pinchD = 0;
@@ -802,6 +825,7 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('explore');
     camera.up.set(0, 1, 0);
     hideJoy();
+    navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -830,8 +854,9 @@ export function createEngine({ canvas, ui, emit }) {
   ];
   function cycleCamera() {
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
-    if (!DRIVE_CAMS[camMode].topdown) camera.up.set(0, 1, 0);
-    toast('Camera: ' + DRIVE_CAMS[camMode].name, 1100);
+    const td = DRIVE_CAMS[camMode].topdown;
+    if (!td) { camera.up.set(0, 1, 0); inp2.navActive = false; navPtr = null; }   // leaving top-down ends draw-to-drive
+    toast('Camera: ' + DRIVE_CAMS[camMode].name + (td ? ' · drag to drive 🪄' : ''), td ? 1700 : 1100);
   }
   // Scoop camera presets [dist, height] — cycled with the 🎥 button.
   const SCOOP_CAMS = [
@@ -880,8 +905,18 @@ export function createEngine({ canvas, ui, emit }) {
 
   function updateDrive(dt, now) {
     // mix stick (jx/jy) + keyboard (kx/ky) + dedicated touch steer/gas/brake
-    const jx = clamp(inp2.jx + inp2.kx + inp2.steer, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
-    const throttle = clamp(Math.max(0, -jy) + inp2.gas, 0, 1), brake = clamp(Math.max(0, jy) + inp2.brake, 0, 1);
+    let jx = clamp(inp2.jx + inp2.kx + inp2.steer, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
+    let throttle = clamp(Math.max(0, -jy) + inp2.gas, 0, 1), brake = clamp(Math.max(0, jy) + inp2.brake, 0, 1);
+    // Top-down draw-to-drive override: steer toward the finger's ground point and
+    // auto-throttle, easing off (and braking) as the car reaches it.
+    if (inp2.navActive) {
+      const dx = inp2.navX - car.x, dz = inp2.navZ - car.z, dd = Math.hypot(dx, dz);
+      let dyaw = Math.atan2(dx, dz) - car.yaw;
+      while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+      jx = clamp(-dyaw * 1.6, -1, 1);                       // steer toward the target heading
+      throttle = dd > 3 ? clamp(0.45 + (1 - Math.abs(dyaw) / Math.PI) * 0.55, 0, 1) : 0;
+      brake = (dd <= 3 && car.speed > 4) ? 0.5 : 0;
+    }
     if (throttle > 0.1 || brake > 0.1) showT = 0;
     const road = onRoad(car.x, car.z);
     const maxF = road ? 36 : 20, maxR = -7;
@@ -942,6 +977,10 @@ export function createEngine({ canvas, ui, emit }) {
     car.group.rotateY(car.yaw - Math.PI / 2);
     car.group.rotateZ(-pitch);
     car.group.rotateX(roll);
+    if (navMarker) {
+      navMarker.visible = inp2.navActive;
+      if (inp2.navActive) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
+    }
     if (groundPatch) {
       const show = !!(p3dtiles && p3dtiles.holder.visible);   // only over the photoreal world
       groundPatch.visible = show;
