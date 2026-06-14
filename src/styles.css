@@ -39,9 +39,6 @@ body{font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
 #loading span{font-size:13px;font-weight:500;opacity:.6}
 @keyframes pulse{50%{transform:scale(1.6);opacity:.5}}
 /* ---- drive HUD ---- */
-#ringsHud{position:absolute;top:14px;left:50%;transform:translateX(-50%);
-  padding:8px 14px;font-family:'Bricolage Grotesque',system-ui,sans-serif;
-  font-size:14px;font-weight:700;color:var(--poppy)}
 #exitBtn{position:absolute;top:14px;right:14px;width:auto;padding:10px 14px;
   color:#fff;background:#28241d}
 #camBtn{position:absolute;top:110px;right:14px;width:auto;padding:8px 11px;color:#fff;background:#28241d}
@@ -76,6 +73,8 @@ body{font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
   padding:8px 14px;font-family:'Bricolage Grotesque',system-ui,sans-serif;
   font-size:14px;font-weight:700;color:#6b4a2f;white-space:nowrap}
 #exitScoop{position:absolute;top:14px;right:14px;width:auto;padding:10px 14px;color:#fff;background:#28241d}
+#shiftLock{position:absolute;top:62px;right:14px;width:42px;height:42px;padding:0;border-radius:50%;font-size:18px;background:#28241d;color:#fff}
+#shiftLock.on{background:var(--poppy)}
 #joy{display:none;pointer-events:none;position:absolute;width:122px;height:122px;border-radius:50%;
   background:rgba(250,247,240,.55);border:1px solid rgba(40,36,29,.18);touch-action:none;
   backdrop-filter:blur(6px)}

@@ -14,6 +14,7 @@ export default function App() {
   const [mode, setMode] = useState('explore');
   const [subline, setSubline] = useState('Hayward, CA');
   const [inside, setInside] = useState(false);
+  const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [carColor, setCarColor] = useState('#e02818');
   const [toast, setToast] = useState({ html: '', show: false });
@@ -28,6 +29,7 @@ export default function App() {
         case 'mode': setMode(p); break;
         case 'subline': setSubline(p); break;
         case 'inside': setInside(p); break;
+        case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'carColor': setCarColor(p); break;
         case 'carCard':
@@ -110,7 +112,8 @@ export default function App() {
             <div id="toolChip" className="chip">{scoopHud.name} <span>{scoopHud.bag}/{scoopHud.cap}</span></div>
             <div id="pooHud" className="chip">💩 {scoopHud.total} scooped · yard {scoopHud.clean}% ✨</div>
             <button id="exitScoop" className="btn" onClick={() => eng().exitScoop()}>Exit ✕</button>
-            <div id="lookHint" className="chip">touch left side to move · drag to look · pinch to zoom</div>
+            <button id="shiftLock" className={'btn' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
+            <div id="lookHint" className="chip">left side to move · drag to look · scroll/pinch zoom · 🔒 shift-lock</div>
           </div>
         )}
         <div id="joy" ref={el => (uiRefs.current.joy = el)}><div id="knob" ref={el => (uiRefs.current.knob = el)} /></div>

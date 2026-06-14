@@ -196,8 +196,14 @@ export function createEngine({ canvas, ui, emit }) {
   const lookPtrs = new Map();
   const camOrbit = { yaw: 0, pitch: 0, t: 0 };
   let movePtr = null, joyBX = 0, joyBY = 0, pinchD = 0, czoom = 1, szoom = 1;
-  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0 };
+  // Roblox-style controls: shared look/zoom feel across drive+scoop, a steering
+  // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
+  // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
+  // dedicated touch driving inputs (steer/gas/brake).
+  const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
+  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0 };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false;
+  let shiftLock = false, moveMag = 0, azVel = 0, poVel = 0;
 
   function hideJoy() {
     movePtr = null; inp2.jx = 0; inp2.jy = 0;
@@ -228,6 +234,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     canvas.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, b: e.button }); moved = 0;
+    azVel = poVel = 0;
     canvas.classList.add('dragging');
     if (ptrs.size === 2) {
       const [a, b] = [...ptrs.values()];
@@ -262,14 +269,15 @@ export function createEngine({ canvas, ui, emit }) {
         return;
       }
       const dx = e.clientX - ox, dy = e.clientY - oy;
+      if (Math.abs(dx) + Math.abs(dy) < 2) return; // look deadzone (kill jitter)
       if (mode === 'drive') {
-        camOrbit.yaw -= dx * 0.0046;
-        camOrbit.pitch = clamp(camOrbit.pitch + dy * 0.003, -0.45, 0.8);
+        camOrbit.yaw -= dx * LOOK_SENS;
+        camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
         camOrbit.t = performance.now();
         showT = 0;
       } else {
-        camYawS -= dx * 0.0046;
-        scPitch = clamp(scPitch + dy * 0.003, -0.3, 0.8);
+        camYawS -= dx * LOOK_SENS;
+        scPitch = clamp(scPitch + dy * PITCH_SENS, -0.3, 0.8);
       }
       return;
     }
@@ -280,7 +288,10 @@ export function createEngine({ canvas, ui, emit }) {
     p.x = e.clientX; p.y = e.clientY;
     if (ptrs.size === 1) {
       if (p.b === 2 || e.shiftKey) pan(dx, dy);
-      else { ctl.gaz -= dx * 0.0052; ctl.gpo = clamp(ctl.gpo - dy * 0.0042, 0.14, 1.46); }
+      else {
+        ctl.gaz -= dx * 0.0052; ctl.gpo = clamp(ctl.gpo - dy * 0.0042, 0.14, 1.46);
+        azVel = -dx * 0.0052; poVel = -dy * 0.0042; // for flick momentum on release
+      }
     } else if (ptrs.size === 2) {
       const [a, b] = [...ptrs.values()];
       const pinch = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -301,7 +312,9 @@ export function createEngine({ canvas, ui, emit }) {
 
   function onWheel(e) {
     e.preventDefault();
-    if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * 0.0011), 14, 640);
+    if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
+    else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), 0.55, 2.1);
+    else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.55, 2.0);
   }
 
   function onContextMenu(e) { e.preventDefault(); }
@@ -334,6 +347,10 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- keyboard ----------
   function onKeyDown(e) {
     if (mode === 'drive' || mode === 'scoop') {
+      if (mode === 'scoop' && e.key === 'Shift' && !e.repeat) {
+        shiftLock = !shiftLock; emit('shiftLock', shiftLock);
+        toast(shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
+      }
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;
       if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = -1;
@@ -400,14 +417,15 @@ export function createEngine({ canvas, ui, emit }) {
   function updateScoop(dt, now) {
     let jx = clamp(inp2.jx + inp2.kx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     const mag = Math.min(1, Math.hypot(jx, jy));
-    if (mag > 0.08) {
+    if (shiftLock) CHAR.yaw = camYawS; // Roblox shift-lock: keeper faces the camera
+    if (mag > MOVE_DEADZONE) {
       // camera sits at CHAR - f*dist looking along +f, so screen-right is
       // (-cos, +sin); the old (+cos, -sin) strafe was mirrored left/right
       const fX = Math.sin(camYawS), fZ = Math.cos(camYawS);
       const rX = -Math.cos(camYawS), rZ = Math.sin(camYawS);
       let mx = rX * jx - fX * jy, mz = rZ * jx - fZ * jy;
       const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
-      CHAR.yaw = Math.atan2(mx, mz);
+      if (!shiftLock) CHAR.yaw = Math.atan2(mx, mz); // else keep facing camera, strafe
       const sp = 4.4 * mag;
       let nx = CHAR.x + mx * sp * dt, nz = CHAR.z + mz * sp * dt;
       const rad = 0.42;
@@ -537,8 +555,9 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function updateDrive(dt, now) {
-    const jx = clamp(inp2.jx + inp2.kx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
-    const throttle = Math.max(0, -jy), brake = Math.max(0, jy);
+    // mix stick (jx/jy) + keyboard (kx/ky) + dedicated touch steer/gas/brake
+    const jx = clamp(inp2.jx + inp2.kx + inp2.steer, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
+    const throttle = clamp(Math.max(0, -jy) + inp2.gas, 0, 1), brake = clamp(Math.max(0, jy) + inp2.brake, 0, 1);
     if (throttle > 0.1 || brake > 0.1) showT = 0;
     const road = onRoad(car.x, car.z);
     const maxF = road ? 36 : 20, maxR = -7;
@@ -671,6 +690,10 @@ export function createEngine({ canvas, ui, emit }) {
       updateScoop(dt, now);
     } else {
       const k = reduceMotion ? 1 : 0.16;
+      if (!reduceMotion && !ptrs.size && (Math.abs(azVel) > 1e-4 || Math.abs(poVel) > 1e-4)) {
+        ctl.gaz += azVel; ctl.gpo = clamp(ctl.gpo + poVel, 0.14, 1.46);
+        const decay = Math.exp(-dt * 4); azVel *= decay; poVel *= decay; // flick momentum
+      }
       ctl.tx += (ctl.gtx - ctl.tx) * k; ctl.ty += (ctl.gty - ctl.ty) * k; ctl.tz += (ctl.gtz - ctl.tz) * k;
       ctl.az += (ctl.gaz - ctl.az) * k; ctl.po += (ctl.gpo - ctl.po) * k; ctl.r += (ctl.gr - ctl.r) * k;
       applyCam();
@@ -738,6 +761,7 @@ export function createEngine({ canvas, ui, emit }) {
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
     toggleInside: () => setInside(!insideOpen),
+    toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
     focusHouse, cycleCamera, toggleCarColor, dispose,
     get mode() { return mode; }
   };
