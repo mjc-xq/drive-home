@@ -57,7 +57,35 @@ export function createEngine({ canvas, ui, emit }) {
   scene.add(sun);
 
   const world = buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GRID_ANG, aerialUrl });
-  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat, staticGroup } = world;
+  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat, staticGroup, aerialMat } = world;
+
+  // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
+  // that follows the car and fades into the 3D photoreal, masking the melty
+  // photogrammetry right around the actor. uvAt is affine, so the aerial UV is
+  // computed from world position in-shader — the disc just moves, no UV rebuild.
+  let groundPatch = null;
+  {
+    const A = S.aerial;
+    const uS = 1 / (A.E1 - A.E0), uO = (C[0] - A.E0) / (A.E1 - A.E0);
+    const vS = -1 / (A.Nt - A.Nb), vO = (C[1] - A.Nb) / (A.Nt - A.Nb);
+    const R = 24, geo = new THREE.CircleGeometry(R, 72); geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false,
+      uniforms: { map: { value: aerialMat.map }, uA: { value: new THREE.Vector4(uS, uO, vS, vO) }, rInv: { value: 1 / R } },
+      vertexShader: `varying vec2 vW; varying float vR;
+        void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vW = wp.xz; vR = length(position.xz);
+          gl_Position = projectionMatrix * viewMatrix * wp; }`,
+      fragmentShader: `uniform sampler2D map; uniform vec4 uA; uniform float rInv; varying vec2 vW; varying float vR;
+        void main(){ vec2 uv = vec2(vW.x*uA.x + uA.y, vW.y*uA.z + uA.w);
+          float a = 1.0 - smoothstep(0.4, 0.96, vR * rInv);
+          vec3 c = texture2D(map, uv).rgb;
+          c = (c - 0.5) * 1.12 + 0.5; c *= 0.9;        // nudge toward the darker, contrastier Google tiles
+          gl_FragColor = vec4(c, a); }`
+    });
+    groundPatch = new THREE.Mesh(geo, mat);
+    groundPatch.renderOrder = 3; groundPatch.visible = false; groundPatch.frustumCulled = false;
+    scene.add(groundPatch);
+  }
 
   // ---------- photoreal Google 3D Tiles (default; ?flat disables) ----------
   // Streams the real, textured neighborhood — every house, fence, tree — and
@@ -125,11 +153,16 @@ export function createEngine({ canvas, ui, emit }) {
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
   // and never climb the bumpy photogrammetry mesh.
   let tilesReady = false;
+  // Photoreal renders the REAL neighborhood (every house, tree, fence) in Explore
+  // (aerial) AND Drive (a drone-follow cam, high enough that photogrammetry reads
+  // clean); the procedural staticGroup hides once tiles arrive. Scoop (a 2 m
+  // walking cam) stays procedural — that close, photogrammetry is melty.
+  const photoModes = mode => mode === 'explore' || mode === 'drive';
   function applyModeVisuals() {
-    const explore = mode === 'explore';
-    if (p3dtiles) p3dtiles.holder.visible = explore;
-    staticGroup.visible = !(explore && p3dtiles && tilesReady);
-    if (ring) ring.visible = explore;            // the house marker reads as an orange band at ground level
+    const photo = photoModes(mode) && p3dtiles;
+    if (p3dtiles) p3dtiles.holder.visible = photoModes(mode);
+    staticGroup.visible = !(photo && tilesReady);
+    if (ring) ring.visible = mode === 'explore';   // marker only makes sense from the air
   }
   if (!flags.has('flat')) {
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
@@ -197,7 +230,7 @@ export function createEngine({ canvas, ui, emit }) {
     installDracoDecoder();
     cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
     // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
-    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, meta: VEHICLES[1] });   // GLB nose runs -Z
+    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });   // GLB nose runs -Z; black baked into the GLB (keeps taillights)
     loadDrivableCar(car, siennaUrl, 2, { length: 5.1, flip: false, meta: VEHICLES[2] }); // GLB nose runs +Z
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
@@ -206,17 +239,17 @@ export function createEngine({ canvas, ui, emit }) {
     const ux = house.c[0] - frontPt[0], uz = house.c[1] - frontPt[1];
     const ul = Math.hypot(ux, uz) || 1, u = [ux / ul, uz / ul], perp = [-u[1], u[0]];
     const carYaw = Math.atan2(-u[0], -u[1]);            // nose toward the street
-    const park = (url, side, len, flip) => {
+    const park = (url, side, len, flip, black = true) => {
       const cx = frontPt[0] + u[0] * 7 + perp[0] * side * 2.4;
       const cz = frontPt[1] + u[1] * 7 + perp[1] * side * 2.4;
       // add the footprint collider only once the car actually loads, so a failed
       // load doesn't leave an invisible wall the driven car bounces off.
-      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black: true, flip }, () => {
+      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
         const hl = len / 2, hw = 1.05;
         bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
       });
     };
-    park(rav4Url, 1, 4.6, false);     // RAV4 nose runs +Z → carYaw already faces it to the street
+    park(rav4Url, 1, 4.6, false, false);  // RAV4 nose runs +Z → carYaw already faces it; black baked in (keeps taillights)
     park(siennaUrl, -1, 5.1, true);   // Sienna nose runs -Z → flip 180° to face the street
   }
   let showT = 0;
@@ -563,9 +596,9 @@ export function createEngine({ canvas, ui, emit }) {
       const sg = run(1) >= run(-1) ? 1 : -1;
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
-    car.speed = 0; car.group.visible = true;
+    car.speed = 0; car.group.visible = true; car.groundY = null;
     camOrbit.yaw = 0; camOrbit.pitch = 0;
-    showT = 2.8;
+    showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
     showCarCard();
@@ -576,6 +609,7 @@ export function createEngine({ canvas, ui, emit }) {
     camera.up.set(0, 1, 0);
     hideJoy();
     car.group.visible = false;
+    if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
     inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
     audio.engineStop();
@@ -673,16 +707,25 @@ export function createEngine({ canvas, ui, emit }) {
     const lim = 314;
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= -0.2; }
     car.x = nx; car.z = nz;
-    const yC = groundAt(car.x, car.z);
-    const yF = groundAt(car.x + fx * 1.4, car.z + fz * 1.4), yB = groundAt(car.x - fx * 1.4, car.z - fz * 1.4);
+    // Ride the ground smoothly: photoreal tile height is bumpy/melty, so low-pass
+    // it for the car body and take tilt from the smooth procedural terrain.
+    const yRaw = groundAt(car.x, car.z, terrainAt(car.x, car.z));
+    car.groundY = car.groundY == null ? yRaw : car.groundY + (yRaw - car.groundY) * Math.min(1, dt * 5);
+    const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
-    const yR = groundAt(car.x + rxv * 0.9, car.z + rzv * 0.9), yL = groundAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
-    const pitch = Math.atan2(yB - yF, 2.8), roll = Math.atan2(yR - yL, 1.8);
+    const tF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), tB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
+    const tR = terrainAt(car.x + rxv * 0.9, car.z + rzv * 0.9), tL = terrainAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
+    const pitch = Math.atan2(tB - tF, 2.8), roll = Math.atan2(tR - tL, 1.8);
     car.group.position.set(car.x, yC + 0.06, car.z);
     car.group.rotation.set(0, 0, 0);
     car.group.rotateY(car.yaw - Math.PI / 2);
     car.group.rotateZ(-pitch);
     car.group.rotateX(roll);
+    if (groundPatch) {
+      const show = !!(p3dtiles && p3dtiles.holder.visible);   // only over the photoreal world
+      groundPatch.visible = show;
+      if (show) groundPatch.position.set(car.x, yC + 0.05, car.z);
+    }
     const spin = car.speed * dt / 0.37;
     const active = car.models[car.modelIdx];
     if (active) {
@@ -713,10 +756,16 @@ export function createEngine({ canvas, ui, emit }) {
       camera.up.set(0, 1, 0);
       if (now - camOrbit.t > 1400 && Math.abs(car.speed) > 2) camOrbit.yaw *= Math.exp(-dt * 2.2);
       const a = car.yaw + Math.PI + camOrbit.yaw;
-      const dist = (camMode === 1 ? 14.5 : 9.4) * czoom, h = ((camMode === 1 ? 7.8 : 3.7) + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
+      // camMode 0 = drone-follow (high/back, where the photoreal reads clean);
+      // camMode 1 = low chase (closer, more cinematic but shows photogrammetry melt)
+      const dist = (camMode === 1 ? 11 : 24) * czoom, h = ((camMode === 1 ? 5 : 22) + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
       const camT = _camT.set(car.x + Math.sin(a) * dist, yC + h, car.z + Math.cos(a) * dist);
-      const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
-      if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
+      // only the low chase collides with geometry; the drone flies above the melt
+      // (resolveCam against melty tile blobs would yank it down onto the car).
+      if (camMode === 1) {
+        const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
+        if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
+      }
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, Math.min(1, dt * 4.6));
       camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.3);
@@ -776,7 +825,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
-    if (p3dtiles && mode === 'explore') { camera.updateMatrixWorld(); p3dtiles.update(); }
+    if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); p3dtiles.update(); }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
