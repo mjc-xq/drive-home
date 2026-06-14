@@ -273,9 +273,52 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       for (const g of roofGs) ctxTops.push({ g, color: WHITE });
     }
   }
+  // ---- textured building sides ----
+  // A tileable stucco facade with faint floor banding + a regular window grid,
+  // multiplied onto the (vertex-tinted) context walls via a triplanar shader
+  // patch (no geometry/UVs needed, so collision + the shared merge() are
+  // untouched). One tile = ~4 m wide x 3 m (one floor) tall.
+  function makeFacadeTexture() {
+    const cv = document.createElement('canvas'); cv.width = 128; cv.height = 96;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#efe9de'; c.fillRect(0, 0, 128, 96);            // bright stucco base
+    for (let i = 0; i < 1600; i++) {                                // stucco grain
+      c.fillStyle = `rgba(120,110,96,${Math.random() * 0.05})`;
+      c.fillRect(Math.random() * 128, Math.random() * 96, 1.5, 1.5);
+    }
+    c.fillStyle = 'rgba(90,80,68,0.18)'; c.fillRect(0, 0, 128, 2); // floor band (tiles)
+    for (const wx of [20, 76]) {                                   // 2 windows / tile
+      c.fillStyle = '#42505c'; c.fillRect(wx, 30, 32, 40);         // glass
+      c.fillStyle = 'rgba(20,24,30,0.5)'; c.fillRect(wx + 14, 30, 4, 40); // mullion
+      c.fillStyle = 'rgba(245,240,230,0.6)'; c.strokeStyle = 'rgba(245,240,230,0.6)';
+      c.lineWidth = 2; c.strokeRect(wx, 30, 32, 40);               // light frame
+    }
+    const t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return t;
+  }
+  const facadeTex = makeFacadeTexture();
+  function facadeMat() {
+    const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .92 });
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uFacade = { value: facadeTex };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWN;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed,1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * objectNormal);');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWN; uniform sampler2D uFacade;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          { float u = abs(vWN.x) > abs(vWN.z) ? vWPos.z : vWPos.x;
+            vec3 fac = texture2D(uFacade, vec2(u / 4.0, vWPos.y / 3.0)).rgb;
+            float wall = 1.0 - clamp(abs(vWN.y) * 2.0, 0.0, 1.0);
+            diffuseColor.rgb *= mix(vec3(1.0), fac * 1.08, wall); }`);
+    };
+    m.customProgramCacheKey = () => 'facadeWalls';
+    return m;
+  }
   {
-    const wallsMesh = new THREE.Mesh(merge(ctxWalls),
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }));
+    const wallsMesh = new THREE.Mesh(merge(ctxWalls), facadeMat());
     wallsMesh.castShadow = wallsMesh.receiveShadow = true; scene.add(wallsMesh);
     const topsMesh = new THREE.Mesh(merge(ctxTops, uvAt), aerialMat);
     topsMesh.castShadow = topsMesh.receiveShadow = true; scene.add(topsMesh);
