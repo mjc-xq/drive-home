@@ -75,3 +75,27 @@ export function loadPoopGeometry(url, onReady) {
     onReady(geo, mat);
   }, undefined, err => console.warn('poop model failed, keeping fallback', err));
 }
+
+// Vegetation: returns the named tree/bush variants from veg.glb, each as a
+// centered, base-on-ground geometry + its (unlit, alpha-masked) material, so the
+// engine can instance them at the procedural tree points. Native sizes are kept
+// (the caller scales per-instance to a metric height).
+export function loadVegetation(url, onReady) {
+  new GLTFLoader().load(url, gltf => {
+    gltf.scene.updateMatrixWorld(true);
+    const variants = [];
+    gltf.scene.traverse(o => {
+      if (!o.isMesh) return;
+      const geo = bakedGeom(o);
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
+      geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+      const mat = o.material.clone();           // unlit forest atlas (KHR_materials_unlit)
+      mat.alphaTest = 0.5; mat.transparent = false; mat.depthWrite = true;
+      mat.side = THREE.DoubleSide; mat.toneMapped = false;
+      if (mat.map) mat.map.colorSpace = THREE.NoColorSpace;
+      variants.push({ name: o.name, geom: geo, mat, height: size.y || 1, bush: /bush/i.test(o.name) });
+    });
+    if (variants.length) onReady(variants);
+  }, undefined, err => console.warn('veg model failed, keeping fallback', err));
+}

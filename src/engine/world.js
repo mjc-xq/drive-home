@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { merge, gablePrism, footprintGeom, splitTops, makeRand } from './geom.js';
 import { buildRoadMask } from './roadmask.js';
+import { loadVegetation } from './models.js';
+import vegUrl from '../assets/veg.glb';
 
 // Builds every static thing in the scene from scene.json. Returns the handles
 // the engine needs for gameplay (collision boxes, road lookup, house, spawn
@@ -592,6 +594,10 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       }
     }
   }
+  // Procedural tree blobs go in their own group (kept as the fallback); once the
+  // real veg.glb loads we hide them and instance the GLB trees/bushes at the same
+  // points so the clean ground world looks real instead of low-poly-lumpy.
+  const procTrees = new THREE.Group(); sadd(procTrees);
   {
     const trunkG = new THREE.CylinderGeometry(0.14, 0.22, 2.3, 5);
     const canG = new THREE.IcosahedronGeometry(1.5, 0); canG.scale(1, 1.3, 1);
@@ -607,8 +613,35 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       M.compose(Pp.set(p[0], y + (2.3 + 1.2) * s, p[1]), Q, Sc.set(s, s, s));
       if (i % 2 === 0) canA.setMatrixAt(ia++, M); else canB.setMatrixAt(ib++, M);
     });
-    for (const m of [trunk, canA, canB]) { m.instanceMatrix.needsUpdate = true; m.castShadow = true; sadd(m); }
+    for (const m of [trunk, canA, canB]) { m.instanceMatrix.needsUpdate = true; m.castShadow = true; procTrees.add(m); }
   }
+  loadVegetation(vegUrl, variants => {
+    const trees = variants.filter(v => !v.bush), bushes = variants.filter(v => v.bush);
+    if (!trees.length) return;
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), Sc = new THREE.Vector3(), Pp = new THREE.Vector3();
+    // bucket tree points per chosen variant, then one InstancedMesh per variant
+    const buckets = new Map(variants.map(v => [v, []]));
+    treePts.forEach((p, i) => {
+      const small = p[2] < 1.0 && bushes.length;
+      const pool = small ? bushes : trees;
+      buckets.get(pool[i % pool.length]).push(p);
+    });
+    for (const [v, pts] of buckets) {
+      if (!pts.length) continue;
+      const im = new THREE.InstancedMesh(v.geom, v.mat, pts.length);
+      im.castShadow = true;
+      pts.forEach((p, i) => {
+        const targetH = v.bush ? (1.1 + rand() * 0.8) : (5.5 + rand() * 3.5);
+        const s = targetH / v.height;
+        Q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * 6.28);
+        M.compose(Pp.set(p[0], terrainAt(p[0], p[1]), p[1]), Q, Sc.set(s, s, s));
+        im.setMatrixAt(i, M);
+      });
+      im.instanceMatrix.needsUpdate = true;
+      sadd(im);
+    }
+    procTrees.visible = false;   // swap blobs -> real models
+  });
 
   // ---------- house ring + labels ----------
   const hbx = house.bbox;
