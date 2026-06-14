@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { TilesRenderer } from '3d-tiles-renderer';
 import {
   GoogleCloudAuthPlugin, ReorientationPlugin, TileCompressionPlugin,
-  TilesFadePlugin, GLTFExtensionsPlugin
+  TilesFadePlugin, GLTFExtensionsPlugin, TileFlatteningPlugin
 } from '3d-tiles-renderer/plugins';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
@@ -56,6 +56,11 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
     lat: opts.lat, lon: opts.lon, height: opts.height ?? 0,
     azimuth: opts.azimuth ?? 0, recenter: true
   }));
+  // flatten the play-area ground (driveway/yard) — shapes added by the engine
+  // once alignment settles. Vertices are flattened in the TILESET LOCAL frame.
+  const flatten = new TileFlatteningPlugin();
+  tiles.registerPlugin(flatten);
+  tiles.flatten = flatten;
 
   tiles.setCamera(camera);
   tiles.setResolutionFromRenderer(camera, renderer);
