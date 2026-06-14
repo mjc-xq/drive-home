@@ -71,6 +71,10 @@ export function createEngine({ canvas, ui, emit }) {
     const R = 24, geo = new THREE.CircleGeometry(R, 72); geo.rotateX(-Math.PI / 2);
     const mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
+      // tiny camera-ward depth bias: the patch is co-planar with the photoreal
+      // road (same sampled height), so this lets the flat win the road z-fight
+      // while the much-taller trees/houses still draw in front of it.
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
       uniforms: { map: { value: aerialMat.map }, uA: { value: new THREE.Vector4(uS, uO, vS, vO) }, rInv: { value: 1 / R } },
       vertexShader: `varying vec2 vW; varying float vR;
         void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vW = wp.xz; vR = length(position.xz);
@@ -132,6 +136,18 @@ export function createEngine({ canvas, ui, emit }) {
     const y = rawTileY(x, z, fromY);
     if (y != null) return y;
     return fallback != null ? fallback : terrainAt(x, z);
+  }
+  // Height the actor (car/keeper) AND its clean patch ride: the REAL photoreal
+  // ROAD surface, sampled by casting down from just above the actor so it skips
+  // tree canopies, and clamped to within ~2 m of the procedural terrain so a
+  // photogrammetry blob can never lift the actor off the ground topology. This
+  // keeps the flat patch co-planar with the 3D road (so the patch reads as the
+  // road surface, not a layer the 3D rises over) while never climbing trees.
+  function actorGroundY(x, z, prevY) {
+    const tA = terrainAt(x, z);
+    if (!p3dtiles || !p3dtiles.holder.visible) return tA;
+    const y = rawTileY(x, z, (prevY != null ? prevY : tA) + 3);   // first surface below the actor = road
+    return y == null ? tA : clamp(y, tA - 2, tA + 2);
   }
   // One-shot vertical align: sample a ring of down-rays in the open yard/street
   // (radius 14 m, away from the house roof), take the median tile height, and
@@ -489,7 +505,7 @@ export function createEngine({ canvas, ui, emit }) {
     pushScoopHud();
   }
   function enterScoop() {
-    setMode('scoop'); camInit = false; camGroundRef = null;
+    setMode('scoop'); camInit = false; camGroundRef = null; CHAR.groundY = null;
     setInside(false);
     for (const s of labelSprites) s.visible = false;
     CHAR.group.visible = true;
@@ -549,7 +565,10 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.x = nx; CHAR.z = nz;
       CHAR.bob += dt * 10 * mag;
     } else CHAR.bob += dt * 1.5;
-    const cy = terrainAt(CHAR.x, CHAR.z);   // topology only — never climb trees/melt
+    // ride the real photoreal ground (canopy-skipped + clamped), low-passed smooth
+    const cyr = actorGroundY(CHAR.x, CHAR.z, CHAR.groundY);
+    CHAR.groundY = CHAR.groundY == null ? cyr : CHAR.groundY + (cyr - CHAR.groundY) * Math.min(1, dt * 6);
+    const cy = CHAR.groundY;
     CHAR.group.position.set(CHAR.x, cy + (CHAR.drew ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05), CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
     if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
@@ -579,12 +598,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
     if (POOPS.length > 0) spotless = false;
     if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
-    // clean aerial patch follows the keeper — a wide clearing in the real grove
-    // so Drew + nearby poop read clean while the photoreal trees ring the yard
+    // small clean patch right under Drew — just calms the melt at his feet; the
+    // 3D photoreal home (houses, trees) shows all around it.
     if (groundPatch) {
       const show = !!(p3dtiles && p3dtiles.holder.visible);
       groundPatch.visible = show;
-      if (show) { groundPatch.scale.setScalar(0.95); groundPatch.position.set(CHAR.x, cy + 0.05, CHAR.z); }
+      if (show) { groundPatch.scale.setScalar(0.28); groundPatch.position.set(CHAR.x, cy + 0.04, CHAR.z); }
     }
     // follow cam — high enough to clear the real backyard tree canopy (the
     // sanctuary sits in a treed yard), so the photoreal reads clean instead of
@@ -739,10 +758,12 @@ export function createEngine({ canvas, ui, emit }) {
     const lim = 314;
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= -0.2; }
     car.x = nx; car.z = nz;
-    // Height comes ONLY from the ground topology (smooth procedural terrain),
-    // never the photoreal tiles — so the car never climbs trees/roofs/melt and
-    // the surface only rises/falls with the actual lay of the land.
-    const yC = terrainAt(car.x, car.z);
+    // Ride the real photoreal ROAD surface (canopy-skipped + clamped to topology),
+    // low-passed so it's smooth — keeps the car (and its flat patch) sitting ON the
+    // road, never climbing trees. Tilt comes from the smooth procedural terrain.
+    const yr = actorGroundY(car.x, car.z, car.groundY);
+    car.groundY = car.groundY == null ? yr : car.groundY + (yr - car.groundY) * Math.min(1, dt * 5);
+    const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     const tF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), tB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
     const tR = terrainAt(car.x + rxv * 0.9, car.z + rzv * 0.9), tL = terrainAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
@@ -755,7 +776,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) {
       const show = !!(p3dtiles && p3dtiles.holder.visible);   // only over the photoreal world
       groundPatch.visible = show;
-      if (show) { groundPatch.scale.setScalar(1); groundPatch.position.set(car.x, yC + 0.05, car.z); }
+      if (show) { groundPatch.scale.setScalar(0.62); groundPatch.position.set(car.x, yC + 0.04, car.z); }
     }
     const spin = car.speed * dt / 0.37;
     const active = car.models[car.modelIdx];
