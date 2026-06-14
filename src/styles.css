@@ -57,6 +57,8 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #exitBtn,#exitScoop{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #camBtn,#shiftLock{position:absolute;top:calc(64px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #carSwap{position:absolute;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r))}
+#getInCar{position:absolute;bottom:calc(118px + var(--safe-b));left:50%;transform:translateX(-50%);animation:popIn .2s ease}
+@keyframes popIn{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
 #shiftLock.on{background:var(--poppy);border-color:transparent}
 
 /* ---- speedometer (bottom-right) ---- */

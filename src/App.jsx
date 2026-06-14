@@ -15,6 +15,7 @@ export default function App() {
   const [subline, setSubline] = useState('Hayward, CA');
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
+  const [nearCar, setNearCar] = useState(false);
   const [toast, setToast] = useState({ html: '', show: false });
   const [carCard, setCarCard] = useState({ name: '', spec: '', credit: '', show: false });
   const toastTimer = useRef(0);
@@ -28,6 +29,7 @@ export default function App() {
         case 'subline': setSubline(p); break;
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
+        case 'nearCar': setNearCar(p); break;
         case 'carCard':
           setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
           clearTimeout(cardTimer.current);
@@ -108,6 +110,7 @@ export default function App() {
             <div id="pooHud" className="chip">💩 {scoopHud.total} scooped · yard {scoopHud.clean}% ✨</div>
             <button id="exitScoop" className="btn" onClick={() => eng().exitScoop()}>Exit ✕</button>
             <button id="shiftLock" className={'btn icon' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
+            {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
             <div id="lookHint" className="chip">left side to move · drag to look · scroll/pinch zoom · 🔒 shift-lock</div>
           </div>
         )}

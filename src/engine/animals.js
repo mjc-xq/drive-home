@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { merge, critterBuilder, makeRand } from './geom.js';
 import { clamp } from './coords.js';
 import { loadPigPrototype, loadPoopGeometry } from './models.js';
+import { loadDrew } from './drew.js';
 import pigUrl from '../assets/pig.glb';
 import poopUrl from '../assets/poop.glb';
 
@@ -255,5 +256,15 @@ export function createCharacter(scene, SREC) {
   CHAR.scoops[0].visible = true;
   CHAR.group.visible = false;
   scene.add(CHAR.group);
+
+  // Swap the voxel keeper for the rigged "Drew" model once it loads (fail-soft:
+  // the voxel stays on any error). Drew carries its own walk/idle/run + reactions.
+  CHAR.drew = null;
+  loadDrew(ctrl => {
+    bm.visible = false;
+    for (const s of CHAR.scoops) s.visible = false;
+    CHAR.group.add(ctrl.group);
+    CHAR.drew = ctrl;
+  });
   return CHAR;
 }

@@ -87,6 +87,11 @@ export function createEngine({ canvas, ui, emit }) {
     scene.add(groundPatch);
   }
 
+  // Parked cars live in their own group (NOT staticGroup) so they stay visible
+  // over the photoreal world — Drew walks up to one in Scoop to start driving.
+  const carsGroup = new THREE.Group(); scene.add(carsGroup);
+  const parkedSpots = [];
+
   // ---------- photoreal Google 3D Tiles (default; ?flat disables) ----------
   // Streams the real, textured neighborhood — every house, fence, tree — and
   // hides the procedural staticGroup once tiles arrive. The procedural world
@@ -153,15 +158,15 @@ export function createEngine({ canvas, ui, emit }) {
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
   // and never climb the bumpy photogrammetry mesh.
   let tilesReady = false;
-  // Photoreal renders the REAL neighborhood (every house, tree, fence) in Explore
-  // (aerial) AND Drive (a drone-follow cam, high enough that photogrammetry reads
-  // clean); the procedural staticGroup hides once tiles arrive. Scoop (a 2 m
-  // walking cam) stays procedural — that close, photogrammetry is melty.
-  const photoModes = mode => mode === 'explore' || mode === 'drive';
+  // Photoreal renders the REAL neighborhood (every house, tree, fence) in ALL
+  // modes — Explore (aerial), Drive and Scoop (elevated follow cams + a clean
+  // patch under the actor); the procedural staticGroup hides once tiles arrive.
+  const photoModes = mode => mode === 'explore' || mode === 'drive' || mode === 'scoop';
   function applyModeVisuals() {
     const photo = photoModes(mode) && p3dtiles;
     if (p3dtiles) p3dtiles.holder.visible = photoModes(mode);
     staticGroup.visible = !(photo && tilesReady);
+    carsGroup.visible = mode === 'drive' || mode === 'scoop';   // parked cars: ground modes only
     if (ring) ring.visible = mode === 'explore';   // marker only makes sense from the air
   }
   if (!flags.has('flat')) {
@@ -242,9 +247,10 @@ export function createEngine({ canvas, ui, emit }) {
     const park = (url, side, len, flip, black = true) => {
       const cx = frontPt[0] + u[0] * 7 + perp[0] * side * 2.4;
       const cz = frontPt[1] + u[1] * 7 + perp[1] * side * 2.4;
+      parkedSpots.push({ x: cx, z: cz });          // walk-to-drive targets
       // add the footprint collider only once the car actually loads, so a failed
       // load doesn't leave an invisible wall the driven car bounces off.
-      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
+      loadParkedCar(carsGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
         const hl = len / 2, hw = 1.05;
         bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
       });
@@ -299,7 +305,7 @@ export function createEngine({ canvas, ui, emit }) {
   // dedicated touch driving inputs (steer/gas/brake).
   const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
   const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0 };
-  let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false;
+  let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
   let shiftLock = false, moveMag = 0, azVel = 0, poVel = 0;
 
   function hideJoy() {
@@ -440,6 +446,7 @@ export function createEngine({ canvas, ui, emit }) {
         shiftLock = !shiftLock; emit('shiftLock', shiftLock);
         toast(shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
       }
+      if (mode === 'scoop' && (e.key === 'e' || e.key === 'E') && nearCar) { driveFromScoop(); e.preventDefault(); return; }
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;
       if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = -1;
@@ -477,11 +484,12 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function setTool(lvl) {
     CHAR.lvl = lvl;
-    for (let i = 0; i < 3; i++) CHAR.scoops[i].visible = i === lvl;
+    // voxel scoop props only show on the fallback keeper; Drew has no held tool
+    for (let i = 0; i < 3; i++) if (CHAR.scoops[i]) CHAR.scoops[i].visible = !CHAR.drew && i === lvl;
     pushScoopHud();
   }
   function enterScoop() {
-    setMode('scoop'); camInit = false;
+    setMode('scoop'); camInit = false; camGroundRef = null;
     setInside(false);
     for (const s of labelSprites) s.visible = false;
     CHAR.group.visible = true;
@@ -495,6 +503,8 @@ export function createEngine({ canvas, ui, emit }) {
   function exitScoop() {
     setMode('explore');
     camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
+    if (groundPatch) groundPatch.visible = false;
+    if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of labelSprites) s.visible = true;
     CHAR.group.visible = false;
@@ -539,9 +549,10 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.x = nx; CHAR.z = nz;
       CHAR.bob += dt * 10 * mag;
     } else CHAR.bob += dt * 1.5;
-    const cy = groundAt(CHAR.x, CHAR.z);
-    CHAR.group.position.set(CHAR.x, cy + Math.abs(Math.sin(CHAR.bob)) * 0.05, CHAR.z);
+    const cy = terrainAt(CHAR.x, CHAR.z);   // topology only — never climb trees/melt
+    CHAR.group.position.set(CHAR.x, cy + (CHAR.drew ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05), CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
+    if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
     // scooping
     const tool = TOOLS[CHAR.lvl];
     for (let i = POOPS.length - 1; i >= 0; i--) {
@@ -557,6 +568,7 @@ export function createEngine({ canvas, ui, emit }) {
           setTool(nl);
           audio.sfxChime(nl === 1 ? [523, 659, 784] : [523, 659, 784, 1047]);
           toast(nl === 1 ? 'Bigger scoop unlocked! 🥄✨' : 'MEGA SHOVEL unlocked! 🦾💩');
+          if (CHAR.drew) CHAR.drew.react('cheer');     // Drew celebrates the upgrade
         } else pushScoopHud();
       }
     }
@@ -564,20 +576,38 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.bag = 0; bagWarned = false; audio.sfxChime([392, 523]); pushScoopHud();
       toast('Composted ♻️');
     }
-    if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); }
+    if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
     if (POOPS.length > 0) spotless = false;
     if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
-    // follow cam — subject centered
+    // clean aerial patch follows the keeper over the photoreal ground
+    if (groundPatch) {
+      const show = !!(p3dtiles && p3dtiles.holder.visible);
+      groundPatch.visible = show;
+      if (show) { groundPatch.scale.setScalar(0.7); groundPatch.position.set(CHAR.x, cy + 0.05, CHAR.z); }
+    }
+    // follow cam — high enough to clear the real backyard tree canopy (the
+    // sanctuary sits in a treed yard), so the photoreal reads clean instead of
+    // burying the camera in a blob. Flies over the melt, static-ish altitude.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const dist = 6.2 * szoom, h = (2.1 + scPitch * 4.5) * Math.max(0.75, szoom);
-    const camT = _camT.set(CHAR.x - fx * dist, cy + h, CHAR.z - fz * dist);
-    const g = resolveCam(CHAR.x, cy + 1.1, CHAR.z, camT.x, camT.y, camT.z);
-    if (g < 1) { camT.set(CHAR.x + (camT.x - CHAR.x) * g, cy + 1.1 + (camT.y - cy - 1.1) * g, CHAR.z + (camT.z - CHAR.z) * g); }
+    const dist = (15 + scPitch * 4) * szoom, h = (16 + scPitch * 6) * Math.max(0.75, szoom);
+    camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
+    const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
     camV.lerp(camT, Math.min(1, dt * 6));
-    camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.2);
+    camV.y = Math.max(camV.y, terrainAt(camV.x, camV.z) + 1.2);
     camera.position.copy(camV);
     camera.lookAt(CHAR.x, cy + 1.0, CHAR.z);
+    // walk-to-drive: prompt when Drew reaches a parked car in the driveway
+    let near = false;
+    for (const s of parkedSpots) if (Math.hypot(CHAR.x - s.x, CHAR.z - s.z) < 3.6) { near = true; break; }
+    if (near !== nearCar) { nearCar = near; emit('nearCar', near); }
+  }
+  // hop from walking straight into driving (the car spawns at the driveway)
+  function driveFromScoop() {
+    if (mode !== 'scoop' || !nearCar) return;
+    nearCar = false; emit('nearCar', false);
+    audio.blip();
+    enterDrive();
   }
 
   // ---------- drive mode ----------
@@ -724,7 +754,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) {
       const show = !!(p3dtiles && p3dtiles.holder.visible);   // only over the photoreal world
       groundPatch.visible = show;
-      if (show) groundPatch.position.set(car.x, yC + 0.05, car.z);
+      if (show) { groundPatch.scale.setScalar(1); groundPatch.position.set(car.x, yC + 0.05, car.z); }
     }
     const spin = car.speed * dt / 0.37;
     const active = car.models[car.modelIdx];
@@ -894,7 +924,7 @@ export function createEngine({ canvas, ui, emit }) {
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
     toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
-    focusHouse, cycleCamera, cycleCar, dispose,
+    focusHouse, cycleCamera, cycleCar, driveFromScoop, dispose,
     get mode() { return mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging
