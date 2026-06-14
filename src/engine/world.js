@@ -36,29 +36,93 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     m.receiveShadow = true; scene.add(m);
   }
 
-  // ---------- creek ----------
-  let creekPtsW = null;
+  // ---------- creek (animated flowing water) ----------
+  let creekPtsW = null, waterMat = null;
   if (S.creek) {
     creekPtsW = S.creek.p.map(W);
     const pts = creekPtsW;
-    const pos = [], idx = []; let vi = 0; const hw = 1.6, lift = 0.25;
+    // pos as before; uv = [cross-stream 0/1, along-stream arc length in m];
+    // aFlow = centerline tangent per vertex (downstream direction).
+    const pos = [], idx = [], uv = [], flow = []; let vi = 0, slen = 0;
+    const hw = 1.6, lift = 0.25;
     for (let k = 0; k < pts.length; k++) {
       const p = pts[k], q = pts[Math.min(k + 1, pts.length - 1)], o = pts[Math.max(k - 1, 0)];
       let dx = q[0] - o[0], dz = q[1] - o[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
       const nx = -dz, nz = dx;
+      if (k > 0) slen += Math.hypot(p[0] - pts[k - 1][0], p[1] - pts[k - 1][1]);
       for (const s of [1, -1]) {
         const x = p[0] + nx * hw * s, z = p[1] + nz * hw * s;
         pos.push(x, terrainAt(x, z) + lift, z);
+        uv.push(s > 0 ? 0 : 1, slen);
+        flow.push(dx, dz);
       }
       if (k > 0) idx.push(vi - 2, vi - 1, vi, vi, vi - 1, vi + 1);
       vi += 2;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute('aFlow', new THREE.Float32BufferAttribute(flow, 2));
     g.setIndex(idx); g.computeVertexNormals();
-    scene.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-      color: 0x3c6472, roughness: .35, metalness: .1, transparent: true, opacity: .78, side: THREE.DoubleSide
-    })));
+    waterMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uSunDir: { value: new THREE.Vector3(-0.547, 0.71, 0.444) },
+        uSunCol: { value: new THREE.Color(0xfff1d8) },
+        uShallow: { value: new THREE.Color(0x4a7d82) },
+        uDeep: { value: new THREE.Color(0x223f4a) },
+        uAmbTop: { value: new THREE.Color(0xd8e8f6) },
+        uAmbBot: { value: new THREE.Color(0xa39a85) },
+        uFlowSpeed: { value: 0.18 }, uOpacity: { value: 0.84 }
+      },
+      vertexShader: `
+        attribute vec2 aFlow;
+        uniform float uTime;
+        varying vec2 vFlow; varying vec3 vWorld; varying vec3 vNormalUp;
+        void main(){
+          vFlow = normalize(aFlow);
+          float w = sin(uv.y * 0.5 + uTime * 1.2) * 0.5 + sin(uv.y * 1.7 - uTime * 0.9) * 0.5;
+          vec3 p = position; p.y += w * 0.05;
+          vWorld = (modelMatrix * vec4(p, 1.0)).xyz;
+          vNormalUp = normalize(normalMatrix * normal);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }`,
+      fragmentShader: `
+        precision highp float;
+        uniform float uTime, uFlowSpeed, uOpacity;
+        uniform vec3 uSunDir, uSunCol, uShallow, uDeep, uAmbTop, uAmbBot;
+        varying vec2 vFlow; varying vec3 vWorld; varying vec3 vNormalUp;
+        float hash21(vec2 p){ p = fract(p * vec2(123.34, 345.45)); p += dot(p, p + 34.345); return fract(p.x * p.y); }
+        float noise2(vec2 p){
+          vec2 i = floor(p), f = fract(p);
+          float a = hash21(i), b = hash21(i + vec2(1.0,0.0)), c = hash21(i + vec2(0.0,1.0)), d = hash21(i + vec2(1.0,1.0));
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
+        }
+        void main(){
+          vec2 ax = vFlow, cr = vec2(-vFlow.y, vFlow.x);
+          vec2 fuv = vec2(dot(vWorld.xz, ax), dot(vWorld.xz, cr)) * 0.25;
+          vec2 sc = vec2(-uTime * uFlowSpeed, 0.0);
+          float n1 = noise2(fuv * 1.3 + sc);
+          float eps = 0.15;
+          float nL = noise2((fuv + vec2(-eps,0.0)) * 1.3 + sc), nR = noise2((fuv + vec2(eps,0.0)) * 1.3 + sc);
+          float nD = noise2((fuv + vec2(0.0,-eps)) * 1.3 + sc), nU = noise2((fuv + vec2(0.0,eps)) * 1.3 + sc);
+          vec3 rippleN = normalize(vec3((nL - nR) * 4.0, 1.0, (nD - nU) * 4.0));
+          vec3 N = normalize(mix(vNormalUp, rippleN, 0.6));
+          vec3 V = normalize(cameraPosition - vWorld);
+          float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+          vec3 H = normalize(uSunDir + V);
+          float spec = pow(max(dot(N, H), 0.0), 90.0) * 1.4;
+          float ndl = max(dot(N, uSunDir), 0.0);
+          vec3 baseColor = mix(uDeep, uShallow, n1 * 0.5 + 0.5);
+          vec3 amb = mix(uAmbBot, uAmbTop, 0.6);
+          vec3 col = baseColor * (0.35 + 0.65 * ndl) * amb + spec * uSunCol + fres * uAmbTop * 0.5;
+          float alpha = clamp(uOpacity + fres * 0.12, 0.0, 0.95);
+          gl_FragColor = vec4(col, alpha);
+        }`
+    });
+    scene.add(new THREE.Mesh(g, waterMat));
   }
 
   // ---------- streets (crisp ribbons over the aerial) ----------
@@ -557,7 +621,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   else buildLabels();
 
   return {
-    aerialMat, onRoad, house, bldBoxes, bldPolys, treePts, creekPtsW,
+    aerialMat, onRoad, house, bldBoxes, bldPolys, treePts, creekPtsW, waterMat,
     frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites
   };
 }

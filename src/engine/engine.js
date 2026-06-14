@@ -59,7 +59,7 @@ export function createEngine({ canvas, ui, emit }) {
   scene.add(sun);
 
   const world = buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GRID_ANG, aerialUrl });
-  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites } = world;
+  const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat } = world;
 
   // Car-vs-building test: a point is solid only when it's inside an actual
   // footprint polygon (AABB prefilter keeps it cheap). This is what lets the
@@ -654,6 +654,7 @@ export function createEngine({ canvas, ui, emit }) {
   function loop(now) {
     if (disposed) return;
     const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
+    if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
     // roof animation
     const target = insideOpen ? 1 : 0;
     roofAnim += (target - roofAnim) * Math.min(1, dt * 5);
