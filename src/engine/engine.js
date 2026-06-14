@@ -874,9 +874,9 @@ export function createEngine({ canvas, ui, emit }) {
   const DRIVE_CAMS = [
     // high + steep like the top-down (so it stays ABOVE the melty ground-level
     // photogrammetry), but pulled a little behind and aimed well down the road.
-    { name: 'Cruise', dist: 9, h: 34, ahead: 18, drone: true, topdown: false },
+    { name: 'Cruise', dist: 9, h: 34, ahead: 11, drone: true, topdown: false },
     { name: 'Close', dist: 11, h: 5, ahead: 5, drone: false, topdown: false },
-    { name: 'Top-down', dist: 0, h: 52, ahead: 0, drone: true, topdown: true },
+    { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true },
   ];
   function cycleCamera() {
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
@@ -1038,12 +1038,15 @@ export function createEngine({ canvas, ui, emit }) {
       camera.position.set(cx2, cy2, cz2);
       camera.lookAt(car.x, yC + 0.7, car.z);
     } else if (DRIVE_CAMS[camMode].topdown) {
-      const camT = _camT.set(car.x, yC + 52 * czoom, car.z);
+      const CAM = DRIVE_CAMS[camMode];
+      // almost directly overhead, but offset a little behind and aimed a touch
+      // forward so you can read the road ahead (not perfectly straight down).
+      const camT = _camT.set(car.x - fx * CAM.dist, yC + CAM.h * czoom, car.z - fz * CAM.dist);
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, Math.min(1, dt * 5));
       camera.position.copy(camV);
-      camera.up.set(fx, 0, fz); // heading-up top-down
-      camera.lookAt(car.x, yC, car.z);
+      camera.up.set(fx, 0, fz); // heading-up
+      camera.lookAt(car.x + fx * CAM.ahead, yC, car.z + fz * CAM.ahead);
     } else {
       const CAM = DRIVE_CAMS[camMode];
       camera.up.set(0, 1, 0);
