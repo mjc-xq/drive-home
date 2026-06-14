@@ -62,13 +62,15 @@ export function createEngine({ canvas, ui, emit }) {
   let p3dtiles = null;
   const DEG = Math.PI / 180;
   // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
-  // yOffset lifts the photoreal world so its ground meets the procedural terrain
-  // (the car/keeper ride procedural terrainAt, so the two must share a height).
-  const P3DT = { yOffset: 32, spin: 0 };
+  // yOffset lifts the photoreal ground to the procedural terrain height; xOffset/
+  // zOffset + spin (deg) translate/rotate the photoreal world about the house so
+  // it matches the procedural frame (spawns + collision). Spin pivots on origin.
+  const P3DT = { yOffset: 32, xOffset: 0, zOffset: 0, spin: 0 };
   const applyP3DT = () => {
     if (!p3dtiles || !p3dtiles.holder) return;
-    p3dtiles.holder.position.y = P3DT.yOffset;
-    p3dtiles.holder.rotation.y = P3DT.spin * DEG;
+    const h = p3dtiles.holder;
+    h.rotation.y = P3DT.spin * DEG;
+    h.position.set(P3DT.xOffset, P3DT.yOffset, P3DT.zOffset);
   };
   // ---- ground height authority ----
   // groundAt(x,z) = the photoreal tile surface height under (x,z), via a cheap
@@ -77,27 +79,35 @@ export function createEngine({ canvas, ui, emit }) {
   // the data (bldPolys/treePts), so the invariant is untouched.
   const _downRay = new THREE.Raycaster(); _downRay.firstHitOnly = true;
   const _gO = new THREE.Vector3(), _gD = new THREE.Vector3(0, -1, 0), _gHits = [];
+  function rawTileY(x, z) {
+    if (!p3dtiles || !p3dtiles.group.visible) return null;
+    _downRay.set(_gO.set(x, 600, z), _gD); _downRay.far = 1200; _gHits.length = 0;
+    p3dtiles.raycast(_downRay, _gHits);
+    return _gHits.length ? _gHits[0].point.y : null;
+  }
   function groundAt(x, z, fallback) {
-    if (p3dtiles && p3dtiles.group.visible) {
-      _downRay.set(_gO.set(x, 600, z), _gD); _downRay.far = 1200; _gHits.length = 0;
-      p3dtiles.raycast(_downRay, _gHits);
-      if (_gHits.length) return _gHits[0].point.y;
-    }
+    const y = rawTileY(x, z);
+    if (y != null) return y;
     return fallback != null ? fallback : terrainAt(x, z);
   }
-  // Auto-align the photoreal world vertically: median of a ring of down-rays at
-  // the origin → lift the holder so the tile ground meets terrainAt(0,0).
+  // One-shot vertical align: sample a ring of down-rays in the open yard/street
+  // (radius 14 m, away from the house roof), take the median tile height, and
+  // set yOffset so it meets terrainAt(0,0). Clamped + single-shot so it can't
+  // run away accumulating.
+  let alignDone = false;
   function alignP3DT() {
-    if (!p3dtiles || !p3dtiles.holder) return false;
+    if (alignDone || !p3dtiles || !p3dtiles.holder) return false;
     const ys = [];
-    for (const [dx, dz] of [[0, 0], [4, 0], [-4, 0], [0, 4], [0, -4]]) {
-      _downRay.set(_gO.set(dx, 600, dz), _gD); _downRay.far = 1200; _gHits.length = 0;
-      p3dtiles.raycast(_downRay, _gHits);
-      if (_gHits.length) ys.push(_gHits[0].point.y);
+    for (let i = 0; i < 12; i++) {
+      const a = i / 12 * Math.PI * 2;
+      const y = rawTileY(Math.cos(a) * 14, Math.sin(a) * 14);
+      if (y != null) ys.push(y);
     }
-    if (ys.length < 3) return false;
+    if (ys.length < 6) return false;          // wait until enough tiles loaded
     ys.sort((a, b) => a - b);
-    P3DT.yOffset += terrainAt(0, 0) - ys[ys.length >> 1]; applyP3DT();
+    P3DT.yOffset = clamp(P3DT.yOffset + (terrainAt(0, 0) - ys[ys.length >> 1]), -10, 90);
+    applyP3DT();
+    alignDone = true;
     return true;
   }
   if (!flags.has('flat')) {
@@ -106,7 +116,7 @@ export function createEngine({ canvas, ui, emit }) {
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
       p3dtiles = createPhotorealTiles(scene, camera, renderer, {
-        lat: houseLat, lon: houseLon, errorTarget: 16
+        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: 16
       });
       if (!p3dtiles) return;
       applyP3DT();
@@ -118,6 +128,21 @@ export function createEngine({ canvas, ui, emit }) {
         if (tries < 24) { tries++; alignP3DT(); }
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
+  }
+
+  // ?debug: tall coloured poles at the procedural reference points (in the scene,
+  // not staticGroup, so they show over photoreal) to eyeball alignment.
+  if (flags.has('debug')) {
+    const pole = (x, z, color) => {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 80, 8),
+        new THREE.MeshBasicMaterial({ color }));
+      m.position.set(x, 40, z); scene.add(m);
+    };
+    pole(house.c[0], house.c[1], 0xff0000);                       // house = red
+    if (frontPt) pole(frontPt[0], frontPt[1], 0x00ff00);          // car spawn = green
+    pole(SREC.pen[0], SREC.pen[1], 0xff00ff);                     // pigs/pen = magenta
+    pole(SREC.coop[0], SREC.coop[1], 0x00ffff);                   // ducks/coop = cyan
+    pole(SREC.shed[0], SREC.shed[1], 0xff8800);                   // iguana/shed = orange
   }
 
   // Car-vs-building test: a point is solid only when it's inside an actual
@@ -767,10 +792,36 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
-    p3dt: P3DT,                       // mutate {yOffset,spin} then call nudge()
+    p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
     nudge: applyP3DT,
     tiles: () => p3dtiles,
     setProcedural: (on) => { staticGroup.visible = on; },
+    // sweep spin; score = avg tile height at building centroids − at road points
+    // (correct alignment => buildings high/roofs, roads low). Pick the max.
+    calibrate: () => {
+      const road = [], bld = [];
+      for (const r of S.roads) {
+        if (r.k !== 'residential' && r.k !== 'tertiary') continue;
+        for (const p of r.p) { const w = W(p); if (Math.hypot(w[0], w[1]) < 90) road.push(w); }
+      }
+      for (const b of bldPolys) {
+        const cx = (b.bb[0] + b.bb[1]) / 2, cz = (b.bb[2] + b.bb[3]) / 2;
+        if (Math.hypot(cx, cz) < 90) bld.push([cx, cz]);
+      }
+      // Rotate the SAMPLE POINTS by -s about origin (equivalent to spinning the
+      // photoreal +s) and probe the static tiles — avoids stale matrixWorld.
+      const out = {};
+      for (let s = 0; s < 360; s += 5) {
+        const a = -s * DEG, ca = Math.cos(a), sa = Math.sin(a);
+        let rs = 0, rn = 0, bs = 0, bn = 0;
+        for (const [x, z] of road) { const y = rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { rs += y; rn++; } }
+        for (const [x, z] of bld) { const y = rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { bs += y; bn++; } }
+        out[s] = (rn && bn) ? +(bs / bn - rs / rn).toFixed(2) : null;
+      }
+      let best = 0, bestv = -1e9;
+      for (const s in out) if (out[s] != null && out[s] > bestv) { bestv = out[s]; best = +s; }
+      return { bestSpin: best, bestScore: bestv, scores: out, roadPts: road.length, bldPts: bld.length };
+    },
     state: () => ({
       mode, buildings: S.buildings.length, photoreal: !!p3dtiles && !staticGroup.visible,
       poops: POOPS.length, car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), speed: +car.speed.toFixed(1), glb: !!car.glb },

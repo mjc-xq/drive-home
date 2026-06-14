@@ -33,7 +33,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   // off). Both darken them. Treat tiles as an UNLIT backdrop: NoColorSpace map +
   // MeshBasic + a small gain so they read like the bright aerial. Registered
   // before TilesFadePlugin so the fade still wraps the final material.
-  const tileGain = { value: opts.tileGain ?? 1.3 };
+  const tileGain = { value: opts.tileGain ?? 0.82 };
   tiles.tileGain = tileGain;
   tiles.registerPlugin({
     name: 'DAHILL_LOOK',
