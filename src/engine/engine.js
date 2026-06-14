@@ -3,7 +3,7 @@ import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp } from './coords.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
-import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, CARSPECS, VEHICLES } from './car.js';
+import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
@@ -24,6 +24,10 @@ export function createEngine({ canvas, ui, emit }) {
   // ?nocar: skip the GLB swap (fast test loop; procedural car stays).
   const flags = new URLSearchParams(location.search);
   const LITE = flags.has('lite');
+  // Phones: cap pixel ratio and lighten shadows. The shadow pass re-renders every
+  // caster into the depth map each frame, so this is a real per-frame saving and
+  // a defence against GPU-memory pressure on iOS Safari.
+  const MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
   // Upgraded to three r184. The scene's colours and light intensities were all
   // hand-tuned under r128's un-managed, linear-output pipeline, so opt back out
@@ -32,9 +36,9 @@ export function createEngine({ canvas, ui, emit }) {
   THREE.ColorManagement.enabled = false;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.5 : 2));
   renderer.shadowMap.enabled = !LITE;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xc8d6da);
   scene.fog = new THREE.Fog(0xd2dcd6, 460, 1200);
@@ -46,7 +50,7 @@ export function createEngine({ canvas, ui, emit }) {
   const sun = new THREE.DirectionalLight(0xfff1d8, 0.95 * Math.PI);
   sun.position.set(-185, 240, 150);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);
   const sc2 = sun.shadow.camera;
   sc2.left = -300; sc2.right = 300; sc2.top = 300; sc2.bottom = -300; sc2.far = 900;
   sun.shadow.bias = -0.0009;
@@ -186,10 +190,12 @@ export function createEngine({ canvas, ui, emit }) {
   const CHAR = createCharacter(scene, SREC);
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
 
+  let disposed = false;
   const car = createCar(scene);
+  let cancelCarLoad = null;
   if (!flags.has('nocar')) {
     installDracoDecoder();
-    loadRealCar(car, carGlbUrl, () => toast('Using fallback car model'));
+    cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
     // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
     loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, meta: VEHICLES[1] });   // GLB nose runs -Z
     loadDrivableCar(car, siennaUrl, 2, { length: 5.1, flip: false, meta: VEHICLES[2] }); // GLB nose runs +Z
@@ -203,9 +209,12 @@ export function createEngine({ canvas, ui, emit }) {
     const park = (url, side, len, flip) => {
       const cx = frontPt[0] + u[0] * 7 + perp[0] * side * 2.4;
       const cz = frontPt[1] + u[1] * 7 + perp[1] * side * 2.4;
-      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black: true, flip });
-      const hl = len / 2, hw = 1.05;                    // footprint collider (vs the driven car)
-      bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
+      // add the footprint collider only once the car actually loads, so a failed
+      // load doesn't leave an invisible wall the driven car bounces off.
+      loadParkedCar(staticGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black: true, flip }, () => {
+        const hl = len / 2, hw = 1.05;
+        bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
+      });
     };
     park(rav4Url, 1, 4.6, false);     // RAV4 nose runs +Z → carYaw already faces it to the street
     park(siennaUrl, -1, 5.1, true);   // Sienna nose runs -Z → flip 180° to face the street
@@ -214,7 +223,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   function showCarCard() {
     const v = car.models[car.modelIdx];
-    const meta = v && v.name ? v : { name: CARSPECS[0].name, spec: CARSPECS[0].spec, credit: 'Ferrari 458 · vicent091036' };
+    const meta = v && v.name ? v : VEHICLES[0];     // fallback card while no GLB has loaded yet
     emit('carCard', { name: meta.name, spec: meta.spec, credit: meta.credit || '' });
   }
   function cycleCar() {
@@ -452,6 +461,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function exitScoop() {
     setMode('explore');
+    camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
     hideJoy();
     for (const s of labelSprites) s.visible = true;
     CHAR.group.visible = false;
@@ -476,13 +486,13 @@ export function createEngine({ canvas, ui, emit }) {
       const sp = 4.4 * mag;
       let nx = CHAR.x + mx * sp * dt, nz = CHAR.z + mz * sp * dt;
       const rad = 0.42;
-      for (const bb of bldBoxes) {
-        if (nx > bb[0] - rad && nx < bb[1] + rad && nz > bb[2] - rad && nz < bb[3] + rad) {
-          const pl = [nx - (bb[0] - rad), (bb[1] + rad) - nx, nz - (bb[2] - rad), (bb[3] + rad) - nz];
-          const m = Math.min(...pl);
-          if (m === pl[0]) nx = bb[0] - rad; else if (m === pl[1]) nx = bb[1] + rad;
-          else if (m === pl[2]) nz = bb[2] - rad; else nz = bb[3] + rad;
-        }
+      // collide against real building/structure footprints (not the oversized
+      // AABBs) and slide along the wall — otherwise the house's AABB walls off
+      // half the open lawn around the keeper's spawn.
+      if (insideBuilding(nx, nz)) {
+        if (!insideBuilding(nx, CHAR.z)) nz = CHAR.z;
+        else if (!insideBuilding(CHAR.x, nz)) nx = CHAR.x;
+        else { nx = CHAR.x; nz = CHAR.z; }
       }
       for (const t of treePts) {
         const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.55 + rad;
@@ -527,7 +537,7 @@ export function createEngine({ canvas, ui, emit }) {
     // follow cam — subject centered
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
     const dist = 6.2 * szoom, h = (2.1 + scPitch * 4.5) * Math.max(0.75, szoom);
-    const camT = new THREE.Vector3(CHAR.x - fx * dist, cy + h, CHAR.z - fz * dist);
+    const camT = _camT.set(CHAR.x - fx * dist, cy + h, CHAR.z - fz * dist);
     const g = resolveCam(CHAR.x, cy + 1.1, CHAR.z, camT.x, camT.y, camT.z);
     if (g < 1) { camT.set(CHAR.x + (camT.x - CHAR.x) * g, cy + 1.1 + (camT.y - cy - 1.1) * g, CHAR.z + (camT.z - CHAR.z) * g); }
     if (!camInit) { camV.copy(camT); camInit = true; }
@@ -575,6 +585,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   const camV = new THREE.Vector3();
+  const _camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
   let camMode = 0;
   let camInit = false;
   const CAMNAMES = ['Chase', 'High', 'Top-down'];
@@ -673,9 +684,12 @@ export function createEngine({ canvas, ui, emit }) {
     car.group.rotateZ(-pitch);
     car.group.rotateX(roll);
     const spin = car.speed * dt / 0.37;
-    if (car.glb) {
-      for (const w of car.wheelsGLB) w.rotation.x += spin;
+    const active = car.models[car.modelIdx];
+    if (active) {
+      // GLB vehicle: only the Ferrari has named wheel nodes; others ride static
+      if (active.wheels) for (const w of active.wheels) w.rotation.x += spin;
     } else {
+      // procedural fallback car
       for (const w of car.wheels) w.rotation.z -= spin;
       for (const f of car.fronts) f.rotation.y = car.steer * 1.6;
     }
@@ -689,7 +703,7 @@ export function createEngine({ canvas, ui, emit }) {
       camera.position.set(cx2, cy2, cz2);
       camera.lookAt(car.x, yC + 0.7, car.z);
     } else if (camMode === 2) {
-      const camT = new THREE.Vector3(car.x, yC + 52 * czoom, car.z);
+      const camT = _camT.set(car.x, yC + 52 * czoom, car.z);
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, Math.min(1, dt * 5));
       camera.position.copy(camV);
@@ -700,7 +714,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (now - camOrbit.t > 1400 && Math.abs(car.speed) > 2) camOrbit.yaw *= Math.exp(-dt * 2.2);
       const a = car.yaw + Math.PI + camOrbit.yaw;
       const dist = (camMode === 1 ? 14.5 : 9.4) * czoom, h = ((camMode === 1 ? 7.8 : 3.7) + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
-      const camT = new THREE.Vector3(car.x + Math.sin(a) * dist, yC + h, car.z + Math.cos(a) * dist);
+      const camT = _camT.set(car.x + Math.sin(a) * dist, yC + h, car.z + Math.cos(a) * dist);
       const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
       if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
       if (!camInit) { camV.copy(camT); camInit = true; }
@@ -735,7 +749,6 @@ export function createEngine({ canvas, ui, emit }) {
   const dirV = new THREE.Vector3();
   let prev = performance.now();
   let raf = 0;
-  let disposed = false;
   function loop(now) {
     if (disposed) return;
     const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
@@ -811,6 +824,17 @@ export function createEngine({ canvas, ui, emit }) {
       visualViewport.removeEventListener('scroll', resize);
     }
     audio.engineStop();
+    if (cancelCarLoad) cancelCarLoad();          // late car load/timeout can't touch a dead scene
+    if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
+    // free GPU resources the renderer.dispose() alone doesn't reclaim
+    scene.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const m of mats) {
+        for (const k in m) { const v = m[k]; if (v && v.isTexture) v.dispose(); }
+        m.dispose();
+      }
+    });
     renderer.dispose();
     delete window.__dahill;
   }

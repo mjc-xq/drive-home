@@ -74,5 +74,14 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   holder.add(tiles.group);
   scene.add(holder);
   tiles.holder = holder;
+
+  // Full teardown for engine.dispose(): frees all streamed tile geom/textures,
+  // the Draco/KTX2 worker pools, and detaches the holder. The biggest GPU pool
+  // in the app, so this is what actually returns memory on iOS.
+  tiles.disposeAll = () => {
+    try { tiles.dispose(); } catch (e) { /* renderer may already be gone */ }
+    try { draco.dispose(); ktx2.dispose(); } catch (e) { /* idempotent */ }
+    if (holder.parent) holder.parent.remove(holder);
+  };
   return tiles;
 }

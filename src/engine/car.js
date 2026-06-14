@@ -6,13 +6,9 @@ import { DracoShim } from './draco-shim.js';
 // the chase cam show headlights instead of taillights, flip this.
 export const CARYAW = -Math.PI / 2;
 
-export const CARSPECS = [
-  { name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', color: 0xe02818, css: '#e02818' },
-  { name: 'SV-10 GIALLO', spec: '5.2L V10 · 640 HP · AWD', color: 0xf2c500, css: '#f2c500' }
-];
-
 // Fixed-slot vehicle roster: index = the order the swap button cycles through,
-// regardless of which GLB finishes loading first. credit feeds the car card.
+// regardless of which GLB finishes loading first. credit feeds the car card;
+// VEHICLES[0] also doubles as the fallback card when no GLB has loaded yet.
 export const VEHICLES = [
   { slot: 0, name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', credit: 'Ferrari 458 · vicent091036' },
   { slot: 1, name: 'TRAIL XSE', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: 'Toyota RAV4' },
@@ -21,7 +17,7 @@ export const VEHICLES = [
 
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.
 export function createCar(scene) {
-  const car = { x: 0, z: 0, yaw: 0, speed: 0, steer: 0, group: new THREE.Group(), wheels: [], fronts: [], bodyMat: null, red: true, models: [], modelIdx: 0, userPicked: false };
+  const car = { x: 0, z: 0, yaw: 0, speed: 0, steer: 0, group: new THREE.Group(), wheels: [], fronts: [], bodyMat: null, models: [], modelIdx: 0, userPicked: false };
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe02818, metalness: .45, roughness: .26 });
   car.bodyMat = bodyMat;
   const carbon = new THREE.MeshStandardMaterial({ color: 0x141518, metalness: .3, roughness: .5 });
@@ -109,13 +105,16 @@ export function createCar(scene) {
 }
 
 // Swap in the real Ferrari 458 (Draco GLB decoded on the main thread by
-// DracoShim). On ANY failure — load error, decode error, or hang — the
-// procedural car stays and onFallback fires exactly once so the UI can toast.
+// DracoShim). On ANY failure — load error, decode error, hang, or a post-resolve
+// throw on a malformed-but-resolved GLB — the procedural car stays and
+// onFallback fires exactly once so the UI can toast. Returns a canceller the
+// engine calls on dispose so a late load/timeout can't touch a torn-down scene.
 export function loadRealCar(car, url, onFallback) {
   let settled = false;
   const fail = err => {
     if (settled) return;
     settled = true;
+    clearTimeout(timer);
     console.warn('car model failed, using fallback', err);
     if (onFallback) onFallback(err);
   };
@@ -123,67 +122,79 @@ export function loadRealCar(car, url, onFallback) {
   // decode failure would otherwise hang silently with no fallback toast.
   const timer = setTimeout(() => fail(new Error('car model load timed out')), 20000);
   try {
-    DracoShim.onError = e => { clearTimeout(timer); fail(e); };
+    DracoShim.onError = e => fail(e);
     const gl = new GLTFLoader();
     gl.setDRACOLoader(DracoShim);
     gl.load(url, g => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const m = g.scene;
-      m.traverse(o => { if (o.isMesh) o.castShadow = true; });
-      const body = m.getObjectByName('body');
-      if (body && body.material) {
-        car.paint = body.material;
-        car.paint.color.setHex(car.red ? CARSPECS[0].color : CARSPECS[1].color);
-        car.paint.metalness = 0.6; car.paint.roughness = 0.32;
-      }
-      const gls = m.getObjectByName('glass');
-      if (gls && gls.material) {
-        gls.material.color.setHex(0x14181d);
-        gls.material.transparent = true; gls.material.opacity = 0.94;
-        gls.material.metalness = 0.6; gls.material.roughness = 0.1;
-      }
-      car.wheelsGLB = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']
-        .map(n => m.getObjectByName(n)).filter(Boolean);
-      const inner = new THREE.Group();
-      inner.rotation.y = CARYAW;
-      inner.add(m);
-      registerVehicle(car, inner, 0, VEHICLES[0]);
-      car.glb = true;
-    }, undefined, err => { clearTimeout(timer); fail(err); });
-  } catch (e) { clearTimeout(timer); fail(e); }
+      try {
+        const m = g.scene;
+        if (!m) throw new Error('car GLB resolved with no scene');
+        m.traverse(o => { if (o.isMesh) o.castShadow = true; });
+        const body = m.getObjectByName('body');
+        if (body && body.material) {
+          car.paint = body.material;
+          car.paint.color.setHex(0xe02818);
+          car.paint.metalness = 0.6; car.paint.roughness = 0.32;
+        }
+        const gls = m.getObjectByName('glass');
+        if (gls && gls.material) {
+          gls.material.color.setHex(0x14181d);
+          gls.material.transparent = true; gls.material.opacity = 0.94;
+          gls.material.metalness = 0.6; gls.material.roughness = 0.1;
+        }
+        const wheels = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']
+          .map(n => m.getObjectByName(n)).filter(Boolean);
+        const inner = new THREE.Group();
+        inner.rotation.y = CARYAW;
+        inner.add(m);
+        registerVehicle(car, inner, 0, VEHICLES[0]);
+        if (car.models[0]) car.models[0].wheels = wheels;   // Ferrari wheels spin on X
+        car.glb = true;
+        settled = true;                                     // last: a throw above still hits fallback
+        clearTimeout(timer);
+      } catch (e) { fail(e); }
+    }, undefined, err => fail(err));
+  } catch (e) { fail(e); }
+  return () => { settled = true; clearTimeout(timer); };
 }
 
-// Load a plain (non-Draco) car GLB (RAV4 / Sienna), normalize it to ~`length`
-// metres sitting on the ground centred on origin, optionally paint it near-black
-// (skipping glass/lights/chrome), and place it at (x,y,z)+yaw under `parent`.
+// Normalize a plain car GLB scene in place: scale so its longest horizontal axis
+// is ~`length` m, sit it on the ground centred on the origin, and (optionally)
+// paint it near-black skipping glass/lights/chrome. Returns the same scene so it
+// can be wrapped and placed. Shared by the parked + drivable Toyota loaders.
+function normalizeCarGLB(scene, length, black) {
+  scene.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(scene), size = new THREE.Vector3();
+  box.getSize(size);
+  const s = length / (Math.max(size.x, size.z) || 1);
+  scene.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    if (!black || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      const nm = ((m.name || '') + (o.name || '')).toLowerCase();
+      if (m.color && !/glass|light|tail|head|lamp|mirror|chrome|window|plate|signal|amber/.test(nm)) {
+        m.color.setHex(0x17191d);
+        if (m.metalness !== undefined) m.metalness = 0.45;
+        if (m.roughness !== undefined) m.roughness = 0.5;
+      }
+    }
+  });
+  scene.scale.setScalar(s);
+  scene.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s);
+  return scene;
+}
+
+// Load a plain (non-Draco) car GLB (RAV4 / Sienna) as a static prop, normalize
+// it, and place it at (x,y,z)+yaw under `parent`. onReady fires only on success
+// (so the caller can add a footprint collider only when the car actually exists).
 export function loadParkedCar(parent, url, opts = {}, onReady) {
   const { x = 0, y = 0, z = 0, yaw = 0, length = 4.6, black = true, flip = false } = opts;
   new GLTFLoader().load(url, g => {
-    const inner = g.scene;
-    inner.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(inner), size = new THREE.Vector3();
-    box.getSize(size);
-    const s = length / (Math.max(size.x, size.z) || 1);
-    inner.traverse(o => {
-      if (!o.isMesh) return;
-      o.castShadow = true;
-      if (!black || !o.material) return;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of mats) {
-        const nm = ((m.name || '') + (o.name || '')).toLowerCase();
-        if (m.color && !/glass|light|tail|head|lamp|mirror|chrome|window|plate|signal|amber/.test(nm)) {
-          m.color.setHex(0x17191d);
-          if (m.metalness !== undefined) m.metalness = 0.45;
-          if (m.roughness !== undefined) m.roughness = 0.5;
-        }
-      }
-    });
-    inner.scale.setScalar(s);
-    inner.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s);
     const grp = new THREE.Group();
-    grp.add(inner);
+    grp.add(normalizeCarGLB(g.scene, length, black));
     grp.position.set(x, y, z);
     grp.rotation.y = yaw + (flip ? Math.PI : 0);   // some GLBs' nose runs the opposite way
     parent.add(grp);
@@ -206,6 +217,7 @@ function registerVehicle(car, group, slot, meta) {
   // until the user picks, show the lowest loaded slot (Ferrari if present)
   if (!car.userPicked) {
     const first = car.models.findIndex(Boolean);
+    if (first < 0) return;                          // unreachable (slot just set), but never deref [-1]
     car.modelIdx = first;
     for (const m of car.models) if (m) m.group.visible = false;
     car.models[first].group.visible = true;
@@ -232,30 +244,9 @@ export function loadDrivableCar(car, url, slot, opts = {}) {
   const { length = 4.6, black = true, flip = false, meta = {} } = opts;
   const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z
   new GLTFLoader().load(url, g => {
-    const m = g.scene;
-    m.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(m), size = new THREE.Vector3();
-    box.getSize(size);
-    const s = length / (Math.max(size.x, size.z) || 1);
-    m.traverse(o => {
-      if (!o.isMesh) return;
-      o.castShadow = true;
-      if (!black || !o.material) return;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const mm of mats) {
-        const nm = ((mm.name || '') + (o.name || '')).toLowerCase();
-        if (mm.color && !/glass|light|tail|head|lamp|mirror|chrome|window|plate|signal|amber/.test(nm)) {
-          mm.color.setHex(0x17191d);
-          if (mm.metalness !== undefined) mm.metalness = 0.45;
-          if (mm.roughness !== undefined) mm.roughness = 0.5;
-        }
-      }
-    });
-    m.scale.setScalar(s);
-    m.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s);
     const inner = new THREE.Group();
     inner.rotation.y = spin;
-    inner.add(m);
+    inner.add(normalizeCarGLB(g.scene, length, black));
     registerVehicle(car, inner, slot, meta);
   }, undefined, err => console.warn('drivable car failed', url, err));
 }

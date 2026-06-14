@@ -103,8 +103,9 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
     a.hx = SREC.pen[0]; a.hz = SREC.pen[1];
   }
   for (let i = 0; i < 2; i++) {
-    const a = spawnAnimal('duck', duckGeo, SREC.coop[0] + (rand() - 0.5) * 3, SREC.coop[1] + 2 + (rand() - 0.5) * 2, 4.5, 0.8, 1);
-    a.hx = SREC.coop[0]; a.hz = SREC.coop[1] + 1.5;
+    // home/spawn clear of the coop's collision box (+z is its open, door side)
+    const a = spawnAnimal('duck', duckGeo, SREC.coop[0] + (rand() - 0.5) * 3, SREC.coop[1] + 3 + (rand() - 0.5) * 2, 4.5, 0.8, 1);
+    a.hx = SREC.coop[0]; a.hz = SREC.coop[1] + 2.8;
   }
   {
     // bask in the open yard on the shed's door side (away from the house)
@@ -198,7 +199,7 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
   // other. Pigs push off any structure box; every critter separates from peers.
   function resolveCritters() {
     for (const a of ANIMALS) {
-      if (a.kind !== 'pig') continue;
+      if (a.kind === 'iguana') continue;            // iguana basks in the open; pigs + ducks push off structures
       for (const bb of bldBoxes) {
         if (a.x > bb[0] - a.r && a.x < bb[1] + a.r && a.z > bb[2] - a.r && a.z < bb[3] + a.r) {
           const pl = [a.x - (bb[0] - a.r), (bb[1] + a.r) - a.x, a.z - (bb[2] - a.r), (bb[3] + a.r) - a.z];

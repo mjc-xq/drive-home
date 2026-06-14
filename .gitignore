@@ -11,3 +11,5 @@ scripts/_cache/
 .playwright-mcp/
 veh-*.jpeg
 parked-look*.jpeg
+scoop-*.jpeg
+drive-*.jpeg

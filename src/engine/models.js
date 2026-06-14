@@ -28,10 +28,10 @@ export function loadPigPrototype(url, yaw, onReady) {
     root.traverse(o => { if (o.isMesh && /plane|ground|floor|backdrop/i.test(o.name)) o.userData._drop = true; });
     let body = null, bodyN = -1;
     root.traverse(o => { if (o.isMesh && !o.userData._drop) { const n = o.geometry.attributes.position.count; if (n > bodyN) { bodyN = n; body = o; } } });
-    if (!body) return;
+    if (!body) { console.warn('pig GLB had no usable mesh, keeping fallback', url); return; }
     const proto = new THREE.Group();
     root.traverse(o => {
-      if (!o.isMesh || o.userData._drop) return;
+      if (!o.isMesh || o.userData._drop || !o.material) return;
       const m = new THREE.Mesh(bakedGeom(o), o.material.clone());
       if (o === body) { m.material.color && m.material.color.setHex(0x141210); m.material.map = null; m.material.metalness = 0; m.material.roughness = 0.66; }
       m.castShadow = true;
@@ -63,7 +63,7 @@ export function loadPoopGeometry(url, onReady) {
       const color = (o.material && o.material.color) ? o.material.color.clone() : new THREE.Color(0x6b4a2a);
       parts.push({ g, color });
     });
-    if (!parts.length) return;
+    if (!parts.length) { console.warn('poop GLB had no meshes, keeping fallback', url); return; }
     const geo = merge(parts);                        // model is already Y-up
     geo.computeBoundingBox();
     const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
@@ -85,7 +85,7 @@ export function loadVegetation(url, onReady) {
     gltf.scene.updateMatrixWorld(true);
     const variants = [];
     gltf.scene.traverse(o => {
-      if (!o.isMesh) return;
+      if (!o.isMesh || !o.material) return;
       const geo = bakedGeom(o);
       geo.computeBoundingBox();
       const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
@@ -97,5 +97,6 @@ export function loadVegetation(url, onReady) {
       variants.push({ name: o.name, geom: geo, mat, height: size.y || 1, bush: /bush/i.test(o.name) });
     });
     if (variants.length) onReady(variants);
+    else console.warn('veg GLB had no variant meshes, keeping fallback', url);
   }, undefined, err => console.warn('veg model failed, keeping fallback', err));
 }
