@@ -597,7 +597,7 @@ export function createEngine({ canvas, ui, emit }) {
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
     car.speed = 0; car.group.visible = true; car.groundY = null;
-    camOrbit.yaw = 0; camOrbit.pitch = 0;
+    camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null;
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
@@ -620,6 +620,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   const camV = new THREE.Vector3();
   const _camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
+  let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
   let camMode = 0;
   let camInit = false;
   const CAMNAMES = ['Chase', 'High', 'Top-down'];
@@ -707,11 +708,10 @@ export function createEngine({ canvas, ui, emit }) {
     const lim = 314;
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= -0.2; }
     car.x = nx; car.z = nz;
-    // Ride the ground smoothly: photoreal tile height is bumpy/melty, so low-pass
-    // it for the car body and take tilt from the smooth procedural terrain.
-    const yRaw = groundAt(car.x, car.z, terrainAt(car.x, car.z));
-    car.groundY = car.groundY == null ? yRaw : car.groundY + (yRaw - car.groundY) * Math.min(1, dt * 5);
-    const yC = car.groundY;
+    // Height comes ONLY from the ground topology (smooth procedural terrain),
+    // never the photoreal tiles — so the car never climbs trees/roofs/melt and
+    // the surface only rises/falls with the actual lay of the land.
+    const yC = terrainAt(car.x, car.z);
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     const tF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), tB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
     const tR = terrainAt(car.x + rxv * 0.9, car.z + rzv * 0.9), tL = terrainAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
@@ -759,7 +759,10 @@ export function createEngine({ canvas, ui, emit }) {
       // camMode 0 = drone-follow (high/back, where the photoreal reads clean);
       // camMode 1 = low chase (closer, more cinematic but shows photogrammetry melt)
       const dist = (camMode === 1 ? 11 : 24) * czoom, h = ((camMode === 1 ? 5 : 22) + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
-      const camT = _camT.set(car.x + Math.sin(a) * dist, yC + h, car.z + Math.cos(a) * dist);
+      // hold the drone at a STATIC altitude: slow-smooth the ground reference so
+      // small terrain rolls don't bob the camera (camMode 1 stays snappy).
+      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * (camMode === 1 ? 6 : 1.2));
+      const camT = _camT.set(car.x + Math.sin(a) * dist, camGroundRef + h, car.z + Math.cos(a) * dist);
       // only the low chase collides with geometry; the drone flies above the melt
       // (resolveCam against melty tile blobs would yank it down onto the car).
       if (camMode === 1) {
