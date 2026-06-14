@@ -236,7 +236,7 @@ export function createEngine({ canvas, ui, emit }) {
     cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
     // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
     loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });   // GLB nose runs -Z; black baked into the GLB (keeps taillights)
-    loadDrivableCar(car, siennaUrl, 2, { length: 5.1, flip: false, meta: VEHICLES[2] }); // GLB nose runs +Z
+    loadDrivableCar(car, siennaUrl, 2, { length: 5.1, flip: true, black: false, meta: VEHICLES[2] }); // GLB nose runs -Z; black baked into the GLB (keeps taillights)
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
@@ -256,7 +256,7 @@ export function createEngine({ canvas, ui, emit }) {
       });
     };
     park(rav4Url, 1, 4.6, false, false);  // RAV4 nose runs +Z → carYaw already faces it; black baked in (keeps taillights)
-    park(siennaUrl, -1, 5.1, true);   // Sienna nose runs -Z → flip 180° to face the street
+    park(siennaUrl, -1, 5.1, false, false);   // GLB nose runs -Z; black baked in (keeps taillights)
   }
   let showT = 0;
 
@@ -579,17 +579,18 @@ export function createEngine({ canvas, ui, emit }) {
     if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
     if (POOPS.length > 0) spotless = false;
     if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
-    // clean aerial patch follows the keeper over the photoreal ground
+    // clean aerial patch follows the keeper — a wide clearing in the real grove
+    // so Drew + nearby poop read clean while the photoreal trees ring the yard
     if (groundPatch) {
       const show = !!(p3dtiles && p3dtiles.holder.visible);
       groundPatch.visible = show;
-      if (show) { groundPatch.scale.setScalar(0.7); groundPatch.position.set(CHAR.x, cy + 0.05, CHAR.z); }
+      if (show) { groundPatch.scale.setScalar(0.95); groundPatch.position.set(CHAR.x, cy + 0.05, CHAR.z); }
     }
     // follow cam — high enough to clear the real backyard tree canopy (the
     // sanctuary sits in a treed yard), so the photoreal reads clean instead of
     // burying the camera in a blob. Flies over the melt, static-ish altitude.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const dist = (15 + scPitch * 4) * szoom, h = (16 + scPitch * 6) * Math.max(0.75, szoom);
+    const dist = (14 + scPitch * 4) * szoom, h = (17 + scPitch * 6) * Math.max(0.75, szoom);
     camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
     const camT = _camT.set(CHAR.x - fx * dist, camGroundRef + h, CHAR.z - fz * dist);
     if (!camInit) { camV.copy(camT); camInit = true; }
