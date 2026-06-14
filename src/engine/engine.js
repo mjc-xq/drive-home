@@ -104,15 +104,12 @@ export function createEngine({ canvas, ui, emit }) {
   marker.rotation.x = Math.PI; marker.renderOrder = 20; marker.visible = false; marker.frustumCulled = false;
   scene.add(marker);
 
-  // Cleared scoop zone: the sanctuary is flattened clear of photoreal trees, so
-  // the keeper must NOT collide with the (now-invisible) procedural trees in it —
-  // otherwise Drew bumps obstacles that aren't there. Pre-filter them out.
-  // Yard centre + radius cover the user's backyard PROPERTY: behind the house all
-  // the way to the creek (creek ~x-33, house at origin) — so the flat/procedural
-  // area is the real property; photoreal streams beyond it.
+  // Scoop renders the procedural world, so Drew collides with every visible
+  // procedural tree (they sit along the streets, clear of the backyard sanctuary).
+  // sancCx/sancCz mark the backyard centre (behind the house toward the creek).
   const sancCx = -16, sancCz = -10;
   const SCOOP_CLEAR_R = 25;
-  const scoopTrees = treePts.filter(t => Math.hypot(t[0] - sancCx, t[1] - sancCz) > SCOOP_CLEAR_R);
+  const scoopTrees = treePts;
 
   // The scoop backyard: a disc of the REAL procedural ground — true topology
   // (terrainAt heights) + the aerial photo (uvAt on the shared terrain material),
@@ -180,14 +177,11 @@ export function createEngine({ canvas, ui, emit }) {
     scoopFence.castShadow = true; scoopFence.visible = false; scoopFence.frustumCulled = false;
     scene.add(scoopFence);
   }
-  // Building collision for Scoop: drop the small sanctuary props (coop/shed/barn)
-  // that sit inside the cleared zone — they're hidden under the photoreal, so
-  // colliding with them = bumping nothing. Keep the house + anything large.
-  const scoopBldPolys = bldPolys.filter(b => {
-    const w = b.bb[1] - b.bb[0], h = b.bb[3] - b.bb[2];
-    const near = Math.hypot((b.bb[0] + b.bb[1]) / 2 - sancCx, (b.bb[2] + b.bb[3]) / 2 - sancCz) < SCOOP_CLEAR_R;
-    return !(near && Math.max(w, h) < 12);
-  });
+  // Building collision for Scoop. The sanctuary structures (barn/shed/coop) and
+  // the house are all rendered procedurally in Scoop now, so Drew should bump
+  // them. insideScoopBuilding tests the tight footprint polygon (not the oversized
+  // AABB), so keeping every building can't wall off the open lawn.
+  const scoopBldPolys = bldPolys;
   function insideScoopBuilding(x, z) {
     for (const b of scoopBldPolys) {
       const bb = b.bb;
@@ -275,10 +269,6 @@ export function createEngine({ canvas, ui, emit }) {
     P3DT.yOffset = clamp(P3DT.yOffset + adjust, 8, 56);
     applyP3DT();
     alignDone = true;
-    // The flatten shape's local coords were baked against the OLD holder offset;
-    // now that the offset moved, drop it so flattenScoopArea() rebuilds the
-    // clearing floor against the corrected matrix (else it drifts by `adjust`).
-    if (flatShape && p3dtiles.flatten) { try { p3dtiles.flatten.deleteShape(flatShape); } catch (e) { /* idempotent */ } flatShape = null; }
     return true;
   }
   // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
@@ -286,55 +276,19 @@ export function createEngine({ canvas, ui, emit }) {
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
   // and never climb the bumpy photogrammetry mesh.
   let tilesReady = false;
-  // Photoreal renders the REAL neighborhood (every house, tree, fence) in ALL
-  // modes — Explore (aerial), Drive and Scoop (elevated follow cams + a clean
-  // patch under the actor); the procedural staticGroup hides once tiles arrive.
-  const photoModes = mode => mode === 'explore' || mode === 'drive' || mode === 'scoop';
+  // Photoreal Google tiles are the AERIAL + Drive backdrop only. Scoop plays in
+  // the clean procedural world (the real house, the pig barn / iguana shed / duck
+  // coop, the compost bin, trees, and the aerial-photo terrain) — Google
+  // photogrammetry is unusably melty at a keeper's eye level, so we don't render
+  // it in Scoop. This also means no tile-flattening hacks (which used to pancake
+  // the house) and pristine tiles in Explore/Drive.
+  const photoModes = mode => mode === 'explore' || mode === 'drive';
   function applyModeVisuals() {
-    const photo = photoModes(mode) && p3dtiles;
+    const photoOn = photoModes(mode) && p3dtiles && tilesReady;
     if (p3dtiles) p3dtiles.holder.visible = photoModes(mode);
-    staticGroup.visible = !(photo && tilesReady);
+    staticGroup.visible = mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     carsGroup.visible = mode === 'drive' || mode === 'scoop';   // parked cars: ground modes only
     if (ring) ring.visible = mode === 'explore';   // marker only makes sense from the air
-  }
-  // Clear the scoop yard: flatten the photoreal tiles over the sanctuary so the
-  // real trees/melt there are pancaked to the ground (a clean clearing to scoop
-  // in), while the photoreal neighborhood stays full 3D further out. The shape
-  // lives in tiles.group's local frame; we flatten DOWN (world-down in that
-  // frame) so anything above the terrain in the disc collapses to it.
-  let flatShape = null;
-  function flattenScoopArea() {
-    if (flatShape || !p3dtiles || !p3dtiles.flatten || !p3dtiles.holder.visible) return;
-    const cx = sancCx, cz = sancCz;              // concentric with the grass yard + fence
-    if (rawTileY(cx, cz) == null) return;        // wait until sanctuary tiles are streamed
-    const g = p3dtiles.group; g.updateWorldMatrix(true, false);
-    // Pancake onto the REAL topology (0.3 m below the grass, which sits at
-    // terrainAt+0.05), tessellated like the grass disc — so the clearing follows
-    // the yard's slope toward the creek instead of a flat pad that steps above
-    // the lawn where the ground falls away, and the grass always covers it.
-    // The flatten disc reaches WELL PAST the grass/fence (R+14 vs grass R+4): the
-    // extra ring pancakes the melty creek/property-line trees that would
-    // otherwise wall off the view right behind the fence, leaving flat open
-    // ground out to the neighborhood, where distant houses stay full 3D.
-    const R = SCOOP_CLEAR_R + 14, rings = 14, segs = 56, pos = [], idx = [], v = new THREE.Vector3();
-    const addV = (x, z) => { g.worldToLocal(v.set(x, terrainAt(x, z) - 0.3, z)); pos.push(v.x, v.y, v.z); };
-    addV(cx, cz);                                             // vertex 0 = centre
-    for (let r = 1; r <= rings; r++) {
-      const rad = R * r / rings;
-      for (let s = 0; s <= segs; s++) { const a = s / segs * Math.PI * 2; addV(cx + Math.cos(a) * rad, cz + Math.sin(a) * rad); }
-    }
-    const rowStart = r => 1 + (r - 1) * (segs + 1);
-    for (let s = 0; s < segs; s++) idx.push(0, rowStart(1) + s + 1, rowStart(1) + s);
-    for (let r = 1; r < rings; r++) {
-      const a = rowStart(r), b = rowStart(r + 1);
-      for (let s = 0; s < segs; s++) { idx.push(a + s, b + s, a + s + 1); idx.push(a + s + 1, b + s, b + s + 1); }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setIndex(idx); geo.computeVertexNormals();
-    flatShape = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-    const dir = new THREE.Vector3(0, -1, 0).transformDirection(new THREE.Matrix4().copy(g.matrixWorld).invert());
-    p3dtiles.flatten.addShape(flatShape, dir, { threshold: Infinity, thresholdMode: 'flatten', flattenRange: 0 });
   }
   if (!flags.has('flat')) {
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
@@ -349,15 +303,10 @@ export function createEngine({ canvas, ui, emit }) {
       let tries = 0;
       p3dtiles.addEventListener('load-model', () => {
         if (!tilesReady) { tilesReady = true; emit('photoreal', true); }
-        // Align + flatten as the relevant tiles stream — in ANY mode. The start
-        // menu jumps straight to Scoop, so we can't wait for an Explore orbit:
-        // the scoop cam sits at the backyard and FORCES those exact sanctuary
-        // tiles to load, which is the best moment to pancake the clearing. The
-        // robust guards in alignP3DT (reject |adjust|>18, need 8 clean samples)
-        // keep a backyard-cam align from yanking the photoreal off.
+        // Vertically align the photoreal ground to the procedural terrain as the
+        // street tiles stream (Explore/Drive only — Scoop never shows tiles).
         if (tries < 24) { tries++; alignP3DT(); }
-        flattenScoopArea();           // self-gates on rawTileY + flatShape; builds once
-        applyModeVisuals();          // hide procedural in explore once tiles are up
+        applyModeVisuals();          // hide procedural once tiles are up (Explore/Drive)
       });
     }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
   }
@@ -678,8 +627,11 @@ export function createEngine({ canvas, ui, emit }) {
     setInside(false);
     for (const s of labelSprites) s.visible = false;
     CHAR.group.visible = true;
-    CHAR.x = SREC.shed[0] - 2.5; CHAR.z = SREC.shed[1] - 2.5; // shed's door side, clear of the house box
-    CHAR.yaw = Math.atan2(SREC.pen[0] - CHAR.x, SREC.pen[1] - CHAR.z);
+    // Spawn out in the OPEN sanctuary (between the coop and the pen), away from
+    // the house, patio and driveway cars so the camera opens onto the play area
+    // and animals, not flat house walls.
+    CHAR.x = (SREC.coop[0] + SREC.pen[0]) / 2; CHAR.z = (SREC.coop[1] + SREC.pen[1]) / 2;
+    CHAR.yaw = Math.atan2(SREC.barn[0] - CHAR.x, SREC.barn[1] - CHAR.z);
     camYawS = CHAR.yaw;
     audio.ensure();
     setTool(CHAR.lvl);
@@ -773,11 +725,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
     if (POOPS.length > 0) spotless = false;
     if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
-    // the procedural grass yard + fence are the backyard in Scoop (crisp); the
-    // aerial patch is for Drive only.
+    // Scoop renders the full procedural world (its aerial-photo terrain IS the
+    // backyard ground, with the real house + sanctuary structures), so the old
+    // grass disc / fence ring (workarounds for the photoreal case) are off — they
+    // would z-fight the terrain and the ring would cut through the house.
     if (groundPatch) groundPatch.visible = false;
-    if (scoopGrass) scoopGrass.visible = true;
-    if (scoopFence) scoopFence.visible = true;
+    if (scoopGrass) scoopGrass.visible = false;
+    if (scoopFence) scoopFence.visible = false;
     // follow cam — preset (Overhead / Angled / Close), cycled with the 🎥 button.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
     const SC = SCOOP_CAMS[scCam];

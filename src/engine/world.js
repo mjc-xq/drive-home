@@ -537,14 +537,21 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       g = new THREE.BoxGeometry(4.6, 0.12, 3.4).toNonIndexed();
       g.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.atan2(-u[1], u[0])));
       g.translate(px, terrainAt(px, pz) + 0.12, pz); yard.push({ g, color: new THREE.Color(0xb9b2a4) });
-      // two bins by the side (the green one is the compost target)
-      for (let i = 0; i < 2; i++) {
-        g = new THREE.BoxGeometry(0.55, 0.95, 0.55).toNonIndexed();
-        const bx = house.bbox[0] - 1.2, bz = house.c[1] + i * 0.8 - 0.4;
-        g.translate(bx, terrainAt(bx, bz) + 0.48, bz);
-        if (i) COMPOST = [bx, bz];
-        yard.push({ g, color: new THREE.Color(i ? 0x3a5a3c : 0x44484e) });
-      }
+      // grey trash bin tucked by the house side
+      g = new THREE.BoxGeometry(0.55, 0.95, 0.55).toNonIndexed();
+      const tbx = house.bbox[0] - 1.2, tbz = house.c[1] - 0.4;
+      g.translate(tbx, terrainAt(tbx, tbz) + 0.48, tbz);
+      yard.push({ g, color: new THREE.Color(0x44484e) });
+      // GREEN COMPOST BIN — the scoop dump-off. Sit it out in the sanctuary yard,
+      // central to the pig/duck/iguana pens, so the empty-your-scoop loop is short.
+      // Bigger, with a lid lip, so it clearly reads as the target.
+      const cbx = (SREC.shed[0] + SREC.coop[0]) / 2, cbz = (SREC.shed[1] + SREC.coop[1]) / 2;
+      const cby = terrainAt(cbx, cbz);
+      COMPOST = [cbx, cbz];
+      g = new THREE.BoxGeometry(0.72, 1.05, 0.72).toNonIndexed(); g.translate(cbx, cby + 0.53, cbz);
+      yard.push({ g, color: new THREE.Color(0x3a7d44) });
+      g = new THREE.BoxGeometry(0.82, 0.12, 0.82).toNonIndexed(); g.translate(cbx, cby + 1.08, cbz);
+      yard.push({ g, color: new THREE.Color(0x2f6437) });
       const ym = new THREE.Mesh(merge(yard), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }));
       ym.castShadow = true; sadd(ym);
     }
