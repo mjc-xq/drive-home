@@ -263,6 +263,19 @@ export function cycleVehicle(car) {
 // ~`length` m, centre on the origin sitting on the ground, optionally paint it
 // near-black, rotate its nose to +X (`spin`, default CARYAW), and register it at
 // `slot`. Fails soft — the roster simply keeps whatever else loaded.
+// Load + normalize a car GLB into a reusable PROTOTYPE group (nose at +Z, sat on the
+// ground) for AMBIENT TRAFFIC — the engine clone()s it across many cars (shared
+// geometry/materials, cheap). onReady(group) fires on success only.
+export function loadCarProto(url, length, flip, onReady) {
+  const gl = new GLTFLoader(); gl.setDRACOLoader(DracoShim);
+  gl.load(url, g => {
+    const inner = new THREE.Group();
+    inner.rotation.y = flip ? Math.PI : 0;          // face nose +Z (traffic groups rotate by atan2(dx,dz))
+    inner.add(normalizeCarGLB(g.scene, length, false));
+    onReady(inner);
+  }, undefined, err => console.warn('traffic model failed', url, err));
+}
+
 export function loadDrivableCar(car, url, slot, opts = {}) {
   const { length = 4.6, black = true, flip = false, meta = {} } = opts;
   const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z

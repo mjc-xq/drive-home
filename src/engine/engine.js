@@ -4,7 +4,7 @@ import { clamp } from './coords.js';
 import { merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
-import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
+import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
@@ -347,9 +347,22 @@ export function createEngine({ canvas, ui, emit }) {
       const cab = new THREE.Mesh(cabGeo, cabMat); cab.position.set(0, 1.18, -0.25);
       g.add(body); g.add(cab); g.frustumCulled = false; g.visible = false; scene.add(g);
       const seg = tSegs[(i * 9 + 3) % tSegs.length];
-      traffic.push({ group: g, a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false });
+      traffic.push({ group: g, box: [body, cab], a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false });
     }
     traffic._segs = tSegs;
+    // upgrade the placeholder boxes to REAL (cloned) car models once they load — a few
+    // normal neighbourhood cars spread across the fleet; clones share geometry (cheap).
+    [[rav4Url, 4.6], [miniUrl, 3.85], [granviaUrl, 5.1]].forEach((def, mi, defs) => {
+      loadCarProto(def[0], def[1], true, proto => {
+        for (let i = mi; i < traffic.length; i += defs.length) {
+          const c = traffic[i];
+          for (const m of c.box) c.group.remove(m);     // drop the box
+          const inst = proto.clone(true);
+          inst.traverse(o => { if (o.isMesh) o.castShadow = false; });
+          c.group.add(inst);
+        }
+      });
+    });
   }
   function nextTrafficSeg(c) {
     const segs = traffic._segs, cand = [];
