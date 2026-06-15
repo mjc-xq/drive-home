@@ -884,6 +884,28 @@ export function createEngine({ canvas, ui, emit }) {
     ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3; ctl.gr = 110; ctl.gpo = 0.95;
     ctl.tx = ctl.gtx; ctl.tz = ctl.gtz;
   }
+  // Unstick: snap the car to the nearest point ON a drivable road segment, facing
+  // along it, stopped. Projects onto each segment (not just vertices) for accuracy.
+  function resetToRoad() {
+    if (mode !== 'drive') return;
+    let bx = car.x, bz = car.z, bd = Infinity, dirX = 0, dirZ = 1;
+    for (const r of S.roads) {
+      if (r.k !== 'residential' && r.k !== 'tertiary') continue;
+      for (let k = 0; k < r.p.length - 1; k++) {
+        const a = W(r.p[k]), b = W(r.p[k + 1]);
+        const vx = b[0] - a[0], vz = b[1] - a[1], len2 = vx * vx + vz * vz || 1;
+        let t = ((car.x - a[0]) * vx + (car.z - a[1]) * vz) / len2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const px = a[0] + vx * t, pz = a[1] + vz * t;
+        const d = (px - car.x) * (px - car.x) + (pz - car.z) * (pz - car.z);
+        if (d < bd) { bd = d; bx = px; bz = pz; const L = Math.sqrt(len2); dirX = vx / L; dirZ = vz / L; }
+      }
+    }
+    car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
+    camInit = false; inp2.navActive = false;
+    audio.blip && audio.blip();
+    toast('Back on the road 🛣️', 1000);
+  }
 
   const camV = new THREE.Vector3();
   const _camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
@@ -974,14 +996,17 @@ export function createEngine({ canvas, ui, emit }) {
     }
     if (throttle > 0.1 || brake > 0.1) showT = 0;
     const road = onRoad(car.x, car.z);
-    const maxF = road ? 36 : 20, maxR = -7;
-    let acc = (road ? 14 : 10) * throttle;
-    if (brake > 0.1) acc = car.speed > 0.5 ? -26 * brake : -9 * brake;
+    // Much higher top speed on the road (terminal ≈ acc/drag, clamped to maxF), but
+    // far slower off-road so you're rewarded for staying on the street. Steering
+    // grip rises with speed so it's stable, not twitchy, at the new top end.
+    const maxF = road ? 52 : 22, maxR = -8;
+    let acc = (road ? 28 : 11) * throttle;
+    if (brake > 0.1) acc = car.speed > 0.5 ? -34 * brake : -10 * brake;
     car.speed += acc * dt;
-    car.speed -= car.speed * (road ? 0.55 : 0.95) * dt;
+    car.speed -= car.speed * (road ? 0.46 : 0.92) * dt;
     car.speed = clamp(car.speed, maxR, maxF);
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
-    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.055);
+    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.085);
     car.steer += (steerTarget - car.steer) * Math.min(1, dt * 9);
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * dt;
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
@@ -1036,11 +1061,10 @@ export function createEngine({ canvas, ui, emit }) {
       navMarker.visible = inp2.navActive;
       if (inp2.navActive) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
     }
-    if (groundPatch) {
-      const show = !!(p3dtiles && p3dtiles.holder.visible);   // only over the photoreal world
-      groundPatch.visible = show;
-      if (show) { groundPatch.scale.setScalar(0.62); groundPatch.position.set(car.x, yC + 0.04, car.z); }
-    }
+    // The flat aerial patch under the car read as an ugly disc (a different, lower-res
+    // texture than the Google tiles). Keep the car riding the same sampled road
+    // HEIGHT (actorGroundY), but leave the patch hidden so only the photoreal shows.
+    if (groundPatch) groundPatch.visible = false;
     const spin = car.speed * dt / 0.37;
     const active = car.models[car.modelIdx];
     if (active) {
@@ -1073,7 +1097,9 @@ export function createEngine({ canvas, ui, emit }) {
     } else {
       const CAM = DRIVE_CAMS[camMode];
       camera.up.set(0, 1, 0);
-      if (now - camOrbit.t > 1400 && Math.abs(car.speed) > 2) camOrbit.yaw *= Math.exp(-dt * 2.2);
+      // free look: hold wherever you dragged; only drift gently back behind the car
+      // after a few seconds of no look input while actually moving.
+      if (now - camOrbit.t > 2800 && Math.abs(car.speed) > 3) camOrbit.yaw *= Math.exp(-dt * 0.9);
       const a = car.yaw + Math.PI + camOrbit.yaw;
       const dist = CAM.dist * czoom, h = (CAM.h + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
       // hold a STATIC altitude (drone cams): slow-smooth the ground ref so terrain
@@ -1247,7 +1273,7 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.drew.react(moves[Math.floor(Math.random() * moves.length)]);
       if (audio.blip) audio.blip();
     },
-    focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, dispose,
+    focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, resetToRoad, dispose,
     get mode() { return mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging

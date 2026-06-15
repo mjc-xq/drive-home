@@ -110,6 +110,7 @@ export default function App() {
             <button id="exitBtn" className="btn" onClick={() => eng().exitDrive()}>Exit ✕</button>
             <button id="carSwap" className="btn icon" aria-label="Change vehicle" onClick={() => eng().cycleCar()}>🚗</button>
             <button id="camBtn" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
+            <button id="resetRoad" className="btn icon" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
           </div>
         )}
         <div id="carCard" className={carCard.show ? 'show' : ''}>
