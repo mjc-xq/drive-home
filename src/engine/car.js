@@ -11,9 +11,10 @@ export const CARYAW = -Math.PI / 2;
 // VEHICLES[0] also doubles as the fallback card when no GLB has loaded yet.
 // Order = the cycle order; slot 0 is the DEFAULT driven vehicle (the minivan).
 export const VEHICLES = [
-  { slot: 0, name: 'GLIDE LE', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: 'Toyota Sienna' },
-  { slot: 1, name: 'TRAIL XSE', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: 'Toyota RAV4' },
-  { slot: 2, name: 'GT-12 ROSSO', spec: '6.5L V12 · 620 HP · RWD', credit: 'Ferrari 458 · vicent091036' }
+  { slot: 0, name: 'Toyota Sienna', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: '' },
+  { slot: 1, name: 'Toyota RAV4', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: '' },
+  { slot: 2, name: 'Ferrari 458', spec: '4.5L V8 · 562 HP · RWD', credit: 'model: vicent091036' },
+  { slot: 3, name: 'Toy Racer', spec: 'LITTLE · BIG FUN', credit: 'Khronos ToyCar · CC0' }
 ];
 
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.

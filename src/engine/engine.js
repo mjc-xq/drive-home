@@ -11,6 +11,7 @@ import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
 import rav4Url from '../assets/rav4.glb';
 import siennaUrl from '../assets/sienna.glb';
+import toycarUrl from '../assets/toycar.glb';
 
 // The whole game lives here, imperative three.js — React only renders the HUD.
 // Communication: engine -> UI via emit(type, payload) for low-frequency state,
@@ -426,6 +427,7 @@ export function createEngine({ canvas, ui, emit }) {
     // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
     loadDrivableCar(car, siennaUrl, 0, { length: 5.1, flip: false, black: false, meta: VEHICLES[0] }); // minivan = default (slot 0)
     loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });    // RAV4 GLB nose runs -Z
+    loadDrivableCar(car, toycarUrl, 3, { length: 4.0, flip: false, black: false, meta: VEHICLES[3] }); // CC0 Khronos ToyCar
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
