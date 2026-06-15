@@ -31,6 +31,7 @@ export default function App() {
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
   const [music, setMusic] = useState(true);             // soundtrack on/off (🔊 toggle)
   const [drifting, setDrifting] = useState(false);      // sustained-drift glow + DRIFT chip
+  const [moreOpen, setMoreOpen] = useState(false);      // PIT WALL ⋯ secondary-actions tray
   const arrivedTimer = useRef(0);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
@@ -165,38 +166,66 @@ export default function App() {
         </div>
         {mode === 'drive' && (
           <div id="hud">
-            {/* minimap panel (top-left) — tap anywhere on it to drive there */}
-            <div id="minimapWrap" className="panel">
-              <canvas id="minimap" width={132} height={132} title="Tap to drive here"
-                ref={el => (uiRefs.current.minimap = el)}
-                onClick={e => { const r = e.target.getBoundingClientRect(); eng().tapMinimap(e.clientX - r.left, e.clientY - r.top, r.width, r.height); }} />
-              {dest && (
-                <div id="destBar">
-                  <span>📍 {dest.label}</span>
-                  <i id="etaLine" ref={el => (uiRefs.current.eta = el)} />
-                  <button className={'mini' + (autoDrive ? ' on' : '')} aria-label="Auto-drive" onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖' : 'Go'}</button>
-                  <button className="mini" aria-label="Clear destination" onClick={() => eng().clearDestination()}>✕</button>
+            {/* ── PIT WALL: one telemetry blade across the top. Replaces the minimap /
+                dock / bottom speed module / coin panels; the whole middle + both bottom
+                thumb-zones stay clear so the car is never covered. ── */}
+            <div id="pitwall" className="panel">
+              {/* top strip: exit · destination headline (or free-roam) · actions */}
+              <div className="pwTop">
+                <button className="pwExit" aria-label="Exit drive" onClick={() => eng().exitDrive()}>✕</button>
+                {dest ? (
+                  <div className="pwDest">
+                    <i className="kick">NEXT STOP</i>
+                    <b>{dest.label}</b>
+                    <i className="lead" />
+                    <i className="eta" ref={el => (uiRefs.current.eta = el)} />
+                    <button className={'mini' + (autoDrive ? ' on' : '')} aria-label="Auto-drive" onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖' : 'Go'}</button>
+                    <button className="mini" aria-label="Clear destination" onClick={() => eng().clearDestination()}>✕</button>
+                  </div>
+                ) : (
+                  <div className="pwDest free"><i className="kick">FREE ROAM</i><span>tap the map to drive there</span></div>
+                )}
+                <div className="pwActions">
+                  <button className="dockBtn" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
+                  <button className="dockBtn cam" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>🎥<i>{camName}</i></button>
+                  <button className={'dockBtn' + (moreOpen ? ' on' : '')} aria-label="More controls" onClick={() => setMoreOpen(o => !o)}>⋯</button>
+                </div>
+              </div>
+              {/* main row: speed tower · telemetry · minimap tile */}
+              <div className="pwMain">
+                <div className="pwSpeed">
+                  <i id="revInd" ref={el => (uiRefs.current.rev = el)}>R</i>
+                  <b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span>
+                </div>
+                <div className="pwTel">
+                  {driveScore.total > 0 && (
+                    <div className="pwScore">
+                      <span className="coin">💛{driveScore.got}/{driveScore.total}</span>
+                      <span className="places">🏆{poi.found}/{poi.total}</span>
+                      {driveScore.combo > 1 && <span className={'combo' + (driveScore.combo >= 5 ? ' fire' : '')}>🔥×{driveScore.combo}</span>}
+                      {driveScore.trip > 0 && <span className="trip">🏁{driveScore.trip}</span>}
+                    </div>
+                  )}
+                  <div className="pwRow">
+                    <span className="clock">⏱<i ref={el => (uiRefs.current.runTime = el)}>0:00</i></span>
+                    <div id="nitroTrack"><i id="nitroFill" ref={el => (uiRefs.current.boostBar = el)} /><span>NITRO</span></div>
+                  </div>
+                </div>
+                <canvas id="minimap" width={132} height={132} title="Tap to drive here"
+                  ref={el => (uiRefs.current.minimap = el)}
+                  onClick={e => { const r = e.target.getBoundingClientRect(); eng().tapMinimap(e.clientX - r.left, e.clientY - r.top, r.width, r.height); }} />
+              </div>
+              {/* the blade's bottom edge IS the speedometer */}
+              <div id="speedRail"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
+              {/* ⋯ tray: secondary actions hinged under the blade */}
+              {moreOpen && (
+                <div className="pwTray">
+                  <button className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); setMoreOpen(false); }}>🚗</button>
+                  <button className="dockBtn" aria-label="Trace a path to drive" onClick={() => { eng().traceDrive(); setMoreOpen(false); }}>🪄</button>
+                  <button className="dockBtn" aria-label="Back to road" onClick={() => { eng().resetToRoad(); setMoreOpen(false); }}>🛣️</button>
+                  <button className={'dockBtn' + (music ? ' on' : '')} aria-label={music ? 'Music on' : 'Music off'} onClick={() => eng().toggleMusic()}>{music ? '🔊' : '🔇'}</button>
                 </div>
               )}
-            </div>
-            {/* control dock (right) */}
-            <div id="dock" className="panel">
-              <button id="exitBtn" className="dockBtn exit" aria-label="Exit drive" onClick={() => eng().exitDrive()}>✕</button>
-              <button id="navBtn" className="dockBtn" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
-              <button id="carSwap" className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}>🚗</button>
-              <button id="camBtn" className="dockBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>🎥<i className="camName">{camName}</i></button>
-              <button id="traceBtn" className="dockBtn" aria-label="Trace a path to drive" onClick={() => eng().traceDrive()}>🪄</button>
-              <button id="resetRoad" className="dockBtn" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
-              <button id="musicBtn" className={'dockBtn' + (music ? ' on' : '')} aria-label={music ? 'Music on' : 'Music off'} onClick={() => eng().toggleMusic()}>{music ? '🔊' : '🔇'}</button>
-            </div>
-            {/* speed module (bottom-center) */}
-            <div id="speed" className="panel">
-              <div id="speedRow">
-                <i id="revInd" ref={el => (uiRefs.current.rev = el)}>R</i>
-                <b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span>
-              </div>
-              <div id="speedTrack"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
-              <div id="nitroTrack"><i id="nitroFill" ref={el => (uiRefs.current.boostBar = el)} /><span>🚀 NITRO</span></div>
             </div>
             {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
                 the left stick only turns, these drive. Just steering still auto-creeps. */}
@@ -219,15 +248,6 @@ export default function App() {
               onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setHandbrake(true); }} onPointerUp={() => eng().setHandbrake(false)}
               onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
-            {driveScore.total > 0 && (
-              <div id="coinHud" className="panel">
-                <span className="coinCount">💛 {driveScore.got}/{driveScore.total}</span>
-                <span className="places">🏆 {poi.found}/{poi.total}</span>
-                {driveScore.combo > 1 && <span className={'combo' + (driveScore.combo >= 5 ? ' fire' : '')}>🔥×{driveScore.combo}</span>}
-                {driveScore.trip > 0 && <span className="trip">🏁 {driveScore.trip}</span>}
-                <span className="runClock">⏱ <i ref={el => (uiRefs.current.runTime = el)}>0:00</i></span>
-              </div>
-            )}
             {drifting && <div id="driftChip">💨 DRIFT!</div>}
             {driveHint && <div id="driveHint" className="panel">stick = steer · GO = gas (slide ↓ to floor it) · STOP = brake · ✋ drift · tap map to drive · 💛 coins</div>}
             {navOpen && (

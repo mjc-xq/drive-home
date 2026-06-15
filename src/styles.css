@@ -67,26 +67,72 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #jumpBtn{position:absolute;bottom:calc(66px + var(--safe-b));right:calc(12px + var(--safe-r));width:54px;height:54px;font-size:22px}
 #danceBtn{position:absolute;bottom:calc(128px + var(--safe-b));right:calc(12px + var(--safe-r))}
 
-/* ---- drive control dock (right) ---- */
-#dock{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r));display:flex;flex-direction:column;gap:7px;padding:7px}
-.dockBtn{width:46px;height:46px;border-radius:13px;border:1px solid transparent;background:rgba(255,255,255,.06);
-  color:var(--txt);font-size:19px;display:flex;align-items:center;justify-content:center;cursor:pointer;
+/* ════════════════ PIT WALL — the single drive HUD blade (top) ════════════════ */
+#pitwall{position:absolute;top:calc(8px + var(--safe-t));left:calc(8px + var(--safe-l));right:calc(8px + var(--safe-r));
+  z-index:5;border-radius:18px;padding:7px 10px 0;display:flex;flex-direction:column;gap:5px;overflow:visible;
+  pointer-events:auto}   /* the blade is a solid HUD surface — touches on it don't drive the car */
+/* scrim bleeding below so the big MPH never fights the bright satellite imagery */
+#pitwall::before{content:'';position:absolute;inset:0 0 -7px 0;z-index:-1;border-radius:inherit;
+  background:linear-gradient(180deg,rgba(9,11,15,.5),rgba(9,11,15,.1))}
+
+/* top strip: exit · destination headline · actions */
+.pwTop{display:flex;align-items:center;gap:8px;min-height:26px}
+.pwExit{flex:0 0 auto;width:27px;height:27px;border-radius:9px;border:1px solid transparent;
+  background:rgba(217,79,30,.26);color:#ff9b73;font-size:14px;font-weight:800;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:background .15s ease,transform .1s ease}
+.pwExit:active{transform:scale(.9)}
+.pwDest{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;font-size:12.5px}
+.pwDest .kick{flex:0 0 auto;font-style:normal;font-size:8px;font-weight:800;letter-spacing:.16em;color:var(--poppy)}
+.pwDest b{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42%}
+.pwDest .lead{flex:1 1 6px;min-width:6px;align-self:flex-end;margin-bottom:4px;border-bottom:1px dotted var(--line)}
+.pwDest .eta{flex:0 0 auto;font-style:normal;font-size:11px;font-weight:700;opacity:.8;font-variant-numeric:tabular-nums}
+.pwDest.free{color:rgba(244,241,234,.5)}
+.pwDest.free span{font-size:10.5px;font-weight:600}
+.pwActions{flex:0 0 auto;display:flex;gap:5px}
+
+/* compact action buttons (reused in actions + tray) */
+.dockBtn{width:34px;height:27px;border-radius:9px;border:1px solid transparent;background:rgba(255,255,255,.07);
+  color:var(--txt);font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;
   transition:background .15s ease,transform .1s ease}
 .dockBtn:hover{background:rgba(255,255,255,.16)}
 .dockBtn:active{transform:scale(.9)}
-.dockBtn.exit{background:rgba(217,79,30,.22);color:#ff9b73;font-size:16px;font-weight:800}
-.dockBtn.exit:hover{background:rgba(217,79,30,.42)}
-#camBtn{position:relative;flex-direction:column;gap:0;line-height:1;font-size:17px}
-#camBtn .camName{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.01em;opacity:.78;margin-top:1px}
+.dockBtn.on{background:rgba(127,212,255,.22);color:#aee6ff}
+.dockBtn.cam{position:relative;flex-direction:column;gap:0;line-height:1;width:46px;font-size:13px}
+.dockBtn.cam i{font-style:normal;font-size:7.5px;font-weight:800;letter-spacing:.01em;opacity:.78}
 
-/* ---- drive minimap + address nav (top-left) ---- */
-#minimapWrap{position:absolute;top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:6px}
-#minimap{display:block;width:132px;height:132px;border-radius:10px;background:rgba(18,21,26,.5)}
-#destBar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:5px;max-width:144px;font-size:11px;font-weight:600}
-#destBar>span{flex:1 1 60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#etaLine{flex:1 0 100%;order:3;font-style:normal;font-size:10px;font-weight:700;opacity:.72;font-variant-numeric:tabular-nums}
-#destBar .mini{font-size:11px;font-weight:700;padding:3px 7px;border-radius:8px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}
-#destBar .mini.on{background:var(--poppy);border-color:transparent}
+/* main row: speed tower · telemetry · minimap tile */
+.pwMain{display:flex;align-items:center;gap:10px}
+.pwSpeed{position:relative;flex:0 0 auto;display:flex;align-items:baseline;gap:3px;padding-right:11px;border-right:1px solid var(--line)}
+.pwSpeed b{font-size:42px;font-weight:800;line-height:.78;letter-spacing:-.02em;font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1}
+.pwSpeed span{font-size:9px;font-weight:800;letter-spacing:.16em;opacity:.5}
+.pwSpeed #revInd{position:absolute;left:-3px;top:-2px;font-style:normal;font-size:13px;font-weight:900;color:var(--poppy);opacity:0;transition:opacity .12s ease}
+.pwTel{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:6px;justify-content:center}
+.pwScore{display:flex;flex-wrap:wrap;gap:2px 9px;font-size:12px;font-weight:800;letter-spacing:.01em;font-variant-numeric:tabular-nums}
+.pwScore .coin{color:#ffd34d}
+.pwScore .places{color:#ffcf66}
+.pwScore .trip{color:#7fd4ff}
+.pwScore .combo{color:#ff8a3c;animation:pop .25s ease}
+.pwScore .combo.fire{color:#ff5a3c;animation:firePulse .5s ease-in-out infinite}
+.pwRow{display:flex;align-items:center;gap:9px}
+.pwRow .clock{flex:0 0 auto;font-size:11px;font-weight:800;opacity:.82;font-variant-numeric:tabular-nums}
+.pwRow .clock i{font-style:normal}
+.pwMain #minimap{flex:0 0 auto;width:84px;height:84px;border-radius:12px;background:rgba(16,19,24,.55);
+  box-shadow:inset 0 0 0 1px var(--line);cursor:pointer;display:block}
+
+/* the blade's bottom edge IS the speedometer rail */
+#speedRail{height:5px;margin:1px -10px 0;border-radius:0 0 18px 18px;overflow:hidden;background:rgba(255,255,255,.08)}
+#speedRail #speedFill{height:100%;width:0%;
+  background:linear-gradient(90deg,#36d6ff,#3ad17a 26%,#ffc21e 60%,var(--poppy) 82%,#ff5a3c);
+  background-size:calc(100vw - 16px) 100%;background-position:left center;transition:width .1s linear}
+
+/* ⋯ secondary-actions tray, hinged under the blade */
+.pwTray{display:flex;justify-content:flex-end;gap:6px;padding:6px 0 2px;animation:trayDrop .16s cubic-bezier(.2,1.3,.4,1)}
+.pwTray .dockBtn{width:42px;height:34px;font-size:18px}
+@keyframes trayDrop{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:translateY(0)}}
+
+/* inline dest mini-buttons (auto-drive / clear) */
+.mini{font-size:11px;font-weight:700;padding:3px 7px;border-radius:8px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}
+.mini.on{background:var(--poppy);border-color:transparent}
 #navPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,340px);pointer-events:auto}
 #navPanel h3{font-size:18px;font-weight:700;margin-bottom:10px}
 .navPresets{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;margin-bottom:10px}
@@ -134,20 +180,11 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #ui.drive #credits{bottom:calc(70px + var(--safe-b));left:calc(12px + var(--safe-l))}
 
 /* ---- speed module (bottom-center) ---- */
-/* lifted above the pedal/handbrake cluster so the gas pedal never covers the readout;
-   display-only, so touches fall through to the canvas (steering/look). */
-#speed{position:absolute;bottom:calc(110px + var(--safe-b));left:50%;transform:translateX(-50%);
-  width:172px;padding:8px 16px 10px;pointer-events:none}
-#speedRow{display:flex;align-items:baseline;justify-content:center;gap:6px}
-#speedRow b{font-size:46px;font-weight:800;line-height:.85;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-#speedRow span{font-size:11px;font-weight:800;opacity:.55;letter-spacing:.2em}
-#revInd{font-style:normal;font-size:15px;font-weight:900;color:#ff5a3c;opacity:0;transition:opacity .12s ease;align-self:center}
-#speedTrack{margin-top:9px;height:6px;border-radius:3px;background:rgba(255,255,255,.13);overflow:hidden}
-#speedFill{height:100%;width:0%;border-radius:3px;background:#3ad17a;transition:width .1s linear,background .2s ease}
-/* nitro meter — fills with skill (near-miss/drift/arrival), glows when ready, flares when firing */
-#nitroTrack{position:relative;margin-top:6px;height:8px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden}
-#nitroFill{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:4px;background:linear-gradient(90deg,#7a5cff,#36d6ff);transition:width .12s linear}
-#nitroTrack span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:6.5px;font-weight:900;letter-spacing:.18em;color:rgba(255,255,255,.7)}
+/* nitro meter — a slim segment in the PIT WALL telemetry row; fills with skill
+   (near-miss/drift/arrival), glows when ready, flares cyan→white when firing */
+#nitroTrack{position:relative;flex:1 1 auto;height:9px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
+#nitroFill{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:5px;background:linear-gradient(90deg,#7a5cff,#36d6ff);transition:width .12s linear}
+#nitroTrack span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:6.5px;font-weight:900;letter-spacing:.2em;color:rgba(255,255,255,.72)}
 #nitroTrack.ready{box-shadow:0 0 10px rgba(80,200,255,.7);animation:firePulse .6s ease-in-out infinite}
 #nitroTrack.firing #nitroFill{background:linear-gradient(90deg,#36d6ff,#fff)}
 
@@ -196,21 +233,12 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #hbrakeBtn:active{background:rgba(217,79,30,.5)}
 #hbrakeBtn.drifting{background:rgba(255,180,40,.55);border-color:rgba(255,210,90,.9);box-shadow:0 0 16px rgba(255,190,60,.7);animation:firePulse .45s ease-in-out infinite}
 #hornBtn{position:absolute;bottom:calc(204px + var(--safe-b));right:calc(12px + var(--safe-r));width:48px;height:48px;border-radius:15px;font-size:19px}
-#driveHint{position:absolute;top:calc(70px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:86vw;
-  padding:7px 15px;font-size:11.5px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
-#coinHud{position:absolute;top:calc(14px + var(--safe-t));left:50%;transform:translateX(-50%);
-  display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 10px;max-width:74vw;
-  padding:6px 14px;font-size:13.5px;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+/* drive hint sits just BELOW the PIT WALL blade now (the blade owns the top band) */
+#driveHint{position:absolute;top:calc(136px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:90vw;
+  padding:7px 15px;font-size:11px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
 #driftChip{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);pointer-events:none;
   font-size:30px;font-weight:900;letter-spacing:.06em;color:#ffd34d;text-shadow:0 2px 14px rgba(0,0,0,.6);
   animation:firePulse .4s ease-in-out infinite;z-index:6}
-#coinHud .combo{color:#ff8a3c;animation:pop .25s ease}
-#coinHud .combo.fire{color:#ff5a3c;animation:firePulse .5s ease-in-out infinite}
-#coinHud .places{color:#ffcf66}
-#coinHud .trip{color:#7fd4ff}
-#coinHud .runClock{opacity:.82;font-variant-numeric:tabular-nums}
-#coinHud .runClock i{font-style:normal}
-#coinHud .best{opacity:.7;font-weight:700}
 @keyframes pop{from{transform:scale(1.5)}to{transform:scale(1)}}
 @keyframes firePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 .carRow.locked{opacity:.6}

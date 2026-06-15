@@ -468,16 +468,31 @@ export function createEngine({ canvas, ui, emit }) {
     new THREE.MeshBasicMaterial({ color: 0x3a7d44, depthTest: false, transparent: true, opacity: 0.92 }));
   compostMarker.rotation.x = Math.PI; compostMarker.renderOrder = 20; compostMarker.visible = false; compostMarker.frustumCulled = false;
   scene.add(compostMarker);
-  // Address guide: a flat ribbon on the road from the car toward the destination
-  // (drawn on top so road bumps don't hide it), + a tall pin at the destination.
-  const guideGeo = new THREE.PlaneGeometry(1, 1); guideGeo.rotateX(-Math.PI / 2);
-  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0xffc21e, transparent: true, opacity: 0.5, depthWrite: false, depthTest: false }));
+  // Address guide: a ground-draped ribbon that FOLLOWS THE ROUTE through its turns — a
+  // real navigation line over the road, not a single rotating bar. The geometry is a
+  // triangle-strip rebuilt each frame from the route polyline just ahead of the car,
+  // resampled + draped to the ground and drawn on top so road bumps don't hide it.
+  const GUIDE_N = 90;                                   // max cross-sections (~5 m apart)
+  const guidePos = new Float32Array(GUIDE_N * 2 * 3);
+  const guideGeo = new THREE.BufferGeometry();
+  guideGeo.setAttribute('position', new THREE.BufferAttribute(guidePos, 3));
+  { const idx = []; for (let i = 0; i < GUIDE_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } guideGeo.setIndex(idx); }
+  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x2f8bff, transparent: true, opacity: 0.62, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
   guideLine.renderOrder = 17; guideLine.visible = false; guideLine.frustumCulled = false;
   scene.add(guideLine);
   const destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
     new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
   destPin.rotation.x = Math.PI; destPin.renderOrder = 21; destPin.visible = false; destPin.frustumCulled = false;
   scene.add(destPin);
+  // "You are here" locator — a bright downward chevron + halo bobbing over the car, drawn
+  // on top, so you can FIND the car in the high aerial / top-down views where it's tiny.
+  const carLocator = new THREE.Group();
+  { const cone = new THREE.Mesh(new THREE.ConeGeometry(1.9, 3.6, 4), new THREE.MeshBasicMaterial({ color: 0x3ad6ff, depthTest: false, depthWrite: false, transparent: true, opacity: 0.92 }));
+    cone.rotation.x = Math.PI; cone.renderOrder = 1001;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.6, 3.4, 28), new THREE.MeshBasicMaterial({ color: 0x3ad6ff, depthTest: false, depthWrite: false, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = -3.2; ring.renderOrder = 1000;
+    carLocator.add(cone); carLocator.add(ring); }
+  carLocator.frustumCulled = false; carLocator.visible = false; scene.add(carLocator);
 
   // Scoop renders the procedural world, so Drew collides with every visible
   // procedural tree (they sit along the streets, clear of the backyard sanctuary).
@@ -855,7 +870,8 @@ export function createEngine({ canvas, ui, emit }) {
   let navPtr = null;
   const _navRay = new THREE.Raycaster(), _navNDC = new THREE.Vector2();
   const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
-  const driveTopDown = () => mode === 'drive' && DRIVE_CAMS[camMode] && DRIVE_CAMS[camMode].topdown;
+  // drag-to-drive ("trace") is available in the overhead-style views (Top-down AND Aerial)
+  const driveTopDown = () => mode === 'drive' && DRIVE_CAMS[camMode] && DRIVE_CAMS[camMode].dragdrive;
   function setNavFromPointer(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
     _navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
@@ -1269,6 +1285,7 @@ export function createEngine({ canvas, ui, emit }) {
     resetParticles();
     hideBeacons();
     hideTraffic();
+    carLocator.visible = false;
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -1371,6 +1388,39 @@ export function createEngine({ canvas, ui, emit }) {
     return DEST;
   }
   function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Auto-drive ON' : 'Auto-drive off', 1100); }
+  // Rebuild the guide ribbon along the route polyline ahead of the car: gather the next
+  // ~170 m of route (its real turns), resample to ~5 m steps, drape each cross-section
+  // to the ground (relative to the car's road height so it sits ON the street), and
+  // write the triangle-strip vertices. Falls back to a straight line to a routeless DEST.
+  function updateGuide(yC) {
+    const raw = [[car.x, car.z]];
+    if (ROUTE && routeIdx < ROUTE.length) {
+      let acc = 0, px = car.x, pz = car.z;
+      for (let i = routeIdx; i < ROUTE.length && acc < 170; i++) { acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); raw.push([ROUTE[i].x, ROUTE[i].z]); px = ROUTE[i].x; pz = ROUTE[i].z; }
+    } else {
+      const dx = DEST.x - car.x, dz = DEST.z - car.z, dd = Math.hypot(dx, dz) || 1, cap = Math.min(dd, 130);
+      raw.push([car.x + dx / dd * cap, car.z + dz / dd * cap]);
+    }
+    const pts = [raw[0]];
+    for (let i = 1; i < raw.length && pts.length < GUIDE_N; i++) {
+      const a = pts[pts.length - 1], b = raw[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const steps = Math.max(1, Math.min(GUIDE_N - pts.length, Math.round(L / 5)));
+      for (let s = 1; s <= steps; s++) { const t = s / steps; pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+    }
+    if (pts.length < 2) { guideLine.visible = false; return; }
+    const carG = groundAt(car.x, car.z), hw = 1.8;
+    for (let i = 0; i < GUIDE_N; i++) {
+      const k = Math.min(i, pts.length - 1), p = pts[k];
+      const pp = pts[Math.max(0, k - 1)], pn = pts[Math.min(pts.length - 1, k + 1)];
+      let tx = pn[0] - pp[0], tz = pn[1] - pp[1]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const nx = -tz, nz = tx, y = yC + 0.08 + clamp(groundAt(p[0], p[1]) - carG, -3, 3), o = i * 6;
+      guidePos[o] = p[0] + nx * hw; guidePos[o + 1] = y; guidePos[o + 2] = p[1] + nz * hw;
+      guidePos[o + 3] = p[0] - nx * hw; guidePos[o + 4] = y; guidePos[o + 5] = p[1] - nz * hw;
+    }
+    guideGeo.attributes.position.needsUpdate = true;
+    guideGeo.setDrawRange(0, (Math.min(pts.length, GUIDE_N) - 1) * 6);   // only the built segments
+    guideLine.visible = true;
+  }
   // 2D minimap (north-up, centred on the car): roads, house, destination + line, car.
   function drawMinimap(ctx, w, h) {
     ctx.clearRect(0, 0, w, h);
@@ -1465,16 +1515,17 @@ export function createEngine({ canvas, ui, emit }) {
     // clean look — NOT the low 'eye-level horror' of Close).
     { name: 'Cruise', dist: 12, h: 25, ahead: 14, drone: true, topdown: false },
     { name: 'Close', dist: 11, h: 7, ahead: 5, drone: false, topdown: false },
-    { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true },
-    { name: 'Aerial', aerial: true },   // the Explore look (high orbit) while driving
+    { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true, dragdrive: true },
+    { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
   function cycleCamera() {
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
     czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0;   // fresh framing per view (pinch-zoom/look don't leak)
-    const td = DRIVE_CAMS[camMode].topdown;
-    if (!td) { camera.up.set(0, 1, 0); inp2.navActive = false; navPtr = null; }   // leaving top-down ends draw-to-drive
+    const dd = DRIVE_CAMS[camMode].dragdrive;
+    if (!DRIVE_CAMS[camMode].topdown) camera.up.set(0, 1, 0);   // only top-down is heading-up
+    if (!dd) { inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
     emit('driveCam', DRIVE_CAMS[camMode].name);
-    toast('Camera: ' + DRIVE_CAMS[camMode].name + (td ? ' · drag to drive 🪄' : ''), td ? 1700 : 1100);
+    toast('Camera: ' + DRIVE_CAMS[camMode].name + (dd ? ' · drag to drive 🪄' : ''), dd ? 1700 : 1100);
   }
   // Jump straight to the one-finger draw-to-drive (top-down) view — the most phone-native
   // control, otherwise buried behind the 🎥 cycle.
@@ -1755,6 +1806,10 @@ export function createEngine({ canvas, ui, emit }) {
     car.group.rotateY(car.yaw - Math.PI / 2 + driftYaw);
     car.group.rotateZ(-pitch + (car.pitchDyn || 0));   // terrain pitch + dynamic load-transfer dive/squat
     car.group.rotateX(roll);
+    // car locator: bob the "you are here" chevron over the car in the high overhead views
+    const highView = DRIVE_CAMS[camMode] && (DRIVE_CAMS[camMode].aerial || DRIVE_CAMS[camMode].topdown);
+    carLocator.visible = highView;
+    if (highView) { carLocator.position.set(car.x, yC + 9 + Math.sin(now * 0.005) * 0.8, car.z); carLocator.rotation.y = now * 0.0016; }
     // collectible coins: spin + bob, picked up by driving over them
     for (const c of coins) {
       c.mesh.visible = !c.got;
@@ -1818,17 +1873,10 @@ export function createEngine({ canvas, ui, emit }) {
       navMarker.visible = inp2.navActive && !autoDrive;   // hide the finger ring during auto-drive
       if (navMarker.visible) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
     }
-    // address guide: a ribbon pointing along the ROUTE (toward the look-ahead point,
-    // so it bends with the road), + a pin at the destination when near.
+    // address guide: a continuous line along the actual ROUTE (every turn), draped on
+    // the road just ahead of the car; + a pin at the destination when near.
     if (DEST) {
-      const t = navTarget();
-      const dx = t.x - car.x, dz = t.z - car.z, dd = Math.hypot(dx, dz) || 1;
-      const ux = dx / dd, uz = dz / dd;
-      const start = 5, len = clamp(dd - start, 4, 120);   // start ahead of the car (don't tint it)
-      guideLine.visible = true;
-      guideLine.position.set(car.x + ux * (start + len / 2), yC + 0.05, car.z + uz * (start + len / 2));
-      guideLine.rotation.set(0, Math.atan2(ux, uz), 0);
-      guideLine.scale.set(2.4, 1, len);
+      updateGuide(yC);
       const ddDest = Math.hypot(DEST.x - car.x, DEST.z - car.z);
       destPin.visible = ddDest < 700;
       if (destPin.visible) destPin.position.set(DEST.x, terrainAt(DEST.x, DEST.z) + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, DEST.z);
