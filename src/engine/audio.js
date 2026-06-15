@@ -3,18 +3,31 @@
 export function createAudio() {
   let AC = null;
   let eng = null;
+  let wantSuspended = false;   // true while the tab is backgrounded → don't auto-resume
 
   function ensure() {
     try {
       if (!AC) {
         AC = new (window.AudioContext || window.webkitAudioContext)();
-        // iOS moves the context to 'interrupted'/'suspended' on a phone call,
-        // Siri, route change or backgrounding; auto-resume so audio doesn't go
-        // permanently silent for the rest of the session.
-        AC.onstatechange = () => { if (AC.state !== 'running') AC.resume().catch(() => {}); };
+        // iOS moves the context to 'interrupted'/'suspended' on a phone call, Siri, route
+        // change or backgrounding; auto-resume so audio doesn't go permanently silent —
+        // BUT not while we've deliberately suspended for a backgrounded tab (power saving).
+        AC.onstatechange = () => { if (!wantSuspended && AC.state !== 'running') AC.resume().catch(() => {}); };
       }
-      AC.resume();
+      if (!wantSuspended) AC.resume();
     } catch (e) { /* no audio is fine */ }
+  }
+  // Backgrounded tab → halt ALL audio processing (engine drone + music) and pause the
+  // music scheduler so a hidden tab draws ~no power; resume restores it.
+  function suspendAudio() {
+    wantSuspended = true;
+    try { if (music && music.timer) { clearInterval(music.timer); music.timer = 0; } } catch (e) { }
+    try { if (AC) AC.suspend(); } catch (e) { }
+  }
+  function resumeAudio() {
+    wantSuspended = false;
+    try { if (AC) AC.resume(); } catch (e) { }
+    try { if (music && !music.timer && music.sched) { music.nextT = AC.currentTime + 0.12; music.timer = setInterval(music.sched, 30); } } catch (e) { }
   }
 
   // Engine note: two detuned saws + a sub-octave square through a lowpass,
@@ -211,6 +224,7 @@ export function createAudio() {
           music.step++; music.nextT += sp8;
         }
       };
+      music.sched = sched;                 // stored so suspend/resume can pause + restart it
       music.timer = setInterval(sched, 30);
       sched();
     } catch (e) { music = null; }
@@ -229,5 +243,5 @@ export function createAudio() {
   function musicSpeed(frac) { if (music && music.lp) { try { music.lp.frequency.setTargetAtTime(1100 + clamp01(frac) * 2800, AC.currentTime, 0.25); } catch (e) { } } }
   function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
-  return { ensure, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
+  return { ensure, suspendAudio, resumeAudio, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
 }

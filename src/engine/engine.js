@@ -1380,12 +1380,30 @@ export function createEngine({ canvas, ui, emit }) {
   // dense waypoints). Falls back to the destination (straight line) with no route.
   function navTarget() {
     if (!ROUTE || routeIdx >= ROUTE.length) return DEST;
+    // SPEED-SCALED look-ahead: tight at low speed so the car HUGS the route (sticks to
+    // the road through turns), longer at speed for a smooth line. A fixed 32 m look-ahead
+    // cut every corner.
+    const look = clamp(Math.abs(car.speed) * 0.5, 12, 40);
     let acc = 0, px = car.x, pz = car.z;
     for (let i = routeIdx; i < ROUTE.length; i++) {
       acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
-      if (acc >= 32) return ROUTE[i];
+      if (acc >= look) return ROUTE[i];
     }
     return DEST;
+  }
+  // distance along the route to the next real TURN (>~25° heading change) — lets the
+  // chauffeur run FAST on long straights and only slow for corners/arrival.
+  function distToNextTurn() {
+    if (!ROUTE || routeIdx >= ROUTE.length - 1) return 40;
+    let acc = 0, px = car.x, pz = car.z;
+    let hx = ROUTE[routeIdx].x - px, hz = ROUTE[routeIdx].z - pz; let hl = Math.hypot(hx, hz) || 1; hx /= hl; hz /= hl;
+    for (let i = routeIdx; i < ROUTE.length - 1 && acc < 500; i++) {
+      acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
+      let nx = ROUTE[i + 1].x - px, nz = ROUTE[i + 1].z - pz; const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
+      if (hx * nx + hz * nz < 0.9) break;   // ~25°+ bend ahead
+      hx = nx; hz = nz;
+    }
+    return acc;
   }
   function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Auto-drive ON' : 'Auto-drive off', 1100); }
   // Rebuild the guide ribbon along the route polyline ahead of the car: gather the next
@@ -1448,13 +1466,12 @@ export function createEngine({ canvas, ui, emit }) {
       if (!found && !edge) { ctx.strokeStyle = 'rgba(255,90,208,0.8)'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(px, py, 5.4, 0, 7); ctx.stroke(); }
     }
     if (DEST) {
-      ctx.strokeStyle = '#ffc21e'; ctx.lineWidth = 2.4; ctx.beginPath();
-      if (ROUTE && ROUTE.length > 1) {                     // road-following route
-        const s0 = toPx(ROUTE[0].x, ROUTE[0].z); ctx.moveTo(s0[0], s0[1]);
-        for (let i = 1; i < ROUTE.length; i++) { const p = toPx(ROUTE[i].x, ROUTE[i].z); ctx.lineTo(p[0], p[1]); }
-      } else {                                             // straight line (no route yet)
-        const dp = toPx(DEST.x, DEST.z); ctx.moveTo(cx, cy); ctx.lineTo(dp[0], dp[1]);
-      }
+      // draw the route from the CAR forward (not from ROUTE[0]) so the already-driven
+      // part doesn't whip around the car-centred map during auto-drive.
+      ctx.strokeStyle = '#2f8bff'; ctx.lineWidth = 2.6; ctx.lineJoin = 'round'; ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      if (ROUTE && ROUTE.length > 1) for (let i = Math.max(0, routeIdx); i < ROUTE.length; i++) { const p = toPx(ROUTE[i].x, ROUTE[i].z); ctx.lineTo(p[0], p[1]); }
+      else { const dp = toPx(DEST.x, DEST.z); ctx.lineTo(dp[0], dp[1]); }
       ctx.stroke();
       const dp = toPx(DEST.x, DEST.z);
       ctx.fillStyle = '#ffc21e'; ctx.beginPath(); ctx.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); ctx.fill();
@@ -1698,12 +1715,12 @@ export function createEngine({ canvas, ui, emit }) {
     // Auto-drive cap scales with distance to the next turn / the destination — long
     // straight legs of a cross-town route run fast (up to maxF), only corners and the
     // final approach slow the chauffeur down, so the trip isn't a crawl.
-    let autoCap = 45;
+    let autoCap = 80;
     if (autoDrive) {
-      const next = (ROUTE && routeIdx < ROUTE.length) ? ROUTE[routeIdx] : DEST;
-      const dNext = next ? Math.hypot(next.x - car.x, next.z - car.z) : 60;
       const dDest = DEST ? Math.hypot(DEST.x - car.x, DEST.z - car.z) : 1e9;
-      autoCap = clamp(Math.min(dNext, dDest) * 1.4, 22, maxF);
+      // fast on the straights (scale with distance to the next turn), slow into corners
+      // + the final approach so it tracks the road. Floor keeps it brisk, not boring.
+      autoCap = clamp(Math.min(distToNextTurn() * 0.9, dDest * 1.1), 34, 82);
     }
     car.speed += acc * dt;
     car.speed -= car.speed * (openRoad ? 0.1 : 0.28) * dt;   // lawns drag more, but a loose surface — not a brick wall
@@ -2091,8 +2108,8 @@ export function createEngine({ canvas, ui, emit }) {
   // iOS robustness: don't burn GPU/memory streaming tiles to a backgrounded tab,
   // and survive a WebGL context loss instead of freezing on a black canvas.
   function onVisibility() {
-    if (document.hidden) { if (!paused) { paused = true; cancelAnimationFrame(raf); } }
-    else if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); audio.ensure(); raf = requestAnimationFrame(loop); }
+    if (document.hidden) { if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }     // backgrounded → stop RAF + audio (no power)
+    else if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); if (audio.resumeAudio) audio.resumeAudio(); else audio.ensure(); raf = requestAnimationFrame(loop); }
   }
   function onContextLost(e) { e.preventDefault(); ctxLost = true; cancelAnimationFrame(raf); }
   function onContextRestored() { if (!disposed) location.reload(); }   // rebuild streamed GPU state via reload
