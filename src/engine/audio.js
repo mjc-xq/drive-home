@@ -161,5 +161,73 @@ export function createAudio() {
     } catch (e) { }
   }
 
-  return { ensure, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn };
+  // ---- looping procedural arcade soundtrack (the joyride tune) ----
+  // A simple synthwave groove: a I–V–vi–IV loop with a bouncing bass, chord stabs, a
+  // square-wave arp and a noise-drum bus, scheduled ahead of time off AC.currentTime so
+  // it stays tight. The master filter opens with speed so the music lifts on the blast.
+  let music = null;
+  function startMusic() {
+    try {
+      ensure();
+      if (!AC || music) return;
+      const out = AC.createGain(); out.gain.value = 0; out.connect(AC.destination);
+      const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1500; lp.Q.value = 0.5; lp.connect(out);
+      music = { out, lp, step: 0, timer: 0, nextT: AC.currentTime + 0.12 };
+      out.gain.linearRampToValueAtTime(0.15, AC.currentTime + 1.4);   // gentle fade-in
+      const bpm = 112, sp8 = (60 / bpm) / 2;            // 8th-note grid
+      const chords = [[220.0, 261.6, 329.6], [164.8, 207.7, 246.9], [174.6, 220.0, 261.6], [196.0, 246.9, 293.7]];  // Am E F G
+      const bassRoot = [110.0, 82.4, 87.3, 98.0];
+      const tone = (type, f, t, dur, g, dest) => {
+        const o = AC.createOscillator(), gg = AC.createGain();
+        o.type = type; o.frequency.value = f;
+        gg.gain.setValueAtTime(0.0001, t); gg.gain.linearRampToValueAtTime(g, t + 0.012);
+        gg.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+        o.connect(gg); gg.connect(dest || music.lp); o.start(t); o.stop(t + dur + 0.03);
+      };
+      const kick = t => {
+        const o = AC.createOscillator(), gg = AC.createGain();
+        o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(46, t + 0.11);
+        gg.gain.setValueAtTime(0.5, t); gg.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+        o.connect(gg); gg.connect(music.out); o.start(t); o.stop(t + 0.16);
+      };
+      const hat = t => {
+        const nb = AC.createBuffer(1, Math.floor(AC.sampleRate * 0.03), AC.sampleRate), d = nb.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+        const ns = AC.createBufferSource(); ns.buffer = nb;
+        const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
+        const hg = AC.createGain(); hg.gain.value = 0.06;
+        ns.connect(hp); hp.connect(hg); hg.connect(music.out); ns.start(t); ns.stop(t + 0.03);
+      };
+      const sched = () => {
+        if (!music) return;
+        const ahead = AC.currentTime + 0.14;
+        while (music.nextT < ahead) {
+          const t = music.nextT, s = music.step, bar = Math.floor(s / 8) % 4, beat = s % 8, ch = chords[bar];
+          tone('sawtooth', bassRoot[bar] * (beat % 4 === 2 ? 1.5 : 1), t, 0.2, 0.11);     // bouncing bass
+          if (beat === 0 || beat === 4) ch.forEach(f => tone('triangle', f, t, 0.36, 0.045));  // chord stab
+          tone('square', ch[s % 3] * 2, t, 0.11, 0.028);                                  // arp
+          if (beat === 0 || beat === 4) kick(t);
+          if (beat % 2 === 1) hat(t);
+          music.step++; music.nextT += sp8;
+        }
+      };
+      music.timer = setInterval(sched, 30);
+      sched();
+    } catch (e) { music = null; }
+  }
+  function stopMusic() {
+    try {
+      if (!music) return;
+      clearInterval(music.timer);
+      const m = music; music = null;
+      try { m.out.gain.cancelScheduledValues(AC.currentTime); m.out.gain.setTargetAtTime(0.0001, AC.currentTime, 0.12); } catch (e) { }
+      setTimeout(() => { try { m.out.disconnect(); } catch (e) { } }, 500);
+    } catch (e) { music = null; }
+  }
+  function setMusic(on) { if (on) startMusic(); else stopMusic(); return !!music; }
+  function musicOn() { return !!music; }
+  function musicSpeed(frac) { if (music && music.lp) { try { music.lp.frequency.setTargetAtTime(1100 + clamp01(frac) * 2800, AC.currentTime, 0.25); } catch (e) { } } }
+  function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+  return { ensure, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
 }

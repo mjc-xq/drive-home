@@ -151,11 +151,11 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* peripheral optic-flow streaks — a fine sunburst, masked clear in the middle so the
    road stays readable; intensity rides --spd, with a gentle outward rush animation. */
 #fx::before{content:'';position:absolute;inset:-25%;opacity:var(--spd,0);
-  background:repeating-conic-gradient(from 0deg at 50% 50%,
+  background:repeating-conic-gradient(from 0deg at var(--ox,50%) 48%,
     rgba(255,255,255,0) 0deg,rgba(255,255,255,0) 2.6deg,
     rgba(255,255,255,.55) 3deg,rgba(255,255,255,0) 3.5deg);
-  -webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 30%,#000 72%);
-  mask-image:radial-gradient(circle at 50% 50%,transparent 30%,#000 72%);
+  -webkit-mask-image:radial-gradient(circle at var(--ox,50%) 48%,transparent 30%,#000 72%);
+  mask-image:radial-gradient(circle at var(--ox,50%) 48%,transparent 30%,#000 72%);
   animation:rush .6s linear infinite;transition:filter .25s ease}
 /* MOTION BLUR (cheap, mobile-safe): smear ONLY the streak layer when truly flying, so
    the periphery reads as motion-blurred without a full-screen post pass. */
@@ -171,8 +171,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 @media (prefers-reduced-motion:reduce){#fx::before{animation:none}}
 
 /* ---- gas/brake pedals + handbrake + horn (bottom-right) + drive hint ---- */
-.holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);
+.holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);touch-action:none;
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:background .12s ease,transform .1s ease}
+#musicBtn.on{color:#7fd4ff}
 .holdBtn:active{transform:scale(.93)}
 /* the two driving pedals — right thumb. Gas is the big primary; brake sits inboard. */
 #pedals{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));display:flex;align-items:flex-end;gap:10px}

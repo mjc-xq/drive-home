@@ -29,6 +29,7 @@ export default function App() {
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
   const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
+  const [music, setMusic] = useState(true);             // soundtrack on/off (🔊 toggle)
   const arrivedTimer = useRef(0);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
@@ -51,6 +52,7 @@ export default function App() {
         case 'driveCam': setCamName(p); break;
         case 'poiProgress': setPoi(p); break;
         case 'cars': setCars(p); break;
+        case 'music': setMusic(p); break;
         case 'arrived':
           setArrived(p); clearTimeout(arrivedTimer.current);
           arrivedTimer.current = setTimeout(() => setArrived(null), 3600);
@@ -183,6 +185,7 @@ export default function App() {
               <button id="camBtn" className="dockBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>🎥<i className="camName">{camName}</i></button>
               <button id="traceBtn" className="dockBtn" aria-label="Trace a path to drive" onClick={() => eng().traceDrive()}>🪄</button>
               <button id="resetRoad" className="dockBtn" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
+              <button id="musicBtn" className={'dockBtn' + (music ? ' on' : '')} aria-label={music ? 'Music on' : 'Music off'} onClick={() => eng().toggleMusic()}>{music ? '🔊' : '🔇'}</button>
             </div>
             {/* speed module (bottom-center) */}
             <div id="speed" className="panel">
@@ -195,20 +198,23 @@ export default function App() {
             {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
                 the left stick only turns, these drive. Just steering still auto-creeps. */}
             <div id="pedals">
-              <button id="gasBtn" className="panel holdBtn pedal gas" aria-label="Gas (hold to accelerate)"
-                onPointerDown={() => eng().setGas(true)} onPointerUp={() => eng().setGas(false)}
-                onPointerLeave={() => eng().setGas(false)} onPointerCancel={() => eng().setGas(false)}>GO</button>
+              {/* analog GO: press = ~65%, slide your thumb down the pedal toward 100% (floor it).
+                  pointer capture keeps the press alive through a thumb-roll mid-corner. */}
+              <button id="gasBtn" className="panel holdBtn pedal gas" aria-label="Gas (hold to accelerate, slide down to floor it)"
+                onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); const r = e.currentTarget.getBoundingClientRect(); eng().setGasAmount(Math.max(0.6, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5))); }}
+                onPointerMove={e => { if (e.buttons) { const r = e.currentTarget.getBoundingClientRect(); eng().setGasAmount(Math.max(0.55, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5))); } }}
+                onPointerUp={() => eng().setGasAmount(0)} onPointerCancel={() => eng().setGasAmount(0)}>GO</button>
               <button id="brakeBtn" className="panel holdBtn pedal brake" aria-label="Brake (hold to slow / reverse)"
-                onPointerDown={() => eng().setBrake(true)} onPointerUp={() => eng().setBrake(false)}
-                onPointerLeave={() => eng().setBrake(false)} onPointerCancel={() => eng().setBrake(false)}><span ref={el => (uiRefs.current.brakeLbl = el)}>STOP</span></button>
+                onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setBrake(true); }} onPointerUp={() => eng().setBrake(false)}
+                onPointerCancel={() => eng().setBrake(false)}><span ref={el => (uiRefs.current.brakeLbl = el)}>STOP</span></button>
             </div>
             {/* faint resting steer hint (bottom-left, first few seconds only) — pointer-events:none
                 so the real joystick still spawns under the thumb; tells first-timers where to steer */}
             {driveHint && <div id="steerGhost" aria-hidden="true"><span>↺</span><i>steer</i></div>}
             {/* handbrake (hold to drift) + horn, bottom-left */}
             <button id="hbrakeBtn" className="panel holdBtn" aria-label="Handbrake (hold to drift)"
-              onPointerDown={() => eng().setHandbrake(true)} onPointerUp={() => eng().setHandbrake(false)}
-              onPointerLeave={() => eng().setHandbrake(false)} onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
+              onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setHandbrake(true); }} onPointerUp={() => eng().setHandbrake(false)}
+              onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
             {driveScore.total > 0 && (
               <div id="coinHud" className="panel">

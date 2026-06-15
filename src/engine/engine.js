@@ -87,6 +87,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   let DEST = null;        // { x, z, label }
   let userDest = false;   // true when the player set the destination (not an auto-chain)
+  let musicPref = (() => { try { return localStorage.getItem('dahill.music') !== '0'; } catch (e) { return true; } })();   // soundtrack on by default
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
   let routeIdx = 0;       // current target waypoint along ROUTE
   let autoDrive = false;
@@ -298,6 +299,23 @@ export function createEngine({ canvas, ui, emit }) {
     scene.add(m);
     return { poi, mesh: m, mat };
   });
+  // floating name-plate over each real place, so arriving somewhere has identity in-world
+  function makeLabelTex(text) {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 140;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(10,12,16,0.62)';
+    const rw = 620, rh = 110, rx = 10, ry = 15, rr = 26;   // rounded pill
+    ctx.beginPath(); ctx.moveTo(rx + rr, ry); ctx.arcTo(rx + rw, ry, rx + rw, ry + rh, rr); ctx.arcTo(rx + rw, ry + rh, rx, ry + rh, rr); ctx.arcTo(rx, ry + rh, rx, ry, rr); ctx.arcTo(rx, ry, rx + rw, ry, rr); ctx.closePath(); ctx.fill();
+    ctx.font = '700 60px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff'; ctx.fillText(text, 320, 72);
+    const tex = new THREE.CanvasTexture(c); tex.anisotropy = 4; return tex;
+  }
+  const poiLabels = POIS.map(poi => {
+    const mat = new THREE.SpriteMaterial({ map: makeLabelTex(poi.icon + '  ' + poi.label.toUpperCase()), transparent: true, opacity: 0, depthTest: false, depthWrite: false });
+    const s = new THREE.Sprite(mat); s.position.set(poi.x, 13, poi.z); s.scale.set(26, 5.7, 1); s.frustumCulled = false; s.renderOrder = 999; s.visible = false;
+    scene.add(s);
+    return { poi, spr: s, mat };
+  });
   function updateBeacons(now) {
     let nearestKey = null, nd = 1e18;
     for (const b of poiBeacons) { if (poiFound.has(b.poi.key)) continue; const d = Math.hypot(b.poi.x - car.x, b.poi.z - car.z); if (d < nd) { nd = d; nearestKey = b.poi.key; } }
@@ -312,8 +330,17 @@ export function createEngine({ canvas, ui, emit }) {
       const pulse = (b.poi.key === nearestKey && !reduceMotion) ? 0.7 + 0.3 * Math.sin(now * 0.006) : 0.8;
       b.mat.opacity = fade * 0.95 * pulse;
     }
+    // name-plates: legible only when you're close enough to actually be AT the place
+    for (const l of poiLabels) {
+      const d = Math.hypot(l.poi.x - car.x, l.poi.z - car.z);
+      const show = d < 170;
+      l.spr.visible = show;
+      if (!show) continue;
+      l.mat.color.setHex(poiFound.has(l.poi.key) ? 0x9bf3bb : 0xffffff);
+      l.mat.opacity = clamp(1 - (d - 60) / 110, 0, 1);
+    }
   }
-  function hideBeacons() { for (const b of poiBeacons) b.mesh.visible = false; }
+  function hideBeacons() { for (const b of poiBeacons) b.mesh.visible = false; for (const l of poiLabels) l.spr.visible = false; }
 
   // the finish-line moment: a big gold burst, a fanfare, a beat of slow-mo + flash, and
   // an 'ARRIVED' card. Fires for reaching a real place (or any nav destination).
@@ -322,9 +349,16 @@ export function createEngine({ canvas, ui, emit }) {
     for (let k = 0; k < 4; k++) spawnCoinBurst(car.x + (k - 1.5) * 1.2, car.z, y, now);   // ~24 sparks
     if (audio.sfxChime) audio.sfxChime([523, 659, 784, 1047, 1319]);
     if (!reduceMotion) {
-      timeScale = 0.45;
-      if (ui.fx) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 800); }
+      timeScale = 0.4; slowmoHold = 0.32;             // HELD slow-mo (then it eases back) — a real beat, not a blink
+      if (ui.fx) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 850); }
     }
+    // a second triumphant spark wave a beat later
+    setTimeout(() => {
+      if (mode !== 'drive') return;
+      const y2 = car.group ? car.group.position.y : 1;
+      for (let k = 0; k < 3; k++) spawnCoinBurst(car.x + (k - 1) * 1.6, car.z, y2, performance.now());
+      if (audio.sfxChime) audio.sfxChime([784, 1047, 1319, 1568]);
+    }, 280);
     emit('arrived', { label, points: points || 0, trip: tripScore });
   }
 
@@ -1170,6 +1204,7 @@ export function createEngine({ canvas, ui, emit }) {
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
+    if (musicPref && audio.startMusic) audio.startMusic();
     showCarCard();
     toast('Free roam — drive anywhere!', 2200);
   }
@@ -1189,6 +1224,7 @@ export function createEngine({ canvas, ui, emit }) {
     for (const s of labelSprites) s.visible = true;
     inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
     audio.engineStop();
+    if (audio.stopMusic) audio.stopMusic();
     ctl.gtx = clamp(car.x, -310, 310); ctl.gtz = clamp(car.z, -310, 310);
     ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3; ctl.gr = 110; ctl.gpo = 0.95;
     ctl.tx = ctl.gtx; ctl.tz = ctl.gtz;
@@ -1333,7 +1369,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   // collision feedback: a thunk, a kick of camera shake, and a haptic buzz, scaled
   // by impact speed — so hits read as intentional, not a silent invisible-wall ping.
-  let shakeMag = 0, lastHitT = -1e9, timeScale = 1;
+  let shakeMag = 0, lastHitT = -1e9, timeScale = 1, slowmoHold = 0;
   // Returns true only when a FRESH hit registers (past the 200ms cooldown). The
   // caller gates its speed-scrub on that so a car overlapping geometry for several
   // frames isn't scrubbed to a dead stop every frame — the position push-out ejects
@@ -1370,7 +1406,10 @@ export function createEngine({ canvas, ui, emit }) {
     // order = 🎥 cycle order. Cruise (clean high chase) is the default; Close (low,
     // cinematic, gets the full whip+roll) is now SECOND so the most speed-rich view is
     // one tap away; Top-down (drag-to-drive) third; Aerial (Explore orbit) last.
-    { name: 'Cruise', dist: 9, h: 34, ahead: 11, drone: true, topdown: false },
+    // Cruise leans a little lower/more-forward than before for speed feel, but stays
+    // high enough to clear the melty ground-level photogrammetry (the user's preferred
+    // clean look — NOT the low 'eye-level horror' of Close).
+    { name: 'Cruise', dist: 12, h: 25, ahead: 14, drone: true, topdown: false },
     { name: 'Close', dist: 11, h: 7, ahead: 5, drone: false, topdown: false },
     { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true },
     { name: 'Aerial', aerial: true },   // the Explore look (high orbit) while driving
@@ -1455,7 +1494,8 @@ export function createEngine({ canvas, ui, emit }) {
     let jx = clamp(inp2.jx + car.kSteer + inp2.steer, -1, 1);
     let throttleTarget = 0, brake = 0;
     if (inp2.brake || inp2.ky > 0) brake = 1;
-    else if (inp2.gas || inp2.ky < 0) throttleTarget = 1;
+    else if (inp2.ky < 0) throttleTarget = 1;                  // keyboard = full
+    else if (inp2.gas > 0) throttleTarget = inp2.gas;          // touch gas (analog 0..1)
     // Stick-only "auto-creep": cruise GENTLY toward ~18 u/s (≈40 mph) instead of
     // flooring it — a kid who only steers should roll at a corner-able pace, never
     // pin to the 220 mph top end. Hold GO for the real speed.
@@ -1824,11 +1864,13 @@ export function createEngine({ canvas, ui, emit }) {
         const fHi = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
         const v = clamp((f - 0.18) / 0.62, 0, 1) * 0.82 + fHi * 0.18;
         ui.fx.style.setProperty('--spd', v.toFixed(2));
+        ui.fx.style.setProperty('--ox', (50 - (car.steer + camOrbit.yaw * 0.4) * 16).toFixed(1) + '%');  // streaks flow from where you're heading
         ui.fx.classList.toggle('on', v > 0.01);
         ui.fx.classList.toggle('fast', v > 0.6);         // motion-blur the streaks only when truly flying
       }
     }
     audio.engineUpdate(car.speed, feelRef, throttle); // rev maps to the feel reference; load brightens it
+    if (audio.musicSpeed) audio.musicSpeed(clamp(Math.abs(car.speed) / feelRef, 0, 1));   // the tune lifts on the blast
   }
 
   // ---------- viewport (critical mobile invariant — do not regress) ----------
@@ -1866,7 +1908,8 @@ export function createEngine({ canvas, ui, emit }) {
   function loop(now) {
     if (disposed || paused || ctxLost) return;
     const rawDt = Math.min(0.05, (now - prev) / 1000); prev = now;
-    timeScale += (1 - timeScale) * Math.min(1, rawDt * 4.5);   // recover from a crash slow-mo back to real time
+    if (slowmoHold > 0) { slowmoHold -= rawDt; }              // hold the arrival slow-mo before recovering
+    else timeScale += (1 - timeScale) * Math.min(1, rawDt * 4.5);   // recover from slow-mo back to real time
     const dt = rawDt * timeScale;
     if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
     updateAnimals(dt, now); // ambient life in every mode
@@ -1935,6 +1978,7 @@ export function createEngine({ canvas, ui, emit }) {
   renderer.render(scene, camera);
   emit('ready');
   emitPOIs();                 // seed the start-card "places found" badge from saved progress
+  emit('music', musicPref);   // seed the 🔊 toggle state
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
   raf = requestAnimationFrame(loop);
 
@@ -1991,7 +2035,9 @@ export function createEngine({ canvas, ui, emit }) {
     setDestination, clearDestination, toggleAutoDrive,
     setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
     setGas: (on) => { inp2.gas = on ? 1 : 0; if (on) showT = 0; },   // gas pedal (hold)
+    setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)
     setBrake: (on) => { inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
+    toggleMusic: () => { musicPref = !musicPref; try { localStorage.setItem('dahill.music', musicPref ? '1' : '0'); } catch (e) { } if (mode === 'drive' && audio.setMusic) audio.setMusic(musicPref); emit('music', musicPref); return musicPref; },
     // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
     // and let the robot drive there. range/scale mirror drawMinimap exactly.
     tapMinimap: (px, py, w, h) => { const range = 460, scale = (w / 2) / range; setDriveTarget(car.x + (px - w / 2) / scale, car.z + (py - h / 2) / scale); },
