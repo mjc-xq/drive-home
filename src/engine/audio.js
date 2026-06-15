@@ -15,6 +15,7 @@ export function createAudio() {
         // Authoritative: while we WANT it suspended (backgrounded), re-assert suspend if the
         // OS nudges it back to 'running' (fast iOS lock/unlock race); otherwise auto-resume.
         AC.onstatechange = () => {
+          if (!AC) return;                              // closing fires one last statechange after AC was nulled
           if (wantSuspended) { if (AC.state === 'running') AC.suspend().catch(() => {}); return; }
           if (AC.state !== 'running') AC.resume().catch(() => {});
         };
@@ -38,7 +39,7 @@ export function createAudio() {
   function close() {
     wantSuspended = true;
     try { stopMusic(); } catch (e) { }
-    try { if (AC) { AC.close(); AC = null; } } catch (e) { }
+    try { if (AC) { AC.onstatechange = null; AC.close(); AC = null; } } catch (e) { }
     eng = null;
   }
 
