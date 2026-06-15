@@ -804,6 +804,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   let disposed = false;
   const car = createCar(scene);
+  car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
   let cancelCarLoad = null;
   if (!flags.has('nocar')) {
     installDracoDecoder();
@@ -1484,7 +1485,9 @@ export function createEngine({ canvas, ui, emit }) {
     // or advanced a waypoint — a sub-metre lag in the ribbon start is invisible.
     if (Math.abs(car.x - _guideX) < 1.5 && Math.abs(car.z - _guideZ) < 1.5 && routeIdx === _guideIdx) return;
     _guideX = car.x; _guideZ = car.z; _guideIdx = routeIdx;
-    const raw = [[car.x, car.z]];
+    // start the ribbon ~6 m AHEAD of the car (along its heading) so the line never tints
+    // the car itself — you follow it, it doesn't sit on you.
+    const raw = [[car.x + Math.sin(car.yaw) * 6, car.z + Math.cos(car.yaw) * 6]];
     if (ROUTE && routeIdx < ROUTE.length) {
       let acc = 0, px = car.x, pz = car.z;
       for (let i = routeIdx; i < ROUTE.length && acc < 170; i++) { acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); raw.push([ROUTE[i].x, ROUTE[i].z]); px = ROUTE[i].x; pz = ROUTE[i].z; }
@@ -1764,13 +1767,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); } }
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
-    const maxF = (highway ? 150 : openRoad ? 105 : 38) * prof.top * boostMul, maxR = -11;   // highway rips; lawns crawl
+    const maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul, maxR = -11;   // highway = supersonic; lawns crawl
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
     // pin the real 180-220 mph on the open road (it just stays maxed up there).
     const feelRef = 27 * prof.top;
-    let acc = (highway ? 30 : openRoad ? 20 : 9) * prof.accel * throttle * boostMul;   // big surge on the highway
+    let acc = (highway ? 55 : openRoad ? 22 : 9) * prof.accel * throttle * boostMul;   // massive surge on the highway
     // Gentle launch, strong mid-range: ease accel off the line (45%→100% by ~22 mph)
     // so a standstill stab of gas isn't jumpy, but it still pulls hard up to the high
     // top end once rolling. (Directly answers "accelerates too fast / jumpy".)
@@ -1790,12 +1793,13 @@ export function createEngine({ canvas, ui, emit }) {
     // Auto-drive cap scales with distance to the next turn / the destination — long
     // straight legs of a cross-town route run fast (up to maxF), only corners and the
     // final approach slow the chauffeur down, so the trip isn't a crawl.
-    let autoCap = 80;
+    let autoCap = 200;
     if (autoDrive) {
       const dDest = DEST ? Math.hypot(DEST.x - car.x, DEST.z - car.z) : 1e9;
-      // fast on the straights (scale with distance to the next turn), slow into corners
-      // + the final approach so it tracks the road. Floor keeps it brisk, not boring.
-      autoCap = clamp(Math.min(distToNextTurn() * 0.9, dDest * 1.1), 34, 82);
+      // FAST on the straights (scale with distance to the next turn) — on a long highway
+      // leg it ceilings near the top so a cross-town trip is ~2 min, not 10; only corners
+      // + the final approach slow it so it still tracks the road.
+      autoCap = clamp(Math.min(distToNextTurn() * 1.6, dDest * 1.2), 45, highway ? 200 : 80);
     }
     car.speed += acc * dt;
     car.speed -= car.speed * (highway ? 0.06 : openRoad ? 0.1 : 0.28) * dt;   // highway = slippery-fast, lawns drag
