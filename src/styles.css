@@ -88,17 +88,21 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .pwDest .eta{flex:0 0 auto;font-style:normal;font-size:11px;font-weight:700;opacity:.8;font-variant-numeric:tabular-nums}
 .pwDest.free{color:rgba(244,241,234,.5)}
 .pwDest.free span{font-size:10.5px;font-weight:600}
-.pwActions{flex:0 0 auto;display:flex;gap:5px}
 
-/* compact action buttons (reused in actions + tray) */
-.dockBtn{width:34px;height:27px;border-radius:9px;border:1px solid transparent;background:rgba(255,255,255,.07);
-  color:var(--txt);font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;
-  transition:background .15s ease,transform .1s ease}
-.dockBtn:hover{background:rgba(255,255,255,.16)}
-.dockBtn:active{transform:scale(.9)}
-.dockBtn.on{background:rgba(127,212,255,.22);color:#aee6ff}
-.dockBtn.cam{position:relative;flex-direction:column;gap:0;line-height:1;width:46px;font-size:13px}
-.dockBtn.cam i{font-style:normal;font-size:7.5px;font-weight:800;letter-spacing:.01em;opacity:.78}
+/* ── ACTION RAIL: big, always-visible LABELLED controls on the right edge ── */
+#actionRail{position:absolute;top:calc(132px + var(--safe-t));right:calc(8px + var(--safe-r));
+  display:flex;flex-direction:column;gap:7px;z-index:5}
+.railBtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  width:62px;min-height:50px;padding:5px 4px;border-radius:14px;cursor:pointer;color:var(--txt);
+  background:linear-gradient(180deg,rgba(28,32,38,.66),rgba(15,17,21,.62));border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 6px 20px rgba(0,0,0,.38);backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
+  transition:background .15s ease,transform .1s ease,box-shadow .15s ease}
+.railBtn:active{transform:scale(.93)}
+.railBtn .ic{font-size:22px;line-height:1}
+.railBtn .lb{font-size:9px;font-weight:800;letter-spacing:.02em;opacity:.82;white-space:nowrap;max-width:58px;overflow:hidden;text-overflow:ellipsis}
+.railBtn.road{background:linear-gradient(180deg,rgba(217,79,30,.42),rgba(150,45,15,.5));border-color:rgba(255,150,90,.5)}
+.railBtn.on{background:linear-gradient(180deg,rgba(60,160,255,.34),rgba(20,60,110,.5));border-color:rgba(127,212,255,.6);box-shadow:0 0 14px rgba(80,180,255,.4)}
+@media (max-height:680px){#actionRail{gap:5px}.railBtn{min-height:44px;width:56px}.railBtn .ic{font-size:19px}}
 
 /* main row: speed tower · telemetry · minimap tile */
 .pwMain{display:flex;align-items:center;gap:10px}
@@ -126,9 +130,6 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   background-size:calc(100vw - 16px) 100%;background-position:left center;transition:width .1s linear}
 
 /* ⋯ secondary-actions tray, hinged under the blade */
-.pwTray{display:flex;justify-content:flex-end;gap:6px;padding:6px 0 2px;animation:trayDrop .16s cubic-bezier(.2,1.3,.4,1)}
-.pwTray .dockBtn{width:42px;height:34px;font-size:18px}
-@keyframes trayDrop{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:translateY(0)}}
 
 /* inline dest mini-buttons (auto-drive / clear) */
 .mini{font-size:11px;font-weight:700;padding:3px 7px;border-radius:8px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}

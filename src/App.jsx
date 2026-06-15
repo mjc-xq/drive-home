@@ -32,7 +32,6 @@ export default function App() {
   const [music, setMusic] = useState(true);             // soundtrack on/off (🔊 toggle)
   const [autoSteer, setAutoSteer] = useState(true);     // lane-keep assist (🛟 toggle)
   const [drifting, setDrifting] = useState(false);      // sustained-drift glow + DRIFT chip
-  const [moreOpen, setMoreOpen] = useState(false);      // PIT WALL ⋯ secondary-actions tray
   const arrivedTimer = useRef(0);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
@@ -187,11 +186,6 @@ export default function App() {
                 ) : (
                   <div className="pwDest free"><i className="kick">FREE ROAM</i><span>tap the map to drive there</span></div>
                 )}
-                <div className="pwActions">
-                  <button className="dockBtn" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
-                  <button className="dockBtn cam" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>🎥<i>{camName}</i></button>
-                  <button className={'dockBtn' + (moreOpen ? ' on' : '')} aria-label="More controls" onClick={() => setMoreOpen(o => !o)}>⋯</button>
-                </div>
               </div>
               {/* main row: speed tower · telemetry · minimap tile */}
               <div className="pwMain">
@@ -219,16 +213,15 @@ export default function App() {
               </div>
               {/* the blade's bottom edge IS the speedometer */}
               <div id="speedRail"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
-              {/* ⋯ tray: secondary actions hinged under the blade */}
-              {moreOpen && (
-                <div className="pwTray">
-                  <button className={'dockBtn' + (autoSteer ? ' on' : '')} aria-label={autoSteer ? 'Auto-steer on' : 'Auto-steer off'} onClick={() => eng().toggleAutoSteer()}>🛟</button>
-                  <button className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); setMoreOpen(false); }}>🚗</button>
-                  <button className="dockBtn" aria-label="Trace a path to drive" onClick={() => { eng().traceDrive(); setMoreOpen(false); }}>🪄</button>
-                  <button className="dockBtn" aria-label="Back to road" onClick={() => { eng().resetToRoad(); setMoreOpen(false); }}>🛣️</button>
-                  <button className={'dockBtn' + (music ? ' on' : '')} aria-label={music ? 'Music on' : 'Music off'} onClick={() => eng().toggleMusic()}>{music ? '🔊' : '🔇'}</button>
-                </div>
-              )}
+            </div>
+            {/* ── ACTION RAIL: big, always-visible LABELLED controls (right side) ── */}
+            <div id="actionRail">
+              <button className="railBtn road" aria-label="Back to road" onClick={() => eng().resetToRoad()}><span className="ic">🛣️</span><span className="lb">Road</span></button>
+              <button className="railBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}><span className="ic">🎥</span><span className="lb">{camName}</span></button>
+              <button className="railBtn" aria-label="Navigate to a place" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}><span className="ic">🧭</span><span className="lb">Go to…</span></button>
+              <button className="railBtn" aria-label="Choose your car" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}><span className="ic">🚗</span><span className="lb">Cars</span></button>
+              <button className={'railBtn' + (autoSteer ? ' on' : '')} aria-label={autoSteer ? 'Auto-steer on' : 'Auto-steer off'} onClick={() => eng().toggleAutoSteer()}><span className="ic">🛟</span><span className="lb">Assist {autoSteer ? 'on' : 'off'}</span></button>
+              <button className={'railBtn' + (music ? ' on' : '')} aria-label={music ? 'Music on' : 'Music off'} onClick={() => eng().toggleMusic()}><span className="ic">{music ? '🔊' : '🔇'}</span><span className="lb">Music</span></button>
             </div>
             {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
                 the left stick only turns, these drive. Just steering still auto-creeps. */}
