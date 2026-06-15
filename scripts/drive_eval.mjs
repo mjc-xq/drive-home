@@ -24,12 +24,28 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 8 — the round-7 sensory/discovery punch-list landed; re-grade):
-- MUSIC (round-7 #1 gap, fixed): a looping procedural synthwave soundtrack in audio.js
-  (I-V-vi-IV bass + chord stabs + square arp + noise kick/hat, scheduled ahead off
-  AC.currentTime), starts in enterDrive, stops on exit, and its master lowpass opens
-  with speed so the tune lifts on the blast. A 🔊 dock toggle (persisted, on by default)
-  mutes it. Verified: toggle returns state, no errors. The joyride finally has a tune.
+CURRENT STATE (ROUND 9 — the round-8 'empty world' punch-list landed; re-grade NEW code):
+- AMBIENT TRAFFIC (round-8 #1 structural gap, fixed): a pool of 11 simple cars roams the
+  neighbourhood road network — each picks a roadSeg, drives it, then picks the next
+  connected segment (U-turns at dead ends). VERIFIED moving on the streets in a
+  screenshot. They're wired into collision: weave past one within ~2.2 m at >14 u/s →
+  a near-miss combo tick; clip it (within 2.6 m) → a bounce (speed×0.4) + CRUNCH. The
+  near-miss/combo economy finally has live, moving content instead of only static trees.
+- STEERING PLATEAU (round-8 bug the eval computed numerically): net yaw rate WAS climbing
+  monotonically 0.78→3.3 rad/s with speed (twitchier flat-out). Added a high-speed yaw
+  damper (clamp(1-(|speed|-16)*0.012, 0.42, 1)) so authority peaks ~mid-speed (~35 mph)
+  and tapers above — the 200 mph straight now tracks with small corrections.
+- RISK/REWARD STAKES: a big crash (impact>34) now BREAKS the combo ('combo lost!'), so
+  near-misses carry real risk; a sustained drift (|vlat|>8 at speed) glows the ✋ button,
+  flashes a 'DRIFT!' chip, and ticks combo + trip score every ~0.9 s — the holdable
+  drift finally pays out on the goal loop.
+- SPAWN GOAL: EVERY drive (incl. a brand-new 0-found player) is auto-routed to the
+  nearest real place from frame one ('floor it to Stanton Elem — follow the pink beam!'),
+  beacon+ribbon+ETA lit, instead of an aimless 'free roam' toast.
+- ANALOG GO discoverable: a vertical throttle fill rises inside the now-taller GO pedal
+  as you slide your thumb down to floor it; the drive hint spells out 'slide ↓ to floor it'.
+- MUSIC (round 7): a looping procedural synthwave soundtrack (bass+chords+arp+drums,
+  scheduled off AC.currentTime), its lowpass opens with speed; 🔊 dock toggle, persisted.
 - DESTINATION IDENTITY (round-7 #4): a floating CanvasTexture name-plate ('🏠 YOUR HOUSE',
   "🏡 MEEMAW'S", '🏫 STANTON ELEM'…) over each real place, depthTest-off, legible within
   ~170 m and tinted green once found — so arriving at your actual school has presence,
