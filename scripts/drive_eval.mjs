@@ -24,48 +24,44 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 4 — the round-3 punch-list landed; re-grade the NEW code):
-- SPEED REGRESSION FIXED (round-3 #1 blocker): stick-only auto-creep no longer pins
-  to the top — it cruises GENTLY toward ~18 u/s (≈40 mph), corner-able; hold GO for
-  real speed. The real top stays high (maxF 100·top ≈ 183-224 mph) but is decoupled
-  from the FEEL: a feelRef (27·top ≈ 60 mph) is what FOV/speed-lines/gauge/engine-rev
-  saturate against, so 40 mph FEELS like 150 while you can still pin 180+ on the open
-  road (verified: --spd 0.86 at 38 mph). Launch still eased (45%→100% by ~22 mph).
-- OFF-ROAD is now a real penalty: within the ±340 m block, off the street = lawns,
-  maxF 24 (≈44 mph) + drag 0.5, so you slow hard and steer back to pavement. PAST
-  ±340 m (no procedural roads, only real photoreal road) it's treated as open road so
-  a cross-town blast to Meemaw's can hit triple digits.
-- REAL SPEED-LINES: white center-radial streak overlay (masked clear in the middle so
-  the road reads, gentle outward 'rush' animation), driven by --spd, building from
-  ~18%. Vignette kept underneath, lighter. Chase FOV eased (46→76, sp^1.25, builds
-  from the first mph). Top-down + Aerial cams have their own speed cues.
-- PARTICLES (new): pooled skid-mark decals + additive tyre-smoke puffs spawn at the
-  REAR WHEELS whenever the tail is out (|vlat|>6 or handbrake) and moving; a 6-spark
-  gold burst on each coin pickup. Power-slides now SUSTAIN on throttle (grip recovery
-  eased to 0.55× while on the gas) instead of being cancelled — gas holds the slide.
-- SCORE LOOP (new): a run timer starts on first gas/coin and stops on the 18th coin;
-  a quick-chain COMBO ramps (🔥×N, resets after 4 s); BEST time persists to
-  localStorage. Coin HUD shows '💛 x/18 · 🔥×combo · ⏱ m:ss · 🏆 best'; finishing all
-  18 toasts your time + a 'New best!' flag with a celebratory screen flash.
-- NEIGHBOURHOOD CALLOUTS (new): a one-shot toast + soft chime when you drive within
-  ~45 m of your house, Meemaw's, Canyon Middle, Stanton Elementary, or Dad's work
-  (XQ). (verified: '👋 That's YOUR house — 1840 Dahill Lane!' on spawn.)
-- MINIMAP TAP-TO-DRIVE (new): tap anywhere on the minimap → tapMinimap inverts the
-  pixel→world transform and auto-drives the car there (reuses DEST/auto-drive). A
-  reverse 'R' tell-tale lights in the speedo when speed<0; the dest bar shows live
-  remaining distance + rough ETA (verified: '256 m · ~0:24').
-- CHASE CAM auto-recenters fast (~600 ms after you let go, no speed gate) so two-thumb
-  driving (steer + pedals) needs no third look-thumb; czoom + orbit reset on
-  enterDrive and every camera cycle (no pinch-zoom leak).
-- DRIFT/COLLISION/ARRIVAL/HORN/cars/nav as before: per-car {accel,top,grip,slip};
-  hits = thunk+shake+haptic with a 200ms-cooldown-gated scrub; manual+auto arrival
-  payoff; Google Directions road routes + auto-drive (cap 45) + back-to-road.
-- Cameras 🎥 Cruise (default chase) → Top-down (drag-to-drive) → Aerial (Explore look)
-  → Close. HUD: glass panels, right DOCK, speed module lifted above the pedals,
-  GO/STOP pedals + handbrake + horn, framed minimap, coin/timer HUD, fading hint.
-- STILL OPEN (minor): auto-drive cap (45 u/s) makes far trips slow; no on-road
-  mini-challenges/time-trial start beyond the coin rally; tyre-smoke is additive grey
-  (not tinted to surface).
+CURRENT STATE (ROUND 5 — the round-4 punch-list landed; re-grade the NEW code):
+- AUDIO (round-4 #1 gap, fixed): a looping tyre-SCREECH voice (bandpassed noise, Q5.5)
+  ridden each frame from the slip amount + handbrake, so power-slides/skids now make
+  noise; engineUpdate is THROTTLE-AWARE (filter opens + intake roar + a touch louder on
+  the gas) with a filtered-noise 'whoosh' on tip-in; near-miss fires the same whoosh.
+- ANALOG THROTTLE: GO squeezes 0→1 over ~0.4 s (feather power out of a slide) instead
+  of a binary switch (verified ramp 1→3→5→9→13→18 mph); lifting off applies real
+  ENGINE-BRAKING (acc -= speed·0.45, cap 11) so the car coasts down into corners.
+- CAMERA WHIP: the chase look-point is a lerped _lookV (rate 7) carrying a drift/steer
+  lateral lead, so the car slides toward frame-edge on a hard corner and snaps back;
+  ASYMMETRIC FOV (widens at rate 6, relaxes at 2.2 → every GO stab shoves wide fast);
+  continuous high-speed rumble past ~55 mph; a Dutch-tilt ROLL into corners/drift. All
+  gated by reduced-motion.
+- POI META-GOAL (fuses the two best things): the 5 real places (home, Meemaw's, Canyon
+  Middle, Stanton, Dad's work/XQ) now PLOT on the minimap (pink ring = to-find, green =
+  found; off-map ones clamp to the edge as a 'that way' hint), tick lasting progress
+  saved to localStorage, show '🏆 x/5 places found' on the start card, and celebrate
+  all-5. (verified: poisFound=['home'] persisted on spawn.) Coin rally (18 coins) +
+  run-timer/combo/best-time still live alongside it.
+- NEAR-MISS reward (Burnout loop): skimming a tree/animal/parked car within ~1.6 m at
+  >14 u/s WITHOUT a hit → combo tick + whoosh + '💨 Close one! ×N' (650 ms cooldown).
+- CRASH payoff: impact>34 → a beat of global SLOW-MO (timeScale 0.32, recovers) + a
+  white #fx flash + 'CRUNCH! <mph>' toast. Animals now DEFLECT (speed×0.5) instead of
+  flinging the car backward.
+- AUTO-DRIVE cap now scales with distance-to-next-turn (clamp(dist·1.4, 22, maxF)), so
+  long straight legs of a cross-town route run fast, only corners/arrival slow it.
+- DISCOVERABILITY: a faint resting 'steer' ghost-stick bottom-left for the first few
+  seconds; the STOP pedal label flips to 'REV' when reversing (verified); the 🎥 button
+  shows the current camera NAME (verified Cruise→Top-down).
+- POLISH: spin-recovery assist (tail tucks in faster when you're not steering, so slides
+  are catchable); softer high-speed steering falloff (0.03) so the open-road blast stays
+  pointable; surface-tinted smoke (brown dust off-road, grey on tarmac).
+- Everything from before still live: feelRef speed-decoupling (40 mph feels like 150,
+  real top 180-220); off-road lawn penalty; real speed-lines; per-car {accel,top,grip,
+  slip}; minimap tap-to-drive + live ETA; chase auto-recenter; Google Directions routes;
+  back-to-road; horn; 4 cameras (Cruise/Top-down drag-to-drive/Aerial/Close).
+- STILL OPEN (minor): no time-trial/race start beyond the coin rally + landmark hunt;
+  no leaderboard; the procedural collision is on invisible footprints under the tiles.
 
 This is a TOY/joyride: "drive around my real neighborhood and to real places."
 Judge the CURRENT code. Has it crossed into 'amazing'? If not, what's the shortest
