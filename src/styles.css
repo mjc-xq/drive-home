@@ -80,8 +80,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* ---- drive minimap + address nav (top-left) ---- */
 #minimapWrap{position:absolute;top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:6px}
 #minimap{display:block;width:132px;height:132px;border-radius:10px;background:rgba(18,21,26,.5)}
-#destBar{display:flex;align-items:center;gap:4px;margin-top:5px;max-width:144px;font-size:11px;font-weight:600}
-#destBar span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#destBar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:5px;max-width:144px;font-size:11px;font-weight:600}
+#destBar>span{flex:1 1 60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#etaLine{flex:1 0 100%;order:3;font-style:normal;font-size:10px;font-weight:700;opacity:.72;font-variant-numeric:tabular-nums}
 #destBar .mini{font-size:11px;font-weight:700;padding:3px 7px;border-radius:8px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}
 #destBar .mini.on{background:var(--poppy);border-color:transparent}
 #navPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,340px);pointer-events:auto}
@@ -138,14 +139,28 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #speedRow{display:flex;align-items:baseline;justify-content:center;gap:6px}
 #speedRow b{font-size:46px;font-weight:800;line-height:.85;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #speedRow span{font-size:11px;font-weight:800;opacity:.55;letter-spacing:.2em}
+#revInd{font-style:normal;font-size:15px;font-weight:900;color:#ff5a3c;opacity:0;transition:opacity .12s ease;align-self:center}
 #speedTrack{margin-top:9px;height:6px;border-radius:3px;background:rgba(255,255,255,.13);overflow:hidden}
 #speedFill{height:100%;width:0%;border-radius:3px;background:#3ad17a;transition:width .1s linear,background .2s ease}
 
-/* ---- speed-lines / vignette overlay (sense of speed) ---- */
-#fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .25s ease;
-  background:radial-gradient(ellipse at center,transparent 52%,rgba(0,0,0,.34) 100%)}
-#fx.on{opacity:var(--spd,0)}
-#fx.arrive{opacity:.75;background:radial-gradient(circle,rgba(120,230,150,.4),rgba(255,210,70,.22) 55%,transparent 80%);transition:opacity .18s ease}
+/* ---- sense of speed: white speed-lines radiating from centre + a soft vignette ---- */
+#fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .2s ease;overflow:hidden}
+#fx.on{opacity:1}
+/* peripheral optic-flow streaks — a fine sunburst, masked clear in the middle so the
+   road stays readable; intensity rides --spd, with a gentle outward rush animation. */
+#fx::before{content:'';position:absolute;inset:-25%;opacity:var(--spd,0);
+  background:repeating-conic-gradient(from 0deg at 50% 50%,
+    rgba(255,255,255,0) 0deg,rgba(255,255,255,0) 2.6deg,
+    rgba(255,255,255,.55) 3deg,rgba(255,255,255,0) 3.5deg);
+  -webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 30%,#000 72%);
+  mask-image:radial-gradient(circle at 50% 50%,transparent 30%,#000 72%);
+  animation:rush .6s linear infinite}
+/* edge vignette underneath, lighter, so the streaks pop */
+#fx::after{content:'';position:absolute;inset:0;opacity:calc(var(--spd,0) * .8);
+  background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.36) 100%)}
+@keyframes rush{from{transform:scale(1)}to{transform:scale(1.14)}}
+#fx.arrive{opacity:.8;background:radial-gradient(circle,rgba(120,230,150,.42),rgba(255,210,70,.24) 55%,transparent 80%);transition:opacity .18s ease}
+@media (prefers-reduced-motion:reduce){#fx::before{animation:none}}
 
 /* ---- gas/brake pedals + handbrake + horn (bottom-right) + drive hint ---- */
 .holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);
@@ -164,7 +179,12 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #driveHint{position:absolute;top:calc(70px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:86vw;
   padding:7px 15px;font-size:11.5px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
 #coinHud{position:absolute;top:calc(14px + var(--safe-t));left:50%;transform:translateX(-50%);
-  padding:6px 14px;font-size:15px;font-weight:800;letter-spacing:.02em}
+  display:flex;align-items:center;gap:10px;padding:6px 14px;font-size:14px;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+#coinHud .combo{color:#ff8a3c;animation:pop .25s ease}
+#coinHud .runClock{opacity:.82;font-variant-numeric:tabular-nums}
+#coinHud .runClock i{font-style:normal}
+#coinHud .best{opacity:.7;font-weight:700}
+@keyframes pop{from{transform:scale(1.5)}to{transform:scale(1)}}
 
 /* ---- scoop info chips ---- */
 #toolChip{top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:9px 14px;font-size:13px;font-weight:700}

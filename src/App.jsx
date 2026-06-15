@@ -7,7 +7,7 @@ import { createEngine } from './engine/engine.js';
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null });
+  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -18,7 +18,7 @@ export default function App() {
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [nearCar, setNearCar] = useState(false);
   const [driveHint, setDriveHint] = useState(false);    // brief "how to drive" hint
-  const [driveScore, setDriveScore] = useState({ got: 0, total: 0 });
+  const [driveScore, setDriveScore] = useState({ got: 0, total: 0, best: 0, bestStr: '', combo: 0 });
   const [carPicker, setCarPicker] = useState(false);    // car select menu open
   const [cars, setCars] = useState([]);
   const [navOpen, setNavOpen] = useState(false);        // address picker open
@@ -148,12 +148,15 @@ export default function App() {
         </div>
         {mode === 'drive' && (
           <div id="hud">
-            {/* minimap panel (top-left) */}
+            {/* minimap panel (top-left) — tap anywhere on it to drive there */}
             <div id="minimapWrap" className="panel">
-              <canvas id="minimap" width={132} height={132} ref={el => (uiRefs.current.minimap = el)} />
+              <canvas id="minimap" width={132} height={132} title="Tap to drive here"
+                ref={el => (uiRefs.current.minimap = el)}
+                onClick={e => { const r = e.target.getBoundingClientRect(); eng().tapMinimap(e.clientX - r.left, e.clientY - r.top, r.width, r.height); }} />
               {dest && (
                 <div id="destBar">
                   <span>📍 {dest.label}</span>
+                  <i id="etaLine" ref={el => (uiRefs.current.eta = el)} />
                   <button className={'mini' + (autoDrive ? ' on' : '')} aria-label="Auto-drive" onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖' : 'Go'}</button>
                   <button className="mini" aria-label="Clear destination" onClick={() => eng().clearDestination()}>✕</button>
                 </div>
@@ -169,7 +172,10 @@ export default function App() {
             </div>
             {/* speed module (bottom-center) */}
             <div id="speed" className="panel">
-              <div id="speedRow"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
+              <div id="speedRow">
+                <i id="revInd" ref={el => (uiRefs.current.rev = el)}>R</i>
+                <b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span>
+              </div>
               <div id="speedTrack"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
             </div>
             {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
@@ -187,8 +193,15 @@ export default function App() {
               onPointerDown={() => eng().setHandbrake(true)} onPointerUp={() => eng().setHandbrake(false)}
               onPointerLeave={() => eng().setHandbrake(false)} onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
-            {driveScore.total > 0 && <div id="coinHud" className="panel">💛 {driveScore.got}/{driveScore.total}</div>}
-            {driveHint && <div id="driveHint" className="panel">stick = steer · GO/STOP = gas/brake · drag = look · ✋ drift · 🎥 cameras</div>}
+            {driveScore.total > 0 && (
+              <div id="coinHud" className="panel">
+                <span className="coinCount">💛 {driveScore.got}/{driveScore.total}</span>
+                {driveScore.combo > 1 && <span className="combo">🔥×{driveScore.combo}</span>}
+                <span className="runClock">⏱ <i ref={el => (uiRefs.current.runTime = el)}>0:00</i></span>
+                {driveScore.bestStr && <span className="best">🏆 {driveScore.bestStr}</span>}
+              </div>
+            )}
+            {driveHint && <div id="driveHint" className="panel">stick = steer · GO/STOP = gas/brake · ✋ drift · tap the map to drive there · 💛 grab the coins</div>}
             {navOpen && (
               <div id="navPanel" className="startCard">
                 <h3>Drive to…</h3>

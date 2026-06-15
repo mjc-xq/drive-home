@@ -24,38 +24,50 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 2 — a full game-feel pass just landed; re-grade the NEW code):
-- Acceleration: accel 14 u/s^2 × per-car, road drag 0.10 — builds smoothly to a
-  high top speed (maxF 140 u/s ≈ 313 mph × per-car 'top'). Off-road maxF 28 (slow).
-- SENSE OF SPEED (new): perceptual engine rev with a gear feel (audio.engineUpdate
-  now gets the real 140 ceiling, was a bugged 36); camera FOV kicks 46→~73 with
-  speed²; camera pulls back + look-leads ahead with speed; a #fx vignette/speed-rush
-  overlay fades in past ~110 mph. Frame-rate-independent camera smoothing.
-- DRIFT (new): arcade lateral slip — the tail steps out turning hard at speed, far
-  more on the HANDBRAKE (Space / ✋ hold button); grip recovers it, throttle powers
-  out; the body leans into the slide.
-- PER-CAR HANDLING (new): each car has {accel, top, grip, slip} — Sienna heavy+
-  grippy, RAV4 balanced, Ferrari fast+slidey, Toy Racer twitchy.
-- COLLISION FEEDBACK (new): hits scrub speed to a near-stop in the same direction
-  (no more backward fling) + a thunk sfx + decaying camera shake + haptic buzz +
-  a 'watch the critters' toast on animals. (Collision is still on the INVISIBLE
-  procedural footprints while photoreal tiles are shown.)
-- ARRIVAL (new): detected for MANUAL driving too (was auto-only) — chime arpeggio,
-  a celebratory green/gold screen flash, 'You made it to X!' toast.
-- HORN (new): H key / 📣 button.
-- Cameras (🎥 cycle order now Cruise → Top-down → Aerial → Close): Cruise = high
-  chase (default, clean); Top-down = near-overhead heading-up, supports DRAG-TO-DRIVE
-  (drag → car drives there, reverses if behind, faster the farther); Aerial = the
-  exact Explore high-orbit while driving; Close = low cinematic (melty, now LAST).
-- Cars: picker (🚗). Navigation (🧭): address presets + free text; **Google Directions**
-  road-following route on the minimap + guide ribbon; **auto-drive (🤖)** follows the
-  route (capped ~45 u/s); back-to-road (🛣️) snaps to the route/nearest road.
-- HUD: REDESIGNED — glass .panel system, a right-side control DOCK, a bottom-centre
-  SPEED MODULE (big number + colour speed bar), framed minimap, handbrake/horn
-  buttons, a fading drive hint.
-- STILL NOT DONE (last round's lower items): no collectibles/coins or score loop;
-  throttle+steer still share the left stick; minimap isn't tap-to-drive; auto-drive
-  cap (45) is slow for far trips and there's no ETA in the dest bar.
+CURRENT STATE (ROUND 3 — the round-2 punch-list landed; re-grade the NEW code):
+- CONTROLS NOW DECOUPLED (the round-2 #1 blocker, fixed): the left thumbstick
+  STEERS ONLY (X). Throttle/brake are dedicated hold-buttons — a big green GO pedal
+  and a red STOP pedal, bottom-right (right thumb), wired through setGas/setBrake.
+  W/S and ↑/↓ still work. Just pushing the stick auto-creeps (throttle 0.72) so a
+  kid who only steers still rolls. Steering and gas no longer fight on one stick.
+- ACCELERATION: accel 18 u/s^2 (road) × per-car, road drag 0.10, but eased OFF THE
+  LINE — accel scales 45%→100% by ~22 mph — so a standstill stab of gas is gentle,
+  not jumpy, then it pulls hard up to a high top end. maxF road = 100 u/s × per-car
+  'top' (Sienna 0.82 ≈ 183 mph, Ferrari 1.0 = 224 mph). Off-road maxF 45 (slow but
+  recoverable). (Directly answers the user's "jumpy / accelerates too fast" note.)
+- SENSE OF SPEED: ALL speed-feel now normalized to each car's live topRef (= its
+  road top), not a hardcoded constant — chase FOV (46→73, eased sp^1.5 so mid speeds
+  aren't flat), camera pull-back + look-lead, the colour speed bar, the #fx vignette
+  (onset raised to ~45% of the car's top), and the perceptual engine-rev audio all
+  scale per car. Top-down and Aerial cams ALSO got speed: top-down leaps its
+  look-ahead forward + rises + small FOV kick; aerial breathes altitude up and biases
+  the gaze toward travel. Frame-rate-independent smoothing throughout.
+- COINS / SCORE LOOP (exists): 18 gold coins strung along the real roads; driving
+  through one chimes + ticks a '💛 x/18' HUD counter and shows on the minimap.
+- DRIFT: arcade lateral slip — the tail steps out turning hard at speed, far more on
+  the HANDBRAKE (Space / ✋ hold) or brake-to-drift; grip recovers it, throttle powers
+  out; the body leans into the slide. Per-car {accel, top, grip, slip}.
+- COLLISION FEEDBACK: a thunk sfx + decaying camera shake + haptic buzz + 'watch the
+  critters' toast on animals. The speed-scrub is now GATED behind a 200ms cooldown so
+  a car overlapping geometry for several frames is ejected by the position push-out
+  instead of being chained to a dead stop. (Collision is on the INVISIBLE procedural
+  footprints while photoreal tiles render.)
+- ARRIVAL: manual + auto — chime arpeggio, green/gold screen flash, 'You made it!' toast.
+- HORN: H / 📣.
+- Cameras (🎥 cycle Cruise → Top-down → Aerial → Close): Cruise = high chase (default,
+  clean); Top-down = near-overhead heading-up, supports DRAG-TO-DRIVE (drag → car
+  drives there, reverses if behind, faster the farther); Aerial = the exact Explore
+  high-orbit while driving; Close = low cinematic (melty, last).
+- Cars: picker (🚗) with real models (Sienna/RAV4/Ferrari/Toy). Navigation (🧭): address
+  presets (Meemaw's, schools, Dad's work) + free text; **Google Directions** road-
+  following route on the minimap + guide ribbon; **auto-drive (🤖)** follows it (capped
+  ~45 u/s); back-to-road (🛣️) snaps to the route/nearest road.
+- HUD: glass .panel system, right-side control DOCK, a SPEED MODULE (big number +
+  colour bar) lifted clear above the pedal cluster, framed minimap, gas/brake pedals,
+  handbrake + horn, coin counter, a fading drive hint.
+- STILL NOT DONE (lower items): minimap isn't tap-to-drive; auto-drive cap (45) is
+  slow for far trips and there's no ETA in the dest bar; no skid marks / tyre smoke;
+  coins have no run timer / best-time / combo.
 
 This is a TOY/joyride: "drive around my real neighborhood and to real places."
 Judge the CURRENT code. Has it crossed into 'amazing'? If not, what's the shortest
