@@ -24,12 +24,30 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 6 — the round-5 'one more run' punch-list landed; re-grade NEW code):
-- HIGH-SPEED FEEL (round-5 #1 gap, fixed): an uncapped spHi term = clamp((|speed|-feelRef)
-  /(feelRef·2.7),0,1) layers ON TOP of the ~60 mph feel cap, so above 60 the FOV adds a
-  second kick (→~84°), the camera sinks the car back further, the rumble keeps growing,
-  and the speed-lines keep intensifying — the 180-220 mph open-road blast finally reads
-  as faster than a 40 mph cruise (verified --spd 0.86 at 38 mph already; now scales past).
+CURRENT STATE (ROUND 7 — the round-6 'neighborhood fantasy' punch-list landed; re-grade):
+- POI BEACONS (round-6 #1 gap, fixed): a tall additive light-pillar over each of the 5
+  real places, drawn THROUGH the world (depthTest off, renderOrder 998) so you can SEE
+  your school / Meemaw's from across the neighbourhood and aim at it. Pink=to-find,
+  green=found, nearest un-found pulses; opacity fades in by distance, shows within
+  ~1.2 km in Drive (verified: home beacon visible + opacity scales with distance; the
+  far POIs — Stanton 1.2km, Canyon 2.8km — pop in on approach via the chain route).
+- FINISH-LINE ARRIVAL (round-6 #2): reaching a place now fires ~24 gold sparks + a 5-note
+  fanfare + a beat of slow-mo & white flash + an 'ARRIVED' card (place, points, trip
+  score). The <45 m POI and <14 m destination triggers are unified so they don't double-
+  fire. (Was just a toast + 650 ms flash.)
+- MOTION BLUR (round-6 #3): the streak layer smears (filter:blur on #fx.fast::before)
+  only when truly flying — a cheap, mobile-safe approximation of the missing #1 speed
+  cue, gated to high speed + reduced-motion.
+- POWER-SLIDE reward: on the gas + |speed|>10 + turning, the throttle now actively pushes
+  the tail out (car.vlat += steer·throttle·slip·9·dt), so flooring it through a corner
+  HOLDS a drift instead of relying on eased grip-recovery alone.
+- HANDLING tuning: top-end steer divisor 0.03→0.05 (yaw stops climbing past ~60 mph so
+  the blast stays pointable); off-road softened (maxF 24→38, lawn drag 0.5→0.28) so a
+  clipped corner is a loose surface, not glue (verified 43 mph reachable off-road);
+  analog keyboard steering (kSteer ramps ~0.15 s) so desktop arrows ease in like touch.
+- HIGH-SPEED FEEL (from round 5): an uncapped spHi term layers ON TOP of the ~60 mph feel
+  cap — above 60 the FOV adds a second kick (→~84°), the camera sinks the car back, rumble
+  + speed-lines keep intensifying, so the 180-220 mph blast reads faster than a 40 cruise.
 - CHAIN-TRIP FARE LOOP (the 'one more run' fix): reaching a place awards trip points
   (250 + speed·4 + combo·50), then AUTO-ROUTES you to the nearest un-found place via the
   Google guide ('🏁 Next stop: drive to X!'). Verified: spawning finds home → routed to
