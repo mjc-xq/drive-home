@@ -30,6 +30,7 @@ export default function App() {
   const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
   const [music, setMusic] = useState(true);             // soundtrack on/off (🔊 toggle)
+  const [autoSteer, setAutoSteer] = useState(true);     // lane-keep assist (🛟 toggle)
   const [drifting, setDrifting] = useState(false);      // sustained-drift glow + DRIFT chip
   const [moreOpen, setMoreOpen] = useState(false);      // PIT WALL ⋯ secondary-actions tray
   const arrivedTimer = useRef(0);
@@ -55,6 +56,7 @@ export default function App() {
         case 'poiProgress': setPoi(p); break;
         case 'cars': setCars(p); break;
         case 'music': setMusic(p); break;
+        case 'autosteer': setAutoSteer(p); break;
         case 'drift': setDrifting(p); break;
         case 'arrived':
           setArrived(p); clearTimeout(arrivedTimer.current);
@@ -220,6 +222,7 @@ export default function App() {
               {/* ⋯ tray: secondary actions hinged under the blade */}
               {moreOpen && (
                 <div className="pwTray">
+                  <button className={'dockBtn' + (autoSteer ? ' on' : '')} aria-label={autoSteer ? 'Auto-steer on' : 'Auto-steer off'} onClick={() => eng().toggleAutoSteer()}>🛟</button>
                   <button className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); setMoreOpen(false); }}>🚗</button>
                   <button className="dockBtn" aria-label="Trace a path to drive" onClick={() => { eng().traceDrive(); setMoreOpen(false); }}>🪄</button>
                   <button className="dockBtn" aria-label="Back to road" onClick={() => { eng().resetToRoad(); setMoreOpen(false); }}>🛣️</button>

@@ -13,7 +13,7 @@ export const CARYAW = -Math.PI / 2;
 // profile: per-car handling — accel (pull), top (×maxF), grip (steer authority +
 // drift recovery), slip (how easily the tail steps out). Read in updateDrive.
 export const VEHICLES = [
-  { slot: 0, name: 'Toyota Sienna', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: '', profile: { accel: 0.85, top: 0.82, grip: 1.35, slip: 0.4 } },
+  { slot: 0, name: 'Toyota Granvia', spec: '2.5L HYBRID · 189 HP · 8-SEAT MINIVAN', credit: 'model: Sketchfab', profile: { accel: 0.85, top: 0.82, grip: 1.35, slip: 0.4 } },
   { slot: 1, name: 'Toyota RAV4', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: '', profile: { accel: 1.0, top: 0.92, grip: 1.1, slip: 0.7 } },
   { slot: 2, name: 'Ferrari 458', spec: '4.5L V8 · 562 HP · RWD', credit: 'model: vicent091036', profile: { accel: 1.35, top: 1.0, grip: 0.9, slip: 1.1 } },
   { slot: 3, name: 'Toy Racer', spec: 'LITTLE · BIG FUN', credit: 'Khronos ToyCar · CC0', profile: { accel: 1.5, top: 0.7, grip: 0.85, slip: 1.3 } }
@@ -261,7 +261,9 @@ export function cycleVehicle(car) {
 export function loadDrivableCar(car, url, slot, opts = {}) {
   const { length = 4.6, black = true, flip = false, meta = {} } = opts;
   const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z
-  new GLTFLoader().load(url, g => {
+  const gl = new GLTFLoader();
+  gl.setDRACOLoader(DracoShim);                   // decode Draco-compressed GLBs (e.g. the Granvia)
+  gl.load(url, g => {
     const inner = new THREE.Group();
     inner.rotation.y = spin;
     inner.add(normalizeCarGLB(g.scene, length, black));

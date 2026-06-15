@@ -11,6 +11,7 @@ import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
 import rav4Url from '../assets/rav4.glb';
 import siennaUrl from '../assets/sienna.glb';
+import granviaUrl from '../assets/granvia.glb';
 import toycarUrl from '../assets/toycar.glb';
 
 // The whole game lives here, imperative three.js — React only renders the HUD.
@@ -89,6 +90,7 @@ export function createEngine({ canvas, ui, emit }) {
   let DEST = null;        // { x, z, label }
   let userDest = false;   // true when the player set the destination (not an auto-chain)
   let musicPref = (() => { try { return localStorage.getItem('dahill.music') !== '0'; } catch (e) { return true; } })();   // soundtrack on by default
+  let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
   let routeIdx = 0;       // current target waypoint along ROUTE
   let autoDrive = false;
@@ -260,6 +262,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (!best) return;
     autoDrive = false; userDest = false;
     setDestination(best.lat, best.lon, best.label, true);
+    if (DEST) DEST.poiKey = best.key;   // tag so the chain only continues for places you chose
     toast('🏁 Next stop: floor it to ' + best.label + ' — follow the pink beam! 🏁', 2600);
   }
   function checkPOIs(now) {
@@ -284,8 +287,10 @@ export function createEngine({ canvas, ui, emit }) {
         if (poiFound.size === POIS.length && fresh) {
           checkFerrariUnlock();
           toast('🏆 ALL 5 places found! Trip score ' + tripScore + ' 🎉', 3800);
-        } else if (fresh) {
-          chainToNextPOI(now);   // road trip: point at the next place
+        } else if (fresh && DEST && poi.key === (DEST.poiKey || '') ) {
+          // only chain the road-trip if THIS was the place you were navigating to (you
+          // opted in) — never force a new route line on a free-roam drive-by.
+          chainToNextPOI(now);
         }
       }
     }
@@ -786,7 +791,7 @@ export function createEngine({ canvas, ui, emit }) {
     installDracoDecoder();
     cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
     // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
-    loadDrivableCar(car, siennaUrl, 0, { length: 5.1, flip: false, black: false, meta: VEHICLES[0] }); // minivan = default (slot 0)
+    loadDrivableCar(car, granviaUrl, 0, { length: 5.1, flip: true, black: false, meta: VEHICLES[0] }); // Granvia minivan = default (slot 0)
     loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });    // RAV4 GLB nose runs -Z
     loadDrivableCar(car, toycarUrl, 3, { length: 4.0, flip: false, black: false, meta: VEHICLES[3] }); // CC0 Khronos ToyCar
   }
@@ -1268,10 +1273,8 @@ export function createEngine({ canvas, ui, emit }) {
     resetRun(); resetParticles();
     emitScore({ finishMs: 0 });
     emit('driveCam', DRIVE_CAMS[camMode].name);
-    // road-trip framing: point EVERY player at a place from frame one — a fresh player
-    // (0 found) is routed to the nearest school straight away (no aimless free-roam),
-    // a returning player to their next un-found stop.
-    if (poiFound.size < POIS.length) chainToNextPOI(performance.now());
+    // FREE ROAM by default — no auto-destination, so the route line is OFF until you
+    // choose somewhere (🧭 / tap the map). The pink POI beacons still point the way.
     const sp = frontPt || [house.c[0], house.c[1] + 14];
     car.x = sp[0]; car.z = sp[1];
     if (frontDir) {
@@ -1428,6 +1431,22 @@ export function createEngine({ canvas, ui, emit }) {
     return acc;
   }
   function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Auto-drive ON' : 'Auto-drive off', 1100); }
+  // nearest road-segment direction (oriented to the car's heading) for the lane-keep
+  // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
+  function roadAlignDir(x, z, yaw) {
+    let bvx = 0, bvz = 0, bd = 1e18;
+    for (const s of roadSegs) {
+      const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
+      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const ex = ax + vx * t - x, ez = az + vz * t - z, d = ex * ex + ez * ez;
+      if (d < bd) { bd = d; bvx = vx; bvz = vz; }
+    }
+    if (bd > 81) return null;                       // >9 m from any road → no assist
+    const L = Math.hypot(bvx, bvz) || 1; bvx /= L; bvz /= L;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    if (bvx * fx + bvz * fz < 0) { bvx = -bvx; bvz = -bvz; }   // orient with travel (segments are undirected)
+    return [bvx, bvz];
+  }
   // Rebuild the guide ribbon along the route polyline ahead of the car: gather the next
   // ~170 m of route (its real turns), resample to ~5 m steps, drape each cross-section
   // to the ground (relative to the car's road height so it sits ON the street), and
@@ -1704,7 +1723,9 @@ export function createEngine({ canvas, ui, emit }) {
     // (±340 m), where the only surface is the real photoreal road — let it rip there
     // so a cross-town blast to Meemaw's can hit triple digits. WITHIN the block,
     // off the streets means lawns: a real penalty so the pavement is the fast line.
-    const openRoad = road || Math.hypot(car.x, car.z) > 340;
+    const fromHome = Math.hypot(car.x, car.z);
+    const openRoad = road || fromHome > 340;
+    const highway = fromHome > 340;   // the real open road / cross-town — let it RIP (way faster)
     // Per-car handling profile (Sienna heavy+grippy, Ferrari fast+slidey, Toy twitchy).
     const profActive = car.models[car.modelIdx];
     const prof = (profActive && profActive.profile) || { accel: 1, top: 1, grip: 1, slip: 0.7 };
@@ -1718,13 +1739,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); } }
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
-    const maxF = (openRoad ? 100 : 38) * prof.top * boostMul, maxR = -11;   // off-road slower but not a glue trap
+    const maxF = (highway ? 150 : openRoad ? 105 : 38) * prof.top * boostMul, maxR = -11;   // highway rips; lawns crawl
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
     // pin the real 180-220 mph on the open road (it just stays maxed up there).
     const feelRef = 27 * prof.top;
-    let acc = (openRoad ? 18 : 9) * prof.accel * throttle * boostMul;
+    let acc = (highway ? 30 : openRoad ? 20 : 9) * prof.accel * throttle * boostMul;   // big surge on the highway
     // Gentle launch, strong mid-range: ease accel off the line (45%→100% by ~22 mph)
     // so a standstill stab of gas isn't jumpy, but it still pulls hard up to the high
     // top end once rolling. (Directly answers "accelerates too fast / jumpy".)
@@ -1752,7 +1773,7 @@ export function createEngine({ canvas, ui, emit }) {
       autoCap = clamp(Math.min(distToNextTurn() * 0.9, dDest * 1.1), 34, 82);
     }
     car.speed += acc * dt;
-    car.speed -= car.speed * (openRoad ? 0.1 : 0.28) * dt;   // lawns drag more, but a loose surface — not a brick wall
+    car.speed -= car.speed * (highway ? 0.06 : openRoad ? 0.1 : 0.28) * dt;   // highway = slippery-fast, lawns drag
     car.speed = clamp(car.speed, maxR, maxF);
     if (autoDrive) car.speed = Math.min(car.speed, autoCap);   // capped cruise while the robot drives
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
@@ -1769,6 +1790,26 @@ export function createEngine({ canvas, ui, emit }) {
     // 200 mph straight tracks with small corrections.
     const yawDamp = clamp(1 - (Math.abs(car.speed) - 20) * 0.008, 0.55, 1);   // keep enough authority to DODGE at speed
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
+    // AUTO-STEER assist: aim the car along the ROUTE (when navigating) or the nearest
+    // road, so it's easy to stay on the road. When you HAVE a route it actively drives the
+    // car AROUND street corners (strong, wide angle gate) so turns take themselves; in
+    // free-roam it keeps you tracking the road. Your steering always overrides it (fades
+    // to 0 as you push the stick), and it never tugs you off a lawn.
+    if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 5) {
+      let dir = null; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
+      if (onRoute) { const t = navTarget(); dir = [t.x - car.x, t.z - car.z]; }
+      else dir = roadAlignDir(car.x, car.z, car.yaw);
+      if (dir && (dir[0] || dir[1])) {
+        let d = Math.atan2(dir[0], dir[1]) - car.yaw;
+        while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+        const gate = onRoute ? 1.6 : 0.7;                 // route: pull THROUGH corners; road: small fixes
+        if (Math.abs(d) < gate) {
+          const yours = clamp(Math.abs(jx) * (onRoute ? 1.8 : 2.4), 0, 1);        // your input wins
+          const k = (1 - yours) * clamp(Math.abs(car.speed) / 18, 0.5, 1) * (onRoute ? 3.6 : 1.8);
+          car.yaw += clamp(d, -1.3, 1.3) * k * dt;
+        }
+      }
+    }
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -2178,6 +2219,7 @@ export function createEngine({ canvas, ui, emit }) {
   emit('ready');
   emitPOIs();                 // seed the start-card "places found" badge from saved progress
   emit('music', musicPref);   // seed the 🔊 toggle state
+  emit('autosteer', autoSteer);
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
   if (document.hidden) paused = true;   // born in a background tab → don't render/stream until shown
   else raf = requestAnimationFrame(loop);
@@ -2243,6 +2285,7 @@ export function createEngine({ canvas, ui, emit }) {
     setBoost: (on) => { inp2.boost = !!on; },                        // nitro (hold while charged)
     setBrake: (on) => { inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
     toggleMusic: () => { musicPref = !musicPref; try { localStorage.setItem('dahill.music', musicPref ? '1' : '0'); } catch (e) { } if (mode === 'drive' && audio.setMusic) audio.setMusic(musicPref); emit('music', musicPref); return musicPref; },
+    toggleAutoSteer: () => { autoSteer = !autoSteer; try { localStorage.setItem('dahill.autosteer', autoSteer ? '1' : '0'); } catch (e) { } emit('autosteer', autoSteer); toast(autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return autoSteer; },
     // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
     // and let the robot drive there. range/scale mirror drawMinimap exactly.
     tapMinimap: (px, py, w, h) => { const range = 460, scale = (w / 2) / range; setDriveTarget(car.x + (px - w / 2) / scale, car.z + (py - h / 2) / scale); },
