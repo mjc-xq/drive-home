@@ -28,6 +28,8 @@ export default function App() {
   const [autoDrive, setAutoDrive] = useState(false);
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
   const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
+  const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
+  const arrivedTimer = useRef(0);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
   const [carCard, setCarCard] = useState({ name: '', spec: '', credit: '', show: false });
@@ -49,6 +51,10 @@ export default function App() {
         case 'driveCam': setCamName(p); break;
         case 'poiProgress': setPoi(p); break;
         case 'cars': setCars(p); break;
+        case 'arrived':
+          setArrived(p); clearTimeout(arrivedTimer.current);
+          arrivedTimer.current = setTimeout(() => setArrived(null), 3600);
+          break;
         case 'attribution': setAttribution(p); break;
         case 'carCard':
           setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
@@ -69,6 +75,7 @@ export default function App() {
       engine.dispose();
       clearTimeout(toastTimer.current);
       clearTimeout(cardTimer.current);
+      clearTimeout(arrivedTimer.current);
     };
   }, []);
 
@@ -255,6 +262,14 @@ export default function App() {
             <span style={{ opacity: .5, fontSize: 10, letterSpacing: '.04em' }}>{carCard.credit ? `${carCard.credit} · three.js` : 'three.js'}</span>
           </p>
         </div>
+        {arrived && (
+          <div id="arrivedCard">
+            <div className="arrivedFlag">🏁</div>
+            <h2>You made it to {arrived.label}!</h2>
+            {arrived.points > 0 && <p className="arrivedPts">+{arrived.points} points</p>}
+            <p className="arrivedTrip">🏁 Trip score {arrived.trip}</p>
+          </div>
+        )}
         {mode === 'scoop' && (
           <div id="shud">
             <div id="toolChip" className="chip">{scoopHud.name} <span>{scoopHud.bag}/{scoopHud.cap}</span></div>

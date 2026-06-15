@@ -271,21 +271,61 @@ export function createEngine({ canvas, ui, emit }) {
           const pts = 250 + Math.round(Math.abs(car.speed) * 4) + combo * 50;
           tripScore += pts;
           combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1; comboExpire = now + 6000; comboExpired = false;
-          toast(poi.msg + '  ·  +' + pts + ' pts  ·  🏆 ' + poiFound.size + '/' + POIS.length, 2800);
+          arriveCelebrate(poi.label, pts, now);   // the finish-line moment
         } else {
           toast(poi.msg + (fresh ? '  ·  🏆 ' + poiFound.size + '/' + POIS.length : ''), 2600);
+          if (audio.sfxChime) audio.sfxChime(fresh ? [659, 988, 1319] : [659, 988]);
         }
-        if (audio.sfxChime) audio.sfxChime(fresh ? [659, 988, 1319] : [659, 988]);
         emitScore({}); emitPOIs();
         if (poiFound.size === POIS.length && fresh) {
           checkFerrariUnlock();
           toast('🏆 ALL 5 places found! Trip score ' + tripScore + ' 🎉', 3800);
-          if (ui.fx && !reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 650); }
         } else if (fresh) {
           chainToNextPOI(now);   // road trip: point at the next place
         }
       }
     }
+  }
+
+  // ---- POI beacons: a tall light-pillar over each real place, drawn THROUGH the world
+  // (depthTest off) so you can literally SEE your school / Meemaw's from across the
+  // neighbourhood and drive toward it. Pink = still to find, green = found; the nearest
+  // un-found one pulses. Only in Drive, faded in by distance. ----
+  const poiBeacons = POIS.map(poi => {
+    const geo = new THREE.CylinderGeometry(1.6, 3.4, 160, 16, 1, true);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff5ad0, transparent: true, opacity: 0, depthWrite: false, depthTest: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
+    const m = new THREE.Mesh(geo, mat); m.position.set(poi.x, 74, poi.z); m.frustumCulled = false; m.renderOrder = 998; m.visible = false;
+    scene.add(m);
+    return { poi, mesh: m, mat };
+  });
+  function updateBeacons(now) {
+    let nearestKey = null, nd = 1e18;
+    for (const b of poiBeacons) { if (poiFound.has(b.poi.key)) continue; const d = Math.hypot(b.poi.x - car.x, b.poi.z - car.z); if (d < nd) { nd = d; nearestKey = b.poi.key; } }
+    for (const b of poiBeacons) {
+      const d = Math.hypot(b.poi.x - car.x, b.poi.z - car.z);
+      const show = d > 16 && d < 1200;                // hide once you're basically there
+      b.mesh.visible = show;
+      if (!show) continue;
+      const found = poiFound.has(b.poi.key);
+      b.mat.color.setHex(found ? 0x6dffa8 : 0xff7ad8);
+      const fade = clamp((d - 16) / 55, 0, 1) * clamp(1 - (d - 260) / 940, 0.3, 1);   // strong near, fades far
+      const pulse = (b.poi.key === nearestKey && !reduceMotion) ? 0.7 + 0.3 * Math.sin(now * 0.006) : 0.8;
+      b.mat.opacity = fade * 0.95 * pulse;
+    }
+  }
+  function hideBeacons() { for (const b of poiBeacons) b.mesh.visible = false; }
+
+  // the finish-line moment: a big gold burst, a fanfare, a beat of slow-mo + flash, and
+  // an 'ARRIVED' card. Fires for reaching a real place (or any nav destination).
+  function arriveCelebrate(label, points, now) {
+    const y = car.group ? car.group.position.y : 1;
+    for (let k = 0; k < 4; k++) spawnCoinBurst(car.x + (k - 1.5) * 1.2, car.z, y, now);   // ~24 sparks
+    if (audio.sfxChime) audio.sfxChime([523, 659, 784, 1047, 1319]);
+    if (!reduceMotion) {
+      timeScale = 0.45;
+      if (ui.fx) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 800); }
+    }
+    emit('arrived', { label, points: points || 0, trip: tripScore });
   }
 
   // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
@@ -1125,7 +1165,7 @@ export function createEngine({ canvas, ui, emit }) {
       const sg = run(1) >= run(-1) ? 1 : -1;
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
-    car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.group.visible = true; car.groundY = null;
+    car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; car.group.visible = true; car.groundY = null;
     camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null;
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
@@ -1143,6 +1183,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (camera.fov !== 46) { camera.fov = 46; camera.updateProjectionMatrix(); }
     for (const c of coins) c.mesh.visible = false;
     resetParticles();
+    hideBeacons();
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -1408,7 +1449,10 @@ export function createEngine({ canvas, ui, emit }) {
     // DECOUPLED controls: the left stick STEERS only (X). Throttle is the gas pedal
     // (or W), brake is the brake pedal (or S); just steering gently auto-accelerates
     // so kids who only push the stick still cruise. (Touch jy is no longer throttle.)
-    let jx = clamp(inp2.jx + inp2.kx + inp2.steer, -1, 1);
+    // keyboard arrows are binary ±1 — ramp them over ~0.15 s so desktop steering eases
+    // in like the touch stick instead of snapping (kSteer feeds jx; touch jx stays direct).
+    car.kSteer = (car.kSteer || 0) + (inp2.kx - (car.kSteer || 0)) * Math.min(1, dt * 7);
+    let jx = clamp(inp2.jx + car.kSteer + inp2.steer, -1, 1);
     let throttleTarget = 0, brake = 0;
     if (inp2.brake || inp2.ky > 0) brake = 1;
     else if (inp2.gas || inp2.ky < 0) throttleTarget = 1;
@@ -1438,9 +1482,9 @@ export function createEngine({ canvas, ui, emit }) {
     // ARRIVAL payoff — fires once whether you drove there yourself or auto-drove.
     if (DEST && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
       DEST.reached = true;
-      audio.sfxChime([523, 659, 784, 1047]);
-      toast('🎉 You made it to ' + DEST.label + '! 🏁', 3000);
-      if (ui.fx && !reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 650); }
+      // POIs run their own richer celebration via checkPOIs (45 m); this covers free-text
+      // address destinations that aren't one of the 5 places.
+      if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now);
     }
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
     // ground point. Speed scales with DISTANCE (drag far = floor it, near = creep),
@@ -1475,7 +1519,7 @@ export function createEngine({ canvas, ui, emit }) {
     const prof = (profActive && profActive.profile) || { accel: 1, top: 1, grip: 1, slip: 0.7 };
     // High top speed on the open road (maxF 100 u/s ≈ 224 mph × per-car). Lawns cap
     // ~44 mph with heavy drag so you slow right down and steer back to the street.
-    const maxF = (openRoad ? 100 : 24) * prof.top, maxR = -11;
+    const maxF = (openRoad ? 100 : 38) * prof.top, maxR = -11;   // off-road slower but not a glue trap
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -1509,13 +1553,13 @@ export function createEngine({ canvas, ui, emit }) {
       autoCap = clamp(Math.min(dNext, dDest) * 1.4, 22, maxF);
     }
     car.speed += acc * dt;
-    car.speed -= car.speed * (openRoad ? 0.1 : 0.5) * dt;   // lawns drag hard
+    car.speed -= car.speed * (openRoad ? 0.1 : 0.28) * dt;   // lawns drag more, but a loose surface — not a brick wall
     car.speed = clamp(car.speed, maxR, maxF);
     if (autoDrive) car.speed = Math.min(car.speed, autoCap);   // capped cruise while the robot drives
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
     // tighter turns at speed (makes corners) but softened up high so the open-road blast
     // the design invites stays pointable instead of going numb.
-    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.03);
+    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.05);   // tame yaw authority up top so the blast stays pointable
     car.steer += (steerTarget - car.steer) * Math.min(1, dt * 9);
     // brake-to-drift: stab the brake while turning fast (or the Space handbrake) and
     // the tail steps out; a handbrake yaw kick helps rotate through tight corners.
@@ -1527,6 +1571,10 @@ export function createEngine({ canvas, ui, emit }) {
     // exit), so we ease grip recovery while you're on the gas instead of killing it.
     const slip = prof.slip * (1 + hb * 1.9);
     car.vlat = (car.vlat || 0) + car.steer * Math.abs(car.speed) * slip * 1.4 * dt;
+    // POWER-SLIDE reward: on the gas, at speed, while turning → the throttle actively
+    // pushes the tail out (positive exit-yaw), so flooring it through a corner holds a
+    // satisfying drift instead of just leaning on grip recovery being eased.
+    if (throttle > 0.4 && !hb && Math.abs(car.speed) > 10) car.vlat += car.steer * throttle * prof.slip * 9 * dt;
     const gripK = (prof.grip * (hb ? 1.4 : 3.5)) * (throttle > 0.5 && !hb ? 0.55 : 1);
     car.vlat *= Math.exp(-gripK * dt);
     // spin-recovery assist: tail way out + you're NOT actively steering or handbraking
@@ -1620,6 +1668,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (audio.screech) audio.screech(slipping ? clamp((Math.abs(car.vlat) - 3) / 13, 0.18, 1) * (hb ? 1.1 : 1) : 0);
     tickParticles(now, dt);
     checkPOIs(now);
+    updateBeacons(now);
     // live rally clock (direct DOM, no React churn) + combo expiry
     if (ui.runTime) ui.runTime.textContent = fmtTime(runActive ? now - runStart : lastRunMs);
     if (!comboExpired && now > comboExpire) { comboExpired = true; combo = 0; emitScore({}); }
@@ -1776,6 +1825,7 @@ export function createEngine({ canvas, ui, emit }) {
         const v = clamp((f - 0.18) / 0.62, 0, 1) * 0.82 + fHi * 0.18;
         ui.fx.style.setProperty('--spd', v.toFixed(2));
         ui.fx.classList.toggle('on', v > 0.01);
+        ui.fx.classList.toggle('fast', v > 0.6);         // motion-blur the streaks only when truly flying
       }
     }
     audio.engineUpdate(car.speed, feelRef, throttle); // rev maps to the feel reference; load brightens it
@@ -1955,6 +2005,7 @@ export function createEngine({ canvas, ui, emit }) {
     nudge: applyP3DT,
     tiles: () => p3dtiles,
     setProcedural: (on) => { staticGroup.visible = on; },
+    beacons: () => poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +b.mat.opacity.toFixed(2), d: Math.round(Math.hypot(b.poi.x - car.x, b.poi.z - car.z)) })),
     // sweep spin; score = avg tile height at building centroids − at road points
     // (correct alignment => buildings high/roofs, roads low). Pick the max.
     calibrate: () => {

@@ -156,7 +156,12 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
     rgba(255,255,255,.55) 3deg,rgba(255,255,255,0) 3.5deg);
   -webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 30%,#000 72%);
   mask-image:radial-gradient(circle at 50% 50%,transparent 30%,#000 72%);
-  animation:rush .6s linear infinite}
+  animation:rush .6s linear infinite;transition:filter .25s ease}
+/* MOTION BLUR (cheap, mobile-safe): smear ONLY the streak layer when truly flying, so
+   the periphery reads as motion-blurred without a full-screen post pass. */
+#fx.fast::before{filter:blur(2.4px);background:repeating-conic-gradient(from 0deg at 50% 50%,
+    rgba(255,255,255,0) 0deg,rgba(255,255,255,0) 2deg,
+    rgba(255,255,255,.7) 3deg,rgba(255,255,255,0) 4deg)}
 /* edge vignette underneath, lighter, so the streaks pop */
 #fx::after{content:'';position:absolute;inset:0;opacity:calc(var(--spd,0) * .8);
   background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.36) 100%)}
@@ -211,6 +216,18 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #carCard.show{opacity:1;transform:translate(-50%,-50%)}
 #carCard h2{font-size:28px;font-weight:700;letter-spacing:.04em;font-style:italic}
 #carCard p{font-size:12px;opacity:.85;font-weight:600;letter-spacing:.16em;margin-top:4px}
+
+/* ---- arrival "finish line" card ---- */
+#arrivedCard{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%);text-align:center;
+  pointer-events:none;color:var(--txt);background:linear-gradient(160deg,rgba(40,180,99,.32),rgba(20,24,30,.62));
+  padding:18px 30px;border-radius:20px;border:1px solid rgba(120,230,150,.4);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--shadow);z-index:9;
+  animation:arriveIn .45s cubic-bezier(.2,1.3,.4,1)}
+#arrivedCard .arrivedFlag{font-size:40px;line-height:1}
+#arrivedCard h2{font-size:23px;font-weight:800;letter-spacing:.01em;margin-top:4px}
+#arrivedCard .arrivedPts{font-size:18px;font-weight:800;color:#9bf3bb;margin-top:6px}
+#arrivedCard .arrivedTrip{font-size:13px;font-weight:700;opacity:.85;margin-top:2px;color:#7fd4ff}
+@keyframes arriveIn{from{opacity:0;transform:translate(-50%,-50%) scale(.7)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 
 /* ---- toast ---- */
 #toast{position:absolute;top:24%;left:50%;transform:translate(-50%,-50%);padding:13px 22px;
