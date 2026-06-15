@@ -81,7 +81,13 @@ export function createEngine({ canvas, ui, emit }) {
     const N = (lat - GEO0.lat) * M_LAT, E = (lon - GEO0.lon) * M_LON;
     return [E - C[0], -(N - C[1])];
   }
+  function worldToGeo(x, z) {
+    const E = x + C[0], N = C[1] - z;
+    return { lat: GEO0.lat + N / M_LAT, lon: GEO0.lon + E / M_LON };
+  }
   let DEST = null;        // { x, z, label }
+  let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
+  let routeIdx = 0;       // current target waypoint along ROUTE
   let autoDrive = false;
 
   // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
@@ -925,33 +931,85 @@ export function createEngine({ canvas, ui, emit }) {
   // along it, stopped. Projects onto each segment (not just vertices) for accuracy.
   function resetToRoad() {
     if (mode !== 'drive') return;
-    let bx = car.x, bz = car.z, bd = Infinity, dirX = 0, dirZ = 1;
-    for (const r of S.roads) {
-      if (r.k !== 'residential' && r.k !== 'tertiary') continue;
-      for (let k = 0; k < r.p.length - 1; k++) {
-        const a = W(r.p[k]), b = W(r.p[k + 1]);
-        const vx = b[0] - a[0], vz = b[1] - a[1], len2 = vx * vx + vz * vz || 1;
-        let t = ((car.x - a[0]) * vx + (car.z - a[1]) * vz) / len2;
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const px = a[0] + vx * t, pz = a[1] + vz * t;
-        const d = (px - car.x) * (px - car.x) + (pz - car.z) * (pz - car.z);
-        if (d < bd) { bd = d; bx = px; bz = pz; const L = Math.sqrt(len2); dirX = vx / L; dirZ = vz / L; }
-      }
+    // Build the candidate segment list: the live Google route (real roads, works
+    // even far from home) if we have one, else EVERY mapped road (any type) near the
+    // neighbourhood — the old residential/tertiary-only filter missed the road the
+    // car was actually on, so it teleported you somewhere random.
+    let bx = car.x, bz = car.z, bd = Infinity, dirX = 0, dirZ = 1, found = false;
+    const consider = (ax, az, bx2, bz2) => {
+      const vx = bx2 - ax, vz = bz2 - az, len2 = vx * vx + vz * vz || 1;
+      let t = ((car.x - ax) * vx + (car.z - az) * vz) / len2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, pz = az + vz * t;
+      const d = (px - car.x) * (px - car.x) + (pz - car.z) * (pz - car.z);
+      if (d < bd) { bd = d; bx = px; bz = pz; const L = Math.sqrt(len2); dirX = vx / L; dirZ = vz / L; found = true; }
+    };
+    if (ROUTE && ROUTE.length > 1) {
+      for (let i = 0; i < ROUTE.length - 1; i++) consider(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
+    } else {
+      for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
+    if (!found) { toast('No road nearby — drive back toward town'); return; }
     car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
     camInit = false; inp2.navActive = false;
     audio.blip && audio.blip();
     toast('Back on the road 🛣️', 1000);
   }
-  // ---- destination / auto-drive ----
+  // ---- destination / routing / auto-drive ----
+  // Real road route from Google Directions (via the Maps JS SDK, which works in the
+  // browser — the Directions web service is CORS-blocked). Falls back to a straight
+  // line if the SDK/Directions API isn't enabled on the key.
+  let _mapsSDK = null;
+  function loadMapsSDK() {
+    if (window.google && window.google.maps && window.google.maps.DirectionsService) return Promise.resolve(window.google.maps);
+    if (_mapsSDK) return _mapsSDK;
+    const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
+    if (!key) return Promise.reject(new Error('no key'));
+    _mapsSDK = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + key;
+      s.async = true; s.defer = true;
+      s.onload = () => (window.google && window.google.maps) ? res(window.google.maps) : rej(new Error('maps unavailable'));
+      s.onerror = () => rej(new Error('maps script failed'));
+      document.head.appendChild(s);
+    });
+    return _mapsSDK;
+  }
+  function fetchRoute(destLat, destLon) {
+    loadMapsSDK().then(maps => {
+      const o = worldToGeo(car.x, car.z);
+      new maps.DirectionsService().route(
+        { origin: { lat: o.lat, lng: o.lon }, destination: { lat: destLat, lng: destLon }, travelMode: 'DRIVING' },
+        (result, status) => {
+          if (status === 'OK' && result.routes && result.routes[0] && DEST) {
+            const pts = result.routes[0].overview_path.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
+            if (pts.length > 1) { ROUTE = pts; routeIdx = 0; toast('🗺️ Route ready — follow the line', 1500); }
+          } else console.warn('[directions] no route:', status);
+        }
+      );
+    }).catch(e => console.warn('[maps sdk] route unavailable, using straight line —', e && e.message));
+  }
   function setDestination(lat, lon, label) {
     const w = geoToWorld(lat, lon);
     DEST = { x: w[0], z: w[1], label: label || 'Destination' };
+    ROUTE = null; routeIdx = 0;
     emit('dest', { label: DEST.label });
     const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1);
-    toast('📍 ' + DEST.label + ' · ' + km + ' km — follow the line', 2200);
+    toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200);
+    fetchRoute(lat, lon);
   }
-  function clearDestination() { DEST = null; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; emit('dest', null); emit('autodrive', false); }
+  function clearDestination() { DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; emit('dest', null); emit('autodrive', false); }
+  // Live nav target: a look-ahead point ~32 m along the route from the car (so the
+  // guide ribbon + auto-drive follow the road smoothly instead of snapping between
+  // dense waypoints). Falls back to the destination (straight line) with no route.
+  function navTarget() {
+    if (!ROUTE || routeIdx >= ROUTE.length) return DEST;
+    let acc = 0, px = car.x, pz = car.z;
+    for (let i = routeIdx; i < ROUTE.length; i++) {
+      acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
+      if (acc >= 32) return ROUTE[i];
+    }
+    return DEST;
+  }
   function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Auto-drive ON' : 'Auto-drive off', 1100); }
   // 2D minimap (north-up, centred on the car): roads, house, destination + line, car.
   function drawMinimap(ctx, w, h) {
@@ -967,8 +1025,15 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.stroke();
     const hp = toPx(0, 0); ctx.fillStyle = '#4ea1ff'; ctx.beginPath(); ctx.arc(hp[0], hp[1], 3, 0, 7); ctx.fill();
     if (DEST) {
+      ctx.strokeStyle = '#ffc21e'; ctx.lineWidth = 2.4; ctx.beginPath();
+      if (ROUTE && ROUTE.length > 1) {                     // road-following route
+        const s0 = toPx(ROUTE[0].x, ROUTE[0].z); ctx.moveTo(s0[0], s0[1]);
+        for (let i = 1; i < ROUTE.length; i++) { const p = toPx(ROUTE[i].x, ROUTE[i].z); ctx.lineTo(p[0], p[1]); }
+      } else {                                             // straight line (no route yet)
+        const dp = toPx(DEST.x, DEST.z); ctx.moveTo(cx, cy); ctx.lineTo(dp[0], dp[1]);
+      }
+      ctx.stroke();
       const dp = toPx(DEST.x, DEST.z);
-      ctx.strokeStyle = '#ffc21e'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(dp[0], dp[1]); ctx.stroke();
       ctx.fillStyle = '#ffc21e'; ctx.beginPath(); ctx.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); ctx.fill();
     }
     const hx = Math.sin(car.yaw), hz = Math.cos(car.yaw), pxv = Math.cos(car.yaw), pzv = -Math.sin(car.yaw);
@@ -994,6 +1059,7 @@ export function createEngine({ canvas, ui, emit }) {
     { name: 'Cruise', dist: 9, h: 34, ahead: 11, drone: true, topdown: false },
     { name: 'Close', dist: 11, h: 5, ahead: 5, drone: false, topdown: false },
     { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true },
+    { name: 'Aerial', aerial: true },   // the Explore look (high orbit) while driving
   ];
   function cycleCamera() {
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
@@ -1056,21 +1122,33 @@ export function createEngine({ canvas, ui, emit }) {
     // mix stick (jx/jy) + keyboard (kx/ky) + dedicated touch steer/gas/brake
     let jx = clamp(inp2.jx + inp2.kx + inp2.steer, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     let throttle = clamp(Math.max(0, -jy) + inp2.gas, 0, 1), brake = clamp(Math.max(0, jy) + inp2.brake, 0, 1);
-    // auto-drive: feed the destination into the steer-to-target override below; it
-    // beelines (cuts corners) at a capped cruise speed, arriving when close.
+    // advance the route waypoint as the car passes it (drives the guide + auto-drive)
+    if (ROUTE && routeIdx < ROUTE.length && Math.hypot(ROUTE[routeIdx].x - car.x, ROUTE[routeIdx].z - car.z) < 16) routeIdx++;
+    // auto-drive: steer toward the look-ahead route point (follows roads) at a capped
+    // cruise speed, arriving when close to the destination.
     if (autoDrive && DEST) {
-      if (Math.hypot(DEST.x - car.x, DEST.z - car.z) < 9) { autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🎉 Arrived at ' + DEST.label, 2000); }
-      else { inp2.navActive = true; inp2.navX = DEST.x; inp2.navZ = DEST.z; }
+      if (Math.hypot(DEST.x - car.x, DEST.z - car.z) < 10) { autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🎉 Arrived at ' + DEST.label, 2000); }
+      else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
     }
-    // Top-down draw-to-drive override: steer toward the finger's ground point and
-    // auto-throttle, easing off (and braking) as the car reaches it.
+    // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
+    // ground point. Speed scales with DISTANCE (drag far = floor it, near = creep),
+    // and if the target is BEHIND the car it reverses toward it instead of looping.
     if (inp2.navActive) {
       const dx = inp2.navX - car.x, dz = inp2.navZ - car.z, dd = Math.hypot(dx, dz);
       let dyaw = Math.atan2(dx, dz) - car.yaw;
       while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-      jx = clamp(-dyaw * 1.6, -1, 1);                       // steer toward the target heading
-      throttle = dd > 3 ? clamp(0.45 + (1 - Math.abs(dyaw) / Math.PI) * 0.55, 0, 1) : 0;
-      brake = (dd <= 3 && car.speed > 4) ? 0.5 : 0;
+      const farT = clamp(dd / 40, 0, 1);                   // 0 near → 1 at/over 40 m away
+      if (dd < 2.5) { jx = 0; throttle = 0; brake = Math.abs(car.speed) > 2 ? 0.7 : 0; }
+      else if (Math.abs(dyaw) > 1.95) {                    // target is behind → reverse toward it
+        const rdyaw = dyaw > 0 ? dyaw - Math.PI : dyaw + Math.PI;
+        jx = clamp(rdyaw * 2.0, -1, 1);
+        throttle = 0; brake = clamp(0.35 + farT * 0.45, 0, 0.85);   // brake reverses once stopped
+      } else {                                             // drive forward toward it
+        jx = clamp(-dyaw * 2.0, -1, 1);
+        const align = clamp(1 - Math.abs(dyaw) / 1.7, 0.22, 1);     // ease off through sharp turns
+        throttle = clamp((0.22 + farT * 0.78) * align, 0, 1);
+        brake = 0;
+      }
     }
     if (throttle > 0.1 || brake > 0.1) showT = 0;
     const road = onRoad(car.x, car.z);
@@ -1081,11 +1159,13 @@ export function createEngine({ canvas, ui, emit }) {
     // + low drag to actually reach it, strong brakes to scrub it, and off-road stays
     // slow so the street is the fast line. Steering grip rises hard with speed so the
     // car stays planted instead of spinning out at the top end.
+    // High top speed (maxF 140 u/s ≈ 313 mph) but a GENTLE build: low accel + low
+    // road drag means it keeps pulling toward the top end instead of lurching there.
     const maxF = road ? 140 : 28, maxR = -10;
-    let acc = (road ? 70 : 14) * throttle;
-    if (brake > 0.1) acc = car.speed > 0.5 ? -75 * brake : -14 * brake;
+    let acc = (road ? 14 : 8) * throttle;
+    if (brake > 0.1) acc = car.speed > 0.5 ? -42 * brake : -11 * brake;
     car.speed += acc * dt;
-    car.speed -= car.speed * (road ? 0.5 : 0.92) * dt;
+    car.speed -= car.speed * (road ? 0.1 : 0.85) * dt;
     car.speed = clamp(car.speed, maxR, maxF);
     if (autoDrive) car.speed = Math.min(car.speed, 45);   // capped cruise while the robot drives
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
@@ -1144,15 +1224,19 @@ export function createEngine({ canvas, ui, emit }) {
       navMarker.visible = inp2.navActive && !autoDrive;   // hide the finger ring during auto-drive
       if (navMarker.visible) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
     }
-    // address guide: a ribbon on the road toward the destination + a pin when near
+    // address guide: a ribbon pointing along the ROUTE (toward the look-ahead point,
+    // so it bends with the road), + a pin at the destination when near.
     if (DEST) {
-      const dx = DEST.x - car.x, dz = DEST.z - car.z, dd = Math.hypot(dx, dz) || 1;
-      const ux = dx / dd, uz = dz / dd, len = Math.min(dd, 160);
+      const t = navTarget();
+      const dx = t.x - car.x, dz = t.z - car.z, dd = Math.hypot(dx, dz) || 1;
+      const ux = dx / dd, uz = dz / dd;
+      const start = 5, len = clamp(dd - start, 4, 120);   // start ahead of the car (don't tint it)
       guideLine.visible = true;
-      guideLine.position.set(car.x + ux * len / 2, yC + 0.05, car.z + uz * len / 2);
+      guideLine.position.set(car.x + ux * (start + len / 2), yC + 0.05, car.z + uz * (start + len / 2));
       guideLine.rotation.set(0, Math.atan2(ux, uz), 0);
       guideLine.scale.set(2.4, 1, len);
-      destPin.visible = dd < 700;
+      const ddDest = Math.hypot(DEST.x - car.x, DEST.z - car.z);
+      destPin.visible = ddDest < 700;
       if (destPin.visible) destPin.position.set(DEST.x, terrainAt(DEST.x, DEST.z) + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, DEST.z);
     } else { guideLine.visible = false; destPin.visible = false; }
     // The flat aerial patch under the car read as an ugly disc (a different, lower-res
@@ -1178,6 +1262,20 @@ export function createEngine({ canvas, ui, emit }) {
       cx2 = car.x + (cx2 - car.x) * g; cy2 = yC + 1.0 + (cy2 - yC - 1.0) * g; cz2 = car.z + (cz2 - car.z) * g;
       camera.position.set(cx2, cy2, cz2);
       camera.lookAt(car.x, yC + 0.7, car.z);
+    } else if (DRIVE_CAMS[camMode].aerial) {
+      // Explore's look while driving: the same high orbit framing (az/polar/range as
+      // the page-load Explore view), just centred on the car. Drag orbits it, pinch
+      // zooms, and the altitude is slow-smoothed so it floats like the aerial view.
+      camera.up.set(0, 1, 0);
+      const a = 0.45 + camOrbit.yaw;
+      const po = clamp(0.92 - camOrbit.pitch * 0.45, 0.18, 1.4);
+      const r = 185 * czoom;
+      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * 1.0);
+      const camT = _camT.set(car.x + r * Math.sin(po) * Math.sin(a), camGroundRef + r * Math.cos(po), car.z + r * Math.sin(po) * Math.cos(a));
+      if (!camInit) { camV.copy(camT); camInit = true; }
+      camV.lerp(camT, Math.min(1, dt * 4.6));
+      camera.position.copy(camV);
+      camera.lookAt(car.x, camGroundRef + 1, car.z);
     } else if (DRIVE_CAMS[camMode].topdown) {
       const CAM = DRIVE_CAMS[camMode];
       // almost directly overhead, but offset a little behind and aimed a touch
