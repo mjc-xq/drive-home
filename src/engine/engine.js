@@ -331,13 +331,13 @@ export function createEngine({ canvas, ui, emit }) {
     // shared materials: one cab + 7 body colours, reused across all cars (was 22 clones)
     const bodyMats = cols.map(c => new THREE.MeshStandardMaterial({ color: c, metalness: 0.35, roughness: 0.55 }));
     const cabMat = new THREE.MeshStandardMaterial({ color: 0x1b2735, metalness: 0.2, roughness: 0.35 });
-    for (let i = 0; i < 11 && tSegs.length; i++) {
+    for (let i = 0; i < 8 && tSegs.length; i++) {
       const g = new THREE.Group();
       const body = new THREE.Mesh(bodyGeo, bodyMats[i % bodyMats.length]); body.position.y = 0.6; body.castShadow = true;
       const cab = new THREE.Mesh(cabGeo, cabMat); cab.position.set(0, 1.18, -0.25);
       g.add(body); g.add(cab); g.frustumCulled = false; g.visible = false; scene.add(g);
-      const seg = tSegs[(i * 7 + 3) % tSegs.length];
-      traffic.push({ group: g, a: seg[0], b: seg[1], t: (i * 0.17) % 1, speed: 7 + (i % 5) * 2.4, near: false });
+      const seg = tSegs[(i * 9 + 3) % tSegs.length];
+      traffic.push({ group: g, a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false });
     }
     traffic._segs = tSegs;
   }
@@ -356,9 +356,22 @@ export function createEngine({ canvas, ui, emit }) {
     for (const c of traffic) {
       c.group.visible = true;
       const dx = c.b[0] - c.a[0], dz = c.b[1] - c.a[1], len = Math.hypot(dx, dz) || 1;
-      c.t += (c.speed * dt) / len;
+      const fdx = dx / len, fdz = dz / len, rgx = fdz, rgz = -fdx;   // forward + right (for lanes)
+      let cxp = c.a[0] + dx * c.t, czp = c.a[1] + dz * c.t;          // centreline point
+      // YIELD: when the player is close and roughly ahead, the car slows right down (and
+      // swings wide, below) so it's never an unavoidable head-on — you always have room.
+      const toP = Math.hypot(car.x - cxp, car.z - czp);
+      const ahead = (car.x - cxp) * fdx + (car.z - czp) * fdz;
+      const yielding = toP < 28 && ahead > -6;
+      const spdMul = yielding ? clamp((toP - 7) / 20, 0.06, 1) : 1;
+      c.t += (c.speed * spdMul * dt) / len;
       if (c.t >= 1) { nextTrafficSeg(c); continue; }
-      const x = c.a[0] + dx * c.t, z = c.a[1] + dz * c.t;
+      cxp = c.a[0] + dx * c.t; czp = c.a[1] + dz * c.t;
+      // keep to the RIGHT of the centreline (a passable lane); if the player is bearing
+      // down in this car's lane, swing wide to the OTHER side to clear a path.
+      const pPerp = (car.x - cxp) * rgx + (car.z - czp) * rgz;       // >0 = player on the car's right
+      const off = (yielding && pPerp > -1.2) ? -2.0 : 1.5;
+      const x = cxp + rgx * off, z = czp + rgz * off;
       c.x = x; c.z = z;
       c.group.position.set(x, groundAt(x, z) + 0.05, z);
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);
@@ -1754,7 +1767,7 @@ export function createEngine({ canvas, ui, emit }) {
     // falloff and net yaw rate climbs all the way up, making the flat-out blast twitchier
     // the faster you go. Authority now peaks ~mid-speed (~35 mph) and tapers above so a
     // 200 mph straight tracks with small corrections.
-    const yawDamp = clamp(1 - (Math.abs(car.speed) - 16) * 0.012, 0.42, 1);
+    const yawDamp = clamp(1 - (Math.abs(car.speed) - 20) * 0.008, 0.55, 1);   // keep enough authority to DODGE at speed
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
@@ -1804,15 +1817,16 @@ export function createEngine({ canvas, ui, emit }) {
         hitThisFrame = true;
       } else if (fast && d2 < (rr + 1.6) * (rr + 1.6)) nearThisFrame = true;
     }
-    // TRAFFIC: weave past it for a near-miss combo, clip it for a bounce + crunch
+    // TRAFFIC: weave past it for a near-miss combo, clip it for a soft deflect (it yields
+    // + keeps its lane, so a tap is a glancing bump you keep rolling through, not a wall).
     for (const c of traffic) {
       if (c.x === undefined) continue;
-      const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 2.6 + rad;
+      const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 1.9 + rad;
       if (d2 < rr * rr && d2 > 1e-6) {
         const d = Math.sqrt(d2); nx = c.x + dx / d * rr; nz = c.z + dz / d * rr;
-        if (carHit(Math.abs(car.speed), 'car')) car.speed *= 0.4;
+        if (carHit(Math.abs(car.speed), 'car')) car.speed *= 0.72;
         hitThisFrame = true;
-      } else if (fast && d2 < (rr + 2.2) * (rr + 2.2)) nearThisFrame = true;
+      } else if (fast && d2 < (rr + 2.4) * (rr + 2.4)) nearThisFrame = true;
     }
     if (nearThisFrame && !hitThisFrame) nearMiss(now);   // Burnout-style close-call reward
     // Roam far across the streamed Google tiles. The procedural neighborhood (and
