@@ -65,6 +65,24 @@ export function createEngine({ canvas, ui, emit }) {
   const world = buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GRID_ANG, aerialUrl });
   const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat, staticGroup, aerialMat } = world;
 
+  // ---- minimap + address navigation ----
+  // World-frame road segments for the minimap (drawn as a 2D map).
+  const roadSegs = [];
+  for (const r of S.roads) {
+    if (r.k !== 'residential' && r.k !== 'tertiary') continue;
+    for (let k = 0; k < r.p.length - 1; k++) roadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
+  }
+  // geo -> world: the orig/tile frame is anchored at 1840 Dahill Lane (flat tangent
+  // plane — fine across the East Bay for a toy nav line/auto-drive).
+  const GEO0 = { lat: 37.6835313, lon: -122.0686199 };
+  const M_LAT = 110540, M_LON = Math.cos(GEO0.lat * Math.PI / 180) * 111320;
+  function geoToWorld(lat, lon) {
+    const N = (lat - GEO0.lat) * M_LAT, E = (lon - GEO0.lon) * M_LON;
+    return [E - C[0], -(N - C[1])];
+  }
+  let DEST = null;        // { x, z, label }
+  let autoDrive = false;
+
   // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
   // that follows the car and fades into the 3D photoreal, masking the melty
   // photogrammetry right around the actor. uvAt is affine, so the aerial UV is
@@ -125,6 +143,16 @@ export function createEngine({ canvas, ui, emit }) {
     new THREE.MeshBasicMaterial({ color: 0x3a7d44, depthTest: false, transparent: true, opacity: 0.92 }));
   compostMarker.rotation.x = Math.PI; compostMarker.renderOrder = 20; compostMarker.visible = false; compostMarker.frustumCulled = false;
   scene.add(compostMarker);
+  // Address guide: a flat ribbon on the road from the car toward the destination
+  // (drawn on top so road bumps don't hide it), + a tall pin at the destination.
+  const guideGeo = new THREE.PlaneGeometry(1, 1); guideGeo.rotateX(-Math.PI / 2);
+  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0xffc21e, transparent: true, opacity: 0.5, depthWrite: false, depthTest: false }));
+  guideLine.renderOrder = 17; guideLine.visible = false; guideLine.frustumCulled = false;
+  scene.add(guideLine);
+  const destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
+  destPin.rotation.x = Math.PI; destPin.renderOrder = 21; destPin.visible = false; destPin.frustumCulled = false;
+  scene.add(destPin);
 
   // Scoop renders the procedural world, so Drew collides with every visible
   // procedural tree (they sit along the streets, clear of the backyard sanctuary).
@@ -875,6 +903,7 @@ export function createEngine({ canvas, ui, emit }) {
     camera.up.set(0, 1, 0);
     hideJoy();
     navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
+    guideLine.visible = false; destPin.visible = false;
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -905,6 +934,41 @@ export function createEngine({ canvas, ui, emit }) {
     camInit = false; inp2.navActive = false;
     audio.blip && audio.blip();
     toast('Back on the road 🛣️', 1000);
+  }
+  // ---- destination / auto-drive ----
+  function setDestination(lat, lon, label) {
+    const w = geoToWorld(lat, lon);
+    DEST = { x: w[0], z: w[1], label: label || 'Destination' };
+    emit('dest', { label: DEST.label });
+    const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1);
+    toast('📍 ' + DEST.label + ' · ' + km + ' km — follow the line', 2200);
+  }
+  function clearDestination() { DEST = null; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; emit('dest', null); emit('autodrive', false); }
+  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Auto-drive ON' : 'Auto-drive off', 1100); }
+  // 2D minimap (north-up, centred on the car): roads, house, destination + line, car.
+  function drawMinimap(ctx, w, h) {
+    ctx.clearRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, range = 460, scale = (w / 2) / range;
+    const toPx = (wx, wz) => [cx + (wx - car.x) * scale, cy + (wz - car.z) * scale];
+    ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath();
+    for (const s of roadSegs) {
+      const a = toPx(s[0][0], s[0][1]), b = toPx(s[1][0], s[1][1]);
+      if ((a[0] < -10 && b[0] < -10) || (a[0] > w + 10 && b[0] > w + 10) || (a[1] < -10 && b[1] < -10) || (a[1] > h + 10 && b[1] > h + 10)) continue;
+      ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+    }
+    ctx.stroke();
+    const hp = toPx(0, 0); ctx.fillStyle = '#4ea1ff'; ctx.beginPath(); ctx.arc(hp[0], hp[1], 3, 0, 7); ctx.fill();
+    if (DEST) {
+      const dp = toPx(DEST.x, DEST.z);
+      ctx.strokeStyle = '#ffc21e'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(dp[0], dp[1]); ctx.stroke();
+      ctx.fillStyle = '#ffc21e'; ctx.beginPath(); ctx.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); ctx.fill();
+    }
+    const hx = Math.sin(car.yaw), hz = Math.cos(car.yaw), pxv = Math.cos(car.yaw), pzv = -Math.sin(car.yaw);
+    ctx.fillStyle = '#d94f1e'; ctx.beginPath();
+    ctx.moveTo(cx + hx * 7, cy + hz * 7);
+    ctx.lineTo(cx - hx * 5 + pxv * 4, cy - hz * 5 + pzv * 4);
+    ctx.lineTo(cx - hx * 5 - pxv * 4, cy - hz * 5 - pzv * 4);
+    ctx.closePath(); ctx.fill();
   }
 
   const camV = new THREE.Vector3();
@@ -984,6 +1048,12 @@ export function createEngine({ canvas, ui, emit }) {
     // mix stick (jx/jy) + keyboard (kx/ky) + dedicated touch steer/gas/brake
     let jx = clamp(inp2.jx + inp2.kx + inp2.steer, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     let throttle = clamp(Math.max(0, -jy) + inp2.gas, 0, 1), brake = clamp(Math.max(0, jy) + inp2.brake, 0, 1);
+    // auto-drive: feed the destination into the steer-to-target override below; it
+    // beelines (cuts corners) at a capped cruise speed, arriving when close.
+    if (autoDrive && DEST) {
+      if (Math.hypot(DEST.x - car.x, DEST.z - car.z) < 9) { autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🎉 Arrived at ' + DEST.label, 2000); }
+      else { inp2.navActive = true; inp2.navX = DEST.x; inp2.navZ = DEST.z; }
+    }
     // Top-down draw-to-drive override: steer toward the finger's ground point and
     // auto-throttle, easing off (and braking) as the car reaches it.
     if (inp2.navActive) {
@@ -999,14 +1069,19 @@ export function createEngine({ canvas, ui, emit }) {
     // Much higher top speed on the road (terminal ≈ acc/drag, clamped to maxF), but
     // far slower off-road so you're rewarded for staying on the street. Steering
     // grip rises with speed so it's stable, not twitchy, at the new top end.
-    const maxF = road ? 52 : 22, maxR = -8;
-    let acc = (road ? 28 : 11) * throttle;
-    if (brake > 0.1) acc = car.speed > 0.5 ? -34 * brake : -10 * brake;
+    // Hundreds of mph on the road: maxF 140 u/s ≈ 313 mph (mph = u*2.237). Big accel
+    // + low drag to actually reach it, strong brakes to scrub it, and off-road stays
+    // slow so the street is the fast line. Steering grip rises hard with speed so the
+    // car stays planted instead of spinning out at the top end.
+    const maxF = road ? 140 : 28, maxR = -10;
+    let acc = (road ? 70 : 14) * throttle;
+    if (brake > 0.1) acc = car.speed > 0.5 ? -75 * brake : -14 * brake;
     car.speed += acc * dt;
-    car.speed -= car.speed * (road ? 0.46 : 0.92) * dt;
+    car.speed -= car.speed * (road ? 0.5 : 0.92) * dt;
     car.speed = clamp(car.speed, maxR, maxF);
+    if (autoDrive) car.speed = Math.min(car.speed, 45);   // capped cruise while the robot drives
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
-    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.085);
+    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.1);
     car.steer += (steerTarget - car.steer) * Math.min(1, dt * 9);
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * dt;
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
@@ -1039,7 +1114,7 @@ export function createEngine({ canvas, ui, emit }) {
     // its collision) only spans ~±340 m; past that the car rides the real
     // photoreal road directly (see actorGroundY), so the only bound is a generous
     // sanity ring at the metro scale where the flat-earth frame stays accurate.
-    const lim = 4000;
+    const lim = 30000;   // 30 km: reach the East Bay address presets (Oakland ≈ 22 km) across the streamed tiles
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
     car.x = nx; car.z = nz;
     // Ride the real photoreal ROAD surface (canopy-skipped + clamped to topology),
@@ -1058,9 +1133,20 @@ export function createEngine({ canvas, ui, emit }) {
     car.group.rotateZ(-pitch);
     car.group.rotateX(roll);
     if (navMarker) {
-      navMarker.visible = inp2.navActive;
-      if (inp2.navActive) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
+      navMarker.visible = inp2.navActive && !autoDrive;   // hide the finger ring during auto-drive
+      if (navMarker.visible) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
     }
+    // address guide: a ribbon on the road toward the destination + a pin when near
+    if (DEST) {
+      const dx = DEST.x - car.x, dz = DEST.z - car.z, dd = Math.hypot(dx, dz) || 1;
+      const ux = dx / dd, uz = dz / dd, len = Math.min(dd, 160);
+      guideLine.visible = true;
+      guideLine.position.set(car.x + ux * len / 2, yC + 0.05, car.z + uz * len / 2);
+      guideLine.rotation.set(0, Math.atan2(ux, uz), 0);
+      guideLine.scale.set(2.4, 1, len);
+      destPin.visible = dd < 700;
+      if (destPin.visible) destPin.position.set(DEST.x, terrainAt(DEST.x, DEST.z) + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, DEST.z);
+    } else { guideLine.visible = false; destPin.visible = false; }
     // The flat aerial patch under the car read as an ugly disc (a different, lower-res
     // texture than the Google tiles). Keep the car riding the same sampled road
     // HEIGHT (actorGroundY), but leave the patch hidden so only the photoreal shows.
@@ -1145,7 +1231,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- loop ----------
   const dirV = new THREE.Vector3();
   let prev = performance.now();
-  let raf = 0, paused = false, ctxLost = false;
+  let raf = 0, paused = false, ctxLost = false, _miniT = 0;
   // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
   // in view whenever the photoreal world is shown. Throttled; emits only on change.
   const _attrTarget = []; let _attrStr = '', _attrT = 0;
@@ -1185,6 +1271,9 @@ export function createEngine({ canvas, ui, emit }) {
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); p3dtiles.update(); updateAttribution(now); }
     else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
+    if (mode === 'drive' && ui.minimap && now - _miniT > 80) {       // ~12fps minimap
+      _miniT = now; const ctx = ui.minimap.getContext('2d'); if (ctx) drawMinimap(ctx, ui.minimap.width, ui.minimap.height);
+    }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
@@ -1273,7 +1362,8 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.drew.react(moves[Math.floor(Math.random() * moves.length)]);
       if (audio.blip) audio.blip();
     },
-    focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, resetToRoad, dispose,
+    focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, resetToRoad,
+    setDestination, clearDestination, toggleAutoDrive, dispose,
     get mode() { return mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging

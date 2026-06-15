@@ -17,3 +17,4 @@ drive-*.jpeg
 # scratch screenshots at repo root (debug only)
 /*.jpeg
 /*.png
+/.playwright-mcp/

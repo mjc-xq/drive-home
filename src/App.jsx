@@ -7,7 +7,7 @@ import { createEngine } from './engine/engine.js';
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null });
+  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -17,6 +17,11 @@ export default function App() {
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [nearCar, setNearCar] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);        // address picker open
+  const [navAddr, setNavAddr] = useState('');           // custom address input
+  const [navErr, setNavErr] = useState('');
+  const [dest, setDest] = useState(null);               // { label }
+  const [autoDrive, setAutoDrive] = useState(false);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
   const [carCard, setCarCard] = useState({ name: '', spec: '', credit: '', show: false });
@@ -32,6 +37,8 @@ export default function App() {
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'nearCar': setNearCar(p); break;
+        case 'dest': setDest(p); if (!p) setAutoDrive(false); break;
+        case 'autodrive': setAutoDrive(p); break;
         case 'attribution': setAttribution(p); break;
         case 'carCard':
           setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
@@ -56,6 +63,28 @@ export default function App() {
   }, []);
 
   const eng = () => engineRef.current;
+
+  // Quick destinations (live-geocoded for accuracy; hardcoded fallback so they
+  // always work even if the Geocoding API isn't enabled on the key).
+  const PRESETS = [
+    { label: "Meemaw's", q: '4311 Circle Drive, Castro Valley, CA', ll: [37.7205, -122.0775] },
+    { label: 'Canyon Middle', q: 'Canyon Middle School, Castro Valley, CA', ll: [37.7054126, -122.0518696] },
+    { label: 'Stanton Elem', q: 'Stanton Elementary School, Castro Valley, CA', ll: [37.6905, -122.079] },
+    { label: "Dad's work", q: '807 Broadway, Oakland, CA', ll: [37.8004778, -122.2739559] },
+  ];
+  const goTo = async (q, label, fallback) => {
+    const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
+    if (key) {
+      try {
+        const r = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${key}`);
+        const j = await r.json();
+        const loc = j.results && j.results[0] && j.results[0].geometry && j.results[0].geometry.location;
+        if (loc) { eng().setDestination(loc.lat, loc.lng, label || q); setNavOpen(false); return; }
+      } catch (e) { /* fall back below */ }
+    }
+    if (fallback) { eng().setDestination(fallback[0], fallback[1], label || q); setNavOpen(false); }
+    else setNavErr('Couldn’t find that address');
+  };
 
   return (
     <>
@@ -111,6 +140,34 @@ export default function App() {
             <button id="carSwap" className="btn icon" aria-label="Change vehicle" onClick={() => eng().cycleCar()}>🚗</button>
             <button id="camBtn" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
             <button id="resetRoad" className="btn icon" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
+            <button id="navBtn" className="btn icon" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
+            {/* minimap (top-left) */}
+            <div id="minimapWrap" className="chip">
+              <canvas id="minimap" width={132} height={132} ref={el => (uiRefs.current.minimap = el)} />
+              {dest && (
+                <div id="destBar">
+                  <span>📍 {dest.label}</span>
+                  <button className={'mini' + (autoDrive ? ' on' : '')} onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖 Auto' : 'Auto'}</button>
+                  <button className="mini" aria-label="Clear destination" onClick={() => eng().clearDestination()}>✕</button>
+                </div>
+              )}
+            </div>
+            {navOpen && (
+              <div id="navPanel" className="startCard">
+                <h3>Drive to…</h3>
+                <div className="navPresets">
+                  {PRESETS.map(p => (
+                    <button key={p.label} className="btn" onClick={() => goTo(p.q, p.label, p.ll)}>{p.label}</button>
+                  ))}
+                </div>
+                <form onSubmit={e => { e.preventDefault(); if (navAddr.trim()) goTo(navAddr.trim(), navAddr.trim(), null); }}>
+                  <input value={navAddr} onChange={e => { setNavErr(''); setNavAddr(e.target.value); }} placeholder="Type any address…" />
+                  <button type="submit" className="btn primary">Go</button>
+                </form>
+                {navErr && <p className="navErr">{navErr}</p>}
+                <button className="btn navClose" onClick={() => setNavOpen(false)}>Close</button>
+              </div>
+            )}
           </div>
         )}
         <div id="carCard" className={carCard.show ? 'show' : ''}>
