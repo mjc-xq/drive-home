@@ -97,6 +97,7 @@ export function createEngine({ canvas, ui, emit }) {
   let musicPref = (() => { try { return localStorage.getItem('dahill.music') !== '0'; } catch (e) { return true; } })();   // soundtrack on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
+  let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
   let routeIdx = 0;       // current target waypoint along ROUTE
   let autoDrive = false;
@@ -951,7 +952,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
   // path with one finger. (Joystick/keyboard still drive the other camera views.)
-  let navPtr = null;
+  let navPtr = null, navDownX = 0, navDownY = 0, navMoved = false;   // tap (route along roads) vs drag (freeform draw-to-drive)
   const _navRay = new THREE.Raycaster(), _navNDC = new THREE.Vector2();
   const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
   // drag-to-drive ("trace") is available in the overhead-style views (Top-down AND Aerial)
@@ -975,7 +976,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (mode !== 'explore') {
       canvas.setPointerCapture(e.pointerId);
       // Top-down "draw to drive": any drag steers the car to the finger.
-      if (driveTopDown()) { navPtr = e.pointerId; showT = 0; setNavFromPointer(e.clientX, e.clientY); return; }
+      if (driveTopDown()) { navPtr = e.pointerId; navDownX = e.clientX; navDownY = e.clientY; navMoved = false; showT = 0; setNavFromPointer(e.clientX, e.clientY); return; }
       const VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
       // Roblox convention: a press in the lower-left region SPAWNS the
       // thumbstick under the thumb; everything else is camera look.
@@ -1009,7 +1010,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   function onPointerMove(e) {
     if (mode !== 'explore') {
-      if (e.pointerId === navPtr) { setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
+      if (e.pointerId === navPtr) { if (Math.hypot(e.clientX - navDownX, e.clientY - navDownY) > 12) navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
       if (e.pointerId === movePtr) {
         let dx = e.clientX - joyBX, dy = e.clientY - joyBY;
         const d = Math.hypot(dx, dy), mx = 46;
@@ -1069,7 +1070,13 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function onPointerEnd(e) {
-    if (e.pointerId === navPtr) { navPtr = null; inp2.navActive = false; }   // release draw-to-drive: car coasts
+    if (e.pointerId === navPtr) {
+      navPtr = null;
+      // A TAP (no drag) on a road point → route there ALONG the roads and auto-drive, not a
+      // straight line off-road. A DRAG was the freeform draw-to-drive, so release just coasts.
+      if (!navMoved) setDriveTarget(inp2.navX, inp2.navZ);
+      else inp2.navActive = false;
+    }
     if (e.pointerId === movePtr) hideJoy();
     lookPtrs.delete(e.pointerId);
     if (lookPtrs.size < 2) pinchD = 0;
@@ -1360,10 +1367,9 @@ export function createEngine({ canvas, ui, emit }) {
     audio.engineStart();
     if (musicPref && audio.startMusic) audio.startMusic();
     showCarCard();
-    // Start with a clear objective on every run. The beacons are useful, but a live
-    // ribbon + ETA makes Drive feel like a game immediately instead of a blank roam.
-    if (poiFound.size < POIS.length) chainToNextPOI(performance.now());
-    else toast('🏆 All places found — free roam, beat your times!', 2400);
+    // TRUE free roam: never auto-set a destination on entry. The pink POI beacons still
+    // point the way; pick a place with 🧭 or by tapping the map when YOU want a route+ETA.
+    if (poiFound.size >= POIS.length) toast('🏆 All places found — free roam, beat your times!', 2400);
   }
   function exitDrive() {
     setMode('explore');
@@ -1411,7 +1417,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     if (!found) { toast('No road nearby — drive back toward town'); return; }
     car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
-    camInit = false; inp2.navActive = false;
+    camInit = false; inp2.navActive = false; recoverCooldown = 1.8;   // grace so auto-recover can't immediately re-fire
     audio.blip && audio.blip();
     toast('Back on the road 🛣️', 1000);
   }
@@ -1462,8 +1468,16 @@ export function createEngine({ canvas, ui, emit }) {
   // the robot drive there (no Google route needed for a nearby local point). Reuses
   // DEST + auto-drive, so the guide ribbon, pin, ETA and arrival all just work.
   function setDriveTarget(wx, wz) {
-    DEST = { x: wx, z: wz, label: 'the map point' }; ROUTE = null; routeIdx = 0;
-    ROUTE = localRoadRoute(car.x, car.z, wx, wz) || null;
+    // ALWAYS drive there along the roads. If the tap doesn't land on the road graph, snap it
+    // to the nearest road and route to THAT — so a tap a little into a yard still follows the
+    // streets to the spot instead of cutting straight across the grass (and never reverses
+    // awkwardly across a lawn). Only a tap with no reachable road at all is a straight line.
+    let route = localRoadRoute(car.x, car.z, wx, wz);
+    if (!route) {
+      const np = nearestRoadPoint(wx, wz);
+      if (np && np.d < 90) { const r2 = localRoadRoute(car.x, car.z, np.x, np.z); if (r2) { route = r2; wx = np.x; wz = np.z; } }
+    }
+    DEST = { x: wx, z: wz, label: 'the map point' }; ROUTE = route || null; routeIdx = 0;
     autoDrive = true; inp2.navActive = false;
     emit('dest', { label: DEST.label }); emit('autodrive', true);
     toast(ROUTE ? '🤖 Fast cruise on the streets' : '🤖 Driving to your pin', 1300);
@@ -1476,7 +1490,7 @@ export function createEngine({ canvas, ui, emit }) {
     // SPEED-SCALED look-ahead: tight at low speed so the car HUGS the route (sticks to
     // the road through turns), longer at speed for a smooth line. A fixed 32 m look-ahead
     // cut every corner.
-    const look = clamp(Math.abs(car.speed) * 0.5, 12, 40);
+    const look = clamp(Math.abs(car.speed) * 0.42, 11, 28);   // tighter look-ahead → HUGS the route (less corner-cutting off the road)
     let acc = 0, px = car.x, pz = car.z;
     for (let i = routeIdx; i < ROUTE.length; i++) {
       acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
@@ -1500,9 +1514,9 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function autoDriveTargetSpeed(dDest) {
     const turn = distToNextTurn();
-    const straight = clamp((turn - 14) / 130, 0, 1);
+    const straight = clamp((turn - 12) / 95, 0, 1);          // reach full speed on shorter straights
     const far = clamp((dDest - 35) / 220, 0, 1);
-    const cruise = 31 + straight * 33 + far * 10;            // ~70-165 mph, arcade-fast but turn-aware
+    const cruise = 30 + straight * 48 + far * 12;            // FULL speed on the straights, still eased into corners so it stays on the road
     const approach = dDest < 85 ? clamp(14 + dDest * 0.52, 14, 54) : cruise;
     return Math.min(cruise, approach);
   }
@@ -1577,7 +1591,7 @@ export function createEngine({ canvas, ui, emit }) {
       return best;
     };
     const start = project(sx, sz), finish = project(dx, dz);
-    if (!start || !finish || start.d > 55 || finish.d > 55) return null;
+    if (!start || !finish || start.d > 90 || finish.d > 90) return null;   // generous snap so taps near a road still route
     for (let i = 0; i < roadSegs.length; i++) {
       const s = roadSegs[i];
       segPts[i].push({ id: addNode(s[0][0], s[0][1]), t: 0 });
@@ -1613,37 +1627,45 @@ export function createEngine({ canvas, ui, emit }) {
   // ~170 m of route (its real turns), resample to ~5 m steps, drape each cross-section
   // to the ground (relative to the car's road height so it sits ON the street), and
   // write the triangle-strip vertices. Falls back to a straight line to a routeless DEST.
-  let _guideX = 1e9, _guideZ = 1e9, _guideIdx = -1;
+  // Cached canopy-skipped ROAD height per ROUTE point (one raycast each, reused every
+  // frame). Auto-invalidates when ROUTE changes identity. This is what lets the ribbon
+  // sit ON the street instead of floating on the tree/roof canopy that a top-down
+  // groundAt() (cast from far above) hits first.
+  let _routeYFor = null, _routeY = [];
+  function guideHeightAt(i) {
+    if (_routeYFor !== ROUTE) { _routeYFor = ROUTE; _routeY = []; }
+    if (_routeY[i] == null) _routeY[i] = actorGroundY(ROUTE[i].x, ROUTE[i].z);
+    return _routeY[i];
+  }
   function updateGuide(yC) {
-    guideLine.visible = true;
-    // Throttle the rebuild: 90 ground raycasts + a 540-float VBO re-upload + ~90 array
-    // allocs are wasted while the car barely moves. Only rebuild when it's moved >1.5 m
-    // or advanced a waypoint — a sub-metre lag in the ribbon start is invisible.
-    if (Math.abs(car.x - _guideX) < 1.5 && Math.abs(car.z - _guideZ) < 1.5 && routeIdx === _guideIdx) return;
-    _guideX = car.x; _guideZ = car.z; _guideIdx = routeIdx;
-    // start the ribbon ~6 m AHEAD of the car (along its heading) so the line never tints
-    // the car itself — you follow it, it doesn't sit on you.
-    const raw = [[car.x + Math.sin(car.yaw) * 6, car.z + Math.cos(car.yaw) * 6]];
+    // Rebuild EVERY frame (no move-throttle) so the ribbon GLIDES forward instead of
+    // stepping in 1.5 m jumps. It's cheap now: the per-point road heights are cached, so a
+    // frame is just interpolation + a tiny 540-float VBO upload — no per-frame raycasts.
+    // start the ribbon ~6 m AHEAD of the car so the line never tints the car itself.
+    const raw = [[car.x + Math.sin(car.yaw) * 6, car.z + Math.cos(car.yaw) * 6, yC]];
     if (ROUTE && routeIdx < ROUTE.length) {
       let acc = 0, px = car.x, pz = car.z;
-      for (let i = routeIdx; i < ROUTE.length && acc < 170; i++) { acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); raw.push([ROUTE[i].x, ROUTE[i].z]); px = ROUTE[i].x; pz = ROUTE[i].z; }
-    } else {
+      for (let i = routeIdx; i < ROUTE.length && acc < 170; i++) { acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); raw.push([ROUTE[i].x, ROUTE[i].z, guideHeightAt(i)]); px = ROUTE[i].x; pz = ROUTE[i].z; }
+    } else if (DEST) {
       const dx = DEST.x - car.x, dz = DEST.z - car.z, dd = Math.hypot(dx, dz) || 1, cap = Math.min(dd, 130);
-      raw.push([car.x + dx / dd * cap, car.z + dz / dd * cap]);
-    }
+      const ex = car.x + dx / dd * cap, ez = car.z + dz / dd * cap;
+      raw.push([ex, ez, actorGroundY(ex, ez, yC)]);
+    } else { guideLine.visible = false; return; }
+    // resample to ~5 m steps, carrying the draped height through so each cross-section sits
+    // on the road surface (interpolated between cached route-point heights).
     const pts = [raw[0]];
     for (let i = 1; i < raw.length && pts.length < GUIDE_N; i++) {
       const a = pts[pts.length - 1], b = raw[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
       const steps = Math.max(1, Math.min(GUIDE_N - pts.length, Math.round(L / 5)));
-      for (let s = 1; s <= steps; s++) { const t = s / steps; pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+      for (let s = 1; s <= steps; s++) { const t = s / steps; pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]); }
     }
     if (pts.length < 2) { guideLine.visible = false; return; }
-    const carG = groundAt(car.x, car.z), hw = 1.8;
+    const hw = 1.8;
     for (let i = 0; i < GUIDE_N; i++) {
       const k = Math.min(i, pts.length - 1), p = pts[k];
       const pp = pts[Math.max(0, k - 1)], pn = pts[Math.min(pts.length - 1, k + 1)];
       let tx = pn[0] - pp[0], tz = pn[1] - pp[1]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      const nx = -tz, nz = tx, y = yC + 0.08 + clamp(groundAt(p[0], p[1]) - carG, -3, 3), o = i * 6;
+      const nx = -tz, nz = tx, y = p[2] + 0.12, o = i * 6;
       guidePos[o] = p[0] + nx * hw; guidePos[o + 1] = y; guidePos[o + 2] = p[1] + nz * hw;
       guidePos[o + 3] = p[0] - nx * hw; guidePos[o + 4] = y; guidePos[o + 5] = p[1] - nz * hw;
     }
@@ -1882,13 +1904,15 @@ export function createEngine({ canvas, ui, emit }) {
       let dyaw = Math.atan2(dx, dz) - car.yaw;
       while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
       const farT = clamp(dd / (autoDrive ? 52 : 40), 0, 1); // 0 near → 1 far; robot looks further ahead
+      const robot = autoDrive && DEST;
       if (dd < 2.5) { jx = 0; throttle = 0; brake = Math.abs(car.speed) > 2 ? 0.7 : 0; }
-      else if (Math.abs(dyaw) > 1.95) {                    // target is behind → reverse toward it
+      else if (Math.abs(dyaw) > 1.95 && (!robot || dd < 13)) {   // behind & (manual, or robot at close range) → reverse to it
         const rdyaw = dyaw > 0 ? dyaw - Math.PI : dyaw + Math.PI;
         jx = clamp(rdyaw * 2.0, -1, 1);
         throttle = 0; brake = clamp(0.35 + farT * 0.45, 0, 0.85);   // brake reverses once stopped
-      } else {                                             // drive forward toward it
-        const robot = autoDrive && DEST;
+      } else {                                             // drive forward toward it — a robot with a FAR
+        // target behind it arcs around (forward U-turn) at full steering lock instead of
+        // reversing the whole way across lawns into whatever's behind it.
         jx = clamp(-dyaw * (robot ? 2.45 : 2.0), -1, 1);
         const align = clamp(1 - Math.abs(dyaw) / 1.7, robot ? 0.42 : 0.22, 1); // robot keeps pace through bends
         if (robot) {
@@ -1988,6 +2012,7 @@ export function createEngine({ canvas, ui, emit }) {
     // you've drifted OFF the road it switches to RECOVERY: aim straight back at the nearest
     // tarmac from any angle, strongly, so it actively steers you home. Your steering always
     // overrides the corner/track assist (fades to 0 as you push the stick).
+    let assistTargetRate = 0;
     if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 4) {
       let dir = null, recover = false; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - car.x, t.z - car.z]; }
@@ -2003,14 +2028,25 @@ export function createEngine({ canvas, ui, emit }) {
         if (Math.abs(d) < gate) {
           const yours = recover ? 0 : clamp(Math.abs(jx) * (onRoute ? 1.8 : 1.7), 0, 1);   // recovery ignores input — get home first
           const k = (1 - yours) * clamp(Math.abs(car.speed) / 16, 0.5, 1) * (recover ? 4.6 : (onRoute ? 3.6 : 3.4));
-          car.yaw += clamp(d, -1.3, 1.3) * k * dt;
+          assistTargetRate = clamp(d, -1.3, 1.3) * k;
         }
       }
     }
+    // SMOOTH the assist: low-pass the correction rate so a jump in the aim point (a segment
+    // switch or a waypoint advance) eases in over a few frames instead of snapping the wheel
+    // — this kills the "jerky road assist". Decays to 0 when the assist isn't engaged.
+    car.assistRate = (car.assistRate || 0) + (assistTargetRate - (car.assistRate || 0)) * (1 - Math.exp(-dt * 7));
+    car.yaw += car.assistRate * dt;
     // AUTO-RECOVER: if you're stranded well off the road — drove deep into a yard, or
     // crashed and stopped out there — the steer-back can't reach you, so snap to the
-    // nearest road automatically (only with assist on, only in the hood).
-    if (autoSteer && inHood) {
+    // nearest road automatically (assist on, in the hood, not mid-route). While a ROUTE is
+    // active the Google line need not lie on the procedural roadSegs, so measuring off-road
+    // distance against roadSegs would ping-pong the reset (snap to route → "off roadSegs" →
+    // snap again) and the camera never settles — that was the "crash hides the car". The
+    // route-autosteer handles staying on a route; a cooldown blocks any immediate re-fire.
+    recoverCooldown = Math.max(0, recoverCooldown - dt);
+    const onRouteNow = !!(ROUTE && routeIdx < ROUTE.length);
+    if (autoSteer && inHood && !onRouteNow && recoverCooldown <= 0) {
       if (offRoadDist > 14) offRoadT += dt; else offRoadT = 0;
       const stuck = Math.abs(car.speed) < 3;
       if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
@@ -2099,6 +2135,13 @@ export function createEngine({ canvas, ui, emit }) {
     car.group.rotateY(car.yaw - Math.PI / 2 + driftYaw);
     car.group.rotateZ(-pitch + (car.pitchDyn || 0));   // terrain pitch + dynamic load-transfer dive/squat
     car.group.rotateX(roll);
+    // AERIAL / OVERHEAD: blow the car up so it's easy to spot from way up high and more fun
+    // — roughly street-sized on the map. Purely cosmetic: collision uses fixed radii, never
+    // this scale. Lerp so cycling views doesn't pop; aerial floats highest so it gets biggest.
+    const _camV = DRIVE_CAMS[camMode] || {};
+    const dispTarget = _camV.aerial ? 4.0 : _camV.topdown ? 2.6 : 1.1;   // big enough to spot from up high, not cartoonish
+    car.dispScale = car.dispScale == null ? dispTarget : car.dispScale + (dispTarget - car.dispScale) * (1 - Math.exp(-dt * 6));
+    car.group.scale.setScalar(car.dispScale);
     // car locator: bob the "you are here" chevron over the car in the high overhead views
     const highView = DRIVE_CAMS[camMode] && (DRIVE_CAMS[camMode].aerial || DRIVE_CAMS[camMode].topdown);
     carLocator.visible = highView;
