@@ -24,44 +24,39 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 5 — the round-4 punch-list landed; re-grade the NEW code):
-- AUDIO (round-4 #1 gap, fixed): a looping tyre-SCREECH voice (bandpassed noise, Q5.5)
-  ridden each frame from the slip amount + handbrake, so power-slides/skids now make
-  noise; engineUpdate is THROTTLE-AWARE (filter opens + intake roar + a touch louder on
-  the gas) with a filtered-noise 'whoosh' on tip-in; near-miss fires the same whoosh.
-- ANALOG THROTTLE: GO squeezes 0→1 over ~0.4 s (feather power out of a slide) instead
-  of a binary switch (verified ramp 1→3→5→9→13→18 mph); lifting off applies real
-  ENGINE-BRAKING (acc -= speed·0.45, cap 11) so the car coasts down into corners.
-- CAMERA WHIP: the chase look-point is a lerped _lookV (rate 7) carrying a drift/steer
-  lateral lead, so the car slides toward frame-edge on a hard corner and snaps back;
-  ASYMMETRIC FOV (widens at rate 6, relaxes at 2.2 → every GO stab shoves wide fast);
-  continuous high-speed rumble past ~55 mph; a Dutch-tilt ROLL into corners/drift. All
-  gated by reduced-motion.
-- POI META-GOAL (fuses the two best things): the 5 real places (home, Meemaw's, Canyon
-  Middle, Stanton, Dad's work/XQ) now PLOT on the minimap (pink ring = to-find, green =
-  found; off-map ones clamp to the edge as a 'that way' hint), tick lasting progress
-  saved to localStorage, show '🏆 x/5 places found' on the start card, and celebrate
-  all-5. (verified: poisFound=['home'] persisted on spawn.) Coin rally (18 coins) +
-  run-timer/combo/best-time still live alongside it.
-- NEAR-MISS reward (Burnout loop): skimming a tree/animal/parked car within ~1.6 m at
-  >14 u/s WITHOUT a hit → combo tick + whoosh + '💨 Close one! ×N' (650 ms cooldown).
-- CRASH payoff: impact>34 → a beat of global SLOW-MO (timeScale 0.32, recovers) + a
-  white #fx flash + 'CRUNCH! <mph>' toast. Animals now DEFLECT (speed×0.5) instead of
-  flinging the car backward.
-- AUTO-DRIVE cap now scales with distance-to-next-turn (clamp(dist·1.4, 22, maxF)), so
-  long straight legs of a cross-town route run fast, only corners/arrival slow it.
-- DISCOVERABILITY: a faint resting 'steer' ghost-stick bottom-left for the first few
-  seconds; the STOP pedal label flips to 'REV' when reversing (verified); the 🎥 button
-  shows the current camera NAME (verified Cruise→Top-down).
-- POLISH: spin-recovery assist (tail tucks in faster when you're not steering, so slides
-  are catchable); softer high-speed steering falloff (0.03) so the open-road blast stays
-  pointable; surface-tinted smoke (brown dust off-road, grey on tarmac).
-- Everything from before still live: feelRef speed-decoupling (40 mph feels like 150,
-  real top 180-220); off-road lawn penalty; real speed-lines; per-car {accel,top,grip,
-  slip}; minimap tap-to-drive + live ETA; chase auto-recenter; Google Directions routes;
-  back-to-road; horn; 4 cameras (Cruise/Top-down drag-to-drive/Aerial/Close).
-- STILL OPEN (minor): no time-trial/race start beyond the coin rally + landmark hunt;
-  no leaderboard; the procedural collision is on invisible footprints under the tiles.
+CURRENT STATE (ROUND 6 — the round-5 'one more run' punch-list landed; re-grade NEW code):
+- HIGH-SPEED FEEL (round-5 #1 gap, fixed): an uncapped spHi term = clamp((|speed|-feelRef)
+  /(feelRef·2.7),0,1) layers ON TOP of the ~60 mph feel cap, so above 60 the FOV adds a
+  second kick (→~84°), the camera sinks the car back further, the rumble keeps growing,
+  and the speed-lines keep intensifying — the 180-220 mph open-road blast finally reads
+  as faster than a 40 mph cruise (verified --spd 0.86 at 38 mph already; now scales past).
+- CHAIN-TRIP FARE LOOP (the 'one more run' fix): reaching a place awards trip points
+  (250 + speed·4 + combo·50), then AUTO-ROUTES you to the nearest un-found place via the
+  Google guide ('🏁 Next stop: drive to X!'). Verified: spawning finds home → routed to
+  Stanton Elem with a live '1.2 km · ~2:14' ETA + guide ribbon. Returning players are
+  pointed at their next stop on drive entry. 5 one-shot discoveries → a chained road trip.
+- FERRARI UNLOCK gated to all-5 places (persisted localStorage). Locked in the 🚗 picker
+  ('🔒 find all 5 places to unlock', disabled row); unlock fires a toast + chime + refreshes
+  the picker. Verified: Ferrari locked:true on a fresh save, Sienna/RAV4/Toy unlocked.
+- GRAB-THE-WHEEL: any real steer/gas/brake/key input instantly cancels auto-drive ('🕹️ You
+  took the wheel!') so the player never fights the robot.
+- PROGRESSIVE BRAKE: car.brakeAmt ramps in over ~0.25 s (a quick tap trail-brakes light for
+  corner entry, a hold hauls down hard, peak softened -46→-34). LOAD-TRANSFER pitch: the
+  body dives forward under braking / squats back under power, divided by per-car grip
+  (Sienna wallows, Ferrari crisp) — the car finally has longitudinal WEIGHT.
+- COMBO CRESCENDO: ×3 'Combo!' + whoosh, ×5 'ON FIRE!' chime + #fx flash + a pulsing HUD
+  chip, ×8 'UNSTOPPABLE!' — chaining now looks/sounds like it's building (was silent).
+- IN-DRIVE HUD now unifies the goals: 💛 coins · 🏆 x/5 places · 🔥 combo · 🏁 trip score · ⏱
+  clock, all in the top module. Cameras REORDERED Cruise→Close→Top-down→Aerial (the
+  speed-rich low Close cam is one tap away); a 🪄 TRACE dock button jumps straight to
+  one-finger draw-to-drive; the 🎥 camera-name label bumped to a legible 9.5px.
+- Everything from rounds 1-4 still live: tyre-screech + throttle-aware engine + whoosh;
+  analog throttle + engine-braking; camera whip/asymmetric-FOV/roll; speed-lines; particles
+  (skid/smoke/coin-burst, surface-tinted); near-miss reward; crash slow-mo+flash; per-car
+  handling; minimap tap-to-drive + reverse 'REV' pedal label; ghost steer-stick; off-road
+  lawn penalty; Google routes + smarter auto-drive cap; back-to-road; horn.
+- STILL OPEN (minor): no ghost/leaderboard for the coin time-trial; chain trips are
+  guide-only (you drive them, no forced race clock); collision is on invisible footprints.
 
 This is a TOY/joyride: "drive around my real neighborhood and to real places."
 Judge the CURRENT code. Has it crossed into 'amazing'? If not, what's the shortest
