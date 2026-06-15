@@ -225,6 +225,20 @@ function registerVehicle(car, group, slot, meta) {
   }
 }
 
+// Pick a specific loaded vehicle by slot (for the car picker menu).
+export function setVehicle(car, slot) {
+  if (!car.models[slot]) return null;
+  car.userPicked = true;
+  car.modelIdx = slot;
+  for (const m of car.models) if (m) m.group.visible = false;
+  car.models[slot].group.visible = true;
+  return car.models[slot];
+}
+// Roster snapshot for the picker UI: every known vehicle + whether it's loaded/current.
+export function vehicleList(car) {
+  return VEHICLES.map(v => ({ slot: v.slot, name: v.name, spec: v.spec, credit: v.credit, loaded: !!car.models[v.slot], current: car.modelIdx === v.slot }));
+}
+
 // Advance to the next loaded vehicle; returns its meta (or null if none loaded).
 export function cycleVehicle(car) {
   const loaded = car.models.map((m, i) => (m ? i : -1)).filter(i => i >= 0);

@@ -79,6 +79,19 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #navPanel input{flex:1;min-width:0;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.28);color:var(--txt);font-size:15px;pointer-events:auto}
 #navPanel .navErr{color:#ff9a7a;font-size:12px;margin-top:8px}
 #navPanel .navClose{margin-top:10px;width:100%}
+
+/* ---- car picker ---- */
+#carPicker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,360px);pointer-events:auto}
+#carPicker h3{font-size:18px;font-weight:700;margin-bottom:12px}
+.carList{display:flex;flex-direction:column;gap:8px}
+.carRow{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer;transition:background .15s ease}
+.carRow:hover:not(:disabled){background:var(--glass-hi)}
+.carRow:disabled{opacity:.5;cursor:default}
+.carRow.current{background:var(--poppy);border-color:transparent}
+.carName{font-size:16px;font-weight:700;font-style:italic;letter-spacing:.03em}
+.carSpec{font-size:11px;font-weight:600;opacity:.85;letter-spacing:.06em}
+.carCredit{font-size:10px;opacity:.55}
+#carPicker .navClose{margin-top:12px;width:100%}
 #getInCar{position:absolute;bottom:calc(118px + var(--safe-b));left:50%;transform:translateX(-50%);animation:popIn .2s ease}
 @keyframes popIn{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
 

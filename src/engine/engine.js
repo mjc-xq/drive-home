@@ -4,7 +4,7 @@ import { clamp } from './coords.js';
 import { merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
-import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, VEHICLES } from './car.js';
+import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
@@ -456,6 +456,12 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function cycleCar() {
     if (!cycleVehicle(car)) { toast('Only one vehicle loaded'); return; }
+    showCarCard();
+    audio.blip();
+  }
+  function getCars() { return vehicleList(car); }
+  function pickCar(slot) {
+    if (!setVehicle(car, slot)) { toast('That one is still loading…'); return; }
     showCarCard();
     audio.blip();
   }
@@ -1362,7 +1368,7 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.drew.react(moves[Math.floor(Math.random() * moves.length)]);
       if (audio.blip) audio.blip();
     },
-    focusHouse, cycleCamera, cycleCar, cycleScoopCamera, driveFromScoop, resetToRoad,
+    focusHouse, cycleCamera, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad,
     setDestination, clearDestination, toggleAutoDrive, dispose,
     get mode() { return mode; }
   };

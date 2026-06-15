@@ -17,6 +17,8 @@ export default function App() {
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [nearCar, setNearCar] = useState(false);
+  const [carPicker, setCarPicker] = useState(false);    // car select menu open
+  const [cars, setCars] = useState([]);
   const [navOpen, setNavOpen] = useState(false);        // address picker open
   const [navAddr, setNavAddr] = useState('');           // custom address input
   const [navErr, setNavErr] = useState('');
@@ -137,7 +139,7 @@ export default function App() {
           <div id="hud">
             <div id="speedo"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
             <button id="exitBtn" className="btn" onClick={() => eng().exitDrive()}>Exit ✕</button>
-            <button id="carSwap" className="btn icon" aria-label="Change vehicle" onClick={() => eng().cycleCar()}>🚗</button>
+            <button id="carSwap" className="btn icon" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}>🚗</button>
             <button id="camBtn" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
             <button id="resetRoad" className="btn icon" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
             <button id="navBtn" className="btn icon" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
@@ -166,6 +168,22 @@ export default function App() {
                 </form>
                 {navErr && <p className="navErr">{navErr}</p>}
                 <button className="btn navClose" onClick={() => setNavOpen(false)}>Close</button>
+              </div>
+            )}
+            {carPicker && (
+              <div id="carPicker" className="startCard">
+                <h3>Choose your ride</h3>
+                <div className="carList">
+                  {cars.map(c => (
+                    <button key={c.slot} className={'carRow' + (c.current ? ' current' : '')} disabled={!c.loaded}
+                      onClick={() => { eng().pickCar(c.slot); setCars(eng().getCars()); setCarPicker(false); }}>
+                      <span className="carName">{c.name}{c.current ? ' ✓' : ''}</span>
+                      <span className="carSpec">{c.spec}</span>
+                      <span className="carCredit">{c.loaded ? c.credit : 'loading…'}</span>
+                    </button>
+                  ))}
+                </div>
+                <button className="btn navClose" onClick={() => setCarPicker(false)}>Close</button>
               </div>
             )}
           </div>
