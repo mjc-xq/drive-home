@@ -96,6 +96,7 @@ export function createEngine({ canvas, ui, emit }) {
   let userDest = false;   // true when the player set the destination (not an auto-chain)
   let musicPref = (() => { try { return localStorage.getItem('dahill.music') !== '0'; } catch (e) { return true; } })();   // soundtrack on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
+  let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
   let routeIdx = 0;       // current target waypoint along ROUTE
   let autoDrive = false;
@@ -352,13 +353,43 @@ export function createEngine({ canvas, ui, emit }) {
     traffic._segs = tSegs;
     // upgrade the placeholder boxes to REAL (cloned) car models once they load — a few
     // normal neighbourhood cars spread across the fleet; clones share geometry (cheap).
+    // flip:false → the proto's nose sits at +Z so the group's atan2(dx,dz) points it
+    // ALONG travel (flip:true pointed every NPC backwards). Each clone gets its own
+    // material recoloured to a bright, varied paint with a faint emissive lift, so the
+    // cars POP out of the dim photogrammetry instead of reading as near-black metal.
+    const TRAFFIC_PAINT = [0xff5a3c, 0x2f8bff, 0xffd23c, 0x36d07a, 0xff7ad0, 0xff9a1f, 0x9b7bff, 0xe8eef5];
+    // Tiered recolour so NO body ever reads as dark, whatever the GLB named its materials
+    // (gltf-transform often strips names to generic). Glass/lamps keep their look; rubber
+    // goes dark grey; EVERYTHING ELSE becomes bright paint — the catch-all is the body.
+    const GLASS = /glass|window|windshield|screen/;
+    const LAMP = /light|lamp|head|tail|signal|indicator|chrome|mirror/;
+    const RUBBER = /tire|tyre|wheel|rubber/;
     [[rav4Url, 4.6], [miniUrl, 3.85], [granviaUrl, 5.1]].forEach((def, mi, defs) => {
-      loadCarProto(def[0], def[1], true, proto => {
+      loadCarProto(def[0], def[1], false, proto => {
         for (let i = mi; i < traffic.length; i += defs.length) {
           const c = traffic[i];
           for (const m of c.box) c.group.remove(m);     // drop the box
           const inst = proto.clone(true);
-          inst.traverse(o => { if (o.isMesh) o.castShadow = false; });
+          const paint = TRAFFIC_PAINT[i % TRAFFIC_PAINT.length];
+          inst.traverse(o => {
+            if (!o.isMesh) return;
+            o.castShadow = false;
+            const single = !Array.isArray(o.material);
+            const arr = single ? [o.material] : o.material;
+            const out = arr.map(m => {
+              if (!m || !m.color) return m;
+              const nm = ((m.name || '') + (o.name || '')).toLowerCase();
+              const mm = m.clone();                       // own material so the colour is per-car
+              if (GLASS.test(nm) || LAMP.test(nm)) return mm;   // leave glass + lamps alone
+              if (RUBBER.test(nm)) { mm.color.setHex(0x121316); if (mm.metalness !== undefined) mm.metalness = 0.2; if (mm.roughness !== undefined) mm.roughness = 0.85; return mm; }
+              mm.color.setHex(paint);                     // BODY (and anything unnamed) → bright paint
+              if (mm.metalness !== undefined) mm.metalness = 0.3;   // less metal → not env-map-dependent black
+              if (mm.roughness !== undefined) mm.roughness = 0.5;
+              if (mm.emissive) { mm.emissive.setHex(paint); mm.emissiveIntensity = 0.2; }   // gentle self-lift so it reads bright
+              return mm;
+            });
+            o.material = single ? out[0] : out;
+          });
           c.group.add(inst);
         }
       });
@@ -995,7 +1026,7 @@ export function createEngine({ canvas, ui, emit }) {
         const nd = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         if (pinchD > 0 && nd > 0) {
           const f = pinchD / nd;
-          if (mode === 'drive') czoom = clamp(czoom * f, 0.55, 2.1);
+          if (mode === 'drive') czoom = clamp(czoom * f, 0.4, 3.4);   // wide range: pull right in on the car or way out for an overview
           else szoom = clamp(szoom * f, 0.55, 2.0);
         }
         pinchD = nd;
@@ -1047,7 +1078,7 @@ export function createEngine({ canvas, ui, emit }) {
   function onWheel(e) {
     e.preventDefault();
     if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
-    else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), 0.55, 2.1);
+    else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), 0.4, 3.4);
     else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.55, 2.0);
   }
 
@@ -1369,7 +1400,7 @@ export function createEngine({ canvas, ui, emit }) {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
     if (!found) { toast('No road nearby — drive back toward town'); return; }
-    car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
+    car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
     camInit = false; inp2.navActive = false;
     audio.blip && audio.blip();
     toast('Back on the road 🛣️', 1000);
@@ -1459,19 +1490,47 @@ export function createEngine({ canvas, ui, emit }) {
   function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
   // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
-  function roadAlignDir(x, z, yaw) {
-    let bvx = 0, bvz = 0, bd = 1e18;
+  // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
+  // tangent (which gives up at sharp corners and never reels you back to the centre), we
+  // project a point LOOKAHEAD metres ahead of the car onto the road and return it as a
+  // target to steer toward. That single point does three jobs at once: it anticipates the
+  // bend (the probe lands on the post-corner segment), it pulls you back to the centreline
+  // when you run wide, and it needs no wide-angle gate to survive a 90° street corner.
+  // Returns null when the car is >10 m off any road (don't tug you around a lawn).
+  function roadTargetAhead(x, z, yaw, speed) {
+    let carD = 1e18;                                 // how far the car is from the road right now
     for (const s of roadSegs) {
       const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
       let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
       const ex = ax + vx * t - x, ez = az + vz * t - z, d = ex * ex + ez * ez;
-      if (d < bd) { bd = d; bvx = vx; bvz = vz; }
+      if (d < carD) carD = d;
     }
-    if (bd > 81) return null;                       // >9 m from any road → no assist
-    const L = Math.hypot(bvx, bvz) || 1; bvx /= L; bvz /= L;
-    const fx = Math.sin(yaw), fz = Math.cos(yaw);
-    if (bvx * fx + bvz * fz < 0) { bvx = -bvx; bvz = -bvz; }   // orient with travel (segments are undirected)
-    return [bvx, bvz];
+    if (carD > 100) return null;                     // >10 m off any road → no assist
+    const La = clamp(Math.abs(speed) * 0.55, 7, 24); // look further ahead the faster you go
+    const px = x + Math.sin(yaw) * La, pz = z + Math.cos(yaw) * La;
+    let btx = 0, btz = 0, bd = 1e18; let found = false;
+    for (const s of roadSegs) {
+      const ax = s[0][0], az = s[0][1];
+      const mx = (ax + s[1][0]) / 2 - x, mz = (az + s[1][1]) / 2 - z;
+      if (mx * mx + mz * mz > 900) continue;         // only roads within ~30 m (stay on THIS road)
+      const vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
+      let t = ((px - ax) * vx + (pz - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const cx = ax + vx * t, cz = az + vz * t, ex = cx - px, ez = cz - pz, d = ex * ex + ez * ez;
+      if (d < bd) { bd = d; btx = cx; btz = cz; found = true; }
+    }
+    return found ? [btx, btz] : null;
+  }
+  // Nearest point on any neighbourhood road to (x,z), with its distance in metres. Drives
+  // both the off-road steer-back (aim straight at it) and the auto-recover snap.
+  function nearestRoadPoint(x, z) {
+    let bx = x, bz = z, bd = 1e18;
+    for (const s of roadSegs) {
+      const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
+      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d < bd) { bd = d; bx = px; bz = pz; }
+    }
+    return { x: bx, z: bz, d: Math.sqrt(bd) };
   }
   // Rebuild the guide ribbon along the route polyline ahead of the car: gather the next
   // ~170 m of route (its real turns), resample to ~5 m steps, drape each cross-section
@@ -1593,6 +1652,7 @@ export function createEngine({ canvas, ui, emit }) {
   const _lookT = new THREE.Vector3();     // desired chase look point (scratch)
   let _lookV = null;                       // smoothed chase look point — lags so the car whips toward frame edge
   let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
+  let camFloorRef = null;                   // low-passed anti-clip floor so per-bump groundAt spikes don't POP the cam
   let camMode = 0;
   let camInit = false;
   // Drive cameras. Default "Cruise" is the high chase the user likes: well above
@@ -1606,8 +1666,8 @@ export function createEngine({ canvas, ui, emit }) {
     // Cruise leans a little lower/more-forward than before for speed feel, but stays
     // high enough to clear the melty ground-level photogrammetry (the user's preferred
     // clean look — NOT the low 'eye-level horror' of Close).
-    { name: 'Cruise', dist: 12, h: 25, ahead: 14, drone: true, topdown: false },
-    { name: 'Close', dist: 11, h: 7, ahead: 5, drone: false, topdown: false },
+    { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false },
+    { name: 'Close', dist: 11, h: 7.5, ahead: 4, drone: false, topdown: false },
     { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true, dragdrive: true },
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
@@ -1819,26 +1879,43 @@ export function createEngine({ canvas, ui, emit }) {
     // 200 mph straight tracks with small corrections.
     const yawDamp = clamp(1 - (Math.abs(car.speed) - 20) * 0.008, 0.55, 1);   // keep enough authority to DODGE at speed
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
-    // AUTO-STEER assist: aim the car along the ROUTE (when navigating) or the nearest
-    // road, so it's easy to stay on the road. When you HAVE a route it actively drives the
-    // car AROUND street corners (strong, wide angle gate) so turns take themselves; in
-    // free-roam it keeps you tracking the road. Your steering always overrides it (fades
-    // to 0 as you push the stick), and it never tugs you off a lawn.
-    if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 5) {
-      let dir = null; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
+    // Distance to the nearest neighbourhood road (only meaningful in the procedural hood;
+    // far out the car rides photoreal roads with no graph, so we don't measure/recover).
+    const inHood = Math.hypot(car.x, car.z) < 330;
+    const nrp = inHood ? nearestRoadPoint(car.x, car.z) : null;
+    const offRoadDist = nrp ? nrp.d : 0;
+    // AUTO-STEER assist: aim the car along the ROUTE (when navigating), or — in free-roam —
+    // along the nearest road via a look-ahead point that takes street corners for you. When
+    // you've drifted OFF the road it switches to RECOVERY: aim straight back at the nearest
+    // tarmac from any angle, strongly, so it actively steers you home. Your steering always
+    // overrides the corner/track assist (fades to 0 as you push the stick).
+    if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 4) {
+      let dir = null, recover = false; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - car.x, t.z - car.z]; }
-      else dir = roadAlignDir(car.x, car.z, car.yaw);
+      else if (nrp && offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - car.x, nrp.z - car.z]; recover = true; }
+      else { const tp = roadTargetAhead(car.x, car.z, car.yaw, car.speed); if (tp) dir = [tp[0] - car.x, tp[1] - car.z]; }
       if (dir && (dir[0] || dir[1])) {
         let d = Math.atan2(dir[0], dir[1]) - car.yaw;
         while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
-        const gate = onRoute ? 1.6 : 0.7;                 // route: pull THROUGH corners; road: small fixes
+        // Wide gate: a street corner bends the road ~90° vs your heading, so a narrow gate
+        // would switch the assist OFF exactly at the turn. Recovery uses the FULL circle so
+        // it can haul you back even if you're pointed straight away from the road.
+        const gate = recover ? Math.PI : (onRoute ? 1.6 : 1.45);
         if (Math.abs(d) < gate) {
-          const yours = clamp(Math.abs(jx) * (onRoute ? 1.8 : 2.4), 0, 1);        // your input wins
-          const k = (1 - yours) * clamp(Math.abs(car.speed) / 18, 0.5, 1) * (onRoute ? 3.6 : 1.8);
+          const yours = recover ? 0 : clamp(Math.abs(jx) * (onRoute ? 1.8 : 1.7), 0, 1);   // recovery ignores input — get home first
+          const k = (1 - yours) * clamp(Math.abs(car.speed) / 16, 0.5, 1) * (recover ? 4.6 : (onRoute ? 3.6 : 3.4));
           car.yaw += clamp(d, -1.3, 1.3) * k * dt;
         }
       }
     }
+    // AUTO-RECOVER: if you're stranded well off the road — drove deep into a yard, or
+    // crashed and stopped out there — the steer-back can't reach you, so snap to the
+    // nearest road automatically (only with assist on, only in the hood).
+    if (autoSteer && inHood) {
+      if (offRoadDist > 14) offRoadT += dt; else offRoadT = 0;
+      const stuck = Math.abs(car.speed) < 3;
+      if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
+    } else offRoadT = 0;
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -2079,9 +2156,14 @@ export function createEngine({ canvas, ui, emit }) {
         const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
         if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
       }
-      if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; }
+      if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; camFloorRef = null; }
       camV.lerp(camT, 1 - Math.exp(-4.6 * dt));                       // frame-rate-independent smoothing
-      camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.3);
+      // Anti-clip floor, LOW-PASSED: a raw Math.max against groundAt() snaps the camera up
+      // on every photogrammetry bump (the "jump" in Close/Cruise). Smooth the floor so it
+      // rises/falls gently and only ever lifts the cam — never a per-frame pop.
+      const rawFloor = groundAt(camV.x, camV.z) + 1.3;
+      camFloorRef = camFloorRef == null ? rawFloor : camFloorRef + (rawFloor - camFloorRef) * (1 - Math.exp(-dt * 3));
+      if (camV.y < camFloorRef) camV.y = camFloorRef;
       camera.position.copy(camV);
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
       // lead from the drift/steer, so on a hard corner the car slides toward the edge of
