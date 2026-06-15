@@ -131,8 +131,10 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #ui.drive #credits{bottom:calc(70px + var(--safe-b));left:calc(12px + var(--safe-l))}
 
 /* ---- speed module (bottom-center) ---- */
-#speed{position:absolute;bottom:calc(16px + var(--safe-b));left:50%;transform:translateX(-50%);
-  width:188px;padding:9px 18px 11px}
+/* lifted above the pedal/handbrake cluster so the gas pedal never covers the readout;
+   display-only, so touches fall through to the canvas (steering/look). */
+#speed{position:absolute;bottom:calc(110px + var(--safe-b));left:50%;transform:translateX(-50%);
+  width:172px;padding:8px 16px 10px;pointer-events:none}
 #speedRow{display:flex;align-items:baseline;justify-content:center;gap:6px}
 #speedRow b{font-size:46px;font-weight:800;line-height:.85;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #speedRow span{font-size:11px;font-weight:800;opacity:.55;letter-spacing:.2em}
@@ -145,13 +147,20 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #fx.on{opacity:var(--spd,0)}
 #fx.arrive{opacity:.75;background:radial-gradient(circle,rgba(120,230,150,.4),rgba(255,210,70,.22) 55%,transparent 80%);transition:opacity .18s ease}
 
-/* ---- handbrake (hold to drift) + horn (bottom-right) + drive hint ---- */
+/* ---- gas/brake pedals + handbrake + horn (bottom-right) + drive hint ---- */
 .holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:background .12s ease,transform .1s ease}
 .holdBtn:active{transform:scale(.93)}
-#hbrakeBtn{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));width:64px;height:64px;border-radius:19px;font-size:26px}
+/* the two driving pedals — right thumb. Gas is the big primary; brake sits inboard. */
+#pedals{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));display:flex;align-items:flex-end;gap:10px}
+.pedal{font-size:15px;font-weight:800;letter-spacing:.04em}
+#gasBtn{width:86px;height:86px;border-radius:26px;background:rgba(40,180,99,.26);border-color:rgba(90,230,150,.5)}
+#gasBtn:active{background:rgba(40,200,110,.6)}
+#brakeBtn{width:66px;height:66px;border-radius:20px;background:rgba(217,79,30,.22);border-color:rgba(255,120,80,.45)}
+#brakeBtn:active{background:rgba(230,70,40,.6)}
+#hbrakeBtn{position:absolute;bottom:calc(112px + var(--safe-b));right:calc(12px + var(--safe-r));width:56px;height:56px;border-radius:17px;font-size:23px}
 #hbrakeBtn:active{background:rgba(217,79,30,.5)}
-#hornBtn{position:absolute;bottom:calc(90px + var(--safe-b));right:calc(12px + var(--safe-r));width:50px;height:50px;border-radius:15px;font-size:20px}
+#hornBtn{position:absolute;bottom:calc(176px + var(--safe-b));right:calc(12px + var(--safe-r));width:48px;height:48px;border-radius:15px;font-size:19px}
 #driveHint{position:absolute;top:calc(70px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:86vw;
   padding:7px 15px;font-size:11.5px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
 #coinHud{position:absolute;top:calc(14px + var(--safe-t));left:50%;transform:translateX(-50%);

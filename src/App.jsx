@@ -172,13 +172,23 @@ export default function App() {
               <div id="speedRow"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
               <div id="speedTrack"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
             </div>
+            {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
+                the left stick only turns, these drive. Just steering still auto-creeps. */}
+            <div id="pedals">
+              <button id="gasBtn" className="panel holdBtn pedal gas" aria-label="Gas (hold to accelerate)"
+                onPointerDown={() => eng().setGas(true)} onPointerUp={() => eng().setGas(false)}
+                onPointerLeave={() => eng().setGas(false)} onPointerCancel={() => eng().setGas(false)}>GO</button>
+              <button id="brakeBtn" className="panel holdBtn pedal brake" aria-label="Brake (hold to slow / reverse)"
+                onPointerDown={() => eng().setBrake(true)} onPointerUp={() => eng().setBrake(false)}
+                onPointerLeave={() => eng().setBrake(false)} onPointerCancel={() => eng().setBrake(false)}>STOP</button>
+            </div>
             {/* handbrake (hold to drift) + horn, bottom-left */}
             <button id="hbrakeBtn" className="panel holdBtn" aria-label="Handbrake (hold to drift)"
               onPointerDown={() => eng().setHandbrake(true)} onPointerUp={() => eng().setHandbrake(false)}
               onPointerLeave={() => eng().setHandbrake(false)} onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
             {driveScore.total > 0 && <div id="coinHud" className="panel">💛 {driveScore.got}/{driveScore.total}</div>}
-            {driveHint && <div id="driveHint" className="panel">left side = drive · drag = look · ✋ hold to drift · 🎥 cameras</div>}
+            {driveHint && <div id="driveHint" className="panel">stick = steer · GO/STOP = gas/brake · drag = look · ✋ drift · 🎥 cameras</div>}
             {navOpen && (
               <div id="navPanel" className="startCard">
                 <h3>Drive to…</h3>
