@@ -178,18 +178,26 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* the two driving pedals — right thumb. Gas is the big primary; brake sits inboard. */
 #pedals{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));display:flex;align-items:flex-end;gap:10px}
 .pedal{font-size:15px;font-weight:800;letter-spacing:.04em}
-#gasBtn{width:86px;height:86px;border-radius:26px;background:rgba(40,180,99,.26);border-color:rgba(90,230,150,.5)}
-#gasBtn:active{background:rgba(40,200,110,.6)}
+#gasBtn{position:relative;overflow:hidden;width:86px;height:112px;border-radius:26px;background:rgba(40,180,99,.24);border-color:rgba(90,230,150,.5)}
+#gasBtn span{position:relative;z-index:1}
+/* vertical throttle fill — rises with how far down you slide → 'floor it' is visible */
+#gasBtn .gasFill{position:absolute;left:0;right:0;bottom:0;height:var(--fill,0%);z-index:0;
+  background:linear-gradient(0deg,rgba(40,220,120,.75),rgba(40,200,110,.35));transition:height .08s linear}
+#gasBtn:active{border-color:rgba(120,255,170,.85)}
 #brakeBtn{width:66px;height:66px;border-radius:20px;background:rgba(217,79,30,.22);border-color:rgba(255,120,80,.45)}
 #brakeBtn:active{background:rgba(230,70,40,.6)}
-#hbrakeBtn{position:absolute;bottom:calc(112px + var(--safe-b));right:calc(12px + var(--safe-r));width:56px;height:56px;border-radius:17px;font-size:23px}
+#hbrakeBtn{position:absolute;bottom:calc(140px + var(--safe-b));right:calc(12px + var(--safe-r));width:56px;height:56px;border-radius:17px;font-size:23px}
 #hbrakeBtn:active{background:rgba(217,79,30,.5)}
-#hornBtn{position:absolute;bottom:calc(176px + var(--safe-b));right:calc(12px + var(--safe-r));width:48px;height:48px;border-radius:15px;font-size:19px}
+#hbrakeBtn.drifting{background:rgba(255,180,40,.55);border-color:rgba(255,210,90,.9);box-shadow:0 0 16px rgba(255,190,60,.7);animation:firePulse .45s ease-in-out infinite}
+#hornBtn{position:absolute;bottom:calc(204px + var(--safe-b));right:calc(12px + var(--safe-r));width:48px;height:48px;border-radius:15px;font-size:19px}
 #driveHint{position:absolute;top:calc(70px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:86vw;
   padding:7px 15px;font-size:11.5px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
 #coinHud{position:absolute;top:calc(14px + var(--safe-t));left:50%;transform:translateX(-50%);
   display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 10px;max-width:74vw;
   padding:6px 14px;font-size:13.5px;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+#driftChip{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);pointer-events:none;
+  font-size:30px;font-weight:900;letter-spacing:.06em;color:#ffd34d;text-shadow:0 2px 14px rgba(0,0,0,.6);
+  animation:firePulse .4s ease-in-out infinite;z-index:6}
 #coinHud .combo{color:#ff8a3c;animation:pop .25s ease}
 #coinHud .combo.fire{color:#ff5a3c;animation:firePulse .5s ease-in-out infinite}
 #coinHud .places{color:#ffcf66}

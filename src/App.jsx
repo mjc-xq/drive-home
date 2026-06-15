@@ -30,6 +30,7 @@ export default function App() {
   const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
   const [music, setMusic] = useState(true);             // soundtrack on/off (🔊 toggle)
+  const [drifting, setDrifting] = useState(false);      // sustained-drift glow + DRIFT chip
   const arrivedTimer = useRef(0);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
@@ -53,6 +54,7 @@ export default function App() {
         case 'poiProgress': setPoi(p); break;
         case 'cars': setCars(p); break;
         case 'music': setMusic(p); break;
+        case 'drift': setDrifting(p); break;
         case 'arrived':
           setArrived(p); clearTimeout(arrivedTimer.current);
           arrivedTimer.current = setTimeout(() => setArrived(null), 3600);
@@ -201,9 +203,9 @@ export default function App() {
               {/* analog GO: press = ~65%, slide your thumb down the pedal toward 100% (floor it).
                   pointer capture keeps the press alive through a thumb-roll mid-corner. */}
               <button id="gasBtn" className="panel holdBtn pedal gas" aria-label="Gas (hold to accelerate, slide down to floor it)"
-                onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); const r = e.currentTarget.getBoundingClientRect(); eng().setGasAmount(Math.max(0.6, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5))); }}
-                onPointerMove={e => { if (e.buttons) { const r = e.currentTarget.getBoundingClientRect(); eng().setGasAmount(Math.max(0.55, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5))); } }}
-                onPointerUp={() => eng().setGasAmount(0)} onPointerCancel={() => eng().setGasAmount(0)}>GO</button>
+                onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); const r = e.currentTarget.getBoundingClientRect(); const v = Math.max(0.6, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5)); e.currentTarget.style.setProperty('--fill', (v * 100) + '%'); eng().setGasAmount(v); }}
+                onPointerMove={e => { if (e.buttons) { const r = e.currentTarget.getBoundingClientRect(); const v = Math.max(0.55, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5)); e.currentTarget.style.setProperty('--fill', (v * 100) + '%'); eng().setGasAmount(v); } }}
+                onPointerUp={e => { e.currentTarget.style.setProperty('--fill', '0%'); eng().setGasAmount(0); }} onPointerCancel={e => { e.currentTarget.style.setProperty('--fill', '0%'); eng().setGasAmount(0); }}><i className="gasFill" /><span>GO</span></button>
               <button id="brakeBtn" className="panel holdBtn pedal brake" aria-label="Brake (hold to slow / reverse)"
                 onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setBrake(true); }} onPointerUp={() => eng().setBrake(false)}
                 onPointerCancel={() => eng().setBrake(false)}><span ref={el => (uiRefs.current.brakeLbl = el)}>STOP</span></button>
@@ -212,7 +214,7 @@ export default function App() {
                 so the real joystick still spawns under the thumb; tells first-timers where to steer */}
             {driveHint && <div id="steerGhost" aria-hidden="true"><span>↺</span><i>steer</i></div>}
             {/* handbrake (hold to drift) + horn, bottom-left */}
-            <button id="hbrakeBtn" className="panel holdBtn" aria-label="Handbrake (hold to drift)"
+            <button id="hbrakeBtn" className={'panel holdBtn' + (drifting ? ' drifting' : '')} aria-label="Handbrake (hold to drift)"
               onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setHandbrake(true); }} onPointerUp={() => eng().setHandbrake(false)}
               onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
@@ -225,7 +227,8 @@ export default function App() {
                 <span className="runClock">⏱ <i ref={el => (uiRefs.current.runTime = el)}>0:00</i></span>
               </div>
             )}
-            {driveHint && <div id="driveHint" className="panel">stick = steer · GO/STOP = gas/brake · ✋ drift · tap the map to drive there · 💛 grab the coins</div>}
+            {drifting && <div id="driftChip">💨 DRIFT!</div>}
+            {driveHint && <div id="driveHint" className="panel">stick = steer · GO = gas (slide ↓ to floor it) · STOP = brake · ✋ drift · tap map to drive · 💛 coins</div>}
             {navOpen && (
               <div id="navPanel" className="startCard">
                 <h3>Drive to…</h3>

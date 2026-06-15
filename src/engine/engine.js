@@ -221,7 +221,7 @@ export function createEngine({ canvas, ui, emit }) {
   function resetRun() { runActive = false; runStart = 0; lastRunMs = 0; combo = 0; comboExpired = true; }
   // close-call reward: skim a tree/animal/car at speed without hitting it → ramp the
   // same combo, a whoosh, and a 'Close!' beat. Turns every hazard into a thrill.
-  let lastNearT = -1e9;
+  let lastNearT = -1e9, driftState = false, driftAccum = 0;
   function nearMiss(now) {
     if (now - lastNearT < 650) return;
     lastNearT = now;
@@ -253,11 +253,11 @@ export function createEngine({ canvas, ui, emit }) {
   // discoveries into a chained road trip ("now drive to the next place!").
   function chainToNextPOI(now) {
     let best = null, bd = 1e18;
-    for (const p of POIS) { if (poiFound.has(p.key)) continue; const d = Math.hypot(p.x - car.x, p.z - car.z); if (d < bd) { bd = d; best = p; } }
+    for (const p of POIS) { if (poiFound.has(p.key)) continue; const d = Math.hypot(p.x - car.x, p.z - car.z); if (d < 35) continue; if (d < bd) { bd = d; best = p; } }   // skip the one you're at
     if (!best) return;
     autoDrive = false; userDest = false;
     setDestination(best.lat, best.lon, best.label, true);
-    toast('🏁 Next stop: drive to ' + best.label + '!', 2400);
+    toast('🏁 Next stop: floor it to ' + best.label + ' — follow the pink beam! 🏁', 2600);
   }
   function checkPOIs(now) {
     for (const poi of POIS) {
@@ -316,6 +316,49 @@ export function createEngine({ canvas, ui, emit }) {
     scene.add(s);
     return { poi, spr: s, mat };
   });
+
+  // ---- ambient TRAFFIC: simple cars roaming the neighbourhood roads, so there's
+  // finally something alive to weave through. They feed the near-miss/combo economy
+  // and bounce on contact. Lives only on the ±330 m procedural street network. ----
+  const traffic = [];
+  {
+    const tSegs = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 330 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);
+    const cols = [0xb53a32, 0x2f5fb0, 0xd9d9d9, 0x2a2a2a, 0xd6a52e, 0x3f9e63, 0x8a8f96];
+    const bodyGeo = new THREE.BoxGeometry(1.9, 1.0, 4.0); const cabGeo = new THREE.BoxGeometry(1.6, 0.72, 1.9);
+    for (let i = 0; i < 11 && tSegs.length; i++) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(bodyGeo, new THREE.MeshStandardMaterial({ color: cols[i % cols.length], metalness: 0.35, roughness: 0.55 })); body.position.y = 0.6; body.castShadow = true;
+      const cab = new THREE.Mesh(cabGeo, new THREE.MeshStandardMaterial({ color: 0x1b2735, metalness: 0.2, roughness: 0.35 })); cab.position.set(0, 1.18, -0.25);
+      g.add(body); g.add(cab); g.frustumCulled = false; g.visible = false; scene.add(g);
+      const seg = tSegs[(i * 7 + 3) % tSegs.length];
+      traffic.push({ group: g, a: seg[0], b: seg[1], t: (i * 0.17) % 1, speed: 7 + (i % 5) * 2.4, near: false });
+    }
+    traffic._segs = tSegs;
+  }
+  function nextTrafficSeg(c) {
+    const segs = traffic._segs, cand = [];
+    for (const s of segs) {
+      for (const pr of [[s[0], s[1]], [s[1], s[0]]]) {
+        if (Math.hypot(pr[0][0] - c.b[0], pr[0][1] - c.b[1]) < 3.5 && Math.hypot(pr[1][0] - c.a[0], pr[1][1] - c.a[1]) > 4) cand.push(pr);
+      }
+    }
+    if (cand.length) { const n = cand[Math.floor(Math.random() * cand.length)]; c.a = n[0]; c.b = n[1]; }
+    else { const tmp = c.a; c.a = c.b; c.b = tmp; }   // dead end → U-turn
+    c.t = 0;
+  }
+  function updateTraffic(dt, now) {
+    for (const c of traffic) {
+      c.group.visible = true;
+      const dx = c.b[0] - c.a[0], dz = c.b[1] - c.a[1], len = Math.hypot(dx, dz) || 1;
+      c.t += (c.speed * dt) / len;
+      if (c.t >= 1) { nextTrafficSeg(c); continue; }
+      const x = c.a[0] + dx * c.t, z = c.a[1] + dz * c.t;
+      c.x = x; c.z = z;
+      c.group.position.set(x, groundAt(x, z) + 0.05, z);
+      c.group.rotation.set(0, Math.atan2(dx, dz), 0);
+    }
+  }
+  function hideTraffic() { for (const c of traffic) c.group.visible = false; }
   function updateBeacons(now) {
     let nearestKey = null, nd = 1e18;
     for (const b of poiBeacons) { if (poiFound.has(b.poi.key)) continue; const d = Math.hypot(b.poi.x - car.x, b.poi.z - car.z); if (d < nd) { nd = d; nearestKey = b.poi.key; } }
@@ -1184,9 +1227,10 @@ export function createEngine({ canvas, ui, emit }) {
     resetRun(); resetParticles();
     emitScore({ finishMs: 0 });
     emit('driveCam', DRIVE_CAMS[camMode].name);
-    // road-trip framing: a returning player with partial progress gets pointed at their
-    // next un-found place straight away (a fresh player gets it when they pass home).
-    if (poiFound.size >= 1 && poiFound.size < POIS.length) chainToNextPOI(performance.now());
+    // road-trip framing: point EVERY player at a place from frame one — a fresh player
+    // (0 found) is routed to the nearest school straight away (no aimless free-roam),
+    // a returning player to their next un-found stop.
+    if (poiFound.size < POIS.length) chainToNextPOI(performance.now());
     const sp = frontPt || [house.c[0], house.c[1] + 14];
     car.x = sp[0]; car.z = sp[1];
     if (frontDir) {
@@ -1219,6 +1263,7 @@ export function createEngine({ canvas, ui, emit }) {
     for (const c of coins) c.mesh.visible = false;
     resetParticles();
     hideBeacons();
+    hideTraffic();
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -1382,11 +1427,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (audio.sfxThunk) audio.sfxThunk(clamp(impact / 60, 0.2, 1));
     if (navigator.vibrate) { try { navigator.vibrate(Math.round(clamp(impact * 1.4, 10, 55))); } catch (e) { } }
     if (kind === 'animal') toast('🦆 Watch the critters!', 900);
-    // BIG hit → a celebrated moment: a beat of slow-mo, a white flash, a CRUNCH.
-    else if (impact > 34 && !reduceMotion) {
-      timeScale = 0.32;
-      if (ui.fx) { ui.fx.classList.add('crash'); setTimeout(() => ui.fx && ui.fx.classList.remove('crash'), 320); }
-      toast('💥 CRUNCH! ' + Math.round(impact * 2.237) + ' mph', 1200);
+    // BIG hit → a celebrated moment: a beat of slow-mo, a white flash, a CRUNCH. It also
+    // BREAKS your combo — that's the risk that makes near-misses worth the reward.
+    else if (impact > 34) {
+      if (!reduceMotion) { timeScale = 0.32; if (ui.fx) { ui.fx.classList.add('crash'); setTimeout(() => ui.fx && ui.fx.classList.remove('crash'), 320); } }
+      const lost = combo > 1 ? '  ·  combo lost!' : '';
+      if (combo > 1) { combo = 0; comboExpired = true; emitScore({}); }
+      toast('💥 CRUNCH! ' + Math.round(impact * 2.237) + ' mph' + lost, 1200);
     }
     return true;
   }
@@ -1604,7 +1651,12 @@ export function createEngine({ canvas, ui, emit }) {
     // brake-to-drift: stab the brake while turning fast (or the Space handbrake) and
     // the tail steps out; a handbrake yaw kick helps rotate through tight corners.
     const hb = (inp2.hbrake || (brake > 0.1 && Math.abs(car.speed) > 8)) ? 1 : 0;
-    car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * dt;
+    // High-speed yaw DAMPER: without this the speed/2.7 term overwhelms the steer-angle
+    // falloff and net yaw rate climbs all the way up, making the flat-out blast twitchier
+    // the faster you go. Authority now peaks ~mid-speed (~35 mph) and tapers above so a
+    // 200 mph straight tracks with small corrections.
+    const yawDamp = clamp(1 - (Math.abs(car.speed) - 16) * 0.012, 0.42, 1);
+    car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -1623,6 +1675,7 @@ export function createEngine({ canvas, ui, emit }) {
     car.vlat = clamp(car.vlat, -26, 26);
     const rpx = Math.cos(car.yaw), rpz = -Math.sin(car.yaw);   // car's right vector
     let nx = car.x + (fx * car.speed + rpx * car.vlat) * dt, nz = car.z + (fz * car.speed + rpz * car.vlat) * dt;
+    updateTraffic(dt, now);   // move the ambient cars (positions feed the collision below)
     const rad = 1.25;
     let hitThisFrame = false, nearThisFrame = false;
     const fast = Math.abs(car.speed) > 14;
@@ -1651,6 +1704,16 @@ export function createEngine({ canvas, ui, emit }) {
         if (carHit(Math.abs(car.speed), 'animal')) car.speed *= 0.5;   // deflect, don't fling backward
         hitThisFrame = true;
       } else if (fast && d2 < (rr + 1.6) * (rr + 1.6)) nearThisFrame = true;
+    }
+    // TRAFFIC: weave past it for a near-miss combo, clip it for a bounce + crunch
+    for (const c of traffic) {
+      if (c.x === undefined) continue;
+      const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 2.6 + rad;
+      if (d2 < rr * rr && d2 > 1e-6) {
+        const d = Math.sqrt(d2); nx = c.x + dx / d * rr; nz = c.z + dz / d * rr;
+        if (carHit(Math.abs(car.speed), 'car')) car.speed *= 0.4;
+        hitThisFrame = true;
+      } else if (fast && d2 < (rr + 2.2) * (rr + 2.2)) nearThisFrame = true;
     }
     if (nearThisFrame && !hitThisFrame) nearMiss(now);   // Burnout-style close-call reward
     // Roam far across the streamed Google tiles. The procedural neighborhood (and
@@ -1706,6 +1769,18 @@ export function createEngine({ canvas, ui, emit }) {
     }
     // ride the tyre-screech: louder the more the tail is out (and on the handbrake)
     if (audio.screech) audio.screech(slipping ? clamp((Math.abs(car.vlat) - 3) / 13, 0.18, 1) * (hb ? 1.1 : 1) : 0);
+    // DRIFT reward: a held slide glows the ✋ button + a 'DRIFT' chip, and every ~0.9 s of
+    // sustained drift ticks the combo + trip score — the best mechanic finally pays out.
+    const drifting = Math.abs(car.vlat) > 8 && Math.abs(car.speed) > 9;
+    if (drifting !== driftState) { driftState = drifting; emit('drift', drifting); }
+    if (drifting) {
+      driftAccum += dt;
+      if (driftAccum > 0.9) {
+        driftAccum = 0;
+        combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1; comboExpire = now + 4000; comboExpired = false;
+        tripScore += 30 + combo * 15; comboFx(now); emitScore({});
+      }
+    } else driftAccum = 0;
     tickParticles(now, dt);
     checkPOIs(now);
     updateBeacons(now);
