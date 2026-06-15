@@ -115,6 +115,10 @@ export default function App() {
     if (fallback) { eng().setDestination(fallback[0], fallback[1], label || q); setNavOpen(false); }
     else setNavErr('Couldn’t find that address');
   };
+  const traceDrive = camName === 'Top-down' || camName === 'Aerial';
+  const driveHelp = traceDrive
+    ? 'drag the road to drive · release to coast · GO boosts · STOP reverses · tap map to route'
+    : 'left stick steers · GO = gas (slide down to floor it) · STOP = brake · handbrake drifts · tap map to route';
 
   return (
     <>
@@ -214,10 +218,11 @@ export default function App() {
               {/* the blade's bottom edge IS the speedometer */}
               <div id="speedRail"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
             </div>
-            {/* ── ACTION RAIL: big, always-visible LABELLED controls (right side) ── */}
+            {/* ── ACTION RAIL: big, always-visible LABELLED controls, away from the pedals ── */}
             <div id="actionRail">
               <button className="railBtn road" aria-label="Back to road" onClick={() => eng().resetToRoad()}><span className="ic">🛣️</span><span className="lb">Road</span></button>
               <button className="railBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}><span className="ic">🎥</span><span className="lb">{camName}</span></button>
+              <button className={'railBtn trace' + (traceDrive ? ' on' : '')} aria-label="Trace driving" onClick={() => eng().traceDrive()}><span className="ic">🪄</span><span className="lb">Trace</span></button>
               <button className="railBtn" aria-label="Navigate to a place" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}><span className="ic">🧭</span><span className="lb">Go to…</span></button>
               <button className="railBtn" aria-label="Choose your car" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}><span className="ic">🚗</span><span className="lb">Cars</span></button>
               <button className={'railBtn' + (autoSteer ? ' on' : '')} aria-label={autoSteer ? 'Auto-steer on' : 'Auto-steer off'} onClick={() => eng().toggleAutoSteer()}><span className="ic">🛟</span><span className="lb">Assist {autoSteer ? 'on' : 'off'}</span></button>
@@ -239,13 +244,13 @@ export default function App() {
             {/* faint resting steer hint (bottom-left, first few seconds only) — pointer-events:none
                 so the real joystick still spawns under the thumb; tells first-timers where to steer */}
             {driveHint && <div id="steerGhost" aria-hidden="true"><span>↺</span><i>steer</i></div>}
-            {/* handbrake (hold to drift) + horn, bottom-left */}
+            {/* handbrake (hold to drift) + horn, near the pedal thumb zone */}
             <button id="hbrakeBtn" className={'panel holdBtn' + (drifting ? ' drifting' : '')} aria-label="Handbrake (hold to drift)"
               onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setHandbrake(true); }} onPointerUp={() => eng().setHandbrake(false)}
               onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
             {drifting && <div id="driftChip">💨 DRIFT!</div>}
-            {driveHint && <div id="driveHint" className="panel">stick = steer · GO = gas (slide ↓ to floor it) · STOP = brake · ✋ drift · tap map to drive · 💛 coins</div>}
+            {driveHint && <div id="driveHint" className="panel">{driveHelp}</div>}
             {navOpen && (
               <div id="navPanel" className="startCard">
                 <h3>Drive to…</h3>

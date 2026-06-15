@@ -8,6 +8,7 @@
 *{margin:0;padding:0;box-sizing:border-box}
 html,body,#root{height:100%;height:100dvh;overflow:hidden;background:#1a1d22;overscroll-behavior:none}
 body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color:var(--txt);
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
   -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 #scene{position:fixed;top:0;left:0;touch-action:none;cursor:grab}
 #scene.dragging{cursor:grabbing}
@@ -80,7 +81,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .pwExit{flex:0 0 auto;width:27px;height:27px;border-radius:9px;border:1px solid transparent;
   background:rgba(217,79,30,.26);color:#ff9b73;font-size:14px;font-weight:800;cursor:pointer;
   display:flex;align-items:center;justify-content:center;transition:background .15s ease,transform .1s ease}
-.pwExit:active{transform:scale(.9)}
+.pwExit:active{transform:scale(.96)}
 .pwDest{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;font-size:12.5px}
 .pwDest .kick{flex:0 0 auto;font-style:normal;font-size:8px;font-weight:800;letter-spacing:.16em;color:var(--poppy)}
 .pwDest b{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42%}
@@ -89,20 +90,21 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .pwDest.free{color:rgba(244,241,234,.5)}
 .pwDest.free span{font-size:10.5px;font-weight:600}
 
-/* ── ACTION RAIL: big, always-visible LABELLED controls on the right edge ── */
-#actionRail{position:absolute;top:calc(132px + var(--safe-t));right:calc(8px + var(--safe-r));
+/* ── ACTION RAIL: big, always-visible LABELLED controls away from the pedal thumb zone ── */
+#actionRail{position:absolute;top:calc(132px + var(--safe-t));left:calc(8px + var(--safe-l));
   display:flex;flex-direction:column;gap:7px;z-index:5}
 .railBtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
   width:62px;min-height:50px;padding:5px 4px;border-radius:14px;cursor:pointer;color:var(--txt);
   background:linear-gradient(180deg,rgba(28,32,38,.66),rgba(15,17,21,.62));border:1px solid rgba(255,255,255,.12);
   box-shadow:0 6px 20px rgba(0,0,0,.38);backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
   transition:background .15s ease,transform .1s ease,box-shadow .15s ease}
-.railBtn:active{transform:scale(.93)}
+.railBtn:active{transform:scale(.96)}
 .railBtn .ic{font-size:22px;line-height:1}
 .railBtn .lb{font-size:9px;font-weight:800;letter-spacing:.02em;opacity:.82;white-space:nowrap;max-width:58px;overflow:hidden;text-overflow:ellipsis}
 .railBtn.road{background:linear-gradient(180deg,rgba(217,79,30,.42),rgba(150,45,15,.5));border-color:rgba(255,150,90,.5)}
+.railBtn.trace{background:linear-gradient(180deg,rgba(220,74,190,.34),rgba(60,35,105,.5));border-color:rgba(255,138,231,.45)}
 .railBtn.on{background:linear-gradient(180deg,rgba(60,160,255,.34),rgba(20,60,110,.5));border-color:rgba(127,212,255,.6);box-shadow:0 0 14px rgba(80,180,255,.4)}
-@media (max-height:680px){#actionRail{gap:5px}.railBtn{min-height:44px;width:56px}.railBtn .ic{font-size:19px}}
+@media (max-height:680px){#actionRail{display:grid;grid-template-columns:repeat(2,56px);gap:5px}.railBtn{min-height:44px;width:56px}.railBtn .ic{font-size:19px}}
 
 /* main row: speed tower · telemetry · minimap tile */
 .pwMain{display:flex;align-items:center;gap:10px}
@@ -218,7 +220,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);touch-action:none;
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:background .12s ease,transform .1s ease}
 #musicBtn.on{color:#7fd4ff}
-.holdBtn:active{transform:scale(.93)}
+.holdBtn:active{transform:scale(.96)}
 /* the two driving pedals — right thumb. Gas is the big primary; brake sits inboard. */
 #pedals{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));display:flex;align-items:flex-end;gap:10px}
 .pedal{font-size:15px;font-weight:800;letter-spacing:.04em}
@@ -235,8 +237,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #hbrakeBtn.drifting{background:rgba(255,180,40,.55);border-color:rgba(255,210,90,.9);box-shadow:0 0 16px rgba(255,190,60,.7);animation:firePulse .45s ease-in-out infinite}
 #hornBtn{position:absolute;bottom:calc(204px + var(--safe-b));right:calc(12px + var(--safe-r));width:48px;height:48px;border-radius:15px;font-size:19px}
 /* drive hint sits just BELOW the PIT WALL blade now (the blade owns the top band) */
-#driveHint{position:absolute;top:calc(136px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:90vw;
-  padding:7px 15px;font-size:11px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
+#driveHint{position:absolute;top:calc(136px + var(--safe-t));left:calc(82px + var(--safe-l));right:calc(82px + var(--safe-r));
+  padding:7px 15px;font-size:11px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;text-wrap:pretty;animation:fadeIn .3s ease}
+@media (max-height:680px){#driveHint{left:calc(132px + var(--safe-l));right:calc(72px + var(--safe-r))}}
 #driftChip{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);pointer-events:none;
   font-size:30px;font-weight:900;letter-spacing:.06em;color:#ffd34d;text-shadow:0 2px 14px rgba(0,0,0,.6);
   animation:firePulse .4s ease-in-out infinite;z-index:6}
