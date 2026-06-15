@@ -24,13 +24,33 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 7 — the round-6 'neighborhood fantasy' punch-list landed; re-grade):
-- POI BEACONS (round-6 #1 gap, fixed): a tall additive light-pillar over each of the 5
-  real places, drawn THROUGH the world (depthTest off, renderOrder 998) so you can SEE
-  your school / Meemaw's from across the neighbourhood and aim at it. Pink=to-find,
-  green=found, nearest un-found pulses; opacity fades in by distance, shows within
-  ~1.2 km in Drive (verified: home beacon visible + opacity scales with distance; the
-  far POIs — Stanton 1.2km, Canyon 2.8km — pop in on approach via the chain route).
+CURRENT STATE (ROUND 8 — the round-7 sensory/discovery punch-list landed; re-grade):
+- MUSIC (round-7 #1 gap, fixed): a looping procedural synthwave soundtrack in audio.js
+  (I-V-vi-IV bass + chord stabs + square arp + noise kick/hat, scheduled ahead off
+  AC.currentTime), starts in enterDrive, stops on exit, and its master lowpass opens
+  with speed so the tune lifts on the blast. A 🔊 dock toggle (persisted, on by default)
+  mutes it. Verified: toggle returns state, no errors. The joyride finally has a tune.
+- DESTINATION IDENTITY (round-7 #4): a floating CanvasTexture name-plate ('🏠 YOUR HOUSE',
+  "🏡 MEEMAW'S", '🏫 STANTON ELEM'…) over each real place, depthTest-off, legible within
+  ~170 m and tinted green once found — so arriving at your actual school has presence,
+  paying off the beacons + arrival celebration instead of being empty photoreal geometry.
+- DEFAULT CAMERA: Cruise leans lower + more forward (h34→h25, dist9→12, ahead11→14) for
+  real forward-speed feel — BUT deliberately kept ABOVE the melty ground-level
+  photogrammetry, because the USER explicitly prefers the clean high look and called the
+  low eye-level views '3d horror'. (The low Close cam is still one tap away for those who
+  want it. This is a user-preference override of the 'spawn into Close' suggestion.)
+- ANALOG TOUCH THROTTLE (round-7 #5): GO is now a real pedal — press ≈65%, slide the thumb
+  down to floor it (setGasAmount feeds the analog throttle the engine already ramps).
+  Verified: 0.6 gas accelerates gentler than full.
+- FINGER-FEEL (round-7 #6): pedals + handbrake now setPointerCapture and .holdBtn has
+  touch-action:none, so a thumb-roll mid-corner no longer fires pointercancel + stalls
+  the throttle.
+- SENSORY polish: speed-lines now flow from where you're HEADING (--ox biased by
+  steer/look), not dead-centre; the arrival slow-mo is HELD ~0.32 s then eases (a real
+  beat, not a blink) with a second triumphant spark wave + chime.
+- POI BEACONS (round 6): a tall additive light-pillar over each of the 5 real places,
+  drawn THROUGH the world (depthTest off) so you can SEE your school / Meemaw's from
+  across town; pink=to-find, green=found, nearest pulses, fades in within ~1.2 km.
 - FINISH-LINE ARRIVAL (round-6 #2): reaching a place now fires ~24 gold sparks + a 5-note
   fanfare + a beat of slow-mo & white flash + an 'ARRIVED' card (place, points, trip
   score). The <45 m POI and <14 m destination triggers are unified so they don't double-
