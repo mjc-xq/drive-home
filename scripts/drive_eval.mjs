@@ -24,50 +24,48 @@ CODE TO READ (at ${REPO}):
 - src/App.jsx + src/styles.css — the HUD (speedo, camera/car/reset/nav buttons,
   minimap, nav panel, car picker).
 
-CURRENT STATE (ROUND 3 — the round-2 punch-list landed; re-grade the NEW code):
-- CONTROLS NOW DECOUPLED (the round-2 #1 blocker, fixed): the left thumbstick
-  STEERS ONLY (X). Throttle/brake are dedicated hold-buttons — a big green GO pedal
-  and a red STOP pedal, bottom-right (right thumb), wired through setGas/setBrake.
-  W/S and ↑/↓ still work. Just pushing the stick auto-creeps (throttle 0.72) so a
-  kid who only steers still rolls. Steering and gas no longer fight on one stick.
-- ACCELERATION: accel 18 u/s^2 (road) × per-car, road drag 0.10, but eased OFF THE
-  LINE — accel scales 45%→100% by ~22 mph — so a standstill stab of gas is gentle,
-  not jumpy, then it pulls hard up to a high top end. maxF road = 100 u/s × per-car
-  'top' (Sienna 0.82 ≈ 183 mph, Ferrari 1.0 = 224 mph). Off-road maxF 45 (slow but
-  recoverable). (Directly answers the user's "jumpy / accelerates too fast" note.)
-- SENSE OF SPEED: ALL speed-feel now normalized to each car's live topRef (= its
-  road top), not a hardcoded constant — chase FOV (46→73, eased sp^1.5 so mid speeds
-  aren't flat), camera pull-back + look-lead, the colour speed bar, the #fx vignette
-  (onset raised to ~45% of the car's top), and the perceptual engine-rev audio all
-  scale per car. Top-down and Aerial cams ALSO got speed: top-down leaps its
-  look-ahead forward + rises + small FOV kick; aerial breathes altitude up and biases
-  the gaze toward travel. Frame-rate-independent smoothing throughout.
-- COINS / SCORE LOOP (exists): 18 gold coins strung along the real roads; driving
-  through one chimes + ticks a '💛 x/18' HUD counter and shows on the minimap.
-- DRIFT: arcade lateral slip — the tail steps out turning hard at speed, far more on
-  the HANDBRAKE (Space / ✋ hold) or brake-to-drift; grip recovers it, throttle powers
-  out; the body leans into the slide. Per-car {accel, top, grip, slip}.
-- COLLISION FEEDBACK: a thunk sfx + decaying camera shake + haptic buzz + 'watch the
-  critters' toast on animals. The speed-scrub is now GATED behind a 200ms cooldown so
-  a car overlapping geometry for several frames is ejected by the position push-out
-  instead of being chained to a dead stop. (Collision is on the INVISIBLE procedural
-  footprints while photoreal tiles render.)
-- ARRIVAL: manual + auto — chime arpeggio, green/gold screen flash, 'You made it!' toast.
-- HORN: H / 📣.
-- Cameras (🎥 cycle Cruise → Top-down → Aerial → Close): Cruise = high chase (default,
-  clean); Top-down = near-overhead heading-up, supports DRAG-TO-DRIVE (drag → car
-  drives there, reverses if behind, faster the farther); Aerial = the exact Explore
-  high-orbit while driving; Close = low cinematic (melty, last).
-- Cars: picker (🚗) with real models (Sienna/RAV4/Ferrari/Toy). Navigation (🧭): address
-  presets (Meemaw's, schools, Dad's work) + free text; **Google Directions** road-
-  following route on the minimap + guide ribbon; **auto-drive (🤖)** follows it (capped
-  ~45 u/s); back-to-road (🛣️) snaps to the route/nearest road.
-- HUD: glass .panel system, right-side control DOCK, a SPEED MODULE (big number +
-  colour bar) lifted clear above the pedal cluster, framed minimap, gas/brake pedals,
-  handbrake + horn, coin counter, a fading drive hint.
-- STILL NOT DONE (lower items): minimap isn't tap-to-drive; auto-drive cap (45) is
-  slow for far trips and there's no ETA in the dest bar; no skid marks / tyre smoke;
-  coins have no run timer / best-time / combo.
+CURRENT STATE (ROUND 4 — the round-3 punch-list landed; re-grade the NEW code):
+- SPEED REGRESSION FIXED (round-3 #1 blocker): stick-only auto-creep no longer pins
+  to the top — it cruises GENTLY toward ~18 u/s (≈40 mph), corner-able; hold GO for
+  real speed. The real top stays high (maxF 100·top ≈ 183-224 mph) but is decoupled
+  from the FEEL: a feelRef (27·top ≈ 60 mph) is what FOV/speed-lines/gauge/engine-rev
+  saturate against, so 40 mph FEELS like 150 while you can still pin 180+ on the open
+  road (verified: --spd 0.86 at 38 mph). Launch still eased (45%→100% by ~22 mph).
+- OFF-ROAD is now a real penalty: within the ±340 m block, off the street = lawns,
+  maxF 24 (≈44 mph) + drag 0.5, so you slow hard and steer back to pavement. PAST
+  ±340 m (no procedural roads, only real photoreal road) it's treated as open road so
+  a cross-town blast to Meemaw's can hit triple digits.
+- REAL SPEED-LINES: white center-radial streak overlay (masked clear in the middle so
+  the road reads, gentle outward 'rush' animation), driven by --spd, building from
+  ~18%. Vignette kept underneath, lighter. Chase FOV eased (46→76, sp^1.25, builds
+  from the first mph). Top-down + Aerial cams have their own speed cues.
+- PARTICLES (new): pooled skid-mark decals + additive tyre-smoke puffs spawn at the
+  REAR WHEELS whenever the tail is out (|vlat|>6 or handbrake) and moving; a 6-spark
+  gold burst on each coin pickup. Power-slides now SUSTAIN on throttle (grip recovery
+  eased to 0.55× while on the gas) instead of being cancelled — gas holds the slide.
+- SCORE LOOP (new): a run timer starts on first gas/coin and stops on the 18th coin;
+  a quick-chain COMBO ramps (🔥×N, resets after 4 s); BEST time persists to
+  localStorage. Coin HUD shows '💛 x/18 · 🔥×combo · ⏱ m:ss · 🏆 best'; finishing all
+  18 toasts your time + a 'New best!' flag with a celebratory screen flash.
+- NEIGHBOURHOOD CALLOUTS (new): a one-shot toast + soft chime when you drive within
+  ~45 m of your house, Meemaw's, Canyon Middle, Stanton Elementary, or Dad's work
+  (XQ). (verified: '👋 That's YOUR house — 1840 Dahill Lane!' on spawn.)
+- MINIMAP TAP-TO-DRIVE (new): tap anywhere on the minimap → tapMinimap inverts the
+  pixel→world transform and auto-drives the car there (reuses DEST/auto-drive). A
+  reverse 'R' tell-tale lights in the speedo when speed<0; the dest bar shows live
+  remaining distance + rough ETA (verified: '256 m · ~0:24').
+- CHASE CAM auto-recenters fast (~600 ms after you let go, no speed gate) so two-thumb
+  driving (steer + pedals) needs no third look-thumb; czoom + orbit reset on
+  enterDrive and every camera cycle (no pinch-zoom leak).
+- DRIFT/COLLISION/ARRIVAL/HORN/cars/nav as before: per-car {accel,top,grip,slip};
+  hits = thunk+shake+haptic with a 200ms-cooldown-gated scrub; manual+auto arrival
+  payoff; Google Directions road routes + auto-drive (cap 45) + back-to-road.
+- Cameras 🎥 Cruise (default chase) → Top-down (drag-to-drive) → Aerial (Explore look)
+  → Close. HUD: glass panels, right DOCK, speed module lifted above the pedals,
+  GO/STOP pedals + handbrake + horn, framed minimap, coin/timer HUD, fading hint.
+- STILL OPEN (minor): auto-drive cap (45 u/s) makes far trips slow; no on-road
+  mini-challenges/time-trial start beyond the coin rally; tyre-smoke is additive grey
+  (not tinted to surface).
 
 This is a TOY/joyride: "drive around my real neighborhood and to real places."
 Judge the CURRENT code. Has it crossed into 'amazing'? If not, what's the shortest
