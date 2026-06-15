@@ -18,6 +18,7 @@ export default function App() {
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [nearCar, setNearCar] = useState(false);
   const [driveHint, setDriveHint] = useState(false);    // brief "how to drive" hint
+  const [driveScore, setDriveScore] = useState({ got: 0, total: 0 });
   const [carPicker, setCarPicker] = useState(false);    // car select menu open
   const [cars, setCars] = useState([]);
   const [navOpen, setNavOpen] = useState(false);        // address picker open
@@ -41,6 +42,7 @@ export default function App() {
         case 'scoopHud': setScoopHud(p); break;
         case 'nearCar': setNearCar(p); break;
         case 'dest': setDest(p); if (!p) setAutoDrive(false); break;
+        case 'driveScore': setDriveScore(p); break;
         case 'autodrive': setAutoDrive(p); break;
         case 'attribution': setAttribution(p); break;
         case 'carCard':
@@ -175,6 +177,7 @@ export default function App() {
               onPointerDown={() => eng().setHandbrake(true)} onPointerUp={() => eng().setHandbrake(false)}
               onPointerLeave={() => eng().setHandbrake(false)} onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
             <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
+            {driveScore.total > 0 && <div id="coinHud" className="panel">💛 {driveScore.got}/{driveScore.total}</div>}
             {driveHint && <div id="driveHint" className="panel">left side = drive · drag = look · ✋ hold to drift · 🎥 cameras</div>}
             {navOpen && (
               <div id="navPanel" className="startCard">

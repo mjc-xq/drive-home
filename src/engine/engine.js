@@ -90,6 +90,22 @@ export function createEngine({ canvas, ui, emit }) {
   let routeIdx = 0;       // current target waypoint along ROUTE
   let autoDrive = false;
 
+  // ---- drive collectibles: gold coins scattered along the neighbourhood roads ----
+  const coins = [];
+  let coinsGot = 0;
+  {
+    const coinGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.16, 18); coinGeo.rotateX(Math.PI / 2);
+    const coinMat = new THREE.MeshStandardMaterial({ color: 0xffcb2e, metalness: 0.85, roughness: 0.22, emissive: 0x6b4a00, emissiveIntensity: 0.5 });
+    const near = roadSegs.filter(s => Math.hypot(s[0][0], s[0][1]) < 250);
+    const step = Math.max(1, Math.floor(near.length / 18));
+    for (let i = 0; i < near.length && coins.length < 18; i += step) {
+      const s = near[i], mx = (s[0][0] + s[1][0]) / 2, mz = (s[0][1] + s[1][1]) / 2;
+      const m = new THREE.Mesh(coinGeo, coinMat); m.castShadow = true; m.frustumCulled = false; m.visible = false;
+      m.position.set(mx, terrainAt(mx, mz) + 1.1, mz);
+      scene.add(m); coins.push({ mesh: m, x: mx, z: mz, got: false });
+    }
+  }
+
   // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
   // that follows the car and fades into the 3D photoreal, masking the melty
   // photogrammetry right around the actor. uvAt is affine, so the aerial UV is
@@ -895,6 +911,8 @@ export function createEngine({ canvas, ui, emit }) {
   function enterDrive() {
     setMode('drive'); camInit = false;
     setInside(false);
+    for (const c of coins) c.got = false; coinsGot = 0;   // fresh coins each drive
+    emit('driveScore', { got: 0, total: coins.length });
     const sp = frontPt || [house.c[0], house.c[1] + 14];
     car.x = sp[0]; car.z = sp[1];
     if (frontDir) {
@@ -923,6 +941,7 @@ export function createEngine({ canvas, ui, emit }) {
     guideLine.visible = false; destPin.visible = false;
     if (ui.fx) ui.fx.classList.remove('on');
     if (camera.fov !== 46) { camera.fov = 46; camera.updateProjectionMatrix(); }
+    for (const c of coins) c.mesh.visible = false;
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -1029,6 +1048,8 @@ export function createEngine({ canvas, ui, emit }) {
     }
     ctx.stroke();
     const hp = toPx(0, 0); ctx.fillStyle = '#4ea1ff'; ctx.beginPath(); ctx.arc(hp[0], hp[1], 3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#ffcb2e';                            // uncollected coins
+    for (const c of coins) { if (c.got) continue; const p = toPx(c.x, c.z); if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) { ctx.beginPath(); ctx.arc(p[0], p[1], 2, 0, 7); ctx.fill(); } }
     if (DEST) {
       ctx.strokeStyle = '#ffc21e'; ctx.lineWidth = 2.4; ctx.beginPath();
       if (ROUTE && ROUTE.length > 1) {                     // road-following route
@@ -1254,6 +1275,18 @@ export function createEngine({ canvas, ui, emit }) {
     car.group.rotateY(car.yaw - Math.PI / 2 + driftYaw);
     car.group.rotateZ(-pitch);
     car.group.rotateX(roll);
+    // collectible coins: spin + bob, picked up by driving over them
+    for (const c of coins) {
+      c.mesh.visible = !c.got;
+      if (c.got) continue;
+      c.mesh.rotation.y += dt * 3.2;
+      c.mesh.position.y = terrainAt(c.x, c.z) + 1.0 + Math.abs(Math.sin(now * 0.004 + c.x)) * 0.3;
+      if (Math.hypot(car.x - c.x, car.z - c.z) < 3.4) {
+        c.got = true; coinsGot++; if (audio.sfxChime) audio.sfxChime([784, 1047]);
+        emit('driveScore', { got: coinsGot, total: coins.length });
+        if (coinsGot === coins.length) toast('💛 All ' + coins.length + ' coins! Sweet driving 🏁', 2800);
+      }
+    }
     if (navMarker) {
       navMarker.visible = inp2.navActive && !autoDrive;   // hide the finger ring during auto-drive
       if (navMarker.visible) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
