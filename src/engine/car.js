@@ -16,7 +16,12 @@ export const VEHICLES = [
   { slot: 0, name: 'Toyota Granvia', spec: '2.5L HYBRID · 189 HP · 8-SEAT MINIVAN', credit: 'model: Sketchfab', profile: { accel: 0.85, top: 0.82, grip: 1.35, slip: 0.4 } },
   { slot: 1, name: 'Toyota RAV4', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: '', profile: { accel: 1.0, top: 0.92, grip: 1.1, slip: 0.7 } },
   { slot: 2, name: 'Ferrari 458', spec: '4.5L V8 · 562 HP · RWD', credit: 'model: vicent091036', profile: { accel: 1.35, top: 1.0, grip: 0.9, slip: 1.1 } },
-  { slot: 3, name: 'Toy Racer', spec: 'LITTLE · BIG FUN', credit: 'Khronos ToyCar · CC0', profile: { accel: 1.5, top: 0.7, grip: 0.85, slip: 1.3 } }
+  { slot: 3, name: 'Mustang Shelby GT500', spec: '5.2L SUPERCHARGED V8 · 760 HP', credit: 'model: Sketchfab', profile: { accel: 1.3, top: 0.97, grip: 0.9, slip: 1.05 } },
+  { slot: 4, name: 'Mini Cooper S', spec: '2.0L TURBO · GO-KART HANDLING', credit: 'model: Sketchfab', profile: { accel: 1.1, top: 0.82, grip: 1.4, slip: 0.65 } },
+  { slot: 5, name: 'Corvette Stingray', spec: 'LEGO TECHNIC · 6.2L V8 VIBES', credit: 'model: Sketchfab', profile: { accel: 1.25, top: 0.92, grip: 1.05, slip: 0.95 } },
+  { slot: 6, name: 'Rolls-Royce Dawn', spec: '6.6L V12 · LUXURY CRUISER', credit: 'model: Sketchfab', profile: { accel: 0.8, top: 0.88, grip: 1.25, slip: 0.45 } },
+  { slot: 7, name: 'SCG 004CS', spec: 'TWIN-TURBO V8 · TRACK WEAPON', credit: 'model: Sketchfab', profile: { accel: 1.4, top: 1.0, grip: 1.0, slip: 1.0 } },
+  { slot: 8, name: 'Pininfarina Battista', spec: '1900 HP · ELECTRIC HYPERCAR', credit: 'model: Sketchfab', profile: { accel: 1.55, top: 1.15, grip: 0.95, slip: 1.1 } }
 ];
 
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.

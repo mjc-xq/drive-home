@@ -12,7 +12,12 @@ import carGlbUrl from '../assets/ferrari.glb';
 import rav4Url from '../assets/rav4.glb';
 import siennaUrl from '../assets/sienna.glb';
 import granviaUrl from '../assets/granvia.glb';
-import toycarUrl from '../assets/toycar.glb';
+import mustangUrl from '../assets/mustang.glb';
+import miniUrl from '../assets/mini.glb';
+import corvetteUrl from '../assets/corvette.glb';
+import rollsroyceUrl from '../assets/rollsroyce.glb';
+import scgUrl from '../assets/scg.glb';
+import battistaUrl from '../assets/battista.glb';
 
 // The whole game lives here, imperative three.js — React only renders the HUD.
 // Communication: engine -> UI via emit(type, payload) for low-frequency state,
@@ -790,10 +795,17 @@ export function createEngine({ canvas, ui, emit }) {
   if (!flags.has('nocar')) {
     installDracoDecoder();
     cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
-    // RAV4 + Sienna join the Ferrari as swappable driven vehicles (🚗 button).
-    loadDrivableCar(car, granviaUrl, 0, { length: 5.1, flip: true, black: false, meta: VEHICLES[0] }); // Granvia minivan = default (slot 0)
-    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });    // RAV4 GLB nose runs -Z
-    loadDrivableCar(car, toycarUrl, 3, { length: 4.0, flip: false, black: false, meta: VEHICLES[3] }); // CC0 Khronos ToyCar
+    // The swappable roster (🚗). All the new GLBs were Draco+WebP compressed and run nose
+    // -Z, so flip:true points them forward (matches the Granvia). Ferrari is slot 2 (loaded
+    // above via loadRealCar). Profiles live in VEHICLES.
+    loadDrivableCar(car, granviaUrl, 0, { length: 5.1, flip: true, black: false, meta: VEHICLES[0] });
+    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });
+    loadDrivableCar(car, mustangUrl, 3, { length: 4.9, flip: true, black: false, meta: VEHICLES[3] });
+    loadDrivableCar(car, miniUrl, 4, { length: 3.85, flip: true, black: false, meta: VEHICLES[4] });
+    loadDrivableCar(car, corvetteUrl, 5, { length: 4.6, flip: true, black: false, meta: VEHICLES[5] });
+    loadDrivableCar(car, rollsroyceUrl, 6, { length: 5.4, flip: true, black: false, meta: VEHICLES[6] });
+    loadDrivableCar(car, scgUrl, 7, { length: 4.5, flip: true, black: false, meta: VEHICLES[7] });
+    loadDrivableCar(car, battistaUrl, 8, { length: 4.8, flip: true, black: false, meta: VEHICLES[8] });
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
