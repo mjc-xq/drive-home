@@ -12,7 +12,12 @@ export function createAudio() {
         // iOS moves the context to 'interrupted'/'suspended' on a phone call, Siri, route
         // change or backgrounding; auto-resume so audio doesn't go permanently silent —
         // BUT not while we've deliberately suspended for a backgrounded tab (power saving).
-        AC.onstatechange = () => { if (!wantSuspended && AC.state !== 'running') AC.resume().catch(() => {}); };
+        // Authoritative: while we WANT it suspended (backgrounded), re-assert suspend if the
+        // OS nudges it back to 'running' (fast iOS lock/unlock race); otherwise auto-resume.
+        AC.onstatechange = () => {
+          if (wantSuspended) { if (AC.state === 'running') AC.suspend().catch(() => {}); return; }
+          if (AC.state !== 'running') AC.resume().catch(() => {});
+        };
       }
       if (!wantSuspended) AC.resume();
     } catch (e) { /* no audio is fine */ }
@@ -28,6 +33,13 @@ export function createAudio() {
     wantSuspended = false;
     try { if (AC) AC.resume(); } catch (e) { }
     try { if (music && !music.timer && music.sched) { music.nextT = AC.currentTime + 0.12; music.timer = setInterval(music.sched, 30); } } catch (e) { }
+  }
+  // full teardown on dispose — stop the music interval + close the context so nothing lingers
+  function close() {
+    wantSuspended = true;
+    try { stopMusic(); } catch (e) { }
+    try { if (AC) { AC.close(); AC = null; } } catch (e) { }
+    eng = null;
   }
 
   // Engine note: two detuned saws + a sub-octave square through a lowpass,
@@ -243,5 +255,5 @@ export function createAudio() {
   function musicSpeed(frac) { if (music && music.lp) { try { music.lp.frequency.setTargetAtTime(1100 + clamp01(frac) * 2800, AC.currentTime, 0.25); } catch (e) { } } }
   function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
-  return { ensure, suspendAudio, resumeAudio, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
+  return { ensure, suspendAudio, resumeAudio, close, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
 }

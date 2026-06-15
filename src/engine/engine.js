@@ -38,9 +38,10 @@ export function createEngine({ canvas, ui, emit }) {
   THREE.ColorManagement.enabled = false;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  // render at up to 2x even on phones (sharper edges/text; framebuffer cost is small
-  // next to tile memory, which the lruCache caps separately). LITE stays at 1x.
-  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, 2));
+  // Cap pixel ratio: 1.5 on phones (the fill-rate dial — at DPR 2 a 3x phone draws ~1.8×
+  // the fragments of the photoreal tiles + additive overlays + speed-line compositing for
+  // little visible gain), 2 on desktop. LITE stays at 1x.
+  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.5 : 2));
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles
@@ -54,8 +55,8 @@ export function createEngine({ canvas, ui, emit }) {
   scene.add(new THREE.HemisphereLight(0xd8e8f6, 0xa39a85, 0.6 * Math.PI));
   const sun = new THREE.DirectionalLight(0xfff1d8, 0.95 * Math.PI);
   sun.position.set(-185, 240, 150);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);   // 2048 on mobile too: sharper car/keeper/animal shadows
+  sun.castShadow = true;                 // gated to Scoop at runtime (see applyModeVisuals)
+  sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);   // casters sit in a tight frustum; 1024 is plenty on a phone
   const sc2 = sun.shadow.camera;
   // tighter frustum (±170 vs ±300) ~= 3× the texel density where shadows actually
   // land (the scoop sanctuary + driveway); distant procedural shadows aren't missed.
@@ -326,11 +327,14 @@ export function createEngine({ canvas, ui, emit }) {
   {
     const tSegs = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 330 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);
     const cols = [0xb53a32, 0x2f5fb0, 0xd9d9d9, 0x2a2a2a, 0xd6a52e, 0x3f9e63, 0x8a8f96];
-    const bodyGeo = new THREE.BoxGeometry(1.9, 1.0, 4.0); const cabGeo = new THREE.BoxGeometry(1.6, 0.72, 1.9);
+    const bodyGeo = new THREE.BoxGeometry(1.9, 1.0, 4.0), cabGeo = new THREE.BoxGeometry(1.6, 0.72, 1.9);
+    // shared materials: one cab + 7 body colours, reused across all cars (was 22 clones)
+    const bodyMats = cols.map(c => new THREE.MeshStandardMaterial({ color: c, metalness: 0.35, roughness: 0.55 }));
+    const cabMat = new THREE.MeshStandardMaterial({ color: 0x1b2735, metalness: 0.2, roughness: 0.35 });
     for (let i = 0; i < 11 && tSegs.length; i++) {
       const g = new THREE.Group();
-      const body = new THREE.Mesh(bodyGeo, new THREE.MeshStandardMaterial({ color: cols[i % cols.length], metalness: 0.35, roughness: 0.55 })); body.position.y = 0.6; body.castShadow = true;
-      const cab = new THREE.Mesh(cabGeo, new THREE.MeshStandardMaterial({ color: 0x1b2735, metalness: 0.2, roughness: 0.35 })); cab.position.set(0, 1.18, -0.25);
+      const body = new THREE.Mesh(bodyGeo, bodyMats[i % bodyMats.length]); body.position.y = 0.6; body.castShadow = true;
+      const cab = new THREE.Mesh(cabGeo, cabMat); cab.position.set(0, 1.18, -0.25);
       g.add(body); g.add(cab); g.frustumCulled = false; g.visible = false; scene.add(g);
       const seg = tSegs[(i * 7 + 3) % tSegs.length];
       traffic.push({ group: g, a: seg[0], b: seg[1], t: (i * 0.17) % 1, speed: 7 + (i % 5) * 2.4, near: false });
@@ -685,6 +689,11 @@ export function createEngine({ canvas, ui, emit }) {
     staticGroup.visible = mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     carsGroup.visible = mode === 'drive' || mode === 'scoop';   // parked cars: ground modes only
     if (ring) ring.visible = mode === 'explore';   // marker only makes sense from the air
+    // SHADOWS only in Scoop: in Drive/Explore the procedural receivers are hidden and the
+    // Google tiles are MeshBasicMaterial (can't receive), so a full extra depth pass each
+    // frame would render onto nothing. Gate the whole shadow pass off there.
+    sun.castShadow = (mode === 'scoop') && !LITE;
+    renderer.shadowMap.enabled = sun.castShadow;
   }
   if (!flags.has('flat')) {
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
@@ -1410,7 +1419,14 @@ export function createEngine({ canvas, ui, emit }) {
   // ~170 m of route (its real turns), resample to ~5 m steps, drape each cross-section
   // to the ground (relative to the car's road height so it sits ON the street), and
   // write the triangle-strip vertices. Falls back to a straight line to a routeless DEST.
+  let _guideX = 1e9, _guideZ = 1e9, _guideIdx = -1;
   function updateGuide(yC) {
+    guideLine.visible = true;
+    // Throttle the rebuild: 90 ground raycasts + a 540-float VBO re-upload + ~90 array
+    // allocs are wasted while the car barely moves. Only rebuild when it's moved >1.5 m
+    // or advanced a waypoint — a sub-metre lag in the ribbon start is invisible.
+    if (Math.abs(car.x - _guideX) < 1.5 && Math.abs(car.z - _guideZ) < 1.5 && routeIdx === _guideIdx) return;
+    _guideX = car.x; _guideZ = car.z; _guideIdx = routeIdx;
     const raw = [[car.x, car.z]];
     if (ROUTE && routeIdx < ROUTE.length) {
       let acc = 0, px = car.x, pz = car.z;
@@ -2056,7 +2072,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- loop ----------
   const dirV = new THREE.Vector3();
   let prev = performance.now();
-  let raf = 0, paused = false, ctxLost = false, _miniT = 0;
+  let raf = 0, paused = false, ctxLost = false, _miniT = 0, _miniCtx = null, _miniEl = null;
   // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
   // in view whenever the photoreal world is shown. Throttled; emits only on change.
   const _attrTarget = []; let _attrStr = '', _attrT = 0;
@@ -2100,17 +2116,22 @@ export function createEngine({ canvas, ui, emit }) {
     if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); p3dtiles.update(); updateAttribution(now); }
     else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
     if (mode === 'drive' && ui.minimap && now - _miniT > 80) {       // ~12fps minimap
-      _miniT = now; const ctx = ui.minimap.getContext('2d'); if (ctx) drawMinimap(ctx, ui.minimap.width, ui.minimap.height);
+      _miniT = now;
+      if (_miniEl !== ui.minimap) { _miniEl = ui.minimap; _miniCtx = ui.minimap.getContext('2d'); }   // cache the 2D context
+      if (_miniCtx) drawMinimap(_miniCtx, ui.minimap.width, ui.minimap.height);
     }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
   // iOS robustness: don't burn GPU/memory streaming tiles to a backgrounded tab,
   // and survive a WebGL context loss instead of freezing on a black canvas.
-  function onVisibility() {
-    if (document.hidden) { if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }     // backgrounded → stop RAF + audio (no power)
-    else if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); if (audio.resumeAudio) audio.resumeAudio(); else audio.ensure(); raf = requestAnimationFrame(loop); }
-  }
+  // Backgrounded → stop the RAF (halts physics, the 4-camera renders, tile streaming,
+  // minimap + FX) AND suspend audio (no engine drone / music) → a hidden tab draws ~no
+  // power. iOS phone-lock / app-switch often fires pagehide/freeze WITHOUT a reliable
+  // visibilitychange (and Low Power Mode can suppress it), so we listen to all of them.
+  function suspend() { if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }
+  function resume() { if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); if (audio.resumeAudio) audio.resumeAudio(); else audio.ensure(); raf = requestAnimationFrame(loop); } }
+  function onVisibility() { if (document.hidden) suspend(); else resume(); }
   function onContextLost(e) { e.preventDefault(); ctxLost = true; cancelAnimationFrame(raf); }
   function onContextRestored() { if (!disposed) location.reload(); }   // rebuild streamed GPU state via reload
 
@@ -2125,6 +2146,8 @@ export function createEngine({ canvas, ui, emit }) {
   canvas.addEventListener('webglcontextlost', onContextLost, false);
   canvas.addEventListener('webglcontextrestored', onContextRestored, false);
   document.addEventListener('visibilitychange', onVisibility);
+  addEventListener('pagehide', suspend); addEventListener('freeze', suspend);     // iOS lock / app-switch
+  addEventListener('pageshow', resume); addEventListener('resume', resume);
   addEventListener('keydown', onKeyDown);
   addEventListener('keyup', onKeyUp);
   addEventListener('resize', resize);
@@ -2142,7 +2165,8 @@ export function createEngine({ canvas, ui, emit }) {
   emitPOIs();                 // seed the start-card "places found" badge from saved progress
   emit('music', musicPref);   // seed the 🔊 toggle state
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
-  raf = requestAnimationFrame(loop);
+  if (document.hidden) paused = true;   // born in a background tab → don't render/stream until shown
+  else raf = requestAnimationFrame(loop);
 
   function dispose() {
     disposed = true;
@@ -2158,6 +2182,8 @@ export function createEngine({ canvas, ui, emit }) {
     canvas.removeEventListener('webglcontextlost', onContextLost);
     canvas.removeEventListener('webglcontextrestored', onContextRestored);
     document.removeEventListener('visibilitychange', onVisibility);
+    removeEventListener('pagehide', suspend); removeEventListener('freeze', suspend);
+    removeEventListener('pageshow', resume); removeEventListener('resume', resume);
     removeEventListener('keydown', onKeyDown);
     removeEventListener('keyup', onKeyUp);
     removeEventListener('resize', resize);
@@ -2166,6 +2192,8 @@ export function createEngine({ canvas, ui, emit }) {
       visualViewport.removeEventListener('scroll', resize);
     }
     audio.engineStop();
+    if (audio.stopMusic) audio.stopMusic();      // kill the 30ms music scheduler interval (was leaking)
+    if (audio.close) audio.close();              // close the AudioContext so it isn't left running
     if (cancelCarLoad) cancelCarLoad();          // late car load/timeout can't touch a dead scene
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
