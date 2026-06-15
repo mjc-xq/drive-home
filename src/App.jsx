@@ -7,7 +7,7 @@ import { createEngine } from './engine/engine.js';
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null });
+  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -196,6 +196,7 @@ export default function App() {
                 <b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span>
               </div>
               <div id="speedTrack"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
+              <div id="nitroTrack"><i id="nitroFill" ref={el => (uiRefs.current.boostBar = el)} /><span>🚀 NITRO</span></div>
             </div>
             {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
                 the left stick only turns, these drive. Just steering still auto-creeps. */}

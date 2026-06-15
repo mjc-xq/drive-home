@@ -144,6 +144,12 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #revInd{font-style:normal;font-size:15px;font-weight:900;color:#ff5a3c;opacity:0;transition:opacity .12s ease;align-self:center}
 #speedTrack{margin-top:9px;height:6px;border-radius:3px;background:rgba(255,255,255,.13);overflow:hidden}
 #speedFill{height:100%;width:0%;border-radius:3px;background:#3ad17a;transition:width .1s linear,background .2s ease}
+/* nitro meter — fills with skill (near-miss/drift/arrival), glows when ready, flares when firing */
+#nitroTrack{position:relative;margin-top:6px;height:8px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden}
+#nitroFill{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:4px;background:linear-gradient(90deg,#7a5cff,#36d6ff);transition:width .12s linear}
+#nitroTrack span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:6.5px;font-weight:900;letter-spacing:.18em;color:rgba(255,255,255,.7)}
+#nitroTrack.ready{box-shadow:0 0 10px rgba(80,200,255,.7);animation:firePulse .6s ease-in-out infinite}
+#nitroTrack.firing #nitroFill{background:linear-gradient(90deg,#36d6ff,#fff)}
 
 /* ---- sense of speed: white speed-lines radiating from centre + a soft vignette ---- */
 #fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .2s ease;overflow:hidden}
@@ -159,7 +165,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   animation:rush .6s linear infinite;transition:filter .25s ease}
 /* MOTION BLUR (cheap, mobile-safe): smear ONLY the streak layer when truly flying, so
    the periphery reads as motion-blurred without a full-screen post pass. */
-#fx.fast::before{filter:blur(2.4px);background:repeating-conic-gradient(from 0deg at 50% 50%,
+#fx.fast::before{filter:blur(2.4px);background:repeating-conic-gradient(from 0deg at var(--ox,50%) 48%,
     rgba(255,255,255,0) 0deg,rgba(255,255,255,0) 2deg,
     rgba(255,255,255,.7) 3deg,rgba(255,255,255,0) 4deg)}
 /* edge vignette underneath, lighter, so the streaks pop */

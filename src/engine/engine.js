@@ -227,7 +227,7 @@ export function createEngine({ canvas, ui, emit }) {
     lastNearT = now;
     combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1;
     comboExpire = now + 4000; comboExpired = false;
-    tripScore += 40 + combo * 20;
+    tripScore += 40 + combo * 20; addBoost(0.13);
     if (audio.sfxWhoosh) audio.sfxWhoosh(0.8);
     toast('💨 Close one!' + (combo > 1 ? ' ×' + combo : ''), 850);
     comboFx(now);
@@ -248,6 +248,8 @@ export function createEngine({ canvas, ui, emit }) {
      ['dad', 37.8004778, -122.2739559, '💼', "Dad's work", "💼 Dad's work — the XQ Institute!"]
     ].map(([key, lat, lon, icon, label, msg]) => { const w = geoToWorld(lat, lon); return { key, x: w[0], z: w[1], lat, lon, icon, label, msg }; }));
   let tripScore = 0;
+  let boost = 0, boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
+  function addBoost(amt) { boost = clamp(boost + amt, 0, 1); }
   function emitPOIs() { emit('poiProgress', { found: poiFound.size, total: POIS.length }); }
   // Route the player to the nearest place they HAVEN'T found yet — turns 5 one-shot
   // discoveries into a chained road trip ("now drive to the next place!").
@@ -391,6 +393,7 @@ export function createEngine({ canvas, ui, emit }) {
     const y = car.group ? car.group.position.y : 1;
     for (let k = 0; k < 4; k++) spawnCoinBurst(car.x + (k - 1.5) * 1.2, car.z, y, now);   // ~24 sparks
     if (audio.sfxChime) audio.sfxChime([523, 659, 784, 1047, 1319]);
+    addBoost(0.5);                                     // arriving fills a big chunk of nitro for the next leg
     if (!reduceMotion) {
       timeScale = 0.4; slowmoHold = 0.32;             // HELD slow-mo (then it eases back) — a real beat, not a blink
       if (ui.fx) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 850); }
@@ -844,7 +847,7 @@ export function createEngine({ canvas, ui, emit }) {
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
   const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
-  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false };
+  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
@@ -1243,14 +1246,16 @@ export function createEngine({ canvas, ui, emit }) {
       const sg = run(1) >= run(-1) ? 1 : -1;
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
-    car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; car.group.visible = true; car.groundY = null;
+    car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; boost = 0; car.group.visible = true; car.groundY = null;
     camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null;
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
     if (musicPref && audio.startMusic) audio.startMusic();
     showCarCard();
-    toast('Free roam — drive anywhere!', 2200);
+    // only show the free-roam line once there's no next place to chase — otherwise it
+    // would instantly clobber the spawn-goal toast that chainToNextPOI just fired.
+    if (poiFound.size >= POIS.length) toast('🏆 All places found — free roam, beat your times!', 2400);
   }
   function exitDrive() {
     setMode('explore');
@@ -1429,10 +1434,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (kind === 'animal') toast('🦆 Watch the critters!', 900);
     // BIG hit → a celebrated moment: a beat of slow-mo, a white flash, a CRUNCH. It also
     // BREAKS your combo — that's the risk that makes near-misses worth the reward.
-    else if (impact > 34) {
+    else if (impact > 40) {
       if (!reduceMotion) { timeScale = 0.32; if (ui.fx) { ui.fx.classList.add('crash'); setTimeout(() => ui.fx && ui.fx.classList.remove('crash'), 320); } }
-      const lost = combo > 1 ? '  ·  combo lost!' : '';
-      if (combo > 1) { combo = 0; comboExpired = true; emitScore({}); }
+      // halve the combo (not a full wipe) — a hard knock on an invisible footprint
+      // shouldn't erase a whole chain, but it should sting.
+      const lost = combo > 2 ? '  ·  combo halved' : '';
+      if (combo > 2) { combo = Math.floor(combo / 2); comboExpired = false; comboExpire = tnow + 4000; emitScore({}); }
       toast('💥 CRUNCH! ' + Math.round(impact * 2.237) + ' mph' + lost, 1200);
     }
     return true;
@@ -1606,13 +1613,21 @@ export function createEngine({ canvas, ui, emit }) {
     const prof = (profActive && profActive.profile) || { accel: 1, top: 1, grip: 1, slip: 0.7 };
     // High top speed on the open road (maxF 100 u/s ≈ 224 mph × per-car). Lawns cap
     // ~44 mph with heavy drag so you slow right down and steer back to the street.
-    const maxF = (openRoad ? 100 : 38) * prof.top, maxR = -11;   // off-road slower but not a glue trap
+    // NITRO: spend the meter (built from near-misses / drifts / arrivals) for a surge —
+    // routes the skill economy into raw speed, the addictive part of an arcade loop.
+    // auto-fire: flooring the throttle (or the Shift/🚀 input) with charge dumps nitro —
+    // no spare thumb is free for a manual button (left=steer, right=pedals).
+    const boosting = (inp2.boost || throttle > 0.92) && boost > 0.02 && Math.abs(car.speed) > 1.5;
+    if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); } }
+    boostWas = boosting;
+    const boostMul = boosting ? 1.34 : 1;
+    const maxF = (openRoad ? 100 : 38) * prof.top * boostMul, maxR = -11;   // off-road slower but not a glue trap
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
     // pin the real 180-220 mph on the open road (it just stays maxed up there).
     const feelRef = 27 * prof.top;
-    let acc = (openRoad ? 18 : 9) * prof.accel * throttle;
+    let acc = (openRoad ? 18 : 9) * prof.accel * throttle * boostMul;
     // Gentle launch, strong mid-range: ease accel off the line (45%→100% by ~22 mph)
     // so a standstill stab of gas isn't jumpy, but it still pulls hard up to the high
     // top end once rolling. (Directly answers "accelerates too fast / jumpy".)
@@ -1666,7 +1681,7 @@ export function createEngine({ canvas, ui, emit }) {
     // POWER-SLIDE reward: on the gas, at speed, while turning → the throttle actively
     // pushes the tail out (positive exit-yaw), so flooring it through a corner holds a
     // satisfying drift instead of just leaning on grip recovery being eased.
-    if (throttle > 0.4 && !hb && Math.abs(car.speed) > 10) car.vlat += car.steer * throttle * prof.slip * 9 * dt;
+    if (throttle > 0.4 && !hb && Math.abs(car.speed) > 10) car.vlat += car.steer * throttle * prof.slip * 18 * dt;
     const gripK = (prof.grip * (hb ? 1.4 : 3.5)) * (throttle > 0.5 && !hb ? 0.55 : 1);
     car.vlat *= Math.exp(-gripK * dt);
     // spin-recovery assist: tail way out + you're NOT actively steering or handbraking
@@ -1771,14 +1786,14 @@ export function createEngine({ canvas, ui, emit }) {
     if (audio.screech) audio.screech(slipping ? clamp((Math.abs(car.vlat) - 3) / 13, 0.18, 1) * (hb ? 1.1 : 1) : 0);
     // DRIFT reward: a held slide glows the ✋ button + a 'DRIFT' chip, and every ~0.9 s of
     // sustained drift ticks the combo + trip score — the best mechanic finally pays out.
-    const drifting = Math.abs(car.vlat) > 8 && Math.abs(car.speed) > 9;
+    const drifting = Math.abs(car.vlat) > 6 && Math.abs(car.speed) > 9;
     if (drifting !== driftState) { driftState = drifting; emit('drift', drifting); }
     if (drifting) {
       driftAccum += dt;
       if (driftAccum > 0.9) {
         driftAccum = 0;
         combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1; comboExpire = now + 4000; comboExpired = false;
-        tripScore += 30 + combo * 15; comboFx(now); emitScore({});
+        tripScore += 30 + combo * 15; addBoost(0.09); comboFx(now); emitScore({});
       }
     } else driftAccum = 0;
     tickParticles(now, dt);
@@ -1871,10 +1886,12 @@ export function createEngine({ canvas, ui, emit }) {
       camV.lerp(camT, 1 - Math.exp(-5 * dt));
       camera.position.copy(camV);
       camera.up.set(fx, 0, fz); // heading-up
-      const ahead = CAM.ahead + sp * sp * 16;
+      const spHiT = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
+      const ahead = CAM.ahead + sp * sp * 16 + spHiT * 14;     // see further down the road flat-out
       camera.lookAt(car.x + fx * ahead, yC, car.z + fz * ahead);
-      const fovT = 46 + 9 * sp;
+      const fovT = 46 + 9 * sp + 12 * spHiT;                   // a real widen when truly flying
       camera.fov += (fovT - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix();
+      if (!reduceMotion && spHiT > 0.1) { const r = spHiT * 0.04; camera.position.x += (Math.random() - 0.5) * r; camera.position.z += (Math.random() - 0.5) * r; }
     } else {
       const CAM = DRIVE_CAMS[camMode];
       camera.up.set(0, 1, 0);
@@ -1934,6 +1951,11 @@ export function createEngine({ canvas, ui, emit }) {
       if (ui.speedBar) {                                 // speed-bar fill + colour band
         ui.speedBar.style.width = (f * 100).toFixed(1) + '%';
         ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
+      }
+      if (ui.boostBar) {                                 // nitro meter (direct DOM, no React churn)
+        ui.boostBar.style.width = (boost * 100).toFixed(0) + '%';
+        ui.boostBar.parentElement.classList.toggle('ready', boost > 0.25 && !boosting);
+        ui.boostBar.parentElement.classList.toggle('firing', boosting);
       }
       if (ui.fx && !reduceMotion) {                      // speed streaks + vignette: build from ~18%, keep growing flat out
         const fHi = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
@@ -2111,6 +2133,7 @@ export function createEngine({ canvas, ui, emit }) {
     setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
     setGas: (on) => { inp2.gas = on ? 1 : 0; if (on) showT = 0; },   // gas pedal (hold)
     setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)
+    setBoost: (on) => { inp2.boost = !!on; },                        // nitro (hold while charged)
     setBrake: (on) => { inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
     toggleMusic: () => { musicPref = !musicPref; try { localStorage.setItem('dahill.music', musicPref ? '1' : '0'); } catch (e) { } if (mode === 'drive' && audio.setMusic) audio.setMusic(musicPref); emit('music', musicPref); return musicPref; },
     // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
