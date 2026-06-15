@@ -518,7 +518,7 @@ export function createEngine({ canvas, ui, emit }) {
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
   const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
-  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0 };
+  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
@@ -682,6 +682,8 @@ export function createEngine({ canvas, ui, emit }) {
       }
       if (mode === 'scoop' && (e.key === 'e' || e.key === 'E') && nearCar) { driveFromScoop(); e.preventDefault(); return; }
       if (mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
+      if (mode === 'drive' && e.key === ' ') { inp2.hbrake = true; e.preventDefault(); return; }        // Space = handbrake
+      if (mode === 'drive' && (e.key === 'h' || e.key === 'H')) { audio.horn && audio.horn(); e.preventDefault(); return; }
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;
       if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = -1;
@@ -708,6 +710,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (e.key === 'ArrowDown' || e.key === 's') inp2.ky = 0;
     if (e.key === 'ArrowLeft' || e.key === 'a') inp2.kx = 0;
     if (e.key === 'ArrowRight' || e.key === 'd') inp2.kx = 0;
+    if (e.key === ' ') inp2.hbrake = false;
   }
 
   // ---------- scoop mode ----------
@@ -918,6 +921,8 @@ export function createEngine({ canvas, ui, emit }) {
     hideJoy();
     navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
     guideLine.visible = false; destPin.visible = false;
+    if (ui.fx) ui.fx.classList.remove('on');
+    if (camera.fov !== 46) { camera.fov = 46; camera.updateProjectionMatrix(); }
     car.group.visible = false;
     if (groundPatch) groundPatch.visible = false;
     for (const s of labelSprites) s.visible = true;
@@ -1044,6 +1049,19 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.closePath(); ctx.fill();
   }
 
+  // collision feedback: a thunk, a kick of camera shake, and a haptic buzz, scaled
+  // by impact speed — so hits read as intentional, not a silent invisible-wall ping.
+  let shakeMag = 0, lastHitT = -1e9;
+  function carHit(impact, kind) {
+    const tnow = performance.now();
+    if (impact < 4 || tnow - lastHitT < 200) return;
+    lastHitT = tnow;
+    shakeMag = Math.max(shakeMag, clamp(impact * 0.05, 0.15, 1.4));
+    if (audio.sfxThunk) audio.sfxThunk(clamp(impact / 60, 0.2, 1));
+    if (navigator.vibrate) { try { navigator.vibrate(Math.round(clamp(impact * 1.4, 10, 55))); } catch (e) { } }
+    if (kind === 'animal') toast('🦆 Watch the critters!', 900);
+  }
+
   const camV = new THREE.Vector3();
   const _camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
   let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
@@ -1056,10 +1074,12 @@ export function createEngine({ canvas, ui, emit }) {
   const DRIVE_CAMS = [
     // high + steep like the top-down (so it stays ABOVE the melty ground-level
     // photogrammetry), but pulled a little behind and aimed well down the road.
+    // order = 🎥 cycle order; Close (low + melty) is LAST so the first tap isn't the
+    // worst-looking eye-level view.
     { name: 'Cruise', dist: 9, h: 34, ahead: 11, drone: true, topdown: false },
-    { name: 'Close', dist: 11, h: 5, ahead: 5, drone: false, topdown: false },
     { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true },
     { name: 'Aerial', aerial: true },   // the Explore look (high orbit) while driving
+    { name: 'Close', dist: 11, h: 7, ahead: 5, drone: false, topdown: false },
   ];
   function cycleCamera() {
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
@@ -1127,8 +1147,15 @@ export function createEngine({ canvas, ui, emit }) {
     // auto-drive: steer toward the look-ahead route point (follows roads) at a capped
     // cruise speed, arriving when close to the destination.
     if (autoDrive && DEST) {
-      if (Math.hypot(DEST.x - car.x, DEST.z - car.z) < 10) { autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🎉 Arrived at ' + DEST.label, 2000); }
+      if (Math.hypot(DEST.x - car.x, DEST.z - car.z) < 10) { autoDrive = false; inp2.navActive = false; emit('autodrive', false); }
       else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
+    }
+    // ARRIVAL payoff — fires once whether you drove there yourself or auto-drove.
+    if (DEST && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
+      DEST.reached = true;
+      audio.sfxChime([523, 659, 784, 1047]);
+      toast('🎉 You made it to ' + DEST.label + '! 🏁', 3000);
+      if (ui.fx && !reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 650); }
     }
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
     // ground point. Speed scales with DISTANCE (drag far = floor it, near = creep),
@@ -1152,28 +1179,33 @@ export function createEngine({ canvas, ui, emit }) {
     }
     if (throttle > 0.1 || brake > 0.1) showT = 0;
     const road = onRoad(car.x, car.z);
-    // Much higher top speed on the road (terminal ≈ acc/drag, clamped to maxF), but
-    // far slower off-road so you're rewarded for staying on the street. Steering
-    // grip rises with speed so it's stable, not twitchy, at the new top end.
-    // Hundreds of mph on the road: maxF 140 u/s ≈ 313 mph (mph = u*2.237). Big accel
-    // + low drag to actually reach it, strong brakes to scrub it, and off-road stays
-    // slow so the street is the fast line. Steering grip rises hard with speed so the
-    // car stays planted instead of spinning out at the top end.
-    // High top speed (maxF 140 u/s ≈ 313 mph) but a GENTLE build: low accel + low
-    // road drag means it keeps pulling toward the top end instead of lurching there.
-    const maxF = road ? 140 : 28, maxR = -10;
-    let acc = (road ? 14 : 8) * throttle;
+    // Per-car handling profile (Sienna heavy+grippy, Ferrari fast+slidey, Toy twitchy).
+    // High top speed (maxF up to ~313 mph) with a GENTLE build (low accel + low drag);
+    // off-road is slow so the street is the fast line.
+    const profActive = car.models[car.modelIdx];
+    const prof = (profActive && profActive.profile) || { accel: 1, top: 1, grip: 1, slip: 0.7 };
+    const maxF = (road ? 140 : 28) * prof.top, maxR = -10;
+    let acc = (road ? 14 : 8) * prof.accel * throttle;
     if (brake > 0.1) acc = car.speed > 0.5 ? -42 * brake : -11 * brake;
     car.speed += acc * dt;
     car.speed -= car.speed * (road ? 0.1 : 0.85) * dt;
     car.speed = clamp(car.speed, maxR, maxF);
     if (autoDrive) car.speed = Math.min(car.speed, 45);   // capped cruise while the robot drives
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
-    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.1);
+    const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.06);   // real steering authority at top speed
     car.steer += (steerTarget - car.steer) * Math.min(1, dt * 9);
-    car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * dt;
+    car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * dt;
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
-    let nx = car.x + fx * car.speed * dt, nz = car.z + fz * car.speed * dt;
+    // arcade drift: the tail steps out when you turn hard at speed (and far more on
+    // the handbrake); grip recovers it, and throttle powers out of the slide.
+    const hb = inp2.hbrake ? 1 : 0;
+    const slip = prof.slip * (1 + hb * 1.7);
+    car.vlat = (car.vlat || 0) + car.steer * Math.abs(car.speed) * slip * 0.7 * dt;
+    car.vlat *= Math.exp(-(prof.grip * (hb ? 1.6 : 6.5)) * dt);
+    if (throttle > 0.35 && !hb) car.vlat *= Math.exp(-3 * dt);
+    car.vlat = clamp(car.vlat, -22, 22);
+    const rpx = Math.cos(car.yaw), rpz = -Math.sin(car.yaw);   // car's right vector
+    let nx = car.x + (fx * car.speed + rpx * car.vlat) * dt, nz = car.z + (fz * car.speed + rpz * car.vlat) * dt;
     const rad = 1.25;
     // buildings are solid only at their real footprint; slide along the wall
     // instead of stopping dead so you can scrape past a corner.
@@ -1181,13 +1213,13 @@ export function createEngine({ canvas, ui, emit }) {
       if (!insideBuilding(nx, car.z)) nz = car.z;
       else if (!insideBuilding(car.x, nz)) nx = car.x;
       else { nx = car.x; nz = car.z; }
-      car.speed *= -0.22;
+      carHit(Math.abs(car.speed), 'wall'); car.speed *= 0.15;   // near-stop, not a backward fling
     }
     for (const t of treePts) {
       const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.75 + rad;
       if (d2 < rr * rr && d2 > 1e-6) {
         const d = Math.sqrt(d2); nx = t[0] + dx / d * rr; nz = t[1] + dz / d * rr;
-        car.speed *= -0.2;
+        carHit(Math.abs(car.speed), 'tree'); car.speed *= 0.18;
       }
     }
     // sanctuary-safe: animals always bounce the car, never get hurt
@@ -1195,7 +1227,7 @@ export function createEngine({ canvas, ui, emit }) {
       const dx = nx - a.x, dz = nz - a.z, d2 = dx * dx + dz * dz, rr = a.r + rad + 0.5;
       if (d2 < rr * rr && d2 > 1e-6) {
         const d = Math.sqrt(d2); nx = a.x + dx / d * rr; nz = a.z + dz / d * rr;
-        car.speed *= -0.25;
+        carHit(Math.abs(car.speed), 'animal'); car.speed *= -0.2;
       }
     }
     // Roam far across the streamed Google tiles. The procedural neighborhood (and
@@ -1217,7 +1249,9 @@ export function createEngine({ canvas, ui, emit }) {
     const pitch = Math.atan2(tB - tF, 2.8), roll = Math.atan2(tR - tL, 1.8);
     car.group.position.set(car.x, yC + 0.06, car.z);
     car.group.rotation.set(0, 0, 0);
-    car.group.rotateY(car.yaw - Math.PI / 2);
+    // point the body slightly into the slide so drifts read visually
+    const driftYaw = clamp(Math.atan2(car.vlat || 0, Math.max(6, Math.abs(car.speed))) * 0.7, -0.5, 0.5);
+    car.group.rotateY(car.yaw - Math.PI / 2 + driftYaw);
     car.group.rotateZ(-pitch);
     car.group.rotateX(roll);
     if (navMarker) {
@@ -1273,52 +1307,67 @@ export function createEngine({ canvas, ui, emit }) {
       camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * 1.0);
       const camT = _camT.set(car.x + r * Math.sin(po) * Math.sin(a), camGroundRef + r * Math.cos(po), car.z + r * Math.sin(po) * Math.cos(a));
       if (!camInit) { camV.copy(camT); camInit = true; }
-      camV.lerp(camT, Math.min(1, dt * 4.6));
+      camV.lerp(camT, 1 - Math.exp(-4.6 * dt));
       camera.position.copy(camV);
       camera.lookAt(car.x, camGroundRef + 1, car.z);
+      if (camera.fov !== 46) { camera.fov += (46 - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
     } else if (DRIVE_CAMS[camMode].topdown) {
       const CAM = DRIVE_CAMS[camMode];
       // almost directly overhead, but offset a little behind and aimed a touch
       // forward so you can read the road ahead (not perfectly straight down).
       const camT = _camT.set(car.x - fx * CAM.dist, yC + CAM.h * czoom, car.z - fz * CAM.dist);
       if (!camInit) { camV.copy(camT); camInit = true; }
-      camV.lerp(camT, Math.min(1, dt * 5));
+      camV.lerp(camT, 1 - Math.exp(-5 * dt));
       camera.position.copy(camV);
       camera.up.set(fx, 0, fz); // heading-up
       camera.lookAt(car.x + fx * CAM.ahead, yC, car.z + fz * CAM.ahead);
+      if (camera.fov !== 46) { camera.fov += (46 - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
     } else {
       const CAM = DRIVE_CAMS[camMode];
       camera.up.set(0, 1, 0);
       // free look: hold wherever you dragged; only drift gently back behind the car
       // after a few seconds of no look input while actually moving.
       if (now - camOrbit.t > 2800 && Math.abs(car.speed) > 3) camOrbit.yaw *= Math.exp(-dt * 0.9);
-      const a = car.yaw + Math.PI + camOrbit.yaw;
-      const dist = CAM.dist * czoom, h = (CAM.h + camOrbit.pitch * 4.5) * Math.max(0.7, czoom);
+      const sp = clamp(Math.abs(car.speed) / 140, 0, 1);              // 0..1 speed fraction
+      const a = car.yaw + Math.PI + camOrbit.yaw - car.steer * 0.6;   // lead the camera into corners
+      const dist = (CAM.dist + sp * sp * 9) * czoom;                  // sink the car back as it speeds up
+      const h = (CAM.h + camOrbit.pitch * 4.5 + sp * 3) * Math.max(0.7, czoom);
       // hold a STATIC altitude (drone cams): slow-smooth the ground ref so terrain
       // rolls don't bob the high cam; the low Close cam snaps to the ground.
-      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * (CAM.drone ? 1.2 : 6));
+      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * (1 - Math.exp(-dt * (CAM.drone ? 1.2 : 6)));
       const camT = _camT.set(car.x + Math.sin(a) * dist, camGroundRef + h, car.z + Math.cos(a) * dist);
-      // the low Close cam collides with geometry; the high cams fly above the melt
-      // (resolveCam against melty tile blobs would yank them down onto the car).
       if (!CAM.drone) {
         const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
         if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
       }
       if (!camInit) { camV.copy(camT); camInit = true; }
-      camV.lerp(camT, Math.min(1, dt * 4.6));
+      camV.lerp(camT, 1 - Math.exp(-4.6 * dt));                       // frame-rate-independent smoothing
       camV.y = Math.max(camV.y, groundAt(camV.x, camV.z) + 1.3);
       camera.position.copy(camV);
-      // look DOWN THE ROAD: aim a point ahead of the car along its heading, so you
-      // see where you're going instead of the roof of your own car.
-      camera.lookAt(car.x + fx * CAM.ahead, yC + 1.0, car.z + fz * CAM.ahead);
+      camera.lookAt(car.x + fx * (CAM.ahead + sp * 6), yC + 1.0, car.z + fz * (CAM.ahead + sp * 6));
+      const fovT = 46 + 27 * sp * sp;                                 // FOV kick → a real rush at speed
+      camera.fov += (fovT - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix();
     }
+    if (shakeMag > 0.01 && !reduceMotion) {                          // decaying collision shake
+      camera.position.x += (Math.random() - 0.5) * shakeMag;
+      camera.position.y += (Math.random() - 0.5) * shakeMag;
+      camera.position.z += (Math.random() - 0.5) * shakeMag;
+      shakeMag *= Math.exp(-dt * 9);
+    } else shakeMag = 0;
     if (ui.mph) ui.mph.textContent = Math.round(Math.abs(car.speed) * 2.237);
-    if (ui.speedBar) {                                   // speed-bar fill + colour band
+    {
       const f = clamp(Math.abs(car.speed) / 140, 0, 1);
-      ui.speedBar.style.width = (f * 100).toFixed(1) + '%';
-      ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
+      if (ui.speedBar) {                                 // speed-bar fill + colour band
+        ui.speedBar.style.width = (f * 100).toFixed(1) + '%';
+        ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
+      }
+      if (ui.fx && !reduceMotion) {                      // vignette/speed rush past ~35% (≈110 mph)
+        const v = clamp((f - 0.35) / 0.5, 0, 1) * 0.85;
+        ui.fx.style.setProperty('--spd', v.toFixed(2));
+        ui.fx.classList.toggle('on', v > 0.01);
+      }
     }
-    audio.engineUpdate(car.speed, 36);
+    audio.engineUpdate(car.speed, 140);   // real top speed (was a hardcoded 36 → saturated at ~16 mph)
   }
 
   // ---------- viewport (critical mobile invariant — do not regress) ----------
@@ -1474,7 +1523,9 @@ export function createEngine({ canvas, ui, emit }) {
       if (audio.blip) audio.blip();
     },
     focusHouse, cycleCamera, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad,
-    setDestination, clearDestination, toggleAutoDrive, dispose,
+    setDestination, clearDestination, toggleAutoDrive,
+    setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
+    dispose,
     get mode() { return mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging

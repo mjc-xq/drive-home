@@ -43,14 +43,16 @@ export function createAudio() {
 
   function engineUpdate(speed, maxSpeed) {
     if (!eng) return;
-    const r = Math.abs(speed) / maxSpeed;
-    const f = 58 + r * 170;
+    const r = Math.min(1, Math.abs(speed) / (maxSpeed || 1));
+    const rr = Math.pow(r, 0.6);            // perceptual: keeps revving across the whole range
+    const gear = (rr * 5) % 1;              // pitch climbs within a "gear", drops on the shift
+    const f = 56 + rr * 150 + gear * 34;
     eng.o1.frequency.value = f;
     eng.o2.frequency.value = f;
     eng.o3.frequency.value = f / 2;
-    eng.lp.frequency.value = 320 + r * 900;
-    eng.gain.gain.value = 0.012 + r * 0.05;
-    eng.noiseGain.gain.value = r * 0.028;
+    eng.lp.frequency.value = 300 + rr * 1500;
+    eng.gain.gain.value = 0.012 + rr * 0.06;
+    eng.noiseGain.gain.value = rr * 0.035;
   }
 
   function engineStop() {
@@ -84,6 +86,37 @@ export function createAudio() {
     } catch (e) { }
   }
 
+  // collision "thunk": a low sine drop + a short band-passed noise crunch, volume v∈0..1
+  function sfxThunk(v) {
+    try {
+      if (!AC) return;
+      const t = AC.currentTime, vol = 0.05 + (v || 0.5) * 0.22;
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(155, t); o.frequency.exponentialRampToValueAtTime(46, t + 0.18);
+      g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      o.connect(g); g.connect(AC.destination); o.start(); o.stop(t + 0.24);
+      const nb = AC.createBuffer(1, Math.floor(AC.sampleRate * 0.16), AC.sampleRate), d = nb.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      const ns = AC.createBufferSource(); ns.buffer = nb;
+      const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.7;
+      const ng = AC.createGain(); ng.gain.setValueAtTime(vol * 0.7, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      ns.connect(bp); bp.connect(ng); ng.connect(AC.destination); ns.start(); ns.stop(t + 0.18);
+    } catch (e) { }
+  }
+  // two stacked squares — a friendly car horn
+  function horn() {
+    try {
+      if (!AC) return; const t = AC.currentTime;
+      for (const fr of [440, 554]) {
+        const o = AC.createOscillator(), g = AC.createGain();
+        o.type = 'square'; o.frequency.value = fr;
+        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.045, t + 0.02);
+        g.gain.setValueAtTime(0.045, t + 0.3); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        o.connect(g); g.connect(AC.destination); o.start(); o.stop(t + 0.42);
+      }
+    } catch (e) { }
+  }
+
   function sfxChime(notes) {
     try {
       if (!AC) return;
@@ -99,5 +132,5 @@ export function createAudio() {
     } catch (e) { }
   }
 
-  return { ensure, engineStart, engineUpdate, engineStop, blip, sfxScoop, sfxChime };
+  return { ensure, engineStart, engineUpdate, engineStop, blip, sfxScoop, sfxChime, sfxThunk, horn };
 }

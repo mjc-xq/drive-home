@@ -10,11 +10,13 @@ export const CARYAW = -Math.PI / 2;
 // regardless of which GLB finishes loading first. credit feeds the car card;
 // VEHICLES[0] also doubles as the fallback card when no GLB has loaded yet.
 // Order = the cycle order; slot 0 is the DEFAULT driven vehicle (the minivan).
+// profile: per-car handling — accel (pull), top (×maxF), grip (steer authority +
+// drift recovery), slip (how easily the tail steps out). Read in updateDrive.
 export const VEHICLES = [
-  { slot: 0, name: 'Toyota Sienna', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: '' },
-  { slot: 1, name: 'Toyota RAV4', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: '' },
-  { slot: 2, name: 'Ferrari 458', spec: '4.5L V8 · 562 HP · RWD', credit: 'model: vicent091036' },
-  { slot: 3, name: 'Toy Racer', spec: 'LITTLE · BIG FUN', credit: 'Khronos ToyCar · CC0' }
+  { slot: 0, name: 'Toyota Sienna', spec: '2.5L HYBRID · 8-SEAT MINIVAN', credit: '', profile: { accel: 0.85, top: 0.82, grip: 1.35, slip: 0.4 } },
+  { slot: 1, name: 'Toyota RAV4', spec: '2.5L HYBRID · AWD · COMPACT SUV', credit: '', profile: { accel: 1.0, top: 0.92, grip: 1.1, slip: 0.7 } },
+  { slot: 2, name: 'Ferrari 458', spec: '4.5L V8 · 562 HP · RWD', credit: 'model: vicent091036', profile: { accel: 1.35, top: 1.0, grip: 0.9, slip: 1.1 } },
+  { slot: 3, name: 'Toy Racer', spec: 'LITTLE · BIG FUN', credit: 'Khronos ToyCar · CC0', profile: { accel: 1.5, top: 0.7, grip: 0.85, slip: 1.3 } }
 ];
 
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.

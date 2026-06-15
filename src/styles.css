@@ -143,6 +143,17 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .25s ease;
   background:radial-gradient(ellipse at center,transparent 52%,rgba(0,0,0,.34) 100%)}
 #fx.on{opacity:var(--spd,0)}
+#fx.arrive{opacity:.75;background:radial-gradient(circle,rgba(120,230,150,.4),rgba(255,210,70,.22) 55%,transparent 80%);transition:opacity .18s ease}
+
+/* ---- handbrake (hold to drift) + horn (bottom-right) + drive hint ---- */
+.holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:background .12s ease,transform .1s ease}
+.holdBtn:active{transform:scale(.93)}
+#hbrakeBtn{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));width:64px;height:64px;border-radius:19px;font-size:26px}
+#hbrakeBtn:active{background:rgba(217,79,30,.5)}
+#hornBtn{position:absolute;bottom:calc(90px + var(--safe-b));right:calc(12px + var(--safe-r));width:50px;height:50px;border-radius:15px;font-size:20px}
+#driveHint{position:absolute;top:calc(70px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:86vw;
+  padding:7px 15px;font-size:11.5px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
 
 /* ---- scoop info chips ---- */
 #toolChip{top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:9px 14px;font-size:13px;font-weight:700}

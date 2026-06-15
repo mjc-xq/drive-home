@@ -7,7 +7,7 @@ import { createEngine } from './engine/engine.js';
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null });
+  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -17,6 +17,7 @@ export default function App() {
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [nearCar, setNearCar] = useState(false);
+  const [driveHint, setDriveHint] = useState(false);    // brief "how to drive" hint
   const [carPicker, setCarPicker] = useState(false);    // car select menu open
   const [cars, setCars] = useState([]);
   const [navOpen, setNavOpen] = useState(false);        // address picker open
@@ -64,6 +65,13 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (mode !== 'drive') return;
+    setDriveHint(true);
+    const t = setTimeout(() => setDriveHint(false), 7000);
+    return () => clearTimeout(t);
+  }, [mode]);
+
   const eng = () => engineRef.current;
 
   // Quick destinations (live-geocoded for accuracy; hardcoded fallback so they
@@ -98,6 +106,7 @@ export default function App() {
         id="scene" ref={canvasRef} tabIndex={0}
         aria-label="Interactive 3D model of 1840 Dahill Lane with drivable neighborhood"
       />
+      <div id="fx" ref={el => (uiRefs.current.fx = el)} />
       {ready && picking && (
         <div id="startMenu">
           <div className="startCard">
@@ -161,6 +170,12 @@ export default function App() {
               <div id="speedRow"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
               <div id="speedTrack"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
             </div>
+            {/* handbrake (hold to drift) + horn, bottom-left */}
+            <button id="hbrakeBtn" className="panel holdBtn" aria-label="Handbrake (hold to drift)"
+              onPointerDown={() => eng().setHandbrake(true)} onPointerUp={() => eng().setHandbrake(false)}
+              onPointerLeave={() => eng().setHandbrake(false)} onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
+            <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
+            {driveHint && <div id="driveHint" className="panel">left side = drive · drag = look · ✋ hold to drift · 🎥 cameras</div>}
             {navOpen && (
               <div id="navPanel" className="startCard">
                 <h3>Drive to…</h3>
