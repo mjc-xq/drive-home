@@ -7,7 +7,7 @@ import { createEngine } from './engine/engine.js';
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null });
+  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -137,22 +137,29 @@ export default function App() {
         </div>
         {mode === 'drive' && (
           <div id="hud">
-            <div id="speedo"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
-            <button id="exitBtn" className="btn" onClick={() => eng().exitDrive()}>Exit ✕</button>
-            <button id="carSwap" className="btn icon" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}>🚗</button>
-            <button id="camBtn" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
-            <button id="resetRoad" className="btn icon" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
-            <button id="navBtn" className="btn icon" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
-            {/* minimap (top-left) */}
-            <div id="minimapWrap" className="chip">
+            {/* minimap panel (top-left) */}
+            <div id="minimapWrap" className="panel">
               <canvas id="minimap" width={132} height={132} ref={el => (uiRefs.current.minimap = el)} />
               {dest && (
                 <div id="destBar">
                   <span>📍 {dest.label}</span>
-                  <button className={'mini' + (autoDrive ? ' on' : '')} onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖 Auto' : 'Auto'}</button>
+                  <button className={'mini' + (autoDrive ? ' on' : '')} aria-label="Auto-drive" onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖' : 'Go'}</button>
                   <button className="mini" aria-label="Clear destination" onClick={() => eng().clearDestination()}>✕</button>
                 </div>
               )}
+            </div>
+            {/* control dock (right) */}
+            <div id="dock" className="panel">
+              <button id="exitBtn" className="dockBtn exit" aria-label="Exit drive" onClick={() => eng().exitDrive()}>✕</button>
+              <button id="navBtn" className="dockBtn" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
+              <button id="carSwap" className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}>🚗</button>
+              <button id="camBtn" className="dockBtn" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
+              <button id="resetRoad" className="dockBtn" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
+            </div>
+            {/* speed module (bottom-center) */}
+            <div id="speed" className="panel">
+              <div id="speedRow"><b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span></div>
+              <div id="speedTrack"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
             </div>
             {navOpen && (
               <div id="navPanel" className="startCard">

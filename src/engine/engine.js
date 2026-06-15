@@ -1313,6 +1313,11 @@ export function createEngine({ canvas, ui, emit }) {
       camera.lookAt(car.x + fx * CAM.ahead, yC + 1.0, car.z + fz * CAM.ahead);
     }
     if (ui.mph) ui.mph.textContent = Math.round(Math.abs(car.speed) * 2.237);
+    if (ui.speedBar) {                                   // speed-bar fill + colour band
+      const f = clamp(Math.abs(car.speed) / 140, 0, 1);
+      ui.speedBar.style.width = (f * 100).toFixed(1) + '%';
+      ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
+    }
     audio.engineUpdate(car.speed, 36);
   }
 

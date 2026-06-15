@@ -51,18 +51,31 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #compass{position:absolute;bottom:calc(12px + var(--safe-b));left:calc(12px + var(--safe-l));
   width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:5}
 #compass svg{width:34px;height:34px;will-change:transform}
-#ui.drive #compass,#ui.scoop #compass{left:50%;transform:translateX(-50%);bottom:calc(14px + var(--safe-b))}
+#ui.scoop #compass{left:50%;transform:translateX(-50%);bottom:calc(14px + var(--safe-b))}
+#ui.drive #compass{display:none}   /* the minimap shows heading in Drive */
 
-/* ---- action cluster (drive + scoop) : exit top-right, others stacked under ---- */
-#exitBtn,#exitScoop{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r))}
-#camBtn,#shiftLock{position:absolute;top:calc(64px + var(--safe-t));right:calc(12px + var(--safe-r))}
+/* ---- unified glass panel (HUD redesign) ---- */
+.panel{background:linear-gradient(180deg,rgba(28,32,38,.62),rgba(15,17,21,.58));
+  border:1px solid rgba(255,255,255,.10);border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.4);
+  backdrop-filter:blur(22px) saturate(1.45);-webkit-backdrop-filter:blur(22px) saturate(1.45)}
+
+/* ---- scoop action cluster: exit top-right, others stacked under ---- */
+#exitScoop{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r))}
+#shiftLock{position:absolute;top:calc(64px + var(--safe-t));right:calc(12px + var(--safe-r))}
 #scoopCam{position:absolute;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r))}
 /* jump (primary, thumb-reachable bottom-right) + dance just above it */
 #jumpBtn{position:absolute;bottom:calc(66px + var(--safe-b));right:calc(12px + var(--safe-r));width:54px;height:54px;font-size:22px}
 #danceBtn{position:absolute;bottom:calc(128px + var(--safe-b));right:calc(12px + var(--safe-r))}
-#carSwap{position:absolute;top:calc(116px + var(--safe-t));right:calc(12px + var(--safe-r))}
-#resetRoad{position:absolute;top:calc(168px + var(--safe-t));right:calc(12px + var(--safe-r))}
-#navBtn{position:absolute;top:calc(220px + var(--safe-t));right:calc(12px + var(--safe-r))}
+
+/* ---- drive control dock (right) ---- */
+#dock{position:absolute;top:calc(12px + var(--safe-t));right:calc(12px + var(--safe-r));display:flex;flex-direction:column;gap:7px;padding:7px}
+.dockBtn{width:46px;height:46px;border-radius:13px;border:1px solid transparent;background:rgba(255,255,255,.06);
+  color:var(--txt);font-size:19px;display:flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:background .15s ease,transform .1s ease}
+.dockBtn:hover{background:rgba(255,255,255,.16)}
+.dockBtn:active{transform:scale(.9)}
+.dockBtn.exit{background:rgba(217,79,30,.22);color:#ff9b73;font-size:16px;font-weight:800}
+.dockBtn.exit:hover{background:rgba(217,79,30,.42)}
 
 /* ---- drive minimap + address nav (top-left) ---- */
 #minimapWrap{position:absolute;top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:6px}
@@ -117,12 +130,19 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #credits span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ui.drive #credits{bottom:calc(70px + var(--safe-b));left:calc(12px + var(--safe-l))}
 
-/* ---- speedometer (bottom-right) ---- */
-#speedo{position:absolute;bottom:calc(14px + var(--safe-b));right:calc(14px + var(--safe-r));
-  padding:7px 18px;border-radius:14px;text-align:center;background:var(--glass);border:1px solid var(--line);
-  box-shadow:var(--shadow);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
-#speedo b{font-size:30px;font-weight:700;line-height:1}
-#speedo span{font-size:9px;opacity:.6;font-weight:600;letter-spacing:.14em;display:block}
+/* ---- speed module (bottom-center) ---- */
+#speed{position:absolute;bottom:calc(16px + var(--safe-b));left:50%;transform:translateX(-50%);
+  width:188px;padding:9px 18px 11px}
+#speedRow{display:flex;align-items:baseline;justify-content:center;gap:6px}
+#speedRow b{font-size:46px;font-weight:800;line-height:.85;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#speedRow span{font-size:11px;font-weight:800;opacity:.55;letter-spacing:.2em}
+#speedTrack{margin-top:9px;height:6px;border-radius:3px;background:rgba(255,255,255,.13);overflow:hidden}
+#speedFill{height:100%;width:0%;border-radius:3px;background:#3ad17a;transition:width .1s linear,background .2s ease}
+
+/* ---- speed-lines / vignette overlay (sense of speed) ---- */
+#fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .25s ease;
+  background:radial-gradient(ellipse at center,transparent 52%,rgba(0,0,0,.34) 100%)}
+#fx.on{opacity:var(--spd,0)}
 
 /* ---- scoop info chips ---- */
 #toolChip{top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:9px 14px;font-size:13px;font-weight:700}
