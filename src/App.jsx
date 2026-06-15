@@ -48,6 +48,7 @@ export default function App() {
         case 'autodrive': setAutoDrive(p); break;
         case 'driveCam': setCamName(p); break;
         case 'poiProgress': setPoi(p); break;
+        case 'cars': setCars(p); break;
         case 'attribution': setAttribution(p); break;
         case 'carCard':
           setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
@@ -173,6 +174,7 @@ export default function App() {
               <button id="navBtn" className="dockBtn" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
               <button id="carSwap" className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}>🚗</button>
               <button id="camBtn" className="dockBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>🎥<i className="camName">{camName}</i></button>
+              <button id="traceBtn" className="dockBtn" aria-label="Trace a path to drive" onClick={() => eng().traceDrive()}>🪄</button>
               <button id="resetRoad" className="dockBtn" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
             </div>
             {/* speed module (bottom-center) */}
@@ -204,9 +206,10 @@ export default function App() {
             {driveScore.total > 0 && (
               <div id="coinHud" className="panel">
                 <span className="coinCount">💛 {driveScore.got}/{driveScore.total}</span>
-                {driveScore.combo > 1 && <span className="combo">🔥×{driveScore.combo}</span>}
+                <span className="places">🏆 {poi.found}/{poi.total}</span>
+                {driveScore.combo > 1 && <span className={'combo' + (driveScore.combo >= 5 ? ' fire' : '')}>🔥×{driveScore.combo}</span>}
+                {driveScore.trip > 0 && <span className="trip">🏁 {driveScore.trip}</span>}
                 <span className="runClock">⏱ <i ref={el => (uiRefs.current.runTime = el)}>0:00</i></span>
-                {driveScore.bestStr && <span className="best">🏆 {driveScore.bestStr}</span>}
               </div>
             )}
             {driveHint && <div id="driveHint" className="panel">stick = steer · GO/STOP = gas/brake · ✋ drift · tap the map to drive there · 💛 grab the coins</div>}
@@ -231,11 +234,11 @@ export default function App() {
                 <h3>Choose your ride</h3>
                 <div className="carList">
                   {cars.map(c => (
-                    <button key={c.slot} className={'carRow' + (c.current ? ' current' : '')} disabled={!c.loaded}
-                      onClick={() => { eng().pickCar(c.slot); setCars(eng().getCars()); setCarPicker(false); }}>
-                      <span className="carName">{c.name}{c.current ? ' ✓' : ''}</span>
+                    <button key={c.slot} className={'carRow' + (c.current ? ' current' : '') + (c.locked ? ' locked' : '')} disabled={!c.loaded || c.locked}
+                      onClick={() => { eng().pickCar(c.slot); setCars(eng().getCars()); if (!c.locked) setCarPicker(false); }}>
+                      <span className="carName">{c.locked ? '🔒 ' : ''}{c.name}{c.current ? ' ✓' : ''}</span>
                       <span className="carSpec">{c.spec}</span>
-                      <span className="carCredit">{c.loaded ? c.credit : 'loading…'}</span>
+                      <span className="carCredit">{c.locked ? 'find all 5 places to unlock' : (c.loaded ? c.credit : 'loading…')}</span>
                     </button>
                   ))}
                 </div>

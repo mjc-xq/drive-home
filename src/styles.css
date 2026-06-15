@@ -76,8 +76,8 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .dockBtn:active{transform:scale(.9)}
 .dockBtn.exit{background:rgba(217,79,30,.22);color:#ff9b73;font-size:16px;font-weight:800}
 .dockBtn.exit:hover{background:rgba(217,79,30,.42)}
-#camBtn{position:relative;flex-direction:column;gap:0;line-height:1}
-#camBtn .camName{font-style:normal;font-size:7.5px;font-weight:800;letter-spacing:.02em;opacity:.72;margin-top:1px}
+#camBtn{position:relative;flex-direction:column;gap:0;line-height:1;font-size:17px}
+#camBtn .camName{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.01em;opacity:.78;margin-top:1px}
 
 /* ---- drive minimap + address nav (top-left) ---- */
 #minimapWrap{position:absolute;top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:6px}
@@ -182,12 +182,19 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #driveHint{position:absolute;top:calc(70px + var(--safe-t));left:50%;transform:translateX(-50%);max-width:86vw;
   padding:7px 15px;font-size:11.5px;font-weight:600;text-align:center;white-space:nowrap;animation:fadeIn .3s ease}
 #coinHud{position:absolute;top:calc(14px + var(--safe-t));left:50%;transform:translateX(-50%);
-  display:flex;align-items:center;gap:10px;padding:6px 14px;font-size:14px;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+  display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 10px;max-width:74vw;
+  padding:6px 14px;font-size:13.5px;font-weight:800;letter-spacing:.02em;white-space:nowrap}
 #coinHud .combo{color:#ff8a3c;animation:pop .25s ease}
+#coinHud .combo.fire{color:#ff5a3c;animation:firePulse .5s ease-in-out infinite}
+#coinHud .places{color:#ffcf66}
+#coinHud .trip{color:#7fd4ff}
 #coinHud .runClock{opacity:.82;font-variant-numeric:tabular-nums}
 #coinHud .runClock i{font-style:normal}
 #coinHud .best{opacity:.7;font-weight:700}
 @keyframes pop{from{transform:scale(1.5)}to{transform:scale(1)}}
+@keyframes firePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+.carRow.locked{opacity:.6}
+.carRow.locked .carName{color:#ffb24d}
 
 /* ---- scoop info chips ---- */
 #toolChip{top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:9px 14px;font-size:13px;font-weight:700}
