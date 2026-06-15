@@ -7,7 +7,7 @@ import { createEngine } from './engine/engine.js';
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null });
+  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -26,6 +26,8 @@ export default function App() {
   const [navErr, setNavErr] = useState('');
   const [dest, setDest] = useState(null);               // { label }
   const [autoDrive, setAutoDrive] = useState(false);
+  const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
+  const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
   const [carCard, setCarCard] = useState({ name: '', spec: '', credit: '', show: false });
@@ -44,6 +46,8 @@ export default function App() {
         case 'dest': setDest(p); if (!p) setAutoDrive(false); break;
         case 'driveScore': setDriveScore(p); break;
         case 'autodrive': setAutoDrive(p); break;
+        case 'driveCam': setCamName(p); break;
+        case 'poiProgress': setPoi(p); break;
         case 'attribution': setAttribution(p); break;
         case 'carCard':
           setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
@@ -119,6 +123,7 @@ export default function App() {
               <button className="btn primary" onClick={() => { setPicking(false); eng().enterDrive(); }}>🏎️ Drive</button>
               <button className="btn primary" onClick={() => { setPicking(false); eng().enterScoop(); }}>💩 Scoop</button>
             </div>
+            {poi.found > 0 && <p className="poiBadge">🏆 {poi.found}/{poi.total} neighborhood places found{poi.found < poi.total ? ' — drive to the rest!' : ' — all done! 🎉'}</p>}
           </div>
         </div>
       )}
@@ -167,7 +172,7 @@ export default function App() {
               <button id="exitBtn" className="dockBtn exit" aria-label="Exit drive" onClick={() => eng().exitDrive()}>✕</button>
               <button id="navBtn" className="dockBtn" aria-label="Navigate to address" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}>🧭</button>
               <button id="carSwap" className="dockBtn" aria-label="Choose vehicle" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}>🚗</button>
-              <button id="camBtn" className="dockBtn" aria-label="Camera view" onClick={() => eng().cycleCamera()}>🎥</button>
+              <button id="camBtn" className="dockBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>🎥<i className="camName">{camName}</i></button>
               <button id="resetRoad" className="dockBtn" aria-label="Back to road" onClick={() => eng().resetToRoad()}>🛣️</button>
             </div>
             {/* speed module (bottom-center) */}
@@ -186,8 +191,11 @@ export default function App() {
                 onPointerLeave={() => eng().setGas(false)} onPointerCancel={() => eng().setGas(false)}>GO</button>
               <button id="brakeBtn" className="panel holdBtn pedal brake" aria-label="Brake (hold to slow / reverse)"
                 onPointerDown={() => eng().setBrake(true)} onPointerUp={() => eng().setBrake(false)}
-                onPointerLeave={() => eng().setBrake(false)} onPointerCancel={() => eng().setBrake(false)}>STOP</button>
+                onPointerLeave={() => eng().setBrake(false)} onPointerCancel={() => eng().setBrake(false)}><span ref={el => (uiRefs.current.brakeLbl = el)}>STOP</span></button>
             </div>
+            {/* faint resting steer hint (bottom-left, first few seconds only) — pointer-events:none
+                so the real joystick still spawns under the thumb; tells first-timers where to steer */}
+            {driveHint && <div id="steerGhost" aria-hidden="true"><span>↺</span><i>steer</i></div>}
             {/* handbrake (hold to drift) + horn, bottom-left */}
             <button id="hbrakeBtn" className="panel holdBtn" aria-label="Handbrake (hold to drift)"
               onPointerDown={() => eng().setHandbrake(true)} onPointerUp={() => eng().setHandbrake(false)}

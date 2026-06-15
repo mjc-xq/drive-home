@@ -36,23 +36,52 @@ export function createAudio() {
       const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.5;
       const noiseGain = AC.createGain(); noiseGain.gain.value = 0;
       ns.connect(bp); bp.connect(noiseGain); noiseGain.connect(AC.destination);
+      // tyre-screech voice: the SAME looping noise through a tight high band, gated by
+      // a gain we ride from the drift amount — silent until the tail steps out.
+      const sbp = AC.createBiquadFilter(); sbp.type = 'bandpass'; sbp.frequency.value = 1550; sbp.Q.value = 5.5;
+      const screechGain = AC.createGain(); screechGain.gain.value = 0;
+      ns.connect(sbp); sbp.connect(screechGain); screechGain.connect(AC.destination);
       o1.start(); o2.start(); o3.start(); ns.start();
-      eng = { o1, o2, o3, ns, lp, gain, noiseGain };
+      eng = { o1, o2, o3, ns, lp, gain, noiseGain, screechGain, lastThrottle: 0 };
     } catch (e) { eng = null; }
   }
 
-  function engineUpdate(speed, maxSpeed) {
+  function engineUpdate(speed, maxSpeed, throttle) {
     if (!eng) return;
+    const th = throttle || 0;
     const r = Math.min(1, Math.abs(speed) / (maxSpeed || 1));
     const rr = Math.pow(r, 0.6);            // perceptual: keeps revving across the whole range
     const gear = (rr * 5) % 1;              // pitch climbs within a "gear", drops on the shift
-    const f = 56 + rr * 150 + gear * 34;
+    const f = (56 + rr * 150 + gear * 34) * (1 + th * 0.05);   // load lifts the note a touch
     eng.o1.frequency.value = f;
     eng.o2.frequency.value = f;
     eng.o3.frequency.value = f / 2;
-    eng.lp.frequency.value = 300 + rr * 1500;
-    eng.gain.gain.value = 0.012 + rr * 0.06;
-    eng.noiseGain.gain.value = rr * 0.035;
+    eng.lp.frequency.value = 300 + rr * 1500 + th * 600;       // open the filter under throttle (brighter pull)
+    eng.gain.gain.value = 0.012 + rr * 0.06 + th * 0.014;      // a touch louder on the gas
+    eng.noiseGain.gain.value = rr * 0.035 + th * 0.02;         // intake roar when flooring it
+    if (th > 0.5 && eng.lastThrottle <= 0.5) sfxWhoosh(0.5);   // audible "tip-in" when you stab the gas
+    eng.lastThrottle = th;
+  }
+
+  // ride the tyre-screech gain from a 0..1 slip amount (called each frame while drifting)
+  function screech(level) {
+    if (!eng || !AC) return;
+    try { eng.screechGain.gain.setTargetAtTime(Math.min(0.09, (level || 0) * 0.09), AC.currentTime, 0.04); } catch (e) { }
+  }
+
+  // a short filtered-noise swell — tip-in / near-miss "whoosh"
+  function sfxWhoosh(v) {
+    try {
+      if (!AC) return; const t = AC.currentTime, vol = 0.03 + (v || 0.5) * 0.06;
+      const nb = AC.createBuffer(1, Math.floor(AC.sampleRate * 0.34), AC.sampleRate), d = nb.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const ns = AC.createBufferSource(); ns.buffer = nb;
+      const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.1;
+      bp.frequency.setValueAtTime(380, t); bp.frequency.exponentialRampToValueAtTime(2400, t + 0.28);
+      const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.08); g.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
+      ns.connect(bp); bp.connect(g); g.connect(AC.destination); ns.start(); ns.stop(t + 0.36);
+    } catch (e) { }
   }
 
   function engineStop() {
@@ -132,5 +161,5 @@ export function createAudio() {
     } catch (e) { }
   }
 
-  return { ensure, engineStart, engineUpdate, engineStop, blip, sfxScoop, sfxChime, sfxThunk, horn };
+  return { ensure, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn };
 }

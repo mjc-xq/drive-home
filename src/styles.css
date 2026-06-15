@@ -76,6 +76,8 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .dockBtn:active{transform:scale(.9)}
 .dockBtn.exit{background:rgba(217,79,30,.22);color:#ff9b73;font-size:16px;font-weight:800}
 .dockBtn.exit:hover{background:rgba(217,79,30,.42)}
+#camBtn{position:relative;flex-direction:column;gap:0;line-height:1}
+#camBtn .camName{font-style:normal;font-size:7.5px;font-weight:800;letter-spacing:.02em;opacity:.72;margin-top:1px}
 
 /* ---- drive minimap + address nav (top-left) ---- */
 #minimapWrap{position:absolute;top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:6px}
@@ -160,6 +162,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.36) 100%)}
 @keyframes rush{from{transform:scale(1)}to{transform:scale(1.14)}}
 #fx.arrive{opacity:.8;background:radial-gradient(circle,rgba(120,230,150,.42),rgba(255,210,70,.24) 55%,transparent 80%);transition:opacity .18s ease}
+#fx.crash{opacity:.9;background:radial-gradient(circle,rgba(255,255,255,.7),rgba(255,120,60,.3) 60%,transparent 85%);transition:opacity .05s ease}
 @media (prefers-reduced-motion:reduce){#fx::before{animation:none}}
 
 /* ---- gas/brake pedals + handbrake + horn (bottom-right) + drive hint ---- */
@@ -216,6 +219,16 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 #knob{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;
   background:var(--poppy);transform:translate(-50%,-50%);box-shadow:0 3px 12px rgba(0,0,0,.35)}
+/* faint resting steer hint — pure affordance, no pointer events (joystick spawns on top) */
+#steerGhost{position:absolute;left:calc(30px + var(--safe-l));bottom:calc(40px + var(--safe-b));
+  width:96px;height:96px;border-radius:50%;border:2px dashed rgba(255,255,255,.22);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  pointer-events:none;color:rgba(255,255,255,.45);animation:ghostPulse 2.6s ease-in-out infinite}
+#steerGhost span{font-size:30px;line-height:1}
+#steerGhost i{font-style:normal;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+@keyframes ghostPulse{0%,100%{opacity:.5}50%{opacity:.85}}
+@media (prefers-reduced-motion:reduce){#steerGhost{animation:none}}
+.poiBadge{margin-top:12px;font-size:12.5px;font-weight:700;color:#ffcf66;opacity:.95}
 
 /* ---- loading ---- */
 #loading{position:fixed;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;
