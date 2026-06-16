@@ -1,6 +1,36 @@
 import { useEffect, useRef, useState } from 'react';
 import { createEngine } from './engine/engine.js';
 
+// Reusable address box with live Google Places autocomplete. `suggest(text)` returns
+// [{description, placeId}]; picking one calls onPick(item); typing + submit calls onText.
+function AddressSearch({ placeholder, actionLabel, suggest, onPick, onText }) {
+  const [val, setVal] = useState('');
+  const [sugs, setSugs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const tRef = useRef(0);
+  const onChange = (v) => {
+    setVal(v);
+    clearTimeout(tRef.current);
+    if (v.trim().length < 3) { setSugs([]); return; }
+    tRef.current = setTimeout(() => { suggest(v).then(s => setSugs(s || [])).catch(() => setSugs([])); }, 220);
+  };
+  const choose = (item) => { setBusy(true); setSugs([]); setVal(item.description); Promise.resolve(onPick(item)).finally(() => setBusy(false)); };
+  const submit = (e) => { e.preventDefault(); if (!val.trim()) return; setBusy(true); setSugs([]); Promise.resolve(onText(val.trim())).finally(() => setBusy(false)); };
+  return (
+    <form className="addrBox" onSubmit={submit} autoComplete="off">
+      <div className="addrRow">
+        <input value={val} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" spellCheck="false" />
+        <button type="submit" className="addrGo" disabled={busy}>{busy ? '…' : actionLabel}</button>
+      </div>
+      {sugs.length > 0 && (
+        <ul className="addrSug">
+          {sugs.map(s => <li key={s.placeId}><button type="button" onClick={() => choose(s)}><span className="pin">📍</span>{s.description}</button></li>)}
+        </ul>
+      )}
+    </form>
+  );
+}
+
 // React owns the HUD chrome only; the engine owns the canvas, input and the
 // game loop. Low-frequency state flows engine -> here via emit; per-frame
 // values (mph, compass, joystick knob) are written by the engine straight
@@ -24,6 +54,7 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);        // address picker open
   const [navAddr, setNavAddr] = useState('');           // custom address input
   const [navErr, setNavErr] = useState('');
+  const [autoMax, setAutoMax] = useState(() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } });   // auto-drive top-speed cap (mph; 0 = unlimited)
   const [dest, setDest] = useState(null);               // { label }
   const [autoDrive, setAutoDrive] = useState(false);
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
@@ -252,19 +283,35 @@ export default function App() {
             {drifting && <div id="driftChip">💨 DRIFT!</div>}
             {driveHint && <div id="driveHint" className="panel">{driveHelp}</div>}
             {navOpen && (
-              <div id="navPanel" className="startCard">
-                <h3>Drive to…</h3>
+              <div id="navPanel">
+                <div className="navHead"><h3>🧭 Navigate</h3><button className="navX" aria-label="Close" onClick={() => setNavOpen(false)}>✕</button></div>
+
+                <label className="navLbl"><i>🚗</i> Drive to</label>
+                <AddressSearch placeholder="Search a destination…" actionLabel="Go"
+                  suggest={t => eng().placeSuggest(t)}
+                  onPick={s => eng().driveToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
+                  onText={t => eng().driveToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+
                 <div className="navPresets">
                   {PRESETS.map(p => (
-                    <button key={p.label} className="btn" onClick={() => goTo(p.q, p.label, p.ll)}>{p.label}</button>
+                    <button key={p.label} className="chip" onClick={() => { setNavErr(''); eng().driveToText(p.q).then(() => setNavOpen(false)).catch(() => { eng().setDestination(p.ll[0], p.ll[1], p.label); setNavOpen(false); }); }}>{p.label}</button>
                   ))}
                 </div>
-                <form onSubmit={e => { e.preventDefault(); if (navAddr.trim()) goTo(navAddr.trim(), navAddr.trim(), null); }}>
-                  <input value={navAddr} onChange={e => { setNavErr(''); setNavAddr(e.target.value); }} placeholder="Type any address…" />
-                  <button type="submit" className="btn primary">Go</button>
-                </form>
+
+                <label className="navLbl"><i>📍</i> Jump to (start somewhere new)</label>
+                <AddressSearch placeholder="Teleport to an address…" actionLabel="Jump"
+                  suggest={t => eng().placeSuggest(t)}
+                  onPick={s => eng().jumpToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
+                  onText={t => eng().jumpToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+
+                <div className="navSlider">
+                  <label>Auto-drive top speed <b>{autoMax ? autoMax + ' mph' : 'unlimited'}</b></label>
+                  <input type="range" min="0" max="700" step="25" value={autoMax}
+                    onChange={e => { const v = +e.target.value; setAutoMax(v); eng().setAutoMaxMph(v); }} />
+                  <div className="sliderEnds"><span>slow</span><span>700</span></div>
+                </div>
+
                 {navErr && <p className="navErr">{navErr}</p>}
-                <button className="btn navClose" onClick={() => setNavOpen(false)}>Close</button>
               </div>
             )}
             {carPicker && (

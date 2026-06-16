@@ -1428,7 +1428,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (!key) return Promise.reject(new Error('no key'));
     _mapsSDK = new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + key;
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + key + '&libraries=places';   // places = address autocomplete
       s.async = true; s.defer = true;
       s.onload = () => (window.google && window.google.maps) ? res(window.google.maps) : rej(new Error('maps unavailable'));
       s.onerror = () => rej(new Error('maps script failed'));
@@ -1463,6 +1463,57 @@ export function createEngine({ canvas, ui, emit }) {
     fetchRoute(lat, lon);
   }
   function clearDestination() { DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; emit('dest', null); emit('autodrive', false); }
+  // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
+  // Geocoding/Directions endpoints are CORS-blocked, which is why the old fetch box failed) ----
+  function geocodeAddress(text) {
+    return loadMapsSDK().then(maps => new Promise((res, rej) => {
+      new maps.Geocoder().geocode({ address: text }, (r, status) => {
+        if (status === 'OK' && r && r[0]) { const l = r[0].geometry.location; res({ lat: l.lat(), lon: l.lng(), label: r[0].formatted_address }); }
+        else rej(new Error('geocode ' + status));
+      });
+    }));
+  }
+  function geocodePlaceId(placeId, fallbackLabel) {
+    return loadMapsSDK().then(maps => new Promise((res, rej) => {
+      new maps.Geocoder().geocode({ placeId }, (r, status) => {
+        if (status === 'OK' && r && r[0]) { const l = r[0].geometry.location; res({ lat: l.lat(), lon: l.lng(), label: fallbackLabel || r[0].formatted_address }); }
+        else rej(new Error('geocode ' + status));
+      });
+    }));
+  }
+  let _acSvc = null, _acTok = null;
+  function placeSuggest(text) {
+    if (!text || text.trim().length < 3) return Promise.resolve([]);
+    return loadMapsSDK().then(maps => new Promise(res => {
+      if (!maps.places) { res([]); return; }
+      if (!_acSvc) _acSvc = new maps.places.AutocompleteService();
+      if (!_acTok) _acTok = new maps.places.AutocompleteSessionToken();
+      _acSvc.getPlacePredictions({ input: text, sessionToken: _acTok }, (preds, status) => {
+        res((status === 'OK' && preds) ? preds.slice(0, 5).map(p => ({ description: p.description, placeId: p.place_id })) : []);
+      });
+    })).catch(() => []);
+  }
+  // Relocate the START: teleport the car to an address (snap onto the nearest road if one is
+  // near), clear any destination, re-settle the camera. Lets you start anywhere on the map.
+  function jumpTo(lat, lon, label) {
+    const w = geoToWorld(lat, lon);
+    car.x = w[0]; car.z = w[1]; car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.groundY = null;
+    const np = nearestRoadPoint(car.x, car.z);
+    if (np && np.d < 40) { car.x = np.x; car.z = np.z; }
+    clearDestination();
+    camInit = false; recoverCooldown = 1.8;
+    toast('📍 Jumped to ' + (label || 'there'), 1500);
+  }
+  // Destination by address / place — geocode then route there (and auto-drive on request).
+  function setDestinationByText(text, drive) {
+    return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+  }
+  function setDestinationByPlace(placeId, label, drive) {
+    return geocodePlaceId(placeId, label).then(g => { setDestination(g.lat, g.lon, g.label); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+  }
+  // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
+  let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
+  function setAutoMaxMph(mph) { autoMaxMph = Math.max(0, mph | 0); try { localStorage.setItem('dahill.automax', String(autoMaxMph)); } catch (e) { } emit('automax', autoMaxMph); }
   // Tap-to-drive from the minimap: set a raw world point as the destination and let
   // the robot drive there (no Google route needed for a nearby local point). Reuses
   // DEST + auto-drive, so the guide ribbon, pin, ETA and arrival all just work.
@@ -1533,7 +1584,9 @@ export function createEngine({ canvas, ui, emit }) {
     const far = clamp((dDest - 35) / 220, 0, 1);
     const cruise = 34 + straight * 250 + far * 30;          // up to ~700 mph on a long open straight; turns still slow it so it stays on the road
     const approach = dDest < 85 ? clamp(14 + dDest * 0.52, 14, 54) : cruise;
-    return Math.min(cruise, approach);
+    let s = Math.min(cruise, approach);
+    if (autoMaxMph) s = Math.min(s, autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
+    return s;
   }
   function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
@@ -2558,6 +2611,14 @@ export function createEngine({ canvas, ui, emit }) {
     },
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad,
     setDestination, clearDestination, toggleAutoDrive,
+    // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
+    placeSuggest, geocodeAddress, geocodePlaceId,
+    jumpToAddress: (lat, lon, label) => jumpTo(lat, lon, label),
+    jumpToText: (text) => geocodeAddress(text).then(g => { jumpTo(g.lat, g.lon, g.label); return g; }),
+    jumpToPlace: (placeId, label) => geocodePlaceId(placeId, label).then(g => { jumpTo(g.lat, g.lon, g.label); return g; }),
+    driveToText: (text) => setDestinationByText(text, true),
+    driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
+    setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
     setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
     setGas: (on) => { inp2.gas = on ? 1 : 0; if (on) showT = 0; },   // gas pedal (hold)
     setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)

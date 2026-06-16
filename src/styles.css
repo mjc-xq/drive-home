@@ -136,14 +136,45 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* inline dest mini-buttons (auto-drive / clear) */
 .mini{font-size:11px;font-weight:700;padding:3px 7px;border-radius:8px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}
 .mini.on{background:var(--poppy);border-color:transparent}
-#navPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,340px);pointer-events:auto}
-#navPanel h3{font-size:18px;font-weight:700;margin-bottom:10px}
-.navPresets{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;margin-bottom:10px}
-.navPresets .btn{font-size:13px;padding:8px 12px}
-#navPanel form{display:flex;gap:6px}
-#navPanel input{flex:1;min-width:0;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.28);color:var(--txt);font-size:15px;pointer-events:auto}
-#navPanel .navErr{color:#ff9a7a;font-size:12px;margin-top:8px}
-#navPanel .navClose{margin-top:10px;width:100%}
+/* ---- navigate panel: a clean dark sheet with two Google-autocomplete boxes ---- */
+#navPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;width:min(90vw,360px);
+  padding:16px 16px 18px;border-radius:20px;pointer-events:auto;
+  background:linear-gradient(180deg,rgba(24,28,34,.97),rgba(16,19,24,.97));
+  border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 60px rgba(0,0,0,.6),0 0 0 1px rgba(0,0,0,.4);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#fff;max-height:86vh;overflow:visible}
+.navHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+#navPanel h3{font-size:18px;font-weight:800;letter-spacing:.01em;margin:0}
+.navX{width:30px;height:30px;border-radius:9px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;font-size:14px;cursor:pointer}
+.navX:active{background:rgba(255,255,255,.14)}
+.navLbl{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.55);margin:14px 2px 6px}
+.navLbl:first-of-type{margin-top:2px}
+.navLbl i{font-style:normal;font-size:13px}
+.addrBox{position:relative}
+.addrRow{display:flex;gap:7px}
+.addrBox input{flex:1;min-width:0;padding:11px 13px;border-radius:12px;border:1px solid rgba(255,255,255,.14);
+  background:rgba(0,0,0,.34);color:#fff;font-size:15px;outline:none;pointer-events:auto}
+.addrBox input:focus{border-color:rgba(120,180,255,.7);box-shadow:0 0 0 3px rgba(80,150,255,.18)}
+.addrBox input::placeholder{color:rgba(255,255,255,.38)}
+.addrGo{flex:0 0 auto;padding:0 16px;border-radius:12px;border:0;font-size:14px;font-weight:800;cursor:pointer;
+  background:linear-gradient(180deg,#ff7a3c,#ef5a1e);color:#fff;box-shadow:0 4px 12px rgba(239,90,30,.4)}
+.addrGo:active{transform:translateY(1px)}
+.addrGo:disabled{opacity:.6}
+.addrSug{list-style:none;margin:6px 0 0;padding:5px;position:absolute;left:0;right:0;top:100%;z-index:5;
+  background:rgba(20,24,30,.99);border:1px solid rgba(255,255,255,.13);border-radius:12px;box-shadow:0 16px 36px rgba(0,0,0,.55);max-height:220px;overflow-y:auto}
+.addrSug li button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 10px;border:0;border-radius:8px;
+  background:transparent;color:rgba(255,255,255,.92);font-size:13.5px;line-height:1.25;cursor:pointer}
+.addrSug li button:hover,.addrSug li button:active{background:rgba(120,170,255,.16)}
+.addrSug .pin{flex:0 0 auto;font-size:12px;opacity:.8}
+.navPresets{display:flex;flex-wrap:wrap;gap:7px;margin:9px 0 2px}
+.navPresets .chip{font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:999px;cursor:pointer;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.92)}
+.navPresets .chip:active{background:rgba(255,255,255,.18)}
+.navSlider{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
+.navSlider>label{display:block;font-size:13px;font-weight:600;color:rgba(255,255,255,.8);margin-bottom:9px}
+.navSlider>label b{color:#ffb060;font-weight:800}
+.navSlider input[type=range]{width:100%;accent-color:#ff7a3c;height:22px}
+.sliderEnds{display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,.4);margin-top:1px}
+#navPanel .navErr{color:#ff9a7a;font-size:12.5px;margin-top:10px;text-align:center}
 
 /* ---- car picker ---- */
 #carPicker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,360px);pointer-events:auto}
