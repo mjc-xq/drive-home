@@ -1090,8 +1090,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (!roadLifeOn) { hideCrowd(); return; }
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
     if (inScoop) {
-      const wantInt = scoopScene === 'interior';   // show the indoor pair inside, the yard pair outside
-      for (const sp of crowdSpots) sp.rec.grp.visible = wantInt ? sp.zone === 'interior' : sp.zone === 'yard';
+      const wantInt = scoopScene === 'interior';
+      for (const sp of crowdSpots) {
+        // indoors: show only the companion you're NOT playing (one at a time); outdoors: the yard pair
+        if (sp.zone === 'interior') sp.rec.grp.visible = wantInt && sp.char !== CHAR.avatar;
+        else sp.rec.grp.visible = !wantInt && sp.zone === 'yard';
+      }
     } else if (inDrive) {
       // VISIBILITY CAP: with a spread-out pool we can't animate them all (skinned meshes are
       // costly). Show only the nearest CROWD_VIS_CAP within a cull radius — bounds the per-frame
@@ -1284,12 +1288,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (!interior || !ceceCrowd || !drewCrowd) return;
     if (crowdSpots.some(s => s.zone === 'interior')) return;
     const sp = interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)], ra = interior.roomAABB;
-    const add = (crowd, ox, oz, h, clip) => {
-      const x = clamp(sp.x + ox, ra[0] + 0.6, ra[1] - 0.6), z = clamp(sp.z + oz, ra[2] + 0.6, ra[3] - 0.6);
-      crowdSpots.push({ rec: crowd.add(scene, { x, y: interior.floorY, z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', onRoadHt: false, settleT: 0 });
+    // Both stand at the same spot; updateCrowd shows only the ONE you're not currently playing.
+    const add = (crowd, charName, h, clip) => {
+      const x = clamp(sp.x + fwd[0] * 2.6, ra[0] + 0.6, ra[1] - 0.6), z = clamp(sp.z + fwd[1] * 2.6, ra[2] + 0.6, ra[3] - 0.6);
+      crowdSpots.push({ rec: crowd.add(scene, { x, y: interior.floorY, z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
     };
-    add(drewCrowd, fwd[0] * 2.4 + 1.0, fwd[1] * 2.4, DREW_HEIGHT_M, 'dance');
-    add(ceceCrowd, fwd[0] * 2.4 - 1.0, fwd[1] * 2.4, CECE_HEIGHT_M);
+    add(drewCrowd, 'drew', DREW_HEIGHT_M, 'dance');
+    add(ceceCrowd, 'cece', CECE_HEIGHT_M);
   }
 
   // ---------- controls (explore) ----------
@@ -3654,7 +3659,7 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
-    scoop: () => ({ scene: scoopScene, ready: !!interior, avatar: CHAR.avatar, entry: entryPt && entryPt.map(v => +v.toFixed(1)), char: [+CHAR.x.toFixed(1), +CHAR.z.toFixed(1)], dDoor: entryPt ? +Math.hypot(CHAR.x - entryPt[0], CHAR.z - entryPt[1]).toFixed(1) : null }),
+    scoop: () => ({ scene: scoopScene, ready: !!interior, avatar: CHAR.avatar, entry: entryPt && entryPt.map(v => +v.toFixed(1)), char: [+CHAR.x.toFixed(1), +CHAR.z.toFixed(1)], dDoor: entryPt ? +Math.hypot(CHAR.x - entryPt[0], CHAR.z - entryPt[1]).toFixed(1) : null, occ: interior ? interior.occluders.length : 0, hiddenOcc: interior ? interior.occluders.filter(o => !o.visible).length : 0 }),
     crowd: () => ({ on: roadLifeOn, cece: !!ceceCrowd, drew: !!drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - car.x, s.rec.z - car.z)) })) }),
     traffic: () => ({ on: roadLifeOn, total: traffic.length, visible: traffic.filter(c => c.group.visible).length, cars: traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
     p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()

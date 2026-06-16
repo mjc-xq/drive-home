@@ -89,7 +89,11 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const wallColliders = walls.map(w => boxXZ(tmp.setFromObject(w)));
     const doorPortals = doors.map(d => boxXZ(tmp.setFromObject(d), 0.18));
     const furnitureColliders = furniture.map(f => boxXZ(tmp.setFromObject(f)));
-    const occluders = walls.concat(furniture);   // meshes the see-through cut-away can hide (walls + furniture; the couch is added on load)
+    // Everything except the floor can hide the avatar — collect ALL non-floor meshes so the wall
+    // cabinets / chairs / appliances between the camera and the player also go see-through (not just
+    // walls + the big floor-standing furniture). The couch is appended on load.
+    const occluders = [];
+    model.traverse(o => { if (o.isMesh && !FLOOR_RE.test(o.name || '')) occluders.push(o); });
     // Outer shell = union of walls; the hard clamp that keeps the player in the building.
     const roomAABB = [Infinity, -Infinity, Infinity, -Infinity];
     for (const w of wallColliders) { roomAABB[0] = Math.min(roomAABB[0], w[0]); roomAABB[1] = Math.max(roomAABB[1], w[1]); roomAABB[2] = Math.min(roomAABB[2], w[2]); roomAABB[3] = Math.max(roomAABB[3], w[3]); }
