@@ -1539,9 +1539,11 @@ export function createEngine({ canvas, ui, emit }) {
       );
     }).catch(e => console.warn('[maps sdk] route unavailable, using straight line —', e && e.message));
   }
-  function setDestination(lat, lon, label, isChain) {
+  // fromSearch = the player explicitly chose this place from the GO address search;
+  // only THOSE arrivals earn the "Arrived" banner (a casual map tap does not).
+  function setDestination(lat, lon, label, isChain, fromSearch) {
     const w = geoToWorld(lat, lon);
-    DEST = { x: w[0], z: w[1], label: label || 'Destination', geo: { lat, lon } };   // geo kept so a failed route can self-retry
+    DEST = { x: w[0], z: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch };   // geo kept so a failed route can self-retry
     ROUTE = null; routeIdx = 0; userDest = !isChain;
     emit('dest', { label: DEST.label });
     if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200); }
@@ -1661,10 +1663,10 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Destination by address / place — geocode then route there (and auto-drive on request).
   function setDestinationByText(text, drive) {
-    return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+    return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
   }
   function setDestinationByPlace(placeId, label, drive) {
-    return geocodePlaceId(placeId, label).then(g => { setDestination(g.lat, g.lon, g.label); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+    return geocodePlaceId(placeId, label).then(g => { setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
   }
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
   let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
@@ -2143,12 +2145,14 @@ export function createEngine({ canvas, ui, emit }) {
       if (!ROUTE) { inp2.navActive = false; if (DEST.geo && now - (DEST._retryT || 0) > 4000) { DEST._retryT = now; fetchRoute(DEST.geo.lat, DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
       else if (atEnd) {
         autoDrive = false; inp2.navActive = false; emit('autodrive', false);
-        if (!DEST.reached) { DEST.reached = true; if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
+        if (!DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
       } else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
     }
-    // ARRIVAL payoff for a destination you drove to YOURSELF (auto-drive handles its own
-    // arrival above). POIs run their own richer celebration via checkPOIs (45 m).
-    else if (DEST && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
+    // ARRIVAL payoff — ONLY for a destination chosen from the GO address search
+    // (DEST.celebrate). A casual tap-to-trace on the map is NOT an "arrival" worth a
+    // banner (the user: it should only show if you pick an address from GO). POIs run
+    // their own richer celebration via checkPOIs (45 m).
+    else if (DEST && DEST.celebrate && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
       DEST.reached = true;
       if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now);
     }

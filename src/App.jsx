@@ -93,7 +93,7 @@ export default function App() {
         case 'drift': setDrifting(p); break;
         case 'arrived':
           setArrived(p); clearTimeout(arrivedTimer.current);
-          arrivedTimer.current = setTimeout(() => setArrived(null), 3600);
+          arrivedTimer.current = setTimeout(() => setArrived(null), 1800);
           break;
         case 'attribution': setAttribution(p); break;
         case 'carCard':
@@ -459,12 +459,13 @@ export default function App() {
             <span style={{ opacity: .5, fontSize: 10, letterSpacing: '.04em' }}>{carCard.credit ? `${carCard.credit} · three.js` : 'three.js'}</span>
           </p>
         </div>
+        {/* Arrival = a compact, NON-blocking banner that slides in above the dash and
+            auto-dismisses. (Was a big modal dead-centre over the road — "no more!".) */}
         {arrived && (
           <div id="arrivedCard">
-            <div className="arrivedFlag">🏁</div>
-            <h2>You made it to {arrived.label}!</h2>
-            {arrived.points > 0 && <p className="arrivedPts">+{arrived.points} points</p>}
-            <p className="arrivedTrip">🏁 Trip score {arrived.trip}</p>
+            <span className="acFlag">🏁</span>
+            <span className="acText">Arrived · <b>{arrived.label}</b></span>
+            {arrived.points > 0 && <span className="acPts">+{arrived.points}</span>}
           </div>
         )}
         {mode === 'scoop' && (
