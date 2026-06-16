@@ -1,9 +1,20 @@
+/* ---- AGC display face (big speed numbers / dash readouts) ---- */
+@font-face{font-family:"AGC";src:url("./assets/fonts/agc-black.woff2") format("woff2");font-weight:900;font-display:swap}
+@font-face{font-family:"AGC";src:url("./assets/fonts/agc-heavy.woff2") format("woff2");font-weight:800;font-display:swap}
+@font-face{font-family:"AGC";src:url("./assets/fonts/agc-bold.woff2") format("woff2");font-weight:700;font-display:swap}
+@font-face{font-family:"AGC";src:url("./assets/fonts/agc-medium.woff2") format("woff2");font-weight:500;font-display:swap}
+
 :root{
   --poppy:#d94f1e; --txt:#f4f1ea;
   --glass:rgba(20,23,28,.5); --glass-hi:rgba(34,38,45,.6); --line:rgba(255,255,255,.14);
   --shadow:0 4px 22px rgba(0,0,0,.30);
   --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
   --safe-l:env(safe-area-inset-left,0px); --safe-r:env(safe-area-inset-right,0px);
+  /* ---- Drive HUD design tokens (square chrome, nav-app palette) ---- */
+  --nav:#2D8CFF; --go:#2BE84F; --jump:#9B7BFF; --reverse:#FF5247; --coin:#FFC83D; --fire:#FF9E1C;
+  --hud-glass:rgba(8,10,14,.66); --hud-line:rgba(255,255,255,.18);
+  --hud-shadow:0 16px 40px rgba(0,0,0,.5);
+  --hud-blur:blur(18px) saturate(1.3);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body,#root{height:100%;height:100dvh;overflow:hidden;background:#1a1d22;overscroll-behavior:none}
@@ -68,113 +79,175 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #jumpBtn{position:absolute;bottom:calc(66px + var(--safe-b));right:calc(12px + var(--safe-r));width:54px;height:54px;font-size:22px}
 #danceBtn{position:absolute;bottom:calc(128px + var(--safe-b));right:calc(12px + var(--safe-r))}
 
-/* ════════════════ PIT WALL — the single drive HUD blade (top) ════════════════ */
-#pitwall{position:absolute;top:calc(8px + var(--safe-t));left:calc(8px + var(--safe-l));right:calc(8px + var(--safe-r));
-  z-index:5;border-radius:18px;padding:7px 10px 0;display:flex;flex-direction:column;gap:5px;overflow:visible;
-  pointer-events:auto}   /* the blade is a solid HUD surface — touches on it don't drive the car */
-/* scrim bleeding below so the big MPH never fights the bright satellite imagery */
-#pitwall::before{content:'';position:absolute;inset:0 0 -7px 0;z-index:-1;border-radius:inherit;
-  background:linear-gradient(180deg,rgba(9,11,15,.5),rgba(9,11,15,.1))}
+/* ════════════════ DRIVE HUD — square chrome, nav-app cockpit ════════════════ */
+/* the map IS the interface; everything floats. Chrome is square (no radius),
+   glass-blurred, with a single hero DASH at the foot and twin sticks in the corners. */
+.driveHud{position:absolute;inset:0;font-family:'Chakra Petch',system-ui,sans-serif}
+.driveHud button,.driveHud .miniFrame,.driveHud .lookStick{pointer-events:auto}
+/* shared square glass surface */
+.driveHud .glass{background:var(--hud-glass);border:1px solid var(--hud-line);box-shadow:var(--hud-shadow);
+  backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur)}
 
-/* top strip: exit · destination headline · actions */
-.pwTop{display:flex;align-items:center;gap:8px;min-height:26px}
-.pwExit{flex:0 0 auto;width:27px;height:27px;border-radius:9px;border:1px solid transparent;
-  background:rgba(217,79,30,.26);color:#ff9b73;font-size:14px;font-weight:800;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;transition:background .15s ease,transform .1s ease}
-.pwExit:active{transform:scale(.96)}
-.pwDest{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;font-size:12.5px}
-.pwDest .kick{flex:0 0 auto;font-style:normal;font-size:8px;font-weight:800;letter-spacing:.16em;color:var(--poppy)}
-.pwDest b{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42%}
-.pwDest .lead{flex:1 1 6px;min-width:6px;align-self:flex-end;margin-bottom:4px;border-bottom:1px dotted var(--line)}
-.pwDest .eta{flex:0 0 auto;font-style:normal;font-size:11px;font-weight:700;opacity:.8;font-variant-numeric:tabular-nums}
-.pwDest.free{color:rgba(244,241,234,.5)}
-.pwDest.free span{font-size:10.5px;font-weight:600}
+/* ── TOP-LEFT: score strip + framed minimap ── */
+.dvLeft{position:absolute;left:calc(12px + var(--safe-l));top:calc(12px + var(--safe-t));display:flex;flex-direction:column;gap:7px;z-index:6}
+.scoreStrip{display:flex;align-items:stretch;align-self:flex-start;background:var(--hud-glass);border:1px solid var(--hud-line);
+  box-shadow:0 12px 30px rgba(0,0,0,.45);backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur)}
+.scoreStrip.onFire{background:rgba(12,9,7,.72);border-color:rgba(255,130,40,.45)}
+.ssDiv{width:1px;background:rgba(255,255,255,.14)}
+.scoreStrip.onFire .ssDiv{background:rgba(255,130,40,.3)}
+.ssCell{display:flex;align-items:center;gap:7px;padding:8px 12px;font-family:'Chakra Petch';font-weight:600;font-size:14px;color:#fff;font-variant-numeric:tabular-nums}
+.ssNum i,.comboNum i{font-style:normal}
+.ssNum i{color:rgba(255,255,255,.45)}
+.coinDot{width:12px;height:12px;border-radius:50%;background:var(--coin);box-shadow:0 0 8px var(--coin)}
+.ssCell.combo{background:linear-gradient(90deg,rgba(255,158,28,.2),rgba(255,82,71,.2))}
+.ssCell.combo .comboNum{font-family:'AGC';font-weight:800;font-size:17px;color:var(--fire)}
+.ssCell.combo.fire{background:linear-gradient(90deg,var(--fire),var(--reverse));animation:firePulseShadow 1.1s ease-in-out infinite}
+.ssCell.combo.fire .comboNum{color:#fff;font-weight:900}
+.ssCell.combo .fireIc{filter:drop-shadow(0 0 2px rgba(0,0,0,.3))}
+.ssCell.trip{flex-direction:column;align-items:flex-start;gap:1px;padding:6px 13px}
+.ssKick{font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.16em;color:rgba(255,255,255,.5)}
+.tripNum{font-family:'AGC';font-weight:800;font-size:18px;color:#fff;line-height:1}
+.scoreStrip.onFire .tripNum{color:var(--coin)}
+@keyframes firePulseShadow{0%,100%{box-shadow:0 0 0 0 rgba(255,120,30,.5)}50%{box-shadow:0 0 20px 3px rgba(255,120,30,.85)}}
 
-/* ── ACTION RAIL: big, always-visible LABELLED controls away from the pedal thumb zone ── */
-#actionRail{position:absolute;top:calc(132px + var(--safe-t));left:calc(8px + var(--safe-l));
-  display:flex;flex-direction:column;gap:7px;z-index:5}
-.railBtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-  width:62px;min-height:50px;padding:5px 4px;border-radius:14px;cursor:pointer;color:var(--txt);
-  background:linear-gradient(180deg,rgba(28,32,38,.66),rgba(15,17,21,.62));border:1px solid rgba(255,255,255,.12);
-  box-shadow:0 6px 20px rgba(0,0,0,.38);backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
-  transition:background .15s ease,transform .1s ease,box-shadow .15s ease}
-.railBtn:active{transform:scale(.96)}
-.railBtn .ic{font-size:22px;line-height:1}
-.railBtn .lb{font-size:9px;font-weight:800;letter-spacing:.02em;opacity:.82;white-space:nowrap;max-width:58px;overflow:hidden;text-overflow:ellipsis}
-.railBtn.road{background:linear-gradient(180deg,rgba(217,79,30,.42),rgba(150,45,15,.5));border-color:rgba(255,150,90,.5)}
-.railBtn.trace{background:linear-gradient(180deg,rgba(220,74,190,.34),rgba(60,35,105,.5));border-color:rgba(255,138,231,.45)}
-.railBtn.on{background:linear-gradient(180deg,rgba(60,160,255,.34),rgba(20,60,110,.5));border-color:rgba(127,212,255,.6);box-shadow:0 0 14px rgba(80,180,255,.4)}
-@media (max-height:680px){#actionRail{display:grid;grid-template-columns:repeat(2,56px);gap:5px}.railBtn{min-height:44px;width:56px}.railBtn .ic{font-size:19px}}
+.miniFrame{position:relative;width:116px;height:100px;overflow:hidden;border:1px solid rgba(255,255,255,.22);
+  box-shadow:0 8px 22px rgba(0,0,0,.5);background:#1f303d;cursor:pointer}
+.miniFrame #minimap{position:absolute;inset:0;width:116px;height:100px;display:block;cursor:pointer}
+.miniTag{position:absolute;left:6px;top:5px;font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.14em;color:rgba(255,255,255,.8);text-shadow:0 1px 2px #000;pointer-events:none}
+.miniHint{font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.62)}
 
-/* main row: speed tower · telemetry · minimap tile */
-.pwMain{display:flex;align-items:center;gap:10px}
-.pwSpeed{position:relative;flex:0 0 auto;display:flex;align-items:baseline;gap:3px;padding-right:11px;border-right:1px solid var(--line)}
-.pwSpeed b{font-size:42px;font-weight:800;line-height:.78;letter-spacing:-.02em;font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1}
-.pwSpeed span{font-size:9px;font-weight:800;letter-spacing:.16em;opacity:.5}
-.pwSpeed #revInd{position:absolute;left:-3px;top:-2px;font-style:normal;font-size:13px;font-weight:900;color:var(--poppy);opacity:0;transition:opacity .12s ease}
-.pwTel{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:6px;justify-content:center}
-.pwScore{display:flex;flex-wrap:wrap;gap:2px 9px;font-size:12px;font-weight:800;letter-spacing:.01em;font-variant-numeric:tabular-nums}
-.pwScore .coin{color:#ffd34d}
-.pwScore .places{color:#ffcf66}
-.pwScore .trip{color:#7fd4ff}
-.pwScore .combo{color:#ff8a3c;animation:pop .25s ease}
-.pwScore .combo.fire{color:#ff5a3c;animation:firePulse .5s ease-in-out infinite}
-.pwRow{display:flex;align-items:center;gap:9px}
-.pwRow .clock{flex:0 0 auto;font-size:11px;font-weight:800;opacity:.82;font-variant-numeric:tabular-nums}
-.pwRow .clock i{font-style:normal}
-.pwMain #minimap{flex:0 0 auto;width:84px;height:84px;border-radius:12px;background:rgba(16,19,24,.55);
-  box-shadow:inset 0 0 0 1px var(--line);cursor:pointer;display:block}
+/* ── TOP-CENTER: search bar (free roam) ── */
+.searchBar{position:absolute;left:50%;top:calc(14px + var(--safe-t));transform:translateX(-50%);
+  display:flex;align-items:stretch;width:min(72vw,356px);background:rgba(10,12,16,.68);
+  border:1px solid var(--hud-line);box-shadow:0 12px 30px rgba(0,0,0,.45);cursor:pointer;text-align:left;z-index:6;
+  backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur);color:#fff;font-family:'Chakra Petch'}
+.searchBar .sbIcon{display:grid;place-items:center;width:46px;color:var(--nav);border-right:1px solid rgba(255,255,255,.1)}
+.searchBar .sbText{flex:1;display:flex;align-items:center;padding:13px 14px;font-weight:500;font-size:15px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.searchBar .sbGo{display:grid;place-items:center;padding:0 18px;background:var(--nav);color:#041422;font-weight:700;font-size:13px;letter-spacing:.08em}
+.searchBar:active{transform:translateX(-50%) scale(.99)}
 
-/* the blade's bottom edge IS the speedometer rail */
-#speedRail{height:5px;margin:1px -10px 0;border-radius:0 0 18px 18px;overflow:hidden;background:rgba(255,255,255,.08)}
-#speedRail #speedFill{height:100%;width:0%;
-  background:linear-gradient(90deg,#36d6ff,#3ad17a 26%,#ffc21e 60%,var(--poppy) 82%,#ff5a3c);
-  background-size:calc(100vw - 16px) 100%;background-position:left center;transition:width .1s linear}
+/* ── TOP-CENTER: nav card (route active) ── */
+.navCard{position:absolute;left:50%;top:calc(14px + var(--safe-t));transform:translateX(-50%);
+  display:flex;align-items:stretch;max-width:min(80vw,420px);background:rgba(8,10,14,.7);
+  border:1px solid rgba(45,140,255,.45);box-shadow:0 14px 34px rgba(0,0,0,.5);z-index:6;
+  backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur);color:#fff;font-family:'Chakra Petch'}
+.ncTurn{display:flex;align-items:center;gap:13px;padding:10px 16px 10px 11px;min-width:0}
+.ncArrow{flex:0 0 auto;width:44px;height:44px;background:rgba(45,140,255,.18);display:grid;place-items:center}
+.ncDest{min-width:0}
+.ncDest b{display:block;font-weight:600;font-size:15px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:30vw}
+.ncDest span{font-weight:500;font-size:11px;color:rgba(255,255,255,.7)}
+.ncDiv{width:1px;background:rgba(255,255,255,.14)}
+.ncEta{display:flex;align-items:center;gap:11px;padding:10px 13px}
+.ncMin{display:flex;align-items:baseline;gap:5px}
+.ncEtaVal{font-family:'AGC';font-weight:800;font-size:22px;color:var(--go);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ncAuto{display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 9px;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.16);color:rgba(255,255,255,.55);font-family:'Chakra Petch'}
+.ncAuto span{font-weight:600;font-size:8px;letter-spacing:.06em}
+.ncAuto.on{background:rgba(43,232,79,.16);border-color:rgba(43,232,79,.6);color:var(--go);box-shadow:0 0 14px rgba(43,232,79,.3)}
+.ncClear{width:33px;height:33px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);cursor:pointer;display:grid;place-items:center;color:rgba(255,255,255,.7)}
+.ncClear:active,.ncAuto:active{transform:scale(.95)}
 
-/* ⋯ secondary-actions tray, hinged under the blade */
+/* ── TOP-RIGHT: segmented bar + expandable menu ── */
+.dvTopRight{position:absolute;right:calc(12px + var(--safe-r));top:calc(12px + var(--safe-t));display:flex;flex-direction:column;align-items:flex-end;gap:9px;z-index:9}
+.segBar{display:flex;align-items:stretch;background:rgba(10,12,16,.68);border:1px solid var(--hud-line);
+  box-shadow:0 10px 26px rgba(0,0,0,.45);backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur)}
+.segDiv{width:1px;background:rgba(255,255,255,.14)}
+.segBtn{display:flex;align-items:center;gap:9px;padding:9px 13px;background:transparent;border:0;color:#fff;cursor:pointer;font-family:'Chakra Petch'}
+.segBtn:hover{background:rgba(255,255,255,.08)}
+.segBtn:active{background:rgba(255,255,255,.14)}
+.segLab{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.segLab i{font-style:normal;font-weight:600;font-size:8px;letter-spacing:.16em;color:rgba(255,255,255,.45)}
+.segLab b{font-weight:600;font-size:13px;color:#fff;max-width:90px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.segMenu{width:46px;display:grid;place-items:center;padding:9px 0}
+.segMenu.open{background:rgba(45,140,255,.18);color:var(--nav)}
+.segMenuPanel{display:flex;flex-direction:column;gap:6px;padding:7px;min-width:200px;
+  background:rgba(10,12,16,.72);border:1px solid rgba(255,255,255,.16);box-shadow:0 18px 44px rgba(0,0,0,.55);
+  backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);animation:menuDrop .16s ease}
+@keyframes menuDrop{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.menuItem{display:flex;align-items:center;gap:11px;width:100%;padding:9px 12px;text-align:left;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:#fff;font-family:'Chakra Petch'}
+.menuItem:hover{background:rgba(255,255,255,.1)}
+.menuItem.accent{background:rgba(43,232,79,.14);border-color:rgba(43,232,79,.45)}
+.menuItem.on{background:rgba(155,123,255,.14);border-color:rgba(155,123,255,.45)}
+.miIcon{flex:0 0 22px;display:grid;place-items:center;color:#fff}
+.miIcon.go{color:var(--go)}.miIcon.nav{color:var(--nav)}.miIcon.jump{color:var(--jump)}.miIcon.reverse{color:var(--reverse)}
+.miTxt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.miTxt b{font-weight:600;font-size:13px}
+.miTxt i{font-style:normal;font-weight:500;font-size:10px;color:rgba(255,255,255,.5)}
+.miTxt i.go{color:var(--go)}.miTxt i.nav{color:var(--nav)}.miTxt i.jump{color:var(--jump)}.miTxt i.off{color:rgba(255,255,255,.5)}
 
-/* inline dest mini-buttons (auto-drive / clear) */
-.mini{font-size:11px;font-weight:700;padding:3px 7px;border-radius:8px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}
+/* ── BOTTOM-CENTER: the DASH cluster ── */
+.dashCluster{position:absolute;left:50%;bottom:calc(22px + var(--safe-b));transform:translateX(-50%);
+  display:flex;align-items:stretch;background:var(--hud-glass);border:1px solid var(--hud-line);box-shadow:var(--hud-shadow);
+  backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);z-index:6;color:#fff;font-family:'Chakra Petch'}
+.dashCluster.drift{border-color:rgba(255,180,40,.55);box-shadow:0 16px 40px rgba(0,0,0,.5),0 0 22px rgba(255,180,40,.4)}
+.dashDiv{width:1px;background:rgba(255,255,255,.14)}
+.dashSpeed{position:relative;display:flex;align-items:center;gap:12px;padding:9px 18px}
+.dashSpeed b{font-family:'AGC';font-weight:900;font-size:54px;line-height:.74;letter-spacing:-.02em;color:#fff;font-variant-numeric:tabular-nums;text-shadow:0 0 22px rgba(45,140,255,.3)}
+.dashSpeed .dashRev{position:absolute;left:8px;top:6px;font-style:normal;font-family:'AGC';font-weight:800;font-size:14px;color:var(--reverse);opacity:0;transition:opacity .12s ease}
+.dashSpeedMeta{display:flex;flex-direction:column;gap:6px}
+.dashKick{font-family:'Chakra Petch';font-weight:600;font-size:9px;letter-spacing:.16em;color:rgba(255,255,255,.5)}
+.dashBar{width:66px;height:4px;background:rgba(255,255,255,.16)}
+.dashBar i{display:block;height:100%;width:0%;background:var(--nav);transition:width .1s linear}
+.dashCol{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 16px;gap:3px}
+.dashCol .dashKick{letter-spacing:.14em}
+.dashGear{font-family:'AGC';font-weight:800;font-size:24px;color:#fff;transition:color .2s ease}
+.dashGear[data-gear="D"]{color:var(--go)}
+.dashGear[data-gear="R"]{color:var(--reverse)}
+.dashGear[data-gear="N"]{color:rgba(255,255,255,.75)}
+.dashTime{font-family:'Chakra Petch';font-weight:600;font-size:18px;color:#fff;font-variant-numeric:tabular-nums}
+.dashCompass{display:flex;align-items:center;justify-content:center;width:30px;height:30px;margin:0 14px;
+  border-radius:50%;border:1.5px solid rgba(255,255,255,.24);position:relative}
+.dashCompass svg{width:26px;height:26px;will-change:transform}
+
+/* inline dest mini-buttons (kept for back-compat with any legacy markup) */
+.mini{font-size:11px;font-weight:700;padding:3px 7px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer}
 .mini.on{background:var(--poppy);border-color:transparent}
-/* ---- navigate panel: a clean dark sheet with two Google-autocomplete boxes ---- */
-#navPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;width:min(90vw,360px);
-  padding:16px 16px 18px;border-radius:20px;pointer-events:auto;
-  background:linear-gradient(180deg,rgba(24,28,34,.97),rgba(16,19,24,.97));
-  border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 60px rgba(0,0,0,.6),0 0 0 1px rgba(0,0,0,.4);
-  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#fff;max-height:86vh;overflow:visible}
+/* ---- navigate panel: square glass sheet · Drive-to (green) vs Jump-to (violet) ---- */
+#navPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;width:min(92vw,372px);
+  padding:16px 16px 18px;pointer-events:auto;font-family:'Chakra Petch',system-ui,sans-serif;
+  background:linear-gradient(180deg,rgba(16,18,24,.97),rgba(10,12,16,.98));
+  border:1px solid rgba(255,255,255,.16);box-shadow:0 24px 60px rgba(0,0,0,.62),0 0 0 1px rgba(0,0,0,.4);
+  backdrop-filter:blur(18px) saturate(1.3);-webkit-backdrop-filter:blur(18px) saturate(1.3);color:#fff;max-height:88vh;overflow:visible}
 .navHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-#navPanel h3{font-size:18px;font-weight:800;letter-spacing:.01em;margin:0}
-.navX{width:30px;height:30px;border-radius:9px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;font-size:14px;cursor:pointer}
+#navPanel h3{font-family:'AGC';font-size:24px;font-weight:900;letter-spacing:-.01em;text-transform:uppercase;margin:0}
+.navX{width:30px;height:30px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:#fff;cursor:pointer;display:grid;place-items:center}
 .navX:active{background:rgba(255,255,255,.14)}
-.navLbl{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.55);margin:14px 2px 6px}
+.navLbl{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#fff;margin:16px 2px 8px}
 .navLbl:first-of-type{margin-top:2px}
-.navLbl i{font-style:normal;font-size:13px}
+.navLbl.drive{color:var(--go)}.navLbl.jump{color:var(--jump)}
+.navLbl i{font-style:normal;font-size:10px;font-weight:500;letter-spacing:.02em;text-transform:none;color:rgba(255,255,255,.45)}
+.navDot{width:8px;height:8px;flex:0 0 auto}
+.navDot.go{background:var(--go);box-shadow:0 0 8px rgba(43,232,79,.6)}
+.navDot.jump{background:var(--jump);box-shadow:0 0 8px rgba(155,123,255,.6)}
+.navTool.drive .addrGo{background:var(--go);color:#08210f}
+.navTool.jump .addrGo{background:var(--jump);color:#160a2e}
 .addrBox{position:relative}
-.addrRow{display:flex;gap:7px}
-.addrBox input{flex:1;min-width:0;padding:11px 13px;border-radius:12px;border:1px solid rgba(255,255,255,.14);
-  background:rgba(0,0,0,.34);color:#fff;font-size:15px;outline:none;pointer-events:auto}
-.addrBox input:focus{border-color:rgba(120,180,255,.7);box-shadow:0 0 0 3px rgba(80,150,255,.18)}
-.addrBox input::placeholder{color:rgba(255,255,255,.38)}
-.addrGo{flex:0 0 auto;padding:0 16px;border-radius:12px;border:0;font-size:14px;font-weight:800;cursor:pointer;
-  background:linear-gradient(180deg,#ff7a3c,#ef5a1e);color:#fff;box-shadow:0 4px 12px rgba(239,90,30,.4)}
+.addrRow{display:flex;gap:9px}
+.addrBox input{flex:1;min-width:0;padding:12px 14px;border:1px solid rgba(255,255,255,.16);
+  background:rgba(255,255,255,.06);color:#fff;font-family:'Chakra Petch';font-size:15px;font-weight:500;outline:none;pointer-events:auto}
+.navTool.drive .addrBox input:focus{border-color:rgba(43,232,79,.7);box-shadow:0 0 0 3px rgba(43,232,79,.16)}
+.navTool.jump .addrBox input:focus{border-color:rgba(155,123,255,.7);box-shadow:0 0 0 3px rgba(155,123,255,.16)}
+.addrBox input::placeholder{color:rgba(255,255,255,.42)}
+.addrGo{flex:0 0 auto;padding:0 20px;border:0;font-family:'Chakra Petch';font-size:13px;font-weight:700;letter-spacing:.04em;cursor:pointer;display:grid;place-items:center}
 .addrGo:active{transform:translateY(1px)}
 .addrGo:disabled{opacity:.6}
-.addrSug{list-style:none;margin:6px 0 0;padding:5px;position:absolute;left:0;right:0;top:100%;z-index:5;
-  background:rgba(20,24,30,.99);border:1px solid rgba(255,255,255,.13);border-radius:12px;box-shadow:0 16px 36px rgba(0,0,0,.55);max-height:220px;overflow-y:auto}
-.addrSug li button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 10px;border:0;border-radius:8px;
-  background:transparent;color:rgba(255,255,255,.92);font-size:13.5px;line-height:1.25;cursor:pointer}
-.addrSug li button:hover,.addrSug li button:active{background:rgba(120,170,255,.16)}
+.addrSug{list-style:none;margin:7px 0 0;padding:5px;position:absolute;left:0;right:0;top:100%;z-index:5;
+  background:rgba(12,14,20,.99);border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 36px rgba(0,0,0,.55);max-height:220px;overflow-y:auto}
+.addrSug li button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:10px 11px;border:0;
+  background:transparent;color:rgba(255,255,255,.92);font-family:'Chakra Petch';font-size:13.5px;line-height:1.25;cursor:pointer}
+.addrSug li button:hover,.addrSug li button:active{background:rgba(45,140,255,.16)}
 .addrSug .pin{flex:0 0 auto;font-size:12px;opacity:.8}
 .navPresets{display:flex;flex-wrap:wrap;gap:7px;margin:9px 0 2px}
-.navPresets .navChip{position:static;font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:999px;cursor:pointer;white-space:nowrap;
-  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.92)}
-.navPresets .navChip:active{background:rgba(255,255,255,.18)}
-.navSlider{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
-.navSlider>label{display:block;font-size:13px;font-weight:600;color:rgba(255,255,255,.8);margin-bottom:9px}
-.navSlider>label b{color:#ffb060;font-weight:800}
-.navSlider input[type=range]{width:100%;accent-color:#ff7a3c;height:22px}
+.navPresets .navChip{position:static;font-family:'Chakra Petch';font-size:12.5px;font-weight:600;padding:7px 13px;cursor:pointer;white-space:nowrap;
+  background:rgba(43,232,79,.1);border:1px solid rgba(43,232,79,.3);color:#fff}
+.navPresets .navChip:active{background:rgba(43,232,79,.24)}
+.navSlider{margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.1)}
+.navSlider>label{display:block;font-family:'Chakra Petch';font-size:13px;font-weight:500;color:rgba(255,255,255,.8);margin-bottom:9px}
+.navSlider>label b{color:var(--nav);font-weight:700}
+.navSlider input[type=range]{width:100%;accent-color:var(--nav);height:22px}
 .sliderEnds{display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,.4);margin-top:1px}
-#navPanel .navErr{color:#ff9a7a;font-size:12.5px;margin-top:10px;text-align:center}
+#navPanel .navErr{color:var(--reverse);font-size:12.5px;margin-top:10px;text-align:center}
 
 /* ---- car picker ---- */
 #carPicker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,360px);pointer-events:auto}
@@ -211,16 +284,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   text-shadow:0 1px 2px rgba(0,0,0,.55);pointer-events:none;z-index:6}
 #credits svg{flex:0 0 auto;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
 #credits span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#ui.drive #credits{bottom:calc(70px + var(--safe-b));left:calc(12px + var(--safe-l))}
-
-/* ---- speed module (bottom-center) ---- */
-/* nitro meter — a slim segment in the PIT WALL telemetry row; fills with skill
-   (near-miss/drift/arrival), glows when ready, flares cyan→white when firing */
-#nitroTrack{position:relative;flex:1 1 auto;height:9px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
-#nitroFill{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:5px;background:linear-gradient(90deg,#7a5cff,#36d6ff);transition:width .12s linear}
-#nitroTrack span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:6.5px;font-weight:900;letter-spacing:.2em;color:rgba(255,255,255,.72)}
-#nitroTrack.ready{box-shadow:0 0 5px rgba(80,200,255,.3)}
-#nitroTrack.firing #nitroFill{background:linear-gradient(90deg,#36d6ff,#fff)}
+#ui.drive #credits{bottom:calc(4px + var(--safe-b));left:50%;transform:translateX(-50%);background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;max-width:60vw}
 
 /* ---- sense of speed: white speed-lines radiating from centre + a soft vignette ---- */
 #fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .2s ease;overflow:hidden}
@@ -247,33 +311,51 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #fx.crash{opacity:.9;background:radial-gradient(circle,rgba(255,255,255,.7),rgba(255,120,60,.3) 60%,transparent 85%);transition:opacity .05s ease}
 @media (prefers-reduced-motion:reduce){#fx::before{animation:none}}
 
-/* ---- gas/brake pedals + handbrake + horn (bottom-right) + drive hint ---- */
+/* ════════════════ TWIN-STICK controls — box-free circular sticks ════════════════ */
+/* Both sticks autohide (dim to ~.4) when idle. The MOVE stick is a pure affordance:
+   the engine spawns the real #joy/#knob under the thumb on top of it. The LOOK stick
+   is interactive (drives nudgeLook). A small horn sits between them. */
+.moveStick,.lookStick{position:absolute;bottom:calc(28px + var(--safe-b));width:120px;height:120px;
+  opacity:.55;transition:opacity .3s ease;z-index:5;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))}
+/* a soft scrim keeps the sticks legible over bright satellite imagery */
+.moveStick::after,.lookStick::after{content:'';position:absolute;inset:-14px;z-index:-1;border-radius:50%;
+  background:radial-gradient(circle,rgba(9,11,15,.5),transparent 70%)}
+.moveStick{left:calc(30px + var(--safe-l))}
+.lookStick{right:calc(30px + var(--safe-r));touch-action:none;cursor:grab}
+.moveStick.hint{opacity:1}
+.lookStick.active{opacity:1;cursor:grabbing}
+.driveHud:hover .moveStick{opacity:.55}
+.stickRing{position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(255,255,255,.45)}
+.stickRing.dash{border-style:dashed;border-color:rgba(255,255,255,.4)}
+.stickRing.pulse{border-color:rgba(45,140,255,.7);animation:ghostPulse 1.9s ease-in-out infinite}
+.stickArrow{position:absolute;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.5)}
+.stickArrow.up{top:7px}.stickArrow.down{bottom:7px}
+.stickKnob{position:absolute;left:50%;top:50%;width:52px;height:52px;border-radius:50%;
+  transform:translate(-50%,-50%);background:radial-gradient(circle at 40% 32%,#33373f,#14161b);
+  border:1px solid rgba(255,255,255,.3);box-shadow:0 6px 16px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.22)}
+.stickKnob.look{display:grid;place-items:center;color:rgba(255,255,255,.7);border-color:rgba(255,255,255,.4)}
+.lookStick.active .stickKnob.look{color:rgba(255,255,255,.95);box-shadow:0 6px 18px rgba(0,0,0,.6),0 0 16px rgba(255,255,255,.18)}
+.stickLabel{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);
+  font-family:'Chakra Petch';font-weight:600;font-size:9px;letter-spacing:.24em;color:rgba(255,255,255,.7);white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.85)}
+.stickLabel.move{color:rgba(110,180,255,1)}
+/* horn — subtle square button just inboard of the LOOK stick */
+.hornBtn{position:absolute;bottom:calc(40px + var(--safe-b));right:calc(160px + var(--safe-r));width:34px;height:34px;
+  background:rgba(10,12,16,.4);border:1px solid rgba(255,255,255,.14);display:grid;place-items:center;
+  color:rgba(255,255,255,.55);cursor:pointer;z-index:5;transition:background .12s ease,transform .1s ease}
+.hornBtn:active{transform:scale(.94);background:rgba(45,140,255,.3);color:#fff}
+
+/* drive hint card — square glass strip above the dash */
+.driveHintCard{position:absolute;left:50%;bottom:calc(110px + var(--safe-b));transform:translateX(-50%);max-width:min(86vw,460px);
+  padding:9px 18px;background:rgba(8,10,14,.72);border:1px solid rgba(255,255,255,.16);font-family:'Chakra Petch';
+  font-weight:500;font-size:13px;line-height:1.3;color:rgba(255,255,255,.85);text-align:center;text-wrap:pretty;
+  backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur);z-index:6;animation:fadeIn .3s ease}
+.driveHud:not(.tracing) .driveHintCard{border-color:rgba(255,255,255,.16)}
+#driftChip{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);pointer-events:none;font-family:'AGC';
+  font-size:30px;font-weight:900;letter-spacing:.06em;color:var(--coin);text-shadow:0 2px 14px rgba(0,0,0,.6);
+  animation:firePulse .4s ease-in-out infinite;z-index:6}
 .holdBtn{display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt);touch-action:none;
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:background .12s ease,transform .1s ease}
-#musicBtn.on{color:#7fd4ff}
 .holdBtn:active{transform:scale(.96)}
-/* the two driving pedals — right thumb. Gas is the big primary; brake sits inboard. */
-#pedals{position:absolute;bottom:calc(16px + var(--safe-b));right:calc(12px + var(--safe-r));display:flex;align-items:flex-end;gap:10px}
-.pedal{font-size:15px;font-weight:800;letter-spacing:.04em}
-#gasBtn{position:relative;overflow:hidden;width:86px;height:112px;border-radius:26px;background:rgba(40,180,99,.24);border-color:rgba(90,230,150,.5)}
-#gasBtn span{position:relative;z-index:1}
-/* vertical throttle fill — rises with how far down you slide → 'floor it' is visible */
-#gasBtn .gasFill{position:absolute;left:0;right:0;bottom:0;height:var(--fill,0%);z-index:0;
-  background:linear-gradient(0deg,rgba(40,220,120,.75),rgba(40,200,110,.35));transition:height .08s linear}
-#gasBtn:active{border-color:rgba(120,255,170,.85)}
-#brakeBtn{width:66px;height:66px;border-radius:20px;background:rgba(217,79,30,.22);border-color:rgba(255,120,80,.45)}
-#brakeBtn:active{background:rgba(230,70,40,.6)}
-#hbrakeBtn{position:absolute;bottom:calc(140px + var(--safe-b));right:calc(12px + var(--safe-r));width:56px;height:56px;border-radius:17px;font-size:23px}
-#hbrakeBtn:active{background:rgba(217,79,30,.5)}
-#hbrakeBtn.drifting{background:rgba(255,180,40,.55);border-color:rgba(255,210,90,.9);box-shadow:0 0 16px rgba(255,190,60,.7);animation:firePulse .45s ease-in-out infinite}
-#hornBtn{position:absolute;bottom:calc(204px + var(--safe-b));right:calc(12px + var(--safe-r));width:48px;height:48px;border-radius:15px;font-size:19px}
-/* drive hint sits just BELOW the PIT WALL blade now (the blade owns the top band) */
-#driveHint{position:absolute;top:calc(136px + var(--safe-t));left:calc(82px + var(--safe-l));right:calc(82px + var(--safe-r));
-  padding:7px 15px;font-size:11px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;text-wrap:pretty;animation:fadeIn .3s ease}
-@media (max-height:680px){#driveHint{left:calc(132px + var(--safe-l));right:calc(72px + var(--safe-r))}}
-#driftChip{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);pointer-events:none;
-  font-size:30px;font-weight:900;letter-spacing:.06em;color:#ffd34d;text-shadow:0 2px 14px rgba(0,0,0,.6);
-  animation:firePulse .4s ease-in-out infinite;z-index:6}
 @keyframes pop{from{transform:scale(1.5)}to{transform:scale(1)}}
 @keyframes firePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 .carRow.locked{opacity:.6}
@@ -315,21 +397,14 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   transition:opacity .4s ease;pointer-events:none;z-index:9}
 #toast.show{opacity:1}
 
-/* ---- touch thumbstick ---- */
-#joy{display:none;pointer-events:none;position:absolute;width:122px;height:122px;border-radius:50%;
-  background:rgba(255,255,255,.12);border:1px solid var(--line);touch-action:none;
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+/* ---- touch thumbstick (spawned by the engine under the thumb — the real MOVE stick) ---- */
+#joy{display:none;pointer-events:none;position:absolute;width:120px;height:120px;border-radius:50%;
+  background:transparent;border:1.5px solid rgba(45,140,255,.6);touch-action:none}
 #knob{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;
-  background:var(--poppy);transform:translate(-50%,-50%);box-shadow:0 3px 12px rgba(0,0,0,.35)}
-/* faint resting steer hint — pure affordance, no pointer events (joystick spawns on top) */
-#steerGhost{position:absolute;left:calc(30px + var(--safe-l));bottom:calc(40px + var(--safe-b));
-  width:96px;height:96px;border-radius:50%;border:2px dashed rgba(255,255,255,.22);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-  pointer-events:none;color:rgba(255,255,255,.45);animation:ghostPulse 2.6s ease-in-out infinite}
-#steerGhost span{font-size:30px;line-height:1}
-#steerGhost i{font-style:normal;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
-@keyframes ghostPulse{0%,100%{opacity:.5}50%{opacity:.85}}
-@media (prefers-reduced-motion:reduce){#steerGhost{animation:none}}
+  background:radial-gradient(circle at 40% 32%,#3a6fd6,#1b3a82);transform:translate(-50%,-50%);
+  border:1px solid rgba(255,255,255,.45);box-shadow:0 6px 18px rgba(0,0,0,.6),0 0 22px rgba(45,140,255,.6)}
+@keyframes ghostPulse{0%,100%{opacity:.2}50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.stickRing.pulse{animation:none}}
 .poiBadge{margin-top:12px;font-size:12.5px;font-weight:700;color:#ffcf66;opacity:.95}
 
 /* ---- loading ---- */

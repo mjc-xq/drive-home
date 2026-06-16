@@ -1944,12 +1944,19 @@ export function createEngine({ canvas, ui, emit }) {
     car.kSteer = (car.kSteer || 0) + (inp2.kx - (car.kSteer || 0)) * Math.min(1, dt * 7);
     let jx = clamp(inp2.jx + car.kSteer + inp2.steer, -1, 1);
     let throttleTarget = 0, brake = 0;
-    if (inp2.brake || inp2.ky > 0) brake = 1;
+    // TWIN-STICK MOVE: the left stick's vertical axis IS the throttle/brake now.
+    //   jy < 0 (push up)   → gas, proportional to how far up
+    //   jy > 0 (pull down) → brake / reverse
+    // (setGasAmount/setBrake still feed inp2.gas/inp2.brake for back-compat.)
+    const jyGas = inp2.jy < -MOVE_DEADZONE ? clamp((-inp2.jy - MOVE_DEADZONE) / (1 - MOVE_DEADZONE), 0, 1) : 0;
+    const jyBrake = inp2.jy > MOVE_DEADZONE;
+    if (inp2.brake || inp2.ky > 0 || jyBrake) brake = 1;
     else if (inp2.ky < 0) throttleTarget = 1;                  // keyboard = full
+    else if (jyGas > 0) throttleTarget = jyGas;                // left stick up = analog gas
     else if (inp2.gas > 0) throttleTarget = inp2.gas;          // touch gas (analog 0..1)
     // Stick-only "auto-creep": cruise GENTLY toward ~18 u/s (≈40 mph) instead of
     // flooring it — a kid who only steers should roll at a corner-able pace, never
-    // pin to the 220 mph top end. Hold GO for the real speed.
+    // pin to the 220 mph top end. Push up for the real speed.
     else if (Math.abs(jx) > 0.05) throttleTarget = clamp((18 - car.speed) / 18, 0, 0.5);
     // ANALOG pedal: squeeze the throttle up over ~0.4 s and bleed it off faster, so the
     // gas feels like a pedal you press (feather power out of a slide), not a switch.
@@ -1959,7 +1966,7 @@ export function createEngine({ canvas, ui, emit }) {
     let throttle = car.throttle;
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
-    if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || inp2.gas || inp2.brake || inp2.ky)) {
+    if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky)) {
       autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
     }
     // advance the route waypoint as the car passes it (drives the guide + auto-drive)
@@ -2293,6 +2300,11 @@ export function createEngine({ canvas, ui, emit }) {
     const reversing = car.speed < -0.4;
     if (ui.rev) ui.rev.style.opacity = reversing ? '1' : '0';
     if (ui.brakeLbl && ui.brakeLbl.textContent !== (reversing ? 'REV' : 'STOP')) ui.brakeLbl.textContent = reversing ? 'REV' : 'STOP';
+    // GEAR readout for the dash cluster: R reverse · P parked · N coasting · D driving.
+    if (ui.gear) {
+      const g = reversing ? 'R' : (Math.abs(car.speed) < 0.4 && throttle < 0.1) ? 'P' : (throttle > 0.05 ? 'D' : 'N');
+      if (ui.gear.textContent !== g) { ui.gear.textContent = g; ui.gear.dataset.gear = g; }
+    }
     if (ui.eta) {
       if (DEST) {
         const dd = Math.hypot(DEST.x - car.x, DEST.z - car.z);
@@ -2645,6 +2657,14 @@ export function createEngine({ canvas, ui, emit }) {
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
     preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
     setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
+    // LOOK stick (right thumb): orbit the drive camera. dx/dy are screen-pixel deltas,
+    // same convention as a look-drag on the canvas, so it feeds the existing camOrbit.
+    nudgeLook: (dx, dy) => {
+      camOrbit.yaw -= dx * LOOK_SENS;
+      camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
+      camOrbit.t = performance.now();
+      showT = 0;
+    },
     setGas: (on) => { inp2.gas = on ? 1 : 0; if (on) showT = 0; },   // gas pedal (hold)
     setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)
     setBoost: (on) => { inp2.boost = !!on; },                        // nitro (hold while charged)

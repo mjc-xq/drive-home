@@ -37,7 +37,7 @@ function AddressSearch({ placeholder, actionLabel, suggest, onPick, onText }) {
 // into the DOM nodes registered in uiRefs.
 export default function App() {
   const canvasRef = useRef(null);
-  const uiRefs = useRef({ box: null, mph: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
+  const uiRefs = useRef({ box: null, mph: null, gear: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
@@ -52,6 +52,7 @@ export default function App() {
   const [carPicker, setCarPicker] = useState(false);    // car select menu open
   const [cars, setCars] = useState([]);
   const [navOpen, setNavOpen] = useState(false);        // address picker open
+  const [menuOpen, setMenuOpen] = useState(false);      // top-right ☰ menu expanded
   const [navErr, setNavErr] = useState('');
   const [autoMax, setAutoMax] = useState(() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } });   // auto-drive top-speed cap (mph; 0 = unlimited)
   const [dest, setDest] = useState(null);               // { label }
@@ -123,6 +124,30 @@ export default function App() {
   }, [mode]);
 
   const eng = () => engineRef.current;
+  // Right-thumb LOOK stick: pointer drag feeds the engine's camera orbit (nudgeLook)
+  // and nudges the knob within the ring. Self-contained — no React re-render per move.
+  const lookRef = useRef({ id: -1, lx: 0, ly: 0, knob: null });
+  const lookDown = (e) => {
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* capture can fail; drag still tracks via pointerId */ }
+    const L = lookRef.current; L.id = e.pointerId; L.lx = e.clientX; L.ly = e.clientY;
+    e.currentTarget.classList.add('active');
+  };
+  const lookMove = (e) => {
+    const L = lookRef.current; if (e.pointerId !== L.id) return;
+    const dx = e.clientX - L.lx, dy = e.clientY - L.ly; L.lx = e.clientX; L.ly = e.clientY;
+    eng() && eng().nudgeLook && eng().nudgeLook(dx, dy);
+    if (L.knob) {
+      const r = e.currentTarget.getBoundingClientRect();
+      let kx = e.clientX - (r.left + r.width / 2), ky = e.clientY - (r.top + r.height / 2);
+      const d = Math.hypot(kx, ky), mx = 30; if (d > mx) { kx *= mx / d; ky *= mx / d; }
+      L.knob.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
+    }
+  };
+  const lookUp = (e) => {
+    const L = lookRef.current; if (e.pointerId !== L.id) return; L.id = -1;
+    e.currentTarget.classList.remove('active');
+    if (L.knob) L.knob.style.transform = 'translate(-50%,-50%)';
+  };
   // Warm the Google Maps SDK the moment the nav panel opens, so the first keystroke in the
   // address box doesn't jank (the SDK script parse used to land on ~the 3rd character typed).
   useEffect(() => { if (navOpen && eng() && eng().preloadMaps) eng().preloadMaps(); }, [navOpen]);
@@ -137,8 +162,8 @@ export default function App() {
   ];
   const traceDrive = camName === 'Top-down' || camName === 'Aerial';
   const driveHelp = traceDrive
-    ? 'drag the road to drive · release to coast · GO boosts · STOP reverses · tap map to route'
-    : 'left stick steers · GO = gas (slide down to floor it) · STOP = brake · handbrake drifts · tap map to route';
+    ? 'Drag the road to drive · right stick to orbit the camera · tap the map to route'
+    : 'Left stick to move · pull back to reverse · right stick to look · tap the map to route';
 
   return (
     <>
@@ -182,116 +207,205 @@ export default function App() {
             </div>
           </>
         )}
-        <div id="compass" className="chip" aria-hidden="true">
-          <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
-            <polygon points="20,5 24,22 20,19 16,22" fill="#d94f1e" />
-            <polygon points="20,35 24,18 20,21 16,18" fill="#28241d" opacity=".35" />
-            <text x="20" y="3.5" fontSize="7" fontWeight="700" textAnchor="middle" fill="#28241d" opacity=".55">N</text>
-          </svg>
-        </div>
+        {mode !== 'drive' && (
+          <div id="compass" className="chip" aria-hidden="true">
+            <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
+              <polygon points="20,5 24,22 20,19 16,22" fill="#d94f1e" />
+              <polygon points="20,35 24,18 20,21 16,18" fill="#28241d" opacity=".35" />
+              <text x="20" y="3.5" fontSize="7" fontWeight="700" textAnchor="middle" fill="#28241d" opacity=".55">N</text>
+            </svg>
+          </div>
+        )}
         {mode === 'drive' && (
-          <div id="hud">
-            {/* ── PIT WALL: one telemetry blade across the top. Replaces the minimap /
-                dock / bottom speed module / coin panels; the whole middle + both bottom
-                thumb-zones stay clear so the car is never covered. ── */}
-            <div id="pitwall" className="panel">
-              {/* top strip: exit · destination headline (or free-roam) · actions */}
-              <div className="pwTop">
-                <button className="pwExit" aria-label="Exit drive" onClick={() => eng().exitDrive()}>✕</button>
-                {dest ? (
-                  <div className="pwDest">
-                    <i className="kick">NEXT STOP</i>
-                    <b>{dest.label}</b>
-                    <i className="lead" />
-                    <i className="eta" ref={el => (uiRefs.current.eta = el)} />
-                    <button className={'mini' + (autoDrive ? ' on' : '')} aria-label="Auto-drive" onClick={() => eng().toggleAutoDrive()}>{autoDrive ? '🤖' : 'Go'}</button>
-                    <button className="mini" aria-label="Clear destination" onClick={() => eng().clearDestination()}>✕</button>
-                  </div>
-                ) : (
-                  <div className="pwDest free"><i className="kick">FREE ROAM</i><span>tap the map to drive there</span></div>
-                )}
-              </div>
-              {/* main row: speed tower · telemetry · minimap tile */}
-              <div className="pwMain">
-                <div className="pwSpeed">
-                  <i id="revInd" ref={el => (uiRefs.current.rev = el)}>R</i>
-                  <b ref={el => (uiRefs.current.mph = el)}>0</b><span>MPH</span>
-                </div>
-                <div className="pwTel">
-                  {driveScore.total > 0 && (
-                    <div className="pwScore">
-                      <span className="coin">💛{driveScore.got}/{driveScore.total}</span>
-                      <span className="places">🏆{poi.found}/{poi.total}</span>
-                      {driveScore.combo > 1 && <span className={'combo' + (driveScore.combo >= 5 ? ' fire' : '')}>🔥×{driveScore.combo}</span>}
-                      {driveScore.trip > 0 && <span className="trip">🏁{driveScore.trip}</span>}
-                    </div>
+          <div id="hud" className="driveHud">
+
+            {/* ══ TOP-LEFT: score strip (scored run only) above the framed minimap ══ */}
+            <div className="dvLeft">
+              {driveScore.total > 0 && (
+                <div className={'scoreStrip' + (driveScore.combo >= 5 ? ' onFire' : '')}>
+                  <div className="ssCell"><span className="coinDot" /><span className="ssNum">{driveScore.got}<i>/{driveScore.total}</i></span></div>
+                  {driveScore.combo > 1 && (
+                    <><div className="ssDiv" />
+                    <div className={'ssCell combo' + (driveScore.combo >= 5 ? ' fire' : '')}>
+                      {driveScore.combo >= 5 && (
+                        <svg className="fireIc" width="13" height="13" viewBox="0 0 24 24" fill="#fff"><path d="M12 2c1 3-2 4-2 7a4 4 0 0 0 8 0c0-1-1-2-1-2 2 2 3 4 3 7a8 8 0 0 1-16 0c0-5 5-7 6-12z" /></svg>
+                      )}
+                      <span className="comboNum">×{driveScore.combo}</span>
+                    </div></>
                   )}
-                  <div className="pwRow">
-                    <span className="clock">⏱<i ref={el => (uiRefs.current.runTime = el)}>0:00</i></span>
-                    <div id="nitroTrack"><i id="nitroFill" ref={el => (uiRefs.current.boostBar = el)} /><span>NITRO</span></div>
-                  </div>
+                  {driveScore.trip > 0 && (
+                    <><div className="ssDiv" />
+                    <div className="ssCell trip"><span className="ssKick">TRIP</span><span className="tripNum">{driveScore.trip.toLocaleString()}</span></div></>
+                  )}
                 </div>
-                <canvas id="minimap" width={132} height={132} title="Tap to drive here"
+              )}
+              <div className="miniFrame">
+                <canvas id="minimap" width={174} height={150} title="Tap to drive here"
                   ref={el => (uiRefs.current.minimap = el)}
                   onClick={e => { const r = e.target.getBoundingClientRect(); eng().tapMinimap(e.clientX - r.left, e.clientY - r.top, r.width, r.height); }} />
+                <span className="miniTag">MAP</span>
               </div>
-              {/* the blade's bottom edge IS the speedometer */}
-              <div id="speedRail"><div id="speedFill" ref={el => (uiRefs.current.speedBar = el)} /></div>
+              <div className="miniHint">Tap map to drive</div>
             </div>
-            {/* ── ACTION RAIL: big, always-visible LABELLED controls, away from the pedals ── */}
-            <div id="actionRail">
-              <button className="railBtn road" aria-label="Back to road" onClick={() => eng().resetToRoad()}><span className="ic">🛣️</span><span className="lb">Road</span></button>
-              <button className="railBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}><span className="ic">🎥</span><span className="lb">{camName}</span></button>
-              <button className={'railBtn trace' + (traceDrive ? ' on' : '')} aria-label="Trace driving" onClick={() => eng().traceDrive()}><span className="ic">🪄</span><span className="lb">Trace</span></button>
-              <button className="railBtn" aria-label="Navigate to a place" onClick={() => { setNavErr(''); setNavOpen(o => !o); }}><span className="ic">🧭</span><span className="lb">Go to…</span></button>
-              <button className="railBtn" aria-label="Choose your car" onClick={() => { setCars(eng().getCars()); setCarPicker(true); }}><span className="ic">🚗</span><span className="lb">Cars</span></button>
-              <button className={'railBtn' + (autoSteer ? ' on' : '')} aria-label={autoSteer ? 'Auto-steer on' : 'Auto-steer off'} onClick={() => eng().toggleAutoSteer()}><span className="ic">🛟</span><span className="lb">Assist {autoSteer ? 'on' : 'off'}</span></button>
-              <button className={'railBtn' + (music ? ' on' : '')} aria-label={music ? 'Music on' : 'Music off'} onClick={() => eng().toggleMusic()}><span className="ic">{music ? '🔊' : '🔇'}</span><span className="lb">Music</span></button>
+
+            {/* ══ TOP-CENTER: search bar (free-roam) → nav card (route active) ══ */}
+            {dest ? (
+              <div className="navCard">
+                <div className="ncTurn">
+                  <div className="ncArrow">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2D8CFF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 20V10a4 4 0 0 1 4-4h5" /><path d="m15 3 4 3-4 3" /></svg>
+                  </div>
+                  <div className="ncDest"><b>{dest.label}</b><span>Head to destination</span></div>
+                </div>
+                <div className="ncDiv" />
+                <div className="ncEta">
+                  <div className="ncMin"><span className="ncEtaVal" ref={el => (uiRefs.current.eta = el)}>—</span></div>
+                  <button className={'ncAuto' + (autoDrive ? ' on' : '')} aria-label="Auto-drive" onClick={() => eng().toggleAutoDrive()}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="9" width="12" height="9" /><path d="M9 9V6a3 3 0 0 1 6 0v3" /><circle cx="9.5" cy="13.5" r=".8" /><circle cx="14.5" cy="13.5" r=".8" /></svg>
+                    <span>AUTO</span>
+                  </button>
+                  <button className="ncClear" aria-label="Clear destination" onClick={() => eng().clearDestination()}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button className="searchBar" onClick={() => { setNavErr(''); setNavOpen(true); setMenuOpen(false); }}>
+                <span className="sbIcon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg></span>
+                <span className="sbText">Where to? Search or tap the map</span>
+                <span className="sbGo">GO</span>
+              </button>
+            )}
+
+            {/* ══ TOP-RIGHT: segmented VIEW / FIX-ROAD / ☰ menu ══ */}
+            <div className="dvTopRight">
+              <div className="segBar">
+                <button className="segBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2D8CFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="14" height="10" rx="2" /><path d="m16 10 6-3v10l-6-3z" /></svg>
+                  <span className="segLab"><i>VIEW</i><b>{camName}</b></span>
+                </button>
+                <div className="segDiv" />
+                <button className="segBtn" aria-label="Back to road" onClick={() => eng().resetToRoad()}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="8" /><path d="M12 1v3M12 20v3M1 12h3M20 12h3" /></svg>
+                  <span className="segLab"><i>FIX</i><b>ROAD</b></span>
+                </button>
+                <div className="segDiv" />
+                <button className={'segBtn segMenu' + (menuOpen ? ' open' : '')} aria-label="Menu" onClick={() => setMenuOpen(o => !o)}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+                </button>
+              </div>
+              {menuOpen && (
+                <div className="segMenuPanel">
+                  <button className="menuItem accent" onClick={() => { setNavErr(''); setNavOpen(true); setMenuOpen(false); }}>
+                    <span className="miIcon go"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s-7-5.2-7-11a7 7 0 0 1 14 0c0 5.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.2" /></svg></span>
+                    <span className="miTxt"><b>Go to…</b><i className="go">Search · jump</i></span>
+                  </button>
+                  <button className="menuItem" onClick={() => { eng().toggleAutoSteer(); }}>
+                    <span className="miIcon go"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2 5 4-12 2 7h6" /></svg></span>
+                    <span className="miTxt"><b>Assist</b><i className={autoSteer ? 'go' : 'off'}>{autoSteer ? 'On' : 'Off'}</i></span>
+                  </button>
+                  <button className="menuItem" onClick={() => { eng().toggleMusic(); }}>
+                    <span className="miIcon nav"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.6" /><circle cx="16" cy="16" r="2.6" /></svg></span>
+                    <span className="miTxt"><b>Music</b><i className={music ? 'nav' : 'off'}>{music ? 'On' : 'Muted'}</i></span>
+                  </button>
+                  <button className={'menuItem' + (traceDrive ? ' on' : '')} onClick={() => { eng().traceDrive(); }}>
+                    <span className="miIcon jump"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 19l14-9M5 19l3-6 6-3" /></svg></span>
+                    <span className="miTxt"><b>Trace</b><i className={traceDrive ? 'jump' : 'off'}>{traceDrive ? 'On' : 'Off'}</i></span>
+                  </button>
+                  <button className="menuItem" onClick={() => { setCars(eng().getCars()); setCarPicker(true); setMenuOpen(false); }}>
+                    <span className="miIcon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /></svg></span>
+                    <span className="miTxt"><b>Cars</b><i className="off">Garage</i></span>
+                  </button>
+                  <button className="menuItem" onClick={() => { eng().exitDrive(); }}>
+                    <span className="miIcon reverse"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg></span>
+                    <span className="miTxt"><b>Exit drive</b><i className="off">Back to explore</i></span>
+                  </button>
+                </div>
+              )}
             </div>
-            {/* gas + brake pedals (bottom-right, right thumb). Decoupled from steering:
-                the left stick only turns, these drive. Just steering still auto-creeps. */}
-            <div id="pedals">
-              {/* analog GO: press = ~65%, slide your thumb down the pedal toward 100% (floor it).
-                  pointer capture keeps the press alive through a thumb-roll mid-corner. */}
-              <button id="gasBtn" className="panel holdBtn pedal gas" aria-label="Gas (hold to accelerate, slide down to floor it)"
-                onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); const r = e.currentTarget.getBoundingClientRect(); const v = Math.max(0.6, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5)); e.currentTarget.style.setProperty('--fill', (v * 100) + '%'); eng().setGasAmount(v); }}
-                onPointerMove={e => { if (e.buttons) { const r = e.currentTarget.getBoundingClientRect(); const v = Math.max(0.55, Math.min(1, 0.55 + (e.clientY - r.top) / r.height * 0.5)); e.currentTarget.style.setProperty('--fill', (v * 100) + '%'); eng().setGasAmount(v); } }}
-                onPointerUp={e => { e.currentTarget.style.setProperty('--fill', '0%'); eng().setGasAmount(0); }} onPointerCancel={e => { e.currentTarget.style.setProperty('--fill', '0%'); eng().setGasAmount(0); }}><i className="gasFill" /><span>GO</span></button>
-              <button id="brakeBtn" className="panel holdBtn pedal brake" aria-label="Brake (hold to slow / reverse)"
-                onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setBrake(true); }} onPointerUp={() => eng().setBrake(false)}
-                onPointerCancel={() => eng().setBrake(false)}><span ref={el => (uiRefs.current.brakeLbl = el)}>STOP</span></button>
+
+            {/* ══ BOTTOM-CENTER: the DASH cluster (speed · gear · compass · time) ══ */}
+            <div className={'dashCluster' + (drifting ? ' drift' : '')}>
+              <div className="dashSpeed">
+                <i className="dashRev" ref={el => (uiRefs.current.rev = el)}>R</i>
+                <b ref={el => (uiRefs.current.mph = el)}>0</b>
+                <div className="dashSpeedMeta">
+                  <span className="dashKick">MPH</span>
+                  <div className="dashBar"><i ref={el => (uiRefs.current.speedBar = el)} /></div>
+                </div>
+              </div>
+              <div className="dashDiv" />
+              <div className="dashCol">
+                <span className="dashKick">GEAR</span>
+                <b className="dashGear" data-gear="P" ref={el => (uiRefs.current.gear = el)}>P</b>
+              </div>
+              <div className="dashDiv" />
+              <div className="dashCompass">
+                <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
+                  <polygon points="20,5 24,22 20,19 16,22" fill="#FF5247" />
+                  <polygon points="20,35 24,18 20,21 16,18" fill="#fff" opacity=".35" />
+                  <text x="20" y="4" fontSize="7" fontWeight="700" textAnchor="middle" fill="#FF5247">N</text>
+                </svg>
+              </div>
+              <div className="dashDiv" />
+              <div className="dashCol">
+                <span className="dashKick">TIME</span>
+                <b className="dashTime" ref={el => (uiRefs.current.runTime = el)}>0:00</b>
+              </div>
             </div>
-            {/* faint resting steer hint (bottom-left, first few seconds only) — pointer-events:none
-                so the real joystick still spawns under the thumb; tells first-timers where to steer */}
-            {driveHint && <div id="steerGhost" aria-hidden="true"><span>↺</span><i>steer</i></div>}
-            {/* handbrake (hold to drift) + horn, near the pedal thumb zone */}
-            <button id="hbrakeBtn" className={'panel holdBtn' + (drifting ? ' drifting' : '')} aria-label="Handbrake (hold to drift)"
-              onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); eng().setHandbrake(true); }} onPointerUp={() => eng().setHandbrake(false)}
-              onPointerCancel={() => eng().setHandbrake(false)}>✋</button>
-            <button id="hornBtn" className="panel holdBtn" aria-label="Horn" onClick={() => eng().horn()}>📣</button>
+
+            {/* ══ BOTTOM-LEFT: MOVE stick affordance (real joystick spawns over this) ══ */}
+            <div className={'moveStick' + (driveHint ? ' hint' : '')} aria-hidden="true">
+              <div className="stickRing" />
+              {driveHint && <div className="stickRing pulse" />}
+              <div className="stickArrow up"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l6 8H6z" /></svg></div>
+              <div className="stickArrow down"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20l6-8H6z" /></svg></div>
+              <div className="stickKnob" />
+              <div className="stickLabel move">MOVE</div>
+            </div>
+
+            {/* ══ BOTTOM-RIGHT: LOOK stick (orbit camera) + horn ══ */}
+            <div className="lookStick" onPointerDown={lookDown} onPointerMove={lookMove} onPointerUp={lookUp} onPointerCancel={lookUp}>
+              <div className="stickRing dash" />
+              <div className="stickKnob look" ref={el => (lookRef.current.knob = el)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="2.4" /></svg>
+              </div>
+              <div className="stickLabel">LOOK</div>
+            </div>
+            <button className="hornBtn" aria-label="Horn" onClick={() => eng().horn()}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M16 9a5 5 0 0 1 0 6" /></svg>
+            </button>
+
             {drifting && <div id="driftChip">💨 DRIFT!</div>}
-            {driveHint && <div id="driveHint" className="panel">{driveHelp}</div>}
+            {driveHint && <div className="driveHintCard">{driveHelp}</div>}
+
+            {/* ── Navigate panel: Drive-to (green) vs Jump-to (violet) ── */}
             {navOpen && (
               <div id="navPanel">
-                <div className="navHead"><h3>🧭 Navigate</h3><button className="navX" aria-label="Close" onClick={() => setNavOpen(false)}>✕</button></div>
+                <div className="navHead"><h3>Navigate</h3><button className="navX" aria-label="Close" onClick={() => setNavOpen(false)}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button></div>
 
-                <label className="navLbl"><i>🚗</i> Drive to</label>
-                <AddressSearch placeholder="Search a destination…" actionLabel="Go"
-                  suggest={t => eng().placeSuggest(t)}
-                  onPick={s => eng().driveToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
-                  onText={t => eng().driveToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
-
-                <div className="navPresets">
-                  {PRESETS.map(p => (
-                    <button key={p.label} className="navChip" onClick={() => { setNavErr(''); eng().driveToText(p.q).then(() => setNavOpen(false)).catch(() => { eng().setDestination(p.ll[0], p.ll[1], p.label); setNavOpen(false); }); }}>{p.label}</button>
-                  ))}
+                <label className="navLbl drive"><span className="navDot go" /> Drive to <i>route &amp; chauffeur there</i></label>
+                <div className="navTool drive">
+                  <AddressSearch placeholder="Search an address or place" actionLabel="Go"
+                    suggest={t => eng().placeSuggest(t)}
+                    onPick={s => eng().driveToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
+                    onText={t => eng().driveToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+                  <div className="navPresets">
+                    {PRESETS.map(p => (
+                      <button key={p.label} className="navChip" onClick={() => { setNavErr(''); eng().driveToText(p.q).then(() => setNavOpen(false)).catch(() => { eng().setDestination(p.ll[0], p.ll[1], p.label); setNavOpen(false); }); }}>{p.label}</button>
+                    ))}
+                  </div>
                 </div>
 
-                <label className="navLbl"><i>📍</i> Jump to (start somewhere new)</label>
-                <AddressSearch placeholder="Teleport to an address…" actionLabel="Jump"
-                  suggest={t => eng().placeSuggest(t)}
-                  onPick={s => eng().jumpToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
-                  onText={t => eng().jumpToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+                <label className="navLbl jump"><span className="navDot jump" /> Jump to <i>teleport &amp; start over</i></label>
+                <div className="navTool jump">
+                  <AddressSearch placeholder="Teleport to an address…" actionLabel="Jump"
+                    suggest={t => eng().placeSuggest(t)}
+                    onPick={s => eng().jumpToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
+                    onText={t => eng().jumpToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+                </div>
 
                 <div className="navSlider">
                   <label>Auto-drive top speed <b>{autoMax ? autoMax + ' mph' : 'unlimited'}</b></label>
