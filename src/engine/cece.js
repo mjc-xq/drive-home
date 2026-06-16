@@ -46,12 +46,16 @@ function nativeHeight(obj) {
 // swap can fall back instead of hanging.
 export function loadCeceController(onReady, onFail) {
   installDracoDecoder();
-  const loader = new GLTFLoader();
-  loader.setDRACOLoader(DracoShim);
   let settled = false;
   const fail = e => { if (settled) return; settled = true; console.warn('[cece] playable load failed', e); onFail && onFail(e); };
   const timer = setTimeout(() => fail(new Error('cece load timeout')), 20000);
-  loader.load(ceceUrl, g => {
+  // installDracoDecoder injects a classic script that parses ASYNCHRONOUSLY — wait for the decoder
+  // to be ready before loading, so a CeCe swap that happens before the car path warmed Draco (or a
+  // ?nocar session) still decodes instead of silently failing the swap.
+  const begin = () => {
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(DracoShim);
+    loader.load(ceceUrl, g => {
     if (settled) return; settled = true; clearTimeout(timer);
     const model = g.scene;
     // Meshy exports a BLEND / double-sided material that renders near-invisible — force opaque,
@@ -76,4 +80,12 @@ export function loadCeceController(onReady, onFail) {
     for (const clip of g.animations) actions[clip.name] = mixer.clipAction(clip);
     onReady(makeController(inner, mixer, actions, { kind: 'cece', nameMap: CECE_NAME_MAP, actionList: CECE_ACTIONS }));
   }, undefined, e => { clearTimeout(timer); fail(e); });
+  };
+  let waited = 0;
+  (function ready() {
+    if (settled) return;
+    if (typeof globalThis.DracoDecoderModule === 'function') begin();
+    else if (waited < 15000) { waited += 120; setTimeout(ready, 120); }
+    else fail(new Error('Draco decoder not installed'));
+  })();
 }
