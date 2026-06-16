@@ -1134,7 +1134,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
   // path with one finger. (Joystick/keyboard still drive the other camera views.)
-  let navPtr = null, navDownX = 0, navDownY = 0, navMoved = false;   // tap (route along roads) vs drag (freeform draw-to-drive)
+  let navPtr = null, navDownX = 0, navDownY = 0, navMoved = false, navCurX = 0, navCurY = 0;   // tap (route along roads) vs drag (freeform draw-to-drive); navCur tracks the live finger for overhead pinch
   const _navRay = new THREE.Raycaster(), _navNDC = new THREE.Vector2();
   const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
   // drag-to-drive ("trace") is available in the overhead-style views (Top-down AND Aerial)
@@ -1157,8 +1157,19 @@ export function createEngine({ canvas, ui, emit }) {
   function onPointerDown(e) {
     if (mode !== 'explore') {
       canvas.setPointerCapture(e.pointerId);
-      // Top-down "draw to drive": any drag steers the car to the finger.
-      if (driveTopDown()) { navPtr = e.pointerId; navDownX = e.clientX; navDownY = e.clientY; navMoved = false; showT = 0; setNavFromPointer(e.clientX, e.clientY); return; }
+      // Overhead views: ONE finger draws-to-drive; a SECOND finger is a pinch-zoom (the
+      // phone-native way to zoom the map the user asked for) which suspends steering until
+      // you lift back to one finger.
+      if (driveTopDown()) {
+        if (navPtr === null && lookPtrs.size === 0) {
+          navPtr = e.pointerId; navDownX = navCurX = e.clientX; navDownY = navCurY = e.clientY; navMoved = false; showT = 0; setNavFromPointer(e.clientX, e.clientY);
+        } else {
+          if (navPtr !== null) { lookPtrs.set(navPtr, { x: navCurX, y: navCurY }); navPtr = null; inp2.navActive = false; }   // 2nd finger → stop driving, pinch instead
+          lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+        }
+        return;
+      }
       const VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
       // Roblox touch convention, identical in drive + scoop: the LEFT HALF is the
       // movement zone — a press there SPAWNS the dynamic thumbstick under the thumb
@@ -1178,6 +1189,7 @@ export function createEngine({ canvas, ui, emit }) {
         if (ui.knob) ui.knob.style.transform = 'translate(-50%,-50%)';
       } else {
         lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (mode === 'drive') camOrbit.t = performance.now();   // count a look-start as activity so the hold timer doesn't snap a resting finger back
         if (lookPtrs.size === 2) {
           const a = [...lookPtrs.values()];
           pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
@@ -1197,7 +1209,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   function onPointerMove(e) {
     if (mode !== 'explore') {
-      if (e.pointerId === navPtr) { if (Math.hypot(e.clientX - navDownX, e.clientY - navDownY) > 12) navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
+      if (e.pointerId === navPtr) { navCurX = e.clientX; navCurY = e.clientY; if (Math.hypot(e.clientX - navDownX, e.clientY - navDownY) > 12) navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
       if (e.pointerId === movePtr) {
         let dx = e.clientX - joyBX, dy = e.clientY - joyBY;
         const d = Math.hypot(dx, dy), mx = JOY_MAX;
@@ -1216,7 +1228,7 @@ export function createEngine({ canvas, ui, emit }) {
         const nd = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         if (pinchD > 0 && nd > 0) {
           const f = pinchD / nd;
-          if (mode === 'drive') czoom = clamp(czoom * f, 0.4, 3.4);   // wide range: pull right in on the car or way out for an overview
+          if (mode === 'drive') czoom = clamp(czoom * f, driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 3.2 : 3.4);   // overhead gets a much wider+finer range (read one intersection ↔ neighbourhood overview)
           else szoom = clamp(szoom * f, 0.32, 2.6);                   // close over-the-shoulder → wide yard overview
         }
         pinchD = nd;
@@ -1225,7 +1237,7 @@ export function createEngine({ canvas, ui, emit }) {
       const dx = e.clientX - ox, dy = e.clientY - oy;
       if (Math.abs(dx) + Math.abs(dy) < 4) return; // look deadzone (kill resting-finger jitter on high-DPI screens)
       if (mode === 'drive') {
-        camOrbit.yaw -= dx * LOOK_SENS;
+        camOrbit.yaw = clamp(camOrbit.yaw - dx * LOOK_SENS, -2.4, 2.4);   // clamp so a hard drag can't orbit under the map / lose the car
         camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
         camOrbit.t = performance.now();
         showT = 0;
@@ -1274,7 +1286,7 @@ export function createEngine({ canvas, ui, emit }) {
   function onWheel(e) {
     e.preventDefault();
     if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
-    else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), 0.4, 3.4);
+    else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 3.2 : 3.4);
     else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.32, 2.6);
   }
 
@@ -2742,7 +2754,7 @@ export function createEngine({ canvas, ui, emit }) {
     // — roughly street-sized on the map. Purely cosmetic: collision uses fixed radii, never
     // this scale. Lerp so cycling views doesn't pop; aerial floats highest so it gets biggest.
     const _camV = DRIVE_CAMS[camMode] || {};
-    const dispTarget = _camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.18;   // big enough to spot from up high, not cartoonish
+    const dispTarget = _camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.3;   // chase bumped 1.18→1.3 so the car reads clearly when you orbit out; overhead big enough to spot from up high
     car.dispScale = car.dispScale == null ? dispTarget : car.dispScale + (dispTarget - car.dispScale) * (1 - Math.exp(-dt * 6));
     car.group.scale.setScalar(car.dispScale);
     const overhead = _camV.aerial || _camV.topdown;
@@ -2897,7 +2909,7 @@ export function createEngine({ canvas, ui, emit }) {
       // At speed: float a touch higher, ease back, and push the look-ahead WAY
       // forward so the car slides toward the bottom of frame and you see the road
       // rushing up — the overhead read of velocity.
-      const camT = _camT.set(car.x - fx * (CAM.dist + sp * 4), yC + (CAM.h + sp * 9) * czoom, car.z - fz * (CAM.dist + sp * 4));
+      const camT = _camT.set(car.x - fx * (CAM.dist + sp * 4), yC + CAM.h * czoom + sp * 9, car.z - fz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, 1 - Math.exp(-(5 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // keep up at top speed
       camera.position.copy(camV);
@@ -2915,7 +2927,13 @@ export function createEngine({ canvas, ui, emit }) {
       // after you let go — but HOLD the view for a while first so you can actually look
       // around / explore the scene (the old 600 ms snap made it feel impossible to look).
       // Recentre only after ~1.8 s of no look input, and ease back gently.
-      if (now - camOrbit.t > 1800) { const k = 1 - Math.exp(-dt * 1.3); camOrbit.yaw *= (1 - k); camOrbit.pitch *= (1 - k); }
+      // Free-look HOLDS far longer, then eases only YAW back behind the car (re-frame forward)
+      // while PITCH stays where you set it — look up at the skyline / down at the road and it
+      // sticks. The longer idle delay means a resting finger studying the view doesn't snap back.
+      if (now - camOrbit.t > 2600) {
+        camOrbit.yaw *= Math.exp(-dt * 0.9);                                       // slow yaw recentre
+        camOrbit.pitch += (0.1 - camOrbit.pitch) * (1 - Math.exp(-dt * 0.35));     // drift pitch to a gentle rest, very slowly
+      }
       const sp = clamp(Math.abs(car.speed) / feelRef, 0, 1);          // 0..1 of the FEEL range (~60 mph)
       // spHi keeps building ABOVE the feel range up to the real top (~180-220), so the
       // open-road blast the design invites actually reads as faster than a 40 mph cruise.
@@ -3214,7 +3232,7 @@ export function createEngine({ canvas, ui, emit }) {
     // LOOK stick (right thumb): orbit the drive camera. dx/dy are screen-pixel deltas,
     // same convention as a look-drag on the canvas, so it feeds the existing camOrbit.
     nudgeLook: (dx, dy) => {
-      camOrbit.yaw -= dx * LOOK_SENS;
+      camOrbit.yaw = clamp(camOrbit.yaw - dx * LOOK_SENS, -2.4, 2.4);
       camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
       camOrbit.t = performance.now();
       showT = 0;
