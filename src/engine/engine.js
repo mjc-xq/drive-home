@@ -1704,9 +1704,18 @@ export function createEngine({ canvas, ui, emit }) {
     let acc = 0, px = car.x, pz = car.z;
     for (let i = routeIdx; i < ROUTE.length; i++) {
       acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
-      if (acc >= look) return ROUTE[i];
+      if (acc >= look) return laneOffset(i);
     }
     return DEST;
+  }
+  // LANE: aim ~1.7 m to the RIGHT of the route centreline so the car drives IN A LANE
+  // instead of straddling the middle of the road (it follows the right perpendicular of the
+  // local route direction). Only kicks in on faster/wider roads where lane-keeping reads.
+  function laneOffset(i) {
+    const a = ROUTE[Math.max(0, i - 1)], b = ROUTE[Math.min(ROUTE.length - 1, i + 1)];
+    let dx = b.x - a.x, dz = b.z - a.z; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const off = clamp(Math.abs(car.speed) / 12, 0, 1) * 1.7;   // ease the lane offset in with speed
+    return { x: ROUTE[i].x + dz * off, z: ROUTE[i].z - dx * off };   // right perpendicular = (dz, -dx)
   }
   // distance along the route to the next real TURN (>~25° heading change) — lets the
   // chauffeur run FAST on long straights and only slow for corners/arrival.
