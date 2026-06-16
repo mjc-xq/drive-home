@@ -92,6 +92,11 @@ export function createEngine({ canvas, ui, emit }) {
     if (r.k !== 'residential' && r.k !== 'tertiary' && r.k !== 'service') continue;
     for (let k = 0; k < r.p.length - 1; k++) roadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
   }
+  // EVERY mapped road (any type) for the off-road auto-correct + reset-to-road: the
+  // drivable-only roadSegs above (used by the minimap/traffic/crowd) miss roads the car
+  // can still wander off, so nearestRoadPoint/resetToRoad search this wider graph instead.
+  const allRoadSegs = [];
+  for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) allRoadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
   // geo -> world: the orig/tile frame is anchored at 1840 Dahill Lane (flat tangent
   // plane — fine across the East Bay for a toy nav line/auto-drive).
   const GEO0 = { lat: 37.6835313, lon: -122.0686199 };
@@ -108,6 +113,10 @@ export function createEngine({ canvas, ui, emit }) {
   let soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   let roadLifeOn = (() => { try { return localStorage.getItem('dahill.roadlife') !== '0'; } catch (e) { return true; } })();   // pedestrians + traffic on by default
+  // Soft-wall / gravity-well that keeps the car on the street: past LANE_HALF metres off the
+  // nearest road it gets pulled back, ramping in softly and clamped to WALL_MAX m/s so it never
+  // overpowers a deliberate drive (and fades as the player steers).
+  const LANE_HALF = 4.2, WALL_GAIN = 3.5, WALL_MAX = 9.0;
   let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
   let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
@@ -1611,9 +1620,14 @@ export function createEngine({ canvas, ui, emit }) {
     } else {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
-    if (!found) { toast('No road nearby — drive back toward town'); return; }
+    if (!found) {
+      // Last resort: nearestRoadPoint also consults the live ROUTE + every mapped road, so it
+      // returns SOMETHING (worst case the car's own spot) — never silently strand the car.
+      const p = nearestRoadPoint(car.x, car.z);
+      bx = p.x; bz = p.z; found = true;
+    }
     car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
-    camInit = false; inp2.navActive = false; recoverCooldown = 1.8;   // grace so auto-recover can't immediately re-fire
+    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 1.8;   // re-seat the chase/orbit cam at the new spot; grace so auto-recover can't immediately re-fire
     audio.blip && audio.blip();
     toast('Back on the road 🛣️', 1000);
   }
@@ -1851,17 +1865,28 @@ export function createEngine({ canvas, ui, emit }) {
   // where Drive-to arrives — Google geocodes to a rooftop/parcel, not the curb), clear any
   // destination, re-settle the camera. Lets you start anywhere on the map.
   let jumpReqId = 0;
+  // Full post-teleport reset in ONE place: zero the car's motion, force a fresh ground
+  // sample, and RE-SEAT every camera reference (camGroundRef/camFloorRef were the ones the
+  // old jump paths forgot — leaving the orbit cam floating at the OLD altitude for seconds,
+  // which read as "we lost the car"). Short cooldown so a bad landing still recovers fast.
+  function settleAfterTeleport() {
+    car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.groundY = null;
+    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6;
+  }
   function jumpTo(lat, lon, label) {
     const ox = car.x, oz = car.z;                         // origin for the road-end query (captured before we teleport)
     const w = geoToWorld(lat, lon);
-    car.x = w[0]; car.z = w[1]; car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.groundY = null;
+    car.x = w[0]; car.z = w[1];
     // Snap onto the local street graph when one is near (the generous radius matches the
     // tap-to-drive snap, so jumps inside the neighborhood land in the street like a drive).
+    // Even if no road is "near", if the rooftop geocode dropped us INSIDE a building, nudge
+    // to the nearest road so the car never lands wedged (can't move in any gear).
     const np = nearestRoadPoint(car.x, car.z);
     const onLocalRoad = np && np.d < 90;
     if (onLocalRoad) { car.x = np.x; car.z = np.z; }
+    else if (np && insideBuilding(car.x, car.z)) { car.x = np.x; car.z = np.z; }
     clearDestination();
-    camInit = false; recoverCooldown = 1.8;
+    settleAfterTeleport();
     toast('📍 Jumped to ' + esc(label || 'there'), 1500);
     // Far from the neighborhood there's no local road graph, so the geocode rooftop would
     // strand the car ON a building. Match Drive-to EXACTLY: ask Google for the route and slide
@@ -1884,8 +1909,11 @@ export function createEngine({ canvas, ui, emit }) {
           const src = path.length ? path : result.routes[0].overview_path;
           if (!src || !src.length) return;
           const end = src[src.length - 1], e = geoToWorld(end.lat(), end.lng());
-          car.x = e[0]; car.z = e[1]; car.speed = 0; car.vlat = 0; car.groundY = null;
-          camInit = false;
+          car.x = e[0]; car.z = e[1];
+          // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
+          const np = nearestRoadPoint(car.x, car.z);
+          if (np && (np.d < 90 || insideBuilding(car.x, car.z))) { car.x = np.x; car.z = np.z; }
+          settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
         }
       );
     }).catch(() => {});
@@ -2041,12 +2069,16 @@ export function createEngine({ canvas, ui, emit }) {
   // both the off-road steer-back (aim straight at it) and the auto-recover snap.
   function nearestRoadPoint(x, z) {
     let bx = x, bz = z, bd = 1e18;
-    for (const s of roadSegs) {
-      const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
+    const tryAB = (ax, az, b0, b1) => {
+      const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz || 1;
       let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; bx = px; bz = pz; }
-    }
+    };
+    // Live Google route first (real roads, works far from the procedural hood), then EVERY
+    // mapped road. So the steer-back + soft wall + reset always have a target to aim at.
+    if (ROUTE && ROUTE.length > 1) for (let i = 0; i < ROUTE.length - 1; i++) tryAB(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
+    for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return { x: bx, z: bz, d: Math.sqrt(bd) };
   }
   // Local street fallback for minimap/tap auto-drive. Google Directions handles real
@@ -2486,17 +2518,22 @@ export function createEngine({ canvas, ui, emit }) {
     // is controllable; flooring it still reaches the same top. Auto-drive keeps the snappier
     // numbers so the chauffeur still makes good time.
     const manual = !autoDrive;
-    const pedalTgt = Math.pow(throttle, manual ? 3.0 : 2.4) * maxF;  // curved pedal → target speed; steeper = easier SLOW crawl at the bottom
+    // FINE-CONTROL low band: by hand, the first ~18% of pedal maps to a gentle linear crawl
+    // (up to ~7 u/s ≈ 15 mph) you can HOLD for precise manoeuvring, instead of the cube curve's
+    // near-zero-then-lunge bottom. Above that the cube curve takes over toward the top; floored
+    // (throttle=1) the cube far exceeds the crawl band, so top speed is untouched.
+    const fine = manual ? Math.min(throttle, 0.18) / 0.18 * 7 : 0;
+    const pedalTgt = Math.max(fine, Math.pow(throttle, manual ? 3.4 : 2.4) * maxF);  // curved pedal → target speed; steeper manual = easier SLOW crawl at the bottom
     const aGap = pedalTgt - car.speed;
-    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul * speedMul * (manual ? 0.62 : 1);   // peak engine pull (cap); manual builds speed more gradually
-    let acc = clamp(aGap * (aGap > 0 ? (manual ? 1.7 : 2.6) : 0.9), -aMax, aMax);     // chase target; gentler manual pull + lift-off coast
+    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul * speedMul * (manual ? 0.50 : 1);   // peak engine pull (cap); manual builds speed more gradually (gentler off the line)
+    let acc = clamp(aGap * (aGap > 0 ? (manual ? 1.25 : 2.6) : 0.9), -aMax, aMax);     // chase target; softer manual pull eases toward target (precision) + lift-off coast
     if (aGap > 0) acc *= 0.75 + 0.25 * clamp(Math.abs(car.speed) / 6, 0, 1);   // gentle off-the-line ramp — keeps a floored stab feeling punchy, not sluggish
     // PROGRESSIVE brake: ramp the brake force in over ~0.25 s so a quick tap trail-brakes
     // lightly (corner-entry finesse) while a long hold still hauls it down hard.
     const braking = brake > 0.1;
     const bcur = car.brakeAmt || 0;
     car.brakeAmt = bcur + ((braking ? 1 : 0) - bcur) * Math.min(1, dt * (braking ? 4 : 9));
-    if (braking) acc = car.speed > 0.5 ? -34 * car.brakeAmt : -13 * brake;
+    if (braking) acc = car.speed > 0.5 ? -32 * car.brakeAmt : -13 * brake;   // firm but not grabby; brakeAmt ramp keeps a tap a light trail-brake
     // (engine-braking is now implicit: lifting off drops the pedal target below your speed,
     // so the curve above coasts you down on its own.)
     // LOAD TRANSFER: the body dives forward under braking and squats back under power —
@@ -2530,11 +2567,12 @@ export function createEngine({ canvas, ui, emit }) {
     // 200 mph straight tracks with small corrections.
     const yawDamp = clamp(1 - (Math.abs(car.speed) - 20) * 0.008, 0.55, 1);   // keep enough authority to DODGE at speed
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
-    // Distance to the nearest neighbourhood road (only meaningful in the procedural hood;
-    // far out the car rides photoreal roads with no graph, so we don't measure/recover).
+    // Distance to the nearest road, ALWAYS measured at the car's EXACT current position
+    // (nearestRoadPoint now consults the live ROUTE + every mapped road, so it's valid even
+    // far from the procedural hood). inHood still gates the discrete snap-back below.
     const inHood = Math.hypot(car.x, car.z) < 330;
-    const nrp = inHood ? nearestRoadPoint(car.x, car.z) : null;
-    const offRoadDist = nrp ? nrp.d : 0;
+    const nrp = nearestRoadPoint(car.x, car.z);
+    const offRoadDist = nrp.d;
     // AUTO-STEER assist: aim the car along the ROUTE (when navigating), or — in free-roam —
     // along the nearest road via a look-ahead point that takes street corners for you. When
     // you've drifted OFF the road it switches to RECOVERY: aim straight back at the nearest
@@ -2583,6 +2621,11 @@ export function createEngine({ canvas, ui, emit }) {
       const stuck = Math.abs(car.speed) < 3;
       if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
     } else offRoadT = 0;
+    // HARD UNSTICK: a bad teleport/landing can bury the car inside a building footprint, where
+    // the collision below collapses every move candidate to its own spot (can't budge in any
+    // gear). If we're already inside one, snap back to the road now (resetToRoad uses the live
+    // route far from home); the heading is re-derived from the corrected state just below.
+    if (insideBuilding(car.x, car.z)) resetToRoad();
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -2601,6 +2644,20 @@ export function createEngine({ canvas, ui, emit }) {
     car.vlat = clamp(car.vlat, -26, 26);
     const rpx = Math.cos(car.yaw), rpz = -Math.sin(car.yaw);   // car's right vector
     let nx = car.x + (fx * car.speed + rpx * car.vlat) * dt, nz = car.z + (fz * car.speed + rpz * car.vlat) * dt;
+    // SOFT WALL / gravity-well: once the car strays past the lane edge, pull it back toward the
+    // nearest road point. A positional nudge folded into THIS frame's move (so the building/tree
+    // collision below still clamps it) — works even stopped or pointed away, where the yaw assist
+    // can't. Ramps in over a few metres (soft edge), clamps under driving speed (never yanks), and
+    // fades as you steer, so it reads like an invisible berm on the shoulder. Only where a road
+    // graph exists (the hood or a live route) so it never tugs you back into town from the open road.
+    if (autoSteer && !hb && (inHood || onRouteNow) && offRoadDist > LANE_HALF && offRoadDist < 120) {
+      const over = offRoadDist - LANE_HALF;
+      const ramp = clamp(over / 6, 0, 1);                       // ease in over the first 6 m
+      const yours = clamp(Math.abs(jx) * 1.5, 0, 1);            // fade out as the player steers hard
+      let ux = nrp.x - car.x, uz = nrp.z - car.z; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+      const pull = Math.min(WALL_MAX, over * WALL_GAIN) * ramp * (1 - yours);
+      nx += ux * pull * dt; nz += uz * pull * dt;
+    }
     updateTraffic(dt, now);   // move the ambient cars (positions feed the collision below)
     const rad = 1.25;
     let hitThisFrame = false, nearThisFrame = false;
