@@ -131,30 +131,11 @@ export default function App() {
   useEffect(() => { if (!ready) return; const t = setTimeout(() => setRevealTimedOut(true), 5500); return () => clearTimeout(t); }, [ready]);
 
   const eng = () => engineRef.current;
-  // Right-thumb LOOK stick: pointer drag feeds the engine's camera orbit (nudgeLook)
-  // and nudges the knob within the ring. Self-contained — no React re-render per move.
-  const lookRef = useRef({ id: -1, lx: 0, ly: 0, knob: null });
-  const lookDown = (e) => {
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* capture can fail; drag still tracks via pointerId */ }
-    const L = lookRef.current; L.id = e.pointerId; L.lx = e.clientX; L.ly = e.clientY;
-    e.currentTarget.classList.add('active');
-  };
-  const lookMove = (e) => {
-    const L = lookRef.current; if (e.pointerId !== L.id) return;
-    const dx = e.clientX - L.lx, dy = e.clientY - L.ly; L.lx = e.clientX; L.ly = e.clientY;
-    eng() && eng().nudgeLook && eng().nudgeLook(dx, dy);
-    if (L.knob) {
-      const r = e.currentTarget.getBoundingClientRect();
-      let kx = e.clientX - (r.left + r.width / 2), ky = e.clientY - (r.top + r.height / 2);
-      const d = Math.hypot(kx, ky), mx = 30; if (d > mx) { kx *= mx / d; ky *= mx / d; }
-      L.knob.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
-    }
-  };
-  const lookUp = (e) => {
-    const L = lookRef.current; if (e.pointerId !== L.id) return; L.id = -1;
-    e.currentTarget.classList.remove('active');
-    if (L.knob) L.knob.style.transform = 'translate(-50%,-50%)';
-  };
+  // NOTE: camera LOOK has no dedicated on-screen stick anymore. Following Roblox's
+  // touch convention, the whole RIGHT HALF of the screen is camera dead-space — the
+  // engine's canvas pointer handler turns any single-finger drag there into a
+  // rotate/tilt (and two fingers into a pinch-zoom). The HUD only paints a passive,
+  // non-interactive hint there; it never intercepts the drag.
   // Warm the Google Maps SDK the moment the nav panel opens, so the first keystroke in the
   // address box doesn't jank (the SDK script parse used to land on ~the 3rd character typed).
   useEffect(() => { if (navOpen && eng() && eng().preloadMaps) eng().preloadMaps(); }, [navOpen]);
@@ -162,9 +143,9 @@ export default function App() {
   // Quick destinations (live-geocoded for accuracy; hardcoded fallback so they
   // always work even if the Geocoding API isn't enabled on the key).
   const PRESETS = [
-    { label: "Meemaw's", q: '4311 Circle Drive, Castro Valley, CA', ll: [37.7205, -122.0775] },
-    { label: 'Canyon Middle', q: 'Canyon Middle School, Castro Valley, CA', ll: [37.7054126, -122.0518696] },
-    { label: 'Stanton Elem', q: 'Stanton Elementary School, Castro Valley, CA', ll: [37.6905, -122.079] },
+    { label: "Meemaw's", q: '4311 Circle Ave, Castro Valley, CA', ll: [37.6995618, -122.0639216] },
+    { label: 'Canyon Middle', q: 'Canyon Middle School, Castro Valley, CA', ll: [37.7046462, -122.0524363] },
+    { label: 'Stanton Elem', q: 'Stanton Elementary School, Castro Valley, CA', ll: [37.7005734, -122.0940411] },
     { label: "Dad's work", q: '807 Broadway, Oakland, CA', ll: [37.8004778, -122.2739559] },
   ];
   const traceDrive = camName === 'Top-down' || camName === 'Aerial';
@@ -387,24 +368,27 @@ export default function App() {
               </div>
             </div>
 
-            {/* ══ BOTTOM-LEFT: MOVE stick affordance (real joystick spawns over this) ══ */}
-            <div className={'moveStick' + (driveHint ? ' hint' : '')} aria-hidden="true">
+            {/* Roblox-style touch hints — PASSIVE only (pointer-events:none). The real
+                input is the engine's canvas handler: left half spawns the dynamic
+                thumbstick under your thumb, right half is drag-to-look. Hints fade
+                away on their own once you've taken control. Hidden in the overhead
+                drag-to-drive cams, which use a different (tap/drag-the-map) scheme. */}
+            {!traceDrive && (<>
+            {/* ── BOTTOM-LEFT: where the dynamic move thumbstick spawns ── */}
+            <div className={'moveHint' + (driveHint ? ' pulse' : '')} aria-hidden="true">
               <div className="stickRing" />
-              {driveHint && <div className="stickRing pulse" />}
               <div className="stickArrow up"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l6 8H6z" /></svg></div>
               <div className="stickArrow down"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20l6-8H6z" /></svg></div>
               <div className="stickKnob" />
-              <div className="stickLabel move">MOVE</div>
+              <div className="stickLabel move">DRAG TO DRIVE</div>
             </div>
-
-            {/* ══ BOTTOM-RIGHT: LOOK stick (orbit camera) + horn ══ */}
-            <div className="lookStick" onPointerDown={lookDown} onPointerMove={lookMove} onPointerUp={lookUp} onPointerCancel={lookUp}>
-              <div className="stickRing dash" />
-              <div className="stickKnob look" ref={el => (lookRef.current.knob = el)}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="2.4" /></svg>
-              </div>
-              <div className="stickLabel">LOOK</div>
+            {/* ── BOTTOM-RIGHT: dead-space camera zone (swipe to look) ── */}
+            <div className="lookHint" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="2.4" /></svg>
+              <div className="stickLabel">SWIPE TO LOOK</div>
             </div>
+            </>)}
+            {traceDrive && <div className="dragDriveHint">✦ Drag the map to drive · tap a spot to route there</div>}
             <button className="hornBtn" aria-label="Horn" onClick={() => eng().horn()}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M16 9a5 5 0 0 1 0 6" /></svg>
             </button>

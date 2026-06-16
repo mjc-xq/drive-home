@@ -259,9 +259,9 @@ export function createEngine({ canvas, ui, emit }) {
   const poiFound = new Set((() => { try { return JSON.parse(localStorage.getItem(POI_KEY) || '[]'); } catch (e) { return []; } })());
   const homeGeo = worldToGeo(house.c[0], house.c[1]);
   const POIS = [{ key: 'home', x: house.c[0], z: house.c[1], lat: homeGeo.lat, lon: homeGeo.lon, icon: '🏠', label: 'your house', msg: "👋 That's YOUR house — 1840 Dahill Lane!" }].concat(
-    [['meemaw', 37.7205, -122.0775, '🏡', "Meemaw's", "🏡 Meemaw's house!"],
-     ['canyon', 37.7054126, -122.0518696, '🏫', 'Canyon Middle', '🏫 Canyon Middle School!'],
-     ['stanton', 37.6905, -122.079, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
+    [['meemaw', 37.6995618, -122.0639216, '🏡', "Meemaw's", "🏡 Meemaw's house!"],
+     ['canyon', 37.7046462, -122.0524363, '🏫', 'Canyon Middle', '🏫 Canyon Middle School!'],
+     ['stanton', 37.7005734, -122.0940411, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
      ['dad', 37.8004778, -122.2739559, '💼', "Dad's work", "💼 Dad's work — the XQ Institute!"]
     ].map(([key, lat, lon, icon, label, msg]) => { const w = geoToWorld(lat, lon); return { key, x: w[0], z: w[1], lat, lon, icon, label, msg }; }));
   let tripScore = 0;
@@ -1015,7 +1015,7 @@ export function createEngine({ canvas, ui, emit }) {
   // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
-  const LOOK_SENS = 0.0046, PITCH_SENS = 0.003, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;
+  const LOOK_SENS = 0.0072, PITCH_SENS = 0.0048, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;   // more responsive free-look
   const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
@@ -1047,10 +1047,15 @@ export function createEngine({ canvas, ui, emit }) {
       // Top-down "draw to drive": any drag steers the car to the finger.
       if (driveTopDown()) { navPtr = e.pointerId; navDownX = e.clientX; navDownY = e.clientY; navMoved = false; showT = 0; setNavFromPointer(e.clientX, e.clientY); return; }
       const VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
-      // Roblox convention: a press in the lower-left region SPAWNS the
-      // thumbstick under the thumb; everything else is camera look.
-      const steerZoneW = mode === 'drive' ? (MOBILE ? 0.62 : 0.52) : 0.46;
-      const steerZoneTop = mode === 'drive' ? 0.26 : 0.30;
+      // Roblox touch convention, identical in drive + scoop: the LEFT HALF is the
+      // movement zone — a press there SPAWNS the dynamic thumbstick under the thumb
+      // (drag farther = move faster: full throttle / a run). The RIGHT HALF is dead
+      // space for the camera — a single-finger drag there rotates (horizontal) and
+      // tilts (vertical) the view; two fingers anywhere pinch-zoom. We reserve the
+      // top strip from the move zone so a drag that begins up near the HUD reads as
+      // a look, and so the thumbstick never spawns under the top bar.
+      const steerZoneW = MOBILE ? 0.5 : 0.44;          // left half = move (slightly narrower with a mouse)
+      const steerZoneTop = mode === 'drive' ? 0.14 : 0.18;
       if (movePtr === null && e.clientX < VW * steerZoneW && e.clientY > VH * steerZoneTop) {
         movePtr = e.pointerId; joyBX = e.clientX; joyBY = e.clientY;
         if (ui.joy) {
@@ -1099,7 +1104,7 @@ export function createEngine({ canvas, ui, emit }) {
         if (pinchD > 0 && nd > 0) {
           const f = pinchD / nd;
           if (mode === 'drive') czoom = clamp(czoom * f, 0.4, 3.4);   // wide range: pull right in on the car or way out for an overview
-          else szoom = clamp(szoom * f, 0.55, 2.0);
+          else szoom = clamp(szoom * f, 0.32, 2.6);                   // close over-the-shoulder → wide yard overview
         }
         pinchD = nd;
         return;
@@ -1157,7 +1162,7 @@ export function createEngine({ canvas, ui, emit }) {
     e.preventDefault();
     if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
     else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), 0.4, 3.4);
-    else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.55, 2.0);
+    else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.32, 2.6);
   }
 
   function onContextMenu(e) { e.preventDefault(); }
@@ -1277,15 +1282,16 @@ export function createEngine({ canvas, ui, emit }) {
       let mx = rX * jx - fX * jy, mz = rZ * jx - fZ * jy;
       const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
       if (!shiftLock) CHAR.yaw = Math.atan2(mx, mz); // else keep facing camera, strafe
-      // Roblox-style follow cam: gently trail the camera behind the avatar's
-      // heading so the LEFT stick leads and the camera follows — instead of the
-      // look-drag defining where "forward" is (the user's "camera also controls
-      // direction" complaint). A manual right-side look pauses this for ~1s.
-      if (!shiftLock && now - lastLookT > 1000) {
+      // Roblox follow cam: your right-side swipe OWNS the camera. We only add a very
+      // gentle drift to bring it back behind the keeper, and only after you've left
+      // the camera alone for a good while (2.5 s) — so looking around actually holds
+      // instead of being yanked back the instant you start walking. Shift-lock opts
+      // out entirely (the camera leads and the keeper strafes).
+      if (!shiftLock && now - lastLookT > 2500) {
         let dyaw = CHAR.yaw - camYawS;
         while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
         while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-        camYawS += dyaw * Math.min(1, dt * 2.2);
+        camYawS += dyaw * Math.min(1, dt * 0.8);   // ~1.2 s settle, barely noticeable
       }
       const sp = 4.4 * mag;
       let nx = CHAR.x + mx * sp * dt, nz = CHAR.z + mz * sp * dt;
@@ -1405,8 +1411,13 @@ export function createEngine({ canvas, ui, emit }) {
     DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false;
     guideLine.visible = false; destPin.visible = false; if (navMarker) navMarker.visible = false;
     emit('dest', null); emit('autodrive', false);
-    if (!driveCamUserPicked && shouldUseEasyDriveCamera()) {
-      const i = DRIVE_CAMS.findIndex(c => c.topdown);
+    // Default to the Roblox-style CHASE cam ('Close') so driving leads with the
+    // dynamic thumbstick + swipe-to-look controls — that IS the Roblox feel the
+    // player expects. The overhead drag-to-drive map stays one tap away on the VIEW
+    // cycle for anyone who prefers steering by tapping the map. We only honour a cam
+    // the player chose themselves on a previous drive (driveCamUserPicked).
+    if (!driveCamUserPicked) {
+      const i = DRIVE_CAMS.findIndex(c => c.name === 'Close');
       if (i >= 0) camMode = i;
     }
     czoom = 1;                                            // fresh zoom (pinch shouldn't leak between drives)
@@ -1551,7 +1562,7 @@ export function createEngine({ canvas, ui, emit }) {
   // lat/lons were approximate). Updates each POI's world position so proximity/'found' and
   // the in-world beacon+label point at the actual place; shifts the Stanton dancers along.
   const POI_ADDR = {
-    meemaw: '4311 Circle Drive, Castro Valley, CA 94546',
+    meemaw: '4311 Circle Ave, Castro Valley, CA 94546',
     canyon: 'Canyon Middle School, Castro Valley, CA',
     stanton: 'Stanton Elementary School, Castro Valley, CA',
     dad: '807 Broadway, Oakland, CA 94607',
@@ -1590,12 +1601,12 @@ export function createEngine({ canvas, ui, emit }) {
       _gmaps = maps;
       const o = worldToGeo(car.x, car.z);
       _gmap = new maps.Map(div, {
-        center: { lat: o.lat, lng: o.lon }, zoom: 17, disableDefaultUI: true,
+        center: { lat: o.lat, lng: o.lon }, zoom: 15, disableDefaultUI: true,   // neighbourhood context, not a tight street view
         gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
         styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
       });
       _gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: _gmap, zIndex: 5,
-        icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.7, rotation: 0, anchor: new maps.Point(0, 0) } });
+        icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5, scale: 1.05, rotation: 0, anchor: new maps.Point(0, 0) } });
       _gmapRoute = new maps.Polyline({ map: _gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
       _gmap.addListener('click', e => { const w = geoToWorld(e.latLng.lat(), e.latLng.lng()); setDriveTarget(w[0], w[1]); });
     }).catch(() => { });
@@ -1615,7 +1626,7 @@ export function createEngine({ canvas, ui, emit }) {
         if (_gmaps) { const b = new _gmaps.LatLngBounds(); b.extend({ lat: o.lat, lng: o.lon }); for (const p of pts) b.extend(p); _gmap.fitBounds(b, 12); _gmapOverviewUntil = now + 3500; }
       } else if (!ROUTE && _gmapRouteFor) { _gmapRouteFor = null; _gmapRoute.setPath([]); }
     }
-    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() < 15) _gmap.setZoom(17); }   // follow the car (after the overview)
+    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() < 14) _gmap.setZoom(15); }   // follow the car at neighbourhood zoom (after the overview)
   }
   function geocodePlaceId(placeId, fallbackLabel) {
     return loadMapsSDK().then(maps => new Promise((res, rej) => {
@@ -1714,7 +1725,7 @@ export function createEngine({ canvas, ui, emit }) {
   function laneOffset(i) {
     const a = ROUTE[Math.max(0, i - 1)], b = ROUTE[Math.min(ROUTE.length - 1, i + 1)];
     let dx = b.x - a.x, dz = b.z - a.z; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-    const off = clamp(Math.abs(car.speed) / 12, 0, 1) * 1.7;   // ease the lane offset in with speed
+    const off = clamp((Math.abs(car.speed) - 22) / 30, 0, 1) * 1.1;   // small lane offset, ONLY at highway speed (was shoving the car off narrow streets)
     return { x: ROUTE[i].x + dz * off, z: ROUTE[i].z - dx * off };   // right perpendicular = (dz, -dx)
   }
   // distance along the route to the next real TURN (>~25° heading change) — lets the
@@ -1993,10 +2004,6 @@ export function createEngine({ canvas, ui, emit }) {
     { name: 'Top-down', dist: 7, h: 85, ahead: 12, drone: true, topdown: true, dragdrive: true },   // proper high overhead map view
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
-  function shouldUseEasyDriveCamera() {
-    const w = canvas.clientWidth || innerWidth, h = canvas.clientHeight || innerHeight;
-    return MOBILE || Math.min(w, h) < 680 || w < 760;
-  }
   function cycleCamera() {
     driveCamUserPicked = true;
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
@@ -2025,10 +2032,16 @@ export function createEngine({ canvas, ui, emit }) {
     toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
   // Scoop camera presets [dist, height] — cycled with the 🎥 button.
+  // Roblox-style follow cams, cycled with the 🎥 button. The DEFAULT (index 0) is a
+  // behind-the-shoulder angled view like Roblox's default camera — so a right-side
+  // swipe orbits AROUND the keeper and you actually see the world turn, instead of
+  // just spinning a top-down map. 'Overhead' is kept as an option for precise
+  // scooping (it reads the poops better from straight above). pitch (vertical look)
+  // raises/lowers the height; pinch (szoom) is the distance dolly.
   const SCOOP_CAMS = [
-    { name: 'Overhead', dist: 10, h: 19 },   // ~62° down: near top-down
+    { name: 'Follow', dist: 13, h: 8 },      // ~32° down: over-the-shoulder, the Roblox default
     { name: 'Angled', dist: 14, h: 15 },     // ~47° down: tilts past the melty horizon to the yard
-    { name: 'Close', dist: 9, h: 7.5 }       // ~40° down: low follow, still off the horizon
+    { name: 'Overhead', dist: 10, h: 19 }    // ~62° down: near top-down for precise scooping
   ];
   let scCam = 0;
   function cycleScoopCamera() {
@@ -2207,7 +2220,7 @@ export function createEngine({ canvas, ui, emit }) {
     // a soft coast when you lift above it. So light pedal SETTLES at a low cruise (precise
     // manoeuvring) while flooring it pulls hard to the top (fast) — and because it eases in
     // as you approach the target, it never overshoots off the road.
-    const pedalTgt = Math.pow(throttle, 1.8) * maxF;                 // curved pedal → target speed
+    const pedalTgt = Math.pow(throttle, 2.4) * maxF;                 // curved pedal → target speed; steeper = easy SLOW crawl at the bottom
     const aGap = pedalTgt - car.speed;
     const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul;   // peak engine pull (cap)
     let acc = clamp(aGap * (aGap > 0 ? 2.6 : 0.9), -aMax, aMax);     // chase target; gentler on lift-off coast
@@ -2372,10 +2385,16 @@ export function createEngine({ canvas, ui, emit }) {
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
     car.x = nx; car.z = nz;
     // Ride the real photoreal ROAD surface (canopy-skipped + clamped to topology),
-    // low-passed so it's smooth — keeps the car (and its flat patch) sitting ON the
-    // road, never climbing trees. Tilt comes from the smooth procedural terrain.
+    // tracked ASYMMETRICALLY: settle DOWN gently (smooth on descents + bumps) but catch
+    // UP quickly, and never let the smoothed height sink more than a hair below the real
+    // surface. A symmetric low-pass used to lag BELOW a road that climbs faster than it
+    // can track (uphill/onto a bridge at speed) — and once the car was under the surface,
+    // the canopy-skipping down-ray (cast from just above the car) could no longer see the
+    // road ABOVE it, so it stayed buried. The hard floor keeps that from ever happening.
     const yr = actorGroundY(car.x, car.z, car.groundY);
-    car.groundY = car.groundY == null ? yr : car.groundY + (yr - car.groundY) * Math.min(1, dt * 5);
+    if (car.groundY == null) car.groundY = yr;
+    else { const rate = yr > car.groundY ? dt * 12 : dt * 5; car.groundY += (yr - car.groundY) * Math.min(1, rate); }
+    if (yr != null && car.groundY < yr - 0.25) car.groundY = yr - 0.25;
     const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     const tF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), tB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
@@ -2542,9 +2561,10 @@ export function createEngine({ canvas, ui, emit }) {
       const CAM = DRIVE_CAMS[camMode];
       camera.up.set(0, 1, 0);
       // free look: hold wherever you dragged, then auto-recenter behind the car shortly
-      // after you let go — both thumbs drive (steer + pedals), so the view has to come
-      // back on its own without a third thumb. Snappy recenter, no speed gate.
-      if (now - camOrbit.t > 600) { const k = 1 - Math.exp(-dt * 3.2); camOrbit.yaw *= (1 - k); camOrbit.pitch *= (1 - k); }
+      // after you let go — but HOLD the view for a while first so you can actually look
+      // around / explore the scene (the old 600 ms snap made it feel impossible to look).
+      // Recentre only after ~1.8 s of no look input, and ease back gently.
+      if (now - camOrbit.t > 1800) { const k = 1 - Math.exp(-dt * 1.3); camOrbit.yaw *= (1 - k); camOrbit.pitch *= (1 - k); }
       const sp = clamp(Math.abs(car.speed) / feelRef, 0, 1);          // 0..1 of the FEEL range (~60 mph)
       // spHi keeps building ABOVE the feel range up to the real top (~180-220), so the
       // open-road blast the design invites actually reads as faster than a 40 mph cruise.

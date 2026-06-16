@@ -85,7 +85,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* the map IS the interface; everything floats. Chrome is square (no radius),
    glass-blurred, with a single hero DASH at the foot and twin sticks in the corners. */
 .driveHud{position:absolute;inset:0;font-family:'Chakra Petch',system-ui,sans-serif}
-.driveHud button,.driveHud .miniFrame,.driveHud .lookStick{pointer-events:auto}
+.driveHud button,.driveHud .miniFrame{pointer-events:auto}
 /* shared square glass surface */
 .driveHud .glass{background:var(--hud-glass);border:1px solid var(--hud-line);box-shadow:var(--hud-shadow);
   backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur)}
@@ -338,32 +338,33 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #fx.crash{opacity:.9;background:radial-gradient(circle,rgba(255,255,255,.7),rgba(255,120,60,.3) 60%,transparent 85%);transition:opacity .05s ease}
 @media (prefers-reduced-motion:reduce){#fx::before{animation:none}}
 
-/* ════════════════ TWIN-STICK controls — box-free circular sticks ════════════════ */
-/* Both sticks autohide (dim to ~.4) when idle. The MOVE stick is a pure affordance:
-   the engine spawns the real #joy/#knob under the thumb on top of it. The LOOK stick
-   is interactive (drives nudgeLook). A small horn sits between them. */
-.moveStick,.lookStick{position:absolute;bottom:calc(28px + var(--safe-b));width:120px;height:120px;
-  opacity:.55;transition:opacity .3s ease;z-index:5;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))}
-/* a soft scrim keeps the sticks legible over bright satellite imagery */
-.moveStick::after,.lookStick::after{content:'';position:absolute;inset:-14px;z-index:-1;border-radius:50%;
-  background:radial-gradient(circle,rgba(9,11,15,.5),transparent 70%)}
-.moveStick{left:calc(30px + var(--safe-l))}
-.lookStick{right:calc(30px + var(--safe-r));touch-action:none;cursor:grab}
-.moveStick.hint{opacity:1}
-.lookStick.active{opacity:1;cursor:grabbing}
-.driveHud:hover .moveStick{opacity:.55}
+/* ════════════════ ROBLOX-STYLE touch hints — PASSIVE affordances ════════════════ */
+/* These are NOT controls — they never receive pointer events. The engine's own
+   canvas handler does all the work: the LEFT half spawns the dynamic move thumbstick
+   (#joy/#knob) under the thumb, on top of the move hint; the RIGHT half is dead-space
+   the engine turns into a look-drag. Both hints start visible to teach the gesture,
+   then fade to a faint ghost so they never clutter the view. */
+.moveHint,.lookHint{position:absolute;bottom:calc(28px + var(--safe-b));width:120px;height:120px;
+  pointer-events:none;z-index:5;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6));
+  animation:hintFade 7s ease forwards}
+/* a soft scrim keeps the hints legible over bright satellite imagery */
+.moveHint::after,.lookHint::after{content:'';position:absolute;inset:-14px;z-index:-1;border-radius:50%;
+  background:radial-gradient(circle,rgba(9,11,15,.45),transparent 70%)}
+.moveHint{left:calc(30px + var(--safe-l))}
+.lookHint{right:calc(30px + var(--safe-r));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;color:rgba(255,255,255,.7)}
+.moveHint.pulse{animation:none;opacity:1}          /* first-drive coaching: keep it lit + pulsing */
+@keyframes hintFade{0%,55%{opacity:.6}100%{opacity:.22}}
 .stickRing{position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(255,255,255,.45)}
 .stickRing.dash{border-style:dashed;border-color:rgba(255,255,255,.4)}
-.stickRing.pulse{border-color:rgba(45,140,255,.7);animation:ghostPulse 1.9s ease-in-out infinite}
+.moveHint.pulse .stickRing{border-color:rgba(45,140,255,.7);animation:ghostPulse 1.9s ease-in-out infinite}
 .stickArrow{position:absolute;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.5)}
 .stickArrow.up{top:7px}.stickArrow.down{bottom:7px}
 .stickKnob{position:absolute;left:50%;top:50%;width:52px;height:52px;border-radius:50%;
   transform:translate(-50%,-50%);background:radial-gradient(circle at 40% 32%,#33373f,#14161b);
   border:1px solid rgba(255,255,255,.3);box-shadow:0 6px 16px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.22)}
-.stickKnob.look{display:grid;place-items:center;color:rgba(255,255,255,.7);border-color:rgba(255,255,255,.4)}
-.lookStick.active .stickKnob.look{color:rgba(255,255,255,.95);box-shadow:0 6px 18px rgba(0,0,0,.6),0 0 16px rgba(255,255,255,.18)}
 .stickLabel{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);
-  font-family:'Chakra Petch';font-weight:600;font-size:9px;letter-spacing:.24em;color:rgba(255,255,255,.7);white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.85)}
+  font-family:'Chakra Petch';font-weight:600;font-size:9px;letter-spacing:.2em;color:rgba(255,255,255,.7);white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.85)}
+.lookHint .stickLabel{position:static;transform:none}
 .stickLabel.move{color:rgba(110,180,255,1)}
 /* horn — subtle square button just inboard of the LOOK stick */
 .hornBtn{position:absolute;bottom:calc(40px + var(--safe-b));right:calc(160px + var(--safe-r));width:34px;height:34px;
@@ -377,6 +378,13 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   font-weight:500;font-size:13px;line-height:1.3;color:rgba(255,255,255,.85);text-align:center;text-wrap:pretty;
   backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur);z-index:6;animation:fadeIn .3s ease}
 .driveHud:not(.tracing) .driveHintCard{border-color:rgba(255,255,255,.16)}
+/* drag-to-drive hint — shown only in the top-down/aerial "trace" cams (no thumbsticks).
+   A glass pill that floats just above the dash so it never collides with the top bar. */
+.dragDriveHint{position:absolute;left:50%;bottom:calc(120px + var(--safe-b));transform:translateX(-50%);
+  max-width:min(86vw,440px);padding:8px 16px;background:rgba(8,10,14,.66);border:1px solid rgba(45,140,255,.32);
+  font-family:'Chakra Petch';font-weight:500;font-size:12.5px;letter-spacing:.01em;color:rgba(255,255,255,.82);
+  text-align:center;white-space:nowrap;z-index:6;pointer-events:none;
+  backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur);animation:fadeIn .3s ease}
 #driftChip{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);pointer-events:none;font-family:'AGC';
   font-size:30px;font-weight:900;letter-spacing:.06em;color:var(--coin);text-shadow:0 2px 14px rgba(0,0,0,.6);
   animation:firePulse .4s ease-in-out infinite;z-index:6}
@@ -455,3 +463,38 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 
 @media (prefers-reduced-motion:reduce){ #loading .dot{animation:none} .btn{transition:none} }
 @media (max-width:480px){ #title h1{font-size:16px} #hint{display:none} #btns{width:132px} }
+
+/* ============================================================================
+   MOBILE USABILITY  — narrow portrait phones + short landscape.
+   On a ~390px-wide phone the centred search bar (72vw) overlapped BOTH the
+   top-left minimap and the top-right segmented controls. The fix: in portrait
+   the search becomes a full-width top row and the minimap + controls drop to a
+   second row beneath it, so nothing competes for the same horizontal band.
+   Covers phones in BOTH orientations + small tablets (a centred 356px search
+   still collides with the right-hand controls up to ~950px); true desktop keeps
+   the floating centred search.
+   ============================================================================ */
+@media (max-width:960px){
+  /* search / active-route card → a single full-width row pinned to the top */
+  .searchBar,.navCard{left:calc(12px + var(--safe-l));right:calc(12px + var(--safe-r));
+    top:calc(12px + var(--safe-t));transform:none;width:auto;max-width:none}
+  .searchBar:active{transform:scale(.99)}
+  .navCard{justify-content:space-between}
+  .navCard .ncTurn{flex:1;min-width:0}
+  /* minimap (left) and VIEW/FIX/menu (right) tuck just below that search row */
+  .dvLeft{top:calc(64px + var(--safe-t))}
+  .dvTopRight{top:calc(64px + var(--safe-t))}
+  /* the expandable menu can be tall — let it scroll instead of running off-screen */
+  .segMenuPanel{max-height:calc(100dvh - 140px - var(--safe-t) - var(--safe-b));overflow-y:auto}
+}
+
+/* Short viewports (landscape phones, or iOS Safari with its chrome showing):
+   guarantee the centred sheets never exceed the screen and can always scroll. */
+@media (max-height:560px){
+  #navPanel{max-height:calc(100dvh - 16px);overflow-y:auto}
+  .menuSheet{max-height:calc(100dvh - 16px);overflow-y:auto}
+  #carPicker{max-height:calc(100dvh - 16px)}
+  /* trim the dash so it doesn't dominate a short landscape strip */
+  .dashCluster{bottom:calc(10px + var(--safe-b))}
+  .dashSpeed b{font-size:42px}
+}
