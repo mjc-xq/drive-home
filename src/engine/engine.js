@@ -1141,9 +1141,9 @@ export function createEngine({ canvas, ui, emit }) {
     8: { url: battistaUrl, length: 4.8 },
     9: { url: murcielagoUrl, length: 4.7 },
     10: { url: caspitaUrl, length: 4.6 },
-    11: { url: mustang65Url, length: 4.8 },
-    12: { url: mini65Url, length: 3.4 },
-    13: { url: hotrodUrl, length: 4.5 },
+    11: { url: mustang65Url, length: 4.8, flip: false },   // verified by render: these 3 GLBs already run nose-forward, so NO extra 180°
+    12: { url: mini65Url, length: 3.4, flip: false },
+    13: { url: hotrodUrl, length: 4.5, flip: false },
     14: { url: ratrodUrl, length: 4.6 },
   };
   const vehLoading = new Set();
@@ -1162,7 +1162,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (!def) return;
     vehLoading.add(slot);
     modelLoadCancels.push(loadDrivableCar(car, def.url, slot, {
-      length: def.length, flip: true, black: false, meta: VEHICLES[slot],
+      length: def.length, flip: def.flip !== false, black: false, meta: VEHICLES[slot],   // default nose -Z (flip:true); a few verified GLBs set flip:false
       onReady: (s) => { vehLoading.delete(s); emit('cars', getCars()); if (car.modelIdx === s) showCarCard(); }
     }));
   }

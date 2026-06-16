@@ -199,7 +199,20 @@ export function loadRealCar(car, url, onFallback) {
 // is ~`length` m, sit it on the ground centred on the origin, and (optionally)
 // paint it near-black skipping glass/lights/chrome. Returns the same scene so it
 // can be wrapped and placed. Shared by the parked + drivable Toyota loaders.
+// Some exported car GLBs ship a baked studio/showroom around the car (floor, ceiling, a curved
+// curtain/backdrop wall, a shadow plane, and an artist-signature board). That junk dominates the
+// bounding box, so normalize would scale the whole 18 m studio to fit and shrink the actual car to
+// a speck (the Murcielago did exactly this). Strip it by material/name — no real car PART is named
+// floor/ceiling/curtain/backdrop/wall/shadow/ground/studio/showroom or the "ARC…" signature, so
+// clean car models pass through untouched.
+const STUDIO_JUNK = /floor|ceiling|curtain|backdrop|background|\bwall\b|studio|showroom|shadow|ground|\barc(black|metall|logo|matte)/i;
+function stripStudio(scene) {
+  const junk = [];
+  scene.traverse(o => { if (o.isMesh && STUDIO_JUNK.test((o.name || '') + ' ' + ((o.material && o.material.name) || ''))) junk.push(o); });
+  for (const o of junk) { if (o.parent) o.parent.remove(o); }
+}
 function normalizeCarGLB(scene, length, black) {
+  stripStudio(scene);
   scene.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(scene), size = new THREE.Vector3();
   box.getSize(size);
