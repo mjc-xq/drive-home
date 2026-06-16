@@ -2000,7 +2000,7 @@ export function createEngine({ canvas, ui, emit }) {
     // high enough to clear the melty ground-level photogrammetry (the user's preferred
     // clean look — NOT the low 'eye-level horror' of Close).
     { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false },
-    { name: 'Close', dist: 13, h: 11, ahead: 4, drone: false, topdown: false },   // higher/back so buildings + trees don't obscure the car
+    { name: 'Close', dist: 19, h: 12.5, ahead: 12, drone: false, topdown: false },   // Roblox chase: sit back + look well down the road so you SEE where you're going (not just the roof of the car)
     { name: 'Top-down', dist: 7, h: 85, ahead: 12, drone: true, topdown: true, dragdrive: true },   // proper high overhead map view
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
