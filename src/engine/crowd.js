@@ -7,13 +7,14 @@ import drewUrl from '../assets/drew.glb';
 import drewDanceUrl from '../assets/anim/drew-dance.glb';
 import drewWalkUrl from '../assets/anim/drew-walk.glb';
 import drewCheerUrl from '../assets/anim/drew-cheer.glb';
+import drewIdleUrl from '../assets/anim/drew-idle.glb';
 
 // A crowd of animated background characters (CeCe + Drew) dancing/roaming in the world.
 // The rigged model + its clips load once; each placement is a SkeletonUtils clone (so the
 // skeleton is deep-copied) wrapped in a group, with its OWN AnimationMixer playing a looped
 // clip. tick(dt) drives every mixer; the engine distance-gates visibility so only a handful
 // animate at a time (skinned meshes are not cheap on mobile).
-function makeCrowd(base, clips, nativeH, danceNames, innerYaw) {
+function makeCrowd(base, clips, nativeH, moveNames, innerYaw, hitNames = []) {
   const insts = [];
   // Force the model OPAQUE + single-sided: Meshy exports the character as a BLEND /
   // double-sided material that renders near-invisible (and doubles the fill). Materials are
@@ -31,9 +32,29 @@ function makeCrowd(base, clips, nativeH, danceNames, innerYaw) {
       if (m.emissive) { if (m.map) m.emissiveMap = m.map; m.emissive.setHex(0x999999); m.emissiveIntensity = 0.5; }
     }
   });
+  // Keep only the clip names this rig actually has. `moves` = the ambient loop pool a
+  // dancer rotates through; `hits` = one-shot "ow!" reactions played when a car clips them.
+  const moves = moveNames.filter(n => clips[n]);
+  const hits = hitNames.filter(n => clips[n]);
+  const fallback = moves[0] || Object.keys(clips)[0];
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  // Crossfade `rec` onto clip `name`. Looped for ambient moves; LoopOnce + hold-last-frame
+  // for hit reactions so a knocked-down dancer stays down until it respawns.
+  function play(rec, name, { fade = 0.35, once = false } = {}) {
+    const cl = clips[name] || clips[fallback];
+    if (!cl) return;
+    const act = rec.mixer.clipAction(cl);
+    act.reset(); act.enabled = true; act.setEffectiveWeight(1); act.setEffectiveTimeScale(1);
+    if (once) { act.setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true; }
+    else { act.setLoop(THREE.LoopRepeat, Infinity); act.clampWhenFinished = false; }
+    act.fadeIn(fade); act.play();
+    if (rec.act && rec.act !== act) rec.act.fadeOut(fade);
+    rec.act = act; rec.clipName = name;
+  }
   return {
-    danceNames,
-    // add one dancer: world (x,y,z), facing `yaw`, scaled to ~targetH metres, playing `clip`.
+    moveNames: moves,
+    // add one dancer: world (x,y,z), facing `yaw`, scaled to ~targetH metres. Starts on
+    // `clip` (or a random move) and then cycles its whole move pool via tick().
     add(scene, { x, y, z, yaw = 0, targetH = 1.75, clip }) {
       const inst = cloneSkinned(base);
       inst.rotation.y = innerYaw;                       // per-model facing correction (nose → +Z)
@@ -45,16 +66,17 @@ function makeCrowd(base, clips, nativeH, danceNames, innerYaw) {
       grp.visible = false;
       scene.add(grp);
       const mixer = new THREE.AnimationMixer(inst);
-      const name = clip || danceNames[(Math.random() * danceNames.length) | 0];
-      const cl = clips[name] || clips[danceNames[0]] || Object.values(clips)[0];
-      if (cl) { const act = mixer.clipAction(cl); act.play(); mixer.setTime(Math.random() * (cl.duration || 1)); }   // desync the loops
-      const rec = { grp, mixer, x, z, baseX: x, baseY: y, baseZ: z, baseYaw: yaw, vel: null, spin: 0, axisX: 1, axisZ: 0, respawnAt: 0 };
+      const rec = { grp, mixer, x, z, baseX: x, baseY: y, baseZ: z, baseYaw: yaw, vel: null, spin: 0, axisX: 1, axisZ: 0, respawnAt: 0, nextSwitch: 0, act: null, clipName: null };
+      const start = (clip && clips[clip]) ? clip : (moves.length ? pick(moves) : fallback);
+      play(rec, start, { fade: 0 });
+      if (rec.act) rec.act.time = Math.random() * (rec.act.getClip().duration || 1);   // desync the loops
       insts.push(rec);
       return rec;
     },
     list: insts,
     // HIT: launch the nearest VISIBLE, not-already-flying dancer within `rad` of (x,z)
-    // comically through the air along the car's heading. Returns true on a hit.
+    // comically through the air along the car's heading, playing a pain reaction (where the
+    // rig has one — CeCe does, Drew doesn't). Returns true on a hit.
     launchNear(x, z, vx, vz, speed, rad = 3.2) {
       let best = null, bd = rad * rad;
       for (const i of insts) { if (!i.grp.visible || i.vel) continue; const dx = i.grp.position.x - x, dz = i.grp.position.z - z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; best = i; } }
@@ -63,6 +85,7 @@ function makeCrowd(base, clips, nativeH, danceNames, innerYaw) {
       best.vel = { x: vx / L * s * 0.9, y: 8 + s * 0.32, z: vz / L * s * 0.9 };   // up + away
       best.spin = (9 + Math.random() * 9) * (Math.random() < 0.5 ? -1 : 1);       // tumble
       best.axisX = Math.random(); best.axisZ = 1 - best.axisX;
+      if (hits.length) play(best, pick(hits), { fade: 0.06, once: true });        // "ow!" — knocked-back reaction
       return true;
     },
     tick(dt, now) {
@@ -72,10 +95,22 @@ function makeCrowd(base, clips, nativeH, danceNames, innerYaw) {
           i.vel.y -= 26 * dt;
           i.grp.rotation.x += i.spin * i.axisX * dt; i.grp.rotation.z += i.spin * i.axisZ * dt;
           if (i.grp.position.y <= i.baseY && i.vel.y < 0) { i.grp.position.y = i.baseY; i.vel = null; i.respawnAt = (now || 0) + 2600; }
-          i.mixer.update(dt);                                                     // keep flailing — funnier
+          i.mixer.update(dt);                                                     // keep the reaction playing — funnier
         } else if (i.respawnAt && now >= i.respawnAt) {                           // pop back up where it started
           i.grp.position.set(i.baseX, i.baseY, i.baseZ); i.grp.rotation.set(0, i.baseYaw, 0); i.respawnAt = 0;
-        } else if (i.grp.visible) i.mixer.update(dt);
+          if (moves.length) { play(i, pick(moves), { fade: 0 }); i.nextSwitch = (now || 0) + 4000 + Math.random() * 5000; }
+        } else if (i.grp.visible) {
+          // Rotate through the whole move pool on a staggered timer so a dancer never looks
+          // frozen on a single loop. Only visible dancers cycle (and crossfade), so it's cheap.
+          if (moves.length > 1) {
+            if (!i.nextSwitch) i.nextSwitch = now + 3000 + Math.random() * 5000;
+            else if (now >= i.nextSwitch) {
+              let n = pick(moves); if (n === i.clipName) n = pick(moves);
+              play(i, n); i.nextSwitch = now + 4000 + Math.random() * 5000;
+            }
+          }
+          i.mixer.update(dt);
+        }
       }
     },
     dispose() { for (const i of insts) { i.mixer.stopAllAction(); if (i.grp.parent) i.grp.parent.remove(i.grp); } insts.length = 0; },
@@ -89,7 +124,10 @@ function nativeHeight(obj) {
 }
 
 // CeCe: a single GLB with all clips merged. Nose runs -Z out of Meshy, so spin it to +Z.
-const CECE_DANCES = ['All_Night_Dance', 'FunnyDancing_01', 'FunnyDancing_03', 'Gangnam_Groove', 'Bass_Beats', 'Funky_Walk', 'Cheer_with_Both_Hands_1'];
+// MOVES = the ambient pool she rotates through; HITS = pain reactions for car strikes (the
+// rig ships BeHit_FlyUp / Fall_Down / falling_down — kid-friendly knockbacks, no gore clip).
+const CECE_MOVES = ['All_Night_Dance', 'FunnyDancing_01', 'FunnyDancing_03', 'Gangnam_Groove', 'Bass_Beats', 'Funky_Walk', 'Cheer_with_Both_Hands_1', '360_Power_Spin_Jump', 'Big_Heart_Gesture', 'bicycle_crunch', 'Angry_Stomp'];
+const CECE_HITS = ['BeHit_FlyUp', 'Fall_Down', 'falling_down'];
 export function loadCeceCrowd(onReady, onFail) {
   const loader = new GLTFLoader();
   loader.setDRACOLoader(DracoShim);
@@ -97,20 +135,21 @@ export function loadCeceCrowd(onReady, onFail) {
     const base = g.scene;
     const clips = {};
     for (const c of g.animations) clips[c.name] = c;
-    onReady(makeCrowd(base, clips, nativeHeight(base), CECE_DANCES, Math.PI));
+    onReady(makeCrowd(base, clips, nativeHeight(base), CECE_MOVES, Math.PI, CECE_HITS));
   }, undefined, e => { console.warn('[crowd] cece failed', e); onFail && onFail(e); });
 }
 
-// Drew: base rig + a couple of clip-only GLBs bound by shared bone names. DREW_YAW (+PI/2)
-// is the same facing correction the keeper uses.
+// Drew: base rig + clip-only GLBs bound by shared bone names. +PI/2 is the same facing
+// correction the keeper uses. Drew's rig has no pain clip, so a car strike just launches him.
+const DREW_MOVES = ['dance', 'cheer', 'walk', 'idle'];
 export function loadDrewCrowd(onReady, onFail) {
   const loader = new GLTFLoader();
   loader.load(drewUrl, g => {
     const base = g.scene;
     const clips = {};
-    let pending = 3;
-    const done = () => { if (--pending === 0) onReady(makeCrowd(base, clips, nativeHeight(base), ['dance', 'cheer', 'walk'], Math.PI / 2)); };
+    let pending = 4;
+    const done = () => { if (--pending === 0) onReady(makeCrowd(base, clips, nativeHeight(base), DREW_MOVES, Math.PI / 2)); };
     const grab = (url, key) => loader.load(url, cg => { if (cg.animations[0]) clips[key] = cg.animations[0]; done(); }, undefined, () => done());
-    grab(drewDanceUrl, 'dance'); grab(drewCheerUrl, 'cheer'); grab(drewWalkUrl, 'walk');
+    grab(drewDanceUrl, 'dance'); grab(drewCheerUrl, 'cheer'); grab(drewWalkUrl, 'walk'); grab(drewIdleUrl, 'idle');
   }, undefined, e => { console.warn('[crowd] drew failed', e); onFail && onFail(e); });
 }
