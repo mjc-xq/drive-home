@@ -250,6 +250,8 @@ export default function App() {
                 <canvas id="minimap" width={174} height={150} title="Tap to drive here"
                   ref={el => (uiRefs.current.minimap = el)}
                   onClick={e => { const r = e.target.getBoundingClientRect(); eng().tapMinimap(e.clientX - r.left, e.clientY - r.top, r.width, r.height); }} />
+                {/* live Google minimap — covers the canvas fallback once the SDK loads */}
+                <div id="gmap" ref={el => { if (el && eng() && eng().initMiniMap) eng().initMiniMap(el); }} />
                 <span className="miniTag">MAP</span>
               </div>
               <div className="miniHint">Tap map to drive</div>

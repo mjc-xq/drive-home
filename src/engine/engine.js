@@ -1559,6 +1559,54 @@ export function createEngine({ canvas, ui, emit }) {
       }).catch(() => { });
     }
   }
+  // ---- live Google minimap (always shows real streets, even far from the procedural
+  // neighbourhood where the canvas minimap goes blank). Centres on the car, draws the route,
+  // and a tap drives there. Sits OVER the procedural canvas, which stays as the fallback. ----
+  const DARK_MAP_STYLE = [
+    { elementType: 'geometry', stylers: [{ color: '#1b2027' }] },
+    { elementType: 'labels', stylers: [{ visibility: 'off' }] },
+    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#3a4350' }] },
+    { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#55617a' }] },
+    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#16202b' }] },
+    { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+    { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#222831' }] },
+  ];
+  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0;
+  function initMiniMap(div) {
+    if (!div || _gmapDiv === div) return;
+    _gmapDiv = div;
+    loadMapsSDK().then(maps => {
+      if (_gmapDiv !== div) return;
+      _gmaps = maps;
+      const o = worldToGeo(car.x, car.z);
+      _gmap = new maps.Map(div, {
+        center: { lat: o.lat, lng: o.lon }, zoom: 17, disableDefaultUI: true,
+        gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
+        styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
+      });
+      _gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: _gmap, zIndex: 5,
+        icon: { path: 'M0,-7 L4.5,6 L0,3 L-4.5,6 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.2, scale: 1.5, rotation: 0 } });
+      _gmapRoute = new maps.Polyline({ map: _gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
+      _gmap.addListener('click', e => { const w = geoToWorld(e.latLng.lat(), e.latLng.lng()); setDriveTarget(w[0], w[1]); });
+    }).catch(() => { });
+  }
+  function updateMiniMap(now) {
+    if (!_gmap || now - _gmapT < 200) return;   // ~5 Hz pan
+    _gmapT = now;
+    const o = worldToGeo(car.x, car.z);
+    if (_gmapCar) { _gmapCar.setPosition({ lat: o.lat, lng: o.lon }); const ic = _gmapCar.getIcon(); ic.rotation = car.yaw * 180 / Math.PI; _gmapCar.setIcon(ic); }
+    if (_gmapRoute) {
+      if (ROUTE && ROUTE.length && _gmapRouteFor !== ROUTE) {
+        _gmapRouteFor = ROUTE;
+        const pts = ROUTE.map(p => { const g = worldToGeo(p.x, p.z); return { lat: g.lat, lng: g.lon }; });
+        _gmapRoute.setPath(pts);
+        // ROUTE OVERVIEW: fit the whole start→finish into view for a few seconds when a new
+        // route is set, then resume following the car (the user asked to see the full route).
+        if (_gmaps) { const b = new _gmaps.LatLngBounds(); b.extend({ lat: o.lat, lng: o.lon }); for (const p of pts) b.extend(p); _gmap.fitBounds(b, 12); _gmapOverviewUntil = now + 3500; }
+      } else if (!ROUTE && _gmapRouteFor) { _gmapRouteFor = null; _gmapRoute.setPath([]); }
+    }
+    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() < 15) _gmap.setZoom(17); }   // follow the car (after the overview)
+  }
   function geocodePlaceId(placeId, fallbackLabel) {
     return loadMapsSDK().then(maps => new Promise((res, rej) => {
       new maps.Geocoder().geocode({ placeId }, (r, status) => {
@@ -2609,10 +2657,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); if (now - _tilesUpdT > 55) { p3dtiles.update(); _tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
-    if (mode === 'drive' && ui.minimap && now - _miniT > 80) {       // ~12fps minimap
-      _miniT = now;
-      if (_miniEl !== ui.minimap) { _miniEl = ui.minimap; _miniCtx = ui.minimap.getContext('2d'); }   // cache the 2D context
-      if (_miniCtx) drawMinimap(_miniCtx, ui.minimap.width, ui.minimap.height);
+    if (mode === 'drive') {
+      updateMiniMap(now);                                            // live Google minimap (when up)
+      if (!_gmap && ui.minimap && now - _miniT > 80) {              // procedural fallback until/unless it loads
+        _miniT = now;
+        if (_miniEl !== ui.minimap) { _miniEl = ui.minimap; _miniCtx = ui.minimap.getContext('2d'); }
+        if (_miniCtx) drawMinimap(_miniCtx, ui.minimap.width, ui.minimap.height);
+      }
     }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
@@ -2729,6 +2780,7 @@ export function createEngine({ canvas, ui, emit }) {
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
     preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
+    initMiniMap,                                         // mount the live Google minimap into a div
     setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
     // LOOK stick (right thumb): orbit the drive camera. dx/dy are screen-pixel deltas,
     // same convention as a look-drag on the canvas, so it feeds the existing camOrbit.
