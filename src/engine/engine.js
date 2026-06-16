@@ -103,6 +103,7 @@ export function createEngine({ canvas, ui, emit }) {
   let DEST = null;        // { x, z, label }
   let soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
+  let roadLifeOn = (() => { try { return localStorage.getItem('dahill.roadlife') !== '0'; } catch (e) { return true; } })();   // pedestrians + traffic on by default
   let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
   let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
@@ -412,6 +413,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   let trafficTick = 0;
   function updateTraffic(dt, now) {
+    if (!roadLifeOn) { hideTraffic(); return; }
     trafficTick++;
     for (const c of traffic) {
       const dx = c.b[0] - c.a[0], dz = c.b[1] - c.a[1], len = Math.hypot(dx, dz) || 1;
@@ -858,7 +860,7 @@ export function createEngine({ canvas, ui, emit }) {
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
 
   // ---- CROWD: dancing CeCe + Drew characters. Yard dancers liven up Scoop; street
-  // dancers + a cluster at Stanton Elementary liven up Drive. Visibility is mode- and
+  // dancers + clusters at every preset destination liven up Drive. Visibility is mode- and
   // distance-gated so only a handful animate at once (skinned meshes aren't cheap).
   let ceceCrowd = null, drewCrowd = null;
   const crowdSpots = [];   // { rec, zone }
@@ -867,7 +869,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (!crowd) return;
       const y = (onRoadHt ? actorGroundY(x, z) : terrainAt(x, z)) + 0.02;
       const yaw = opts.yaw != null ? opts.yaw : Math.random() * Math.PI * 2;
-      crowdSpots.push({ rec: crowd.add(scene, { x, y, z, yaw, clip: opts.clip }), zone });
+      crowdSpots.push({ rec: crowd.add(scene, { x, y, z, yaw, clip: opts.clip }), zone, onRoadHt: !!onRoadHt, settleT: 0 });
     };
     const hx = house.c[0], hz = house.c[1];
     // Keep a yard dancer out of any building footprint: if the ring spot lands inside a
@@ -890,12 +892,20 @@ export function createEngine({ canvas, ui, emit }) {
       const dx = s[1][0] - s[0][0], dz = s[1][1] - s[0][1], L = Math.hypot(dx, dz) || 1, nx = -dz / L, nz = dx / L, side = (i % 2) ? 2.6 : -2.6;
       put(i % 2 ? ceceCrowd : drewCrowd, mx + nx * side, mz + nz * side, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });
     }
-    // STANTON ELEMENTARY (Drive): a cluster of CeCes dancing at the school
-    const stanton = POIS.find(p => p.key === 'stanton');
-    if (stanton) for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2, r = 4 + (i % 2) * 2.5; put(ceceCrowd, stanton.x + Math.cos(a) * r, stanton.z + Math.sin(a) * r, 'stanton', true); }
-    // CANYON MIDDLE (Drive): a few dancing Drews at the school
-    const canyon = POIS.find(p => p.key === 'canyon');
-    if (canyon) for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2 + 0.6, r = 4 + (i % 2) * 2.5; put(drewCrowd, canyon.x + Math.cos(a) * r, canyon.z + Math.sin(a) * r, 'canyon', true, { clip: i % 2 ? 'dance' : 'cheer' }); }
+    // DESTINATIONS (Drive): every preset stop gets Drew/Cece right on or beside
+    // the arrival point, so there is something visible and hittable when you get there.
+    POIS.forEach((p, pi) => {
+      const count = p.key === 'home' ? 2 : 4;
+      for (let i = 0; i < count; i++) {
+        const a = pi * 0.7 + i / count * Math.PI * 2 + 0.35;
+        const r = p.key === 'home' ? 5.5 + i * 1.4 : 1.3 + (i % 2) * 2.9;
+        const crowd = (i + pi) % 2 ? ceceCrowd : drewCrowd;
+        put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, {
+          yaw: a + Math.PI,
+          clip: crowd === drewCrowd ? (i % 2 ? 'dance' : 'cheer') : undefined
+        });
+      }
+    });
   }
   let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
   if (!flags.has('nochar')) {
@@ -903,12 +913,28 @@ export function createEngine({ canvas, ui, emit }) {
     loadDrewCrowd(c => { drewCrowd = c; _onCrowd(); }, () => _onCrowd());
   } else geocodePOIs();
   let _crowdHitT = 0;
+  function hideCrowd() {
+    for (const sp of crowdSpots) sp.rec.grp.visible = false;
+  }
+  function settleCrowdSpot(sp, dt) {
+    if (!sp.onRoadHt || sp.rec.vel) return;
+    sp.settleT = (sp.settleT || 0) + dt;
+    if (sp.settleT < 0.08) return;
+    sp.settleT = 0;
+    const y = actorGroundY(sp.rec.x, sp.rec.z, sp.rec.baseY) + 0.02;
+    if (!Number.isFinite(y)) return;
+    sp.rec.baseY += (y - sp.rec.baseY) * Math.min(1, dt * 5);
+    if (!sp.rec.vel) sp.rec.grp.position.y = sp.rec.baseY;
+  }
   function updateCrowd(dt, now) {
     if (!crowdSpots.length) return;
+    if (!roadLifeOn) { hideCrowd(); return; }
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
     for (const sp of crowdSpots) {
+      const driveRange = sp.zone === 'street' ? 190 : 260;
       sp.rec.grp.visible = sp.zone === 'yard' ? inScoop
-        : inDrive && Math.hypot(sp.rec.x - car.x, sp.rec.z - car.z) < 150;
+        : inDrive && Math.hypot(sp.rec.x - car.x, sp.rec.z - car.z) < driveRange;
+      if (sp.rec.grp.visible) settleCrowdSpot(sp, dt);
     }
     // COMEDY: plough into a pedestrian and they cartwheel off the road (then pop back up).
     if (inDrive && Math.abs(car.speed) > 6 && now - _crowdHitT > 250) {
@@ -1636,7 +1662,12 @@ export function createEngine({ canvas, ui, emit }) {
         p.x = w[0]; p.z = w[1]; p.lat = g.lat; p.lon = g.lon;
         const b = poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
         const lb = poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
-        for (const sp of crowdSpots) if (sp.zone === p.key) { sp.rec.grp.position.x += p.x - ox; sp.rec.grp.position.z += p.z - oz; sp.rec.x += p.x - ox; sp.rec.z += p.z - oz; }   // shift this POI's dancers (stanton/canyon)
+        for (const sp of crowdSpots) if (sp.zone === p.key) {
+          const dx = p.x - ox, dz = p.z - oz;
+          sp.rec.grp.position.x += dx; sp.rec.grp.position.z += dz;
+          sp.rec.x += dx; sp.rec.z += dz;
+          sp.rec.baseX += dx; sp.rec.baseZ += dz;
+        }   // shift this POI's dancers with the corrected geocode location
       }).catch(() => { });
     }
   }
@@ -2468,14 +2499,16 @@ export function createEngine({ canvas, ui, emit }) {
     }
     // TRAFFIC: weave past it for a near-miss combo, clip it for a soft deflect (it yields
     // + keeps its lane, so a tap is a glancing bump you keep rolling through, not a wall).
-    for (const c of traffic) {
-      if (c.x === undefined) continue;
-      const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 1.9 + rad;
-      if (d2 < rr * rr && d2 > 1e-6) {
-        const d = Math.sqrt(d2); nx = c.x + dx / d * rr; nz = c.z + dz / d * rr;
-        if (carHit(Math.abs(car.speed), 'car')) car.speed *= 0.72;
-        hitThisFrame = true;
-      } else if (fast && d2 < (rr + 2.4) * (rr + 2.4)) nearThisFrame = true;
+    if (roadLifeOn) {
+      for (const c of traffic) {
+        if (c.x === undefined) continue;
+        const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 1.9 + rad;
+        if (d2 < rr * rr && d2 > 1e-6) {
+          const d = Math.sqrt(d2); nx = c.x + dx / d * rr; nz = c.z + dz / d * rr;
+          if (carHit(Math.abs(car.speed), 'car')) car.speed *= 0.72;
+          hitThisFrame = true;
+        } else if (fast && d2 < (rr + 2.4) * (rr + 2.4)) nearThisFrame = true;
+      }
     }
     if (nearThisFrame && !hitThisFrame) nearMiss(now);   // Burnout-style close-call reward
     // Roam far across the streamed Google tiles. The procedural neighborhood (and
@@ -2885,6 +2918,7 @@ export function createEngine({ canvas, ui, emit }) {
   if (audio.setMuted) audio.setMuted(!soundOn);   // sync the master mute with the saved pref
   emit('sound', soundOn);   // seed the 🔊 toggle state
   emit('autosteer', autoSteer);
+  emit('roadlife', roadLifeOn);
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
   if (document.hidden) paused = true;   // born in a background tab → don't render/stream until shown
   else raf = requestAnimationFrame(loop);
@@ -2975,6 +3009,14 @@ export function createEngine({ canvas, ui, emit }) {
     // "Sound" toggle = master mute over EVERYTHING (engine drone + sfx + music), not just the soundtrack.
     toggleSound: () => { soundOn = !soundOn; try { localStorage.setItem('dahill.sound', soundOn ? '1' : '0'); } catch (e) { } if (audio.ensure) audio.ensure(); if (audio.setMuted) audio.setMuted(!soundOn); if (mode === 'drive' && audio.setMusic) audio.setMusic(soundOn); emit('sound', soundOn); return soundOn; },
     toggleAutoSteer: () => { autoSteer = !autoSteer; try { localStorage.setItem('dahill.autosteer', autoSteer ? '1' : '0'); } catch (e) { } emit('autosteer', autoSteer); toast(autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return autoSteer; },
+    toggleRoadLife: () => {
+      roadLifeOn = !roadLifeOn;
+      try { localStorage.setItem('dahill.roadlife', roadLifeOn ? '1' : '0'); } catch (e) { }
+      emit('roadlife', roadLifeOn);
+      if (!roadLifeOn) { hideTraffic(); hideCrowd(); }
+      toast(roadLifeOn ? 'People + traffic ON' : 'People + traffic off', 1300);
+      return roadLifeOn;
+    },
     // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
     // and let the robot drive there. range/scale mirror drawMinimap exactly.
     tapMinimap: (px, py, w, h) => { const range = 460, scale = (w / 2) / range; setDriveTarget(car.x + (px - w / 2) / scale, car.z + (py - h / 2) / scale); },
@@ -2984,7 +3026,8 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
-    crowd: () => ({ cece: !!ceceCrowd, drew: !!drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - car.x, s.rec.z - car.z)) })) }),
+    crowd: () => ({ on: roadLifeOn, cece: !!ceceCrowd, drew: !!drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - car.x, s.rec.z - car.z)) })) }),
+    traffic: () => ({ on: roadLifeOn, total: traffic.length, visible: traffic.filter(c => c.group.visible).length, cars: traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
     p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
     nudge: applyP3DT,
     tiles: () => p3dtiles,

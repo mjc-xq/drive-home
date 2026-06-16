@@ -74,6 +74,7 @@ export default function App() {
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
   const [sound, setSound] = useState(true);             // master sound on/off (🔊 toggle)
   const [autoSteer, setAutoSteer] = useState(true);     // lane-keep assist (🛟 toggle)
+  const [roadLife, setRoadLife] = useState(true);       // pedestrians + traffic toggle
   const [drifting, setDrifting] = useState(false);      // sustained-drift glow + DRIFT chip
   const arrivedTimer = useRef(0);
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
@@ -105,6 +106,7 @@ export default function App() {
         case 'cars': setCars(p); break;
         case 'sound': setSound(p); break;
         case 'autosteer': setAutoSteer(p); break;
+        case 'roadlife': setRoadLife(p); break;
         case 'drift': setDrifting(p); break;
         case 'arrived':
           setArrived(p); clearTimeout(arrivedTimer.current);
@@ -405,6 +407,10 @@ export default function App() {
                   <button className="menuItem" onClick={() => { eng().toggleAutoSteer(); }}>
                     <span className="miIcon go"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2 5 4-12 2 7h6" /></svg></span>
                     <span className="miTxt"><b>Assist</b><i className={autoSteer ? 'go' : 'off'}>{autoSteer ? 'On' : 'Off'}</i></span>
+                  </button>
+                  <button className={'menuItem life' + (roadLife ? ' on' : '')} aria-pressed={roadLife} onClick={() => { eng().toggleRoadLife(); }}>
+                    <span className="miIcon go"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-4h8l1 4" /><rect x="3" y="11" width="14" height="5" /><circle cx="6.5" cy="16.5" r="1.4" /><circle cx="13.5" cy="16.5" r="1.4" /><circle cx="19" cy="7" r="2" /><path d="M19 9v6M17 12h4" /></svg></span>
+                    <span className="miTxt"><b>People + traffic</b><i className={roadLife ? 'go' : 'off'}>{roadLife ? 'On' : 'Off'}</i></span>
                   </button>
                   <button className="menuItem" onClick={() => { eng().toggleSound(); }}>
                     <span className="miIcon nav"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" />{sound ? <><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M19 5.5a9 9 0 0 1 0 13" /></> : <path d="m22 9-6 6M16 9l6 6" />}</svg></span>
