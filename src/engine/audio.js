@@ -71,8 +71,13 @@ export function createAudio() {
       const sbp = AC.createBiquadFilter(); sbp.type = 'bandpass'; sbp.frequency.value = 1550; sbp.Q.value = 5.5;
       const screechGain = AC.createGain(); screechGain.gain.value = 0;
       ns.connect(sbp); sbp.connect(screechGain); screechGain.connect(master);
+      // brake-squeal voice: the SAME noise through a higher, tighter band, ridden from the
+      // brake amount — a satisfying tyre chirp on a hard stop (capped below the drift screech).
+      const bbp = AC.createBiquadFilter(); bbp.type = 'bandpass'; bbp.frequency.value = 2800; bbp.Q.value = 6;
+      const brakeGain = AC.createGain(); brakeGain.gain.value = 0;
+      ns.connect(bbp); bbp.connect(brakeGain); brakeGain.connect(master);
       o1.start(); o2.start(); o3.start(); ns.start();
-      eng = { o1, o2, o3, ns, lp, gain, noiseGain, screechGain, lastThrottle: 0 };
+      eng = { o1, o2, o3, ns, lp, gain, noiseGain, screechGain, brakeGain, lastThrottle: 0 };
     } catch (e) { eng = null; }
   }
 
@@ -97,6 +102,11 @@ export function createAudio() {
   function screech(level) {
     if (!eng || !AC) return;
     try { eng.screechGain.gain.setTargetAtTime(Math.min(0.09, (level || 0) * 0.09), AC.currentTime, 0.04); } catch (e) { }
+  }
+  // ride the brake-squeal gain from a 0..1 brake-bite amount (called each frame)
+  function brakeSqueech(level) {
+    if (!eng || !AC) return;
+    try { eng.brakeGain.gain.setTargetAtTime(Math.min(0.05, (level || 0) * 0.05), AC.currentTime, 0.04); } catch (e) { }
   }
 
   // a short filtered-noise swell — tip-in / near-miss "whoosh"
@@ -249,5 +259,5 @@ export function createAudio() {
   function musicSpeed(frac) { if (music && music.lp) { try { music.lp.frequency.setTargetAtTime(1100 + clamp01(frac) * 2800, AC.currentTime, 0.25); } catch (e) { } } }
   function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
-  return { ensure, suspendAudio, resumeAudio, close, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, setMuted, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
+  return { ensure, suspendAudio, resumeAudio, close, engineStart, engineUpdate, engineStop, screech, brakeSqueech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, setMuted, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
 }

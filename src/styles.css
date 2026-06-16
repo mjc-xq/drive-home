@@ -336,6 +336,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 @keyframes rush{from{transform:scale(1)}to{transform:scale(1.14)}}
 #fx.arrive{opacity:.8;background:radial-gradient(circle,rgba(120,230,150,.42),rgba(255,210,70,.24) 55%,transparent 80%);transition:opacity .18s ease}
 #fx.crash{opacity:.9;background:radial-gradient(circle,rgba(255,255,255,.7),rgba(255,120,60,.3) 60%,transparent 85%);transition:opacity .05s ease}
+#fx.boost{opacity:.7;background:radial-gradient(circle,rgba(140,210,255,.4),rgba(255,255,200,.22) 55%,transparent 80%);transition:opacity .06s ease}   /* a brief cool-blue pop when nitro fires */
 @media (prefers-reduced-motion:reduce){#fx::before{animation:none}}
 
 /* ════════════════ ROBLOX-STYLE touch hints — PASSIVE affordances ════════════════ */

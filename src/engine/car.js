@@ -24,6 +24,24 @@ export const VEHICLES = [
   { slot: 8, name: 'Pininfarina Battista', spec: '1900 HP · ELECTRIC HYPERCAR', credit: 'model: Sketchfab', profile: { accel: 1.55, top: 1.15, grip: 0.95, slip: 1.1 } }
 ];
 
+function liftVehicleMaterials(scene, lift = 0.22) {
+  scene.traverse(o => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      const nm = ((m.name || '') + (o.name || '')).toLowerCase();
+      if (/glass|window|light|tail|head|lamp|mirror|chrome|plate|signal|amber/.test(nm)) continue;
+      if (m.emissive && m.color) {
+        m.emissive.copy(m.color).multiplyScalar(lift);
+        m.emissiveIntensity = Math.max(m.emissiveIntensity || 0, 0.24);
+      }
+      if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.42);
+      if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.36);
+    }
+  });
+}
+
 // Procedural supercar — stays in the scene as the fallback if the GLB fails.
 export function createCar(scene) {
   const car = { x: 0, z: 0, yaw: 0, speed: 0, steer: 0, group: new THREE.Group(), wheels: [], fronts: [], bodyMat: null, models: [], modelIdx: 0, userPicked: false };
@@ -144,7 +162,7 @@ export function loadRealCar(car, url, onFallback) {
         if (body && body.material) {
           car.paint = body.material;
           car.paint.color.setHex(0xe02818);
-          car.paint.metalness = 0.6; car.paint.roughness = 0.32;
+          car.paint.metalness = 0.45; car.paint.roughness = 0.32;   // less mirror-like → the body's own colour reads brighter against bright photoreal tiles
         }
         const gls = m.getObjectByName('glass');
         if (gls && gls.material) {
@@ -154,6 +172,7 @@ export function loadRealCar(car, url, onFallback) {
         }
         const wheels = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']
           .map(n => m.getObjectByName(n)).filter(Boolean);
+        liftVehicleMaterials(m, 0.24);
         const inner = new THREE.Group();
         inner.rotation.y = CARYAW;
         inner.add(m);
@@ -289,7 +308,9 @@ export function loadDrivableCar(car, url, slot, opts = {}) {
   gl.load(url, g => {
     const inner = new THREE.Group();
     inner.rotation.y = spin;
-    inner.add(normalizeCarGLB(g.scene, length, black));
+    const model = normalizeCarGLB(g.scene, length, black);
+    liftVehicleMaterials(model, black ? 0.16 : 0.22);
+    inner.add(model);
     registerVehicle(car, inner, slot, meta);
   }, undefined, err => console.warn('drivable car failed', url, err));
 }

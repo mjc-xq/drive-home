@@ -217,6 +217,8 @@ export function createEngine({ canvas, ui, emit }) {
     combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1;   // chain within 4s to ramp it
     comboExpire = now + 4000; comboExpired = false;
     comboFx(now);
+    // First coin teaches the loop: tell the kid what the coins are FOR (a time trial).
+    if (coinsGot === 1 && coins.length > 1) toast('💛 First coin! Grab them all for a time trial 🏁', 1600);
     let finishMs = 0;
     if (coinsGot >= coins.length) {                                // rally complete → stop clock, save best
       runActive = false; lastRunMs = now - runStart; finishMs = lastRunMs;
@@ -2220,7 +2222,7 @@ export function createEngine({ canvas, ui, emit }) {
     // auto-fire: flooring the throttle (or the Shift/🚀 input) with charge dumps nitro —
     // no spare thumb is free for a manual button (left=steer, right=pedals).
     const boosting = (inp2.boost || throttle > 0.92) && boost > 0.02 && Math.abs(car.speed) > 1.5;
-    if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); } }
+    if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); if (!reduceMotion) { shakeMag = Math.max(shakeMag, 0.6); if (ui.fx) { ui.fx.classList.add('boost'); setTimeout(() => ui.fx && ui.fx.classList.remove('boost'), 160); } } } }   // hard-earned nitro gets a real punch: camera kick + a brief flash
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
     let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul; const maxR = -11;   // highway = supersonic; lawns crawl
@@ -2462,6 +2464,8 @@ export function createEngine({ canvas, ui, emit }) {
     }
     // ride the tyre-screech: louder the more the tail is out (and on the handbrake)
     if (audio.screech) audio.screech(slipping ? clamp((Math.abs(car.vlat) - 3) / 13, 0.18, 1) * (hb ? 1.1 : 1) : 0);
+    // brake squeal: a tyre chirp on a hard stop, gated so it's silent when coasting/parked
+    if (audio.brakeSqueech) audio.brakeSqueech((car.brakeAmt || 0) * clamp((Math.abs(car.speed) - 5) / 15, 0, 1));
     // DRIFT reward: a held slide glows the ✋ button + a 'DRIFT' chip, and every ~0.9 s of
     // sustained drift ticks the combo + trip score — the best mechanic finally pays out.
     const drifting = Math.abs(car.vlat) > 6 && Math.abs(car.speed) > 9;
