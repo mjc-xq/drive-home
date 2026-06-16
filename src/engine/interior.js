@@ -1,0 +1,127 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clamp } from './coords.js';
+import interiorUrl from '../assets/house-interior.glb';
+
+// The house interior is a furniture-segmented room scan (PLAIN GLB — no Draco, no animations,
+// no extensions, so the stock GLTFLoader loads it). Names live on NODES (every mesh.name is
+// undefined), so we categorise by node name: 56 wall_* + 18 joint_* (structure), 12 door_*
+// (passable openings), 10 floor_* (per-room ground), and the named furniture.
+//
+// It is mounted FAR from the yard (the engine places it ~2 km away). In Scoop the fog is pulled
+// in tight (near 38 / far 92), so when the indoor camera is at the interior the whole yard is
+// fogged to the background and never drawn — no per-object hide needed. The room floats as a
+// roofless dollhouse under the sky (the scan has no ceiling); more rooms come later.
+const FLOOR_RE = /^floor_/;
+const WALL_RE = /^(wall_|joint_)/;
+const DOOR_RE = /^door_/;
+// Only the big floor-standing pieces a walking kid can bump into get colliders. Chairs and the
+// wall-hugging mid/low cabinets are skipped — they're already covered by the wall colliders.
+const FURN_RE = /^(sofa|table_|refrigerator|oven|stove|dishwasher|sink|washer_dryer|storage_shelf|storage_cabinet_tall)/;
+
+const nameOf = o => o.name || (o.parent && o.parent.name) || '';
+const boxXZ = (b, pad = 0) => [b.min.x - pad, b.max.x + pad, b.min.z - pad, b.max.z + pad];
+
+// createInterior(scene, {cx,cz,floorY}, onReady, onFail) -> cancel()
+// Loads + normalises the interior, builds collision data in WORLD space, and hands back a small
+// module: { group, floorY, ceilingY, roomAABB, spawn, collide, clampCam }. Fail-soft.
+export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, onFail) {
+  let cancelled = false;
+  new GLTFLoader().load(interiorUrl, g => {
+    if (cancelled) return;
+    const model = g.scene;
+    model.updateMatrixWorld(true);
+    const floors = [], walls = [], doors = [], furniture = [];
+    model.traverse(o => {
+      if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; }
+      const n = o.name;
+      if (!n) return;
+      if (FLOOR_RE.test(n)) floors.push(o);
+      else if (WALL_RE.test(n)) walls.push(o);
+      else if (DOOR_RE.test(n)) doors.push(o);
+      else if (FURN_RE.test(n)) furniture.push(o);
+    });
+    // Double-side the walls so inward-facing faces aren't black, and lift any near-black scan
+    // material a touch so rooms read (the scan's albedo can be very dark).
+    model.traverse(o => {
+      if (!o.isMesh || !o.material) return;
+      const wall = WALL_RE.test(nameOf(o));
+      for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+        if (!m) continue;
+        if (wall) m.side = THREE.DoubleSide;
+        if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3);
+      }
+    });
+
+    // Recenter: floor TOP (not min.y — that would sink the character ~10cm) to world floorY,
+    // and the footprint centre to (cx,cz). floor_* tops give the true standing height.
+    const tmp = new THREE.Box3();
+    let floorTop = -Infinity;
+    for (const f of floors) { tmp.setFromObject(f); if (tmp.max.y > floorTop) floorTop = tmp.max.y; }
+    const overall = new THREE.Box3().setFromObject(model);
+    if (!isFinite(floorTop)) floorTop = overall.min.y + 0.1;
+    const ctrX = (overall.min.x + overall.max.x) / 2, ctrZ = (overall.min.z + overall.max.z) / 2;
+    const ceilingH = overall.max.y - floorTop;
+
+    const group = new THREE.Group();
+    group.add(model);
+    group.position.set(cx - ctrX, floorY - floorTop, cz - ctrZ);
+    group.visible = false;
+    // Interior light rig (same ×Math.PI physical convention as the scene sun/hemi). The scan has
+    // no ceiling so the scene sun reaches in too; this is gentle fill so shadowed corners read.
+    group.add(new THREE.AmbientLight(0xfff4e6, 0.35 * Math.PI));
+    group.add(new THREE.HemisphereLight(0xfff2e0, 0x6b5a48, 0.4 * Math.PI));
+    const fill = new THREE.DirectionalLight(0xffffff, 0.3 * Math.PI);
+    fill.position.set(2, 6, 3); fill.castShadow = false; group.add(fill);
+    scene.add(group);
+    group.updateMatrixWorld(true);
+
+    // World-space colliders. Per-wall (NOT the union — that's just the outer shell, which would
+    // let the character walk through every interior partition). Doorways are passable portals.
+    const wallColliders = walls.map(w => boxXZ(tmp.setFromObject(w)));
+    const doorPortals = doors.map(d => boxXZ(tmp.setFromObject(d), 0.18));
+    const furnitureColliders = furniture.map(f => boxXZ(tmp.setFromObject(f)));
+    // Outer shell = union of walls; the hard clamp that keeps the player in the building.
+    const roomAABB = [Infinity, -Infinity, Infinity, -Infinity];
+    for (const w of wallColliders) { roomAABB[0] = Math.min(roomAABB[0], w[0]); roomAABB[1] = Math.max(roomAABB[1], w[1]); roomAABB[2] = Math.min(roomAABB[2], w[2]); roomAABB[3] = Math.max(roomAABB[3], w[3]); }
+    if (!isFinite(roomAABB[0])) { roomAABB[0] = cx - 4.5; roomAABB[1] = cx + 4.5; roomAABB[2] = cz - 7; roomAABB[3] = cz + 7; }
+
+    // Per-room centroids (world) — spawn in the largest room's open centre (collision-safe),
+    // facing the footprint centre so you look into the house on arrival.
+    const rooms = floors.map(f => { tmp.setFromObject(f); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2, area: (tmp.max.x - tmp.min.x) * (tmp.max.z - tmp.min.z) }; });
+    rooms.sort((a, b) => b.area - a.area);
+    const sp = rooms[0] || { x: cx, z: cz };
+    const spawn = { x: sp.x, z: sp.z, yaw: Math.atan2(cx - sp.x, cz - sp.z) };
+    const ceilingY = floorY + ceilingH;
+
+    const inPortal = (x, z, rad) => { for (const d of doorPortals) if (x > d[0] - rad && x < d[1] + rad && z > d[2] - rad && z < d[3] + rad) return true; return false; };
+    const blocked = (x, z, rad) => {
+      if (inPortal(x, z, rad)) return false;                 // doorways pass straight through
+      for (const w of wallColliders) if (x > w[0] - rad && x < w[1] + rad && z > w[2] - rad && z < w[3] + rad) return true;
+      for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;
+      return false;
+    };
+
+    onReady({
+      group, floorY, ceilingY, roomAABB, spawn,
+      // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
+      // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
+      collide(px, pz, nx, nz, rad) {
+        let x = nx, z = nz;
+        if (blocked(x, z, rad)) {
+          if (!blocked(x, pz, rad)) z = pz;
+          else if (!blocked(px, z, rad)) x = px;
+          else { x = px; z = pz; }
+        }
+        x = clamp(x, roomAABB[0] + rad, roomAABB[1] - rad);
+        z = clamp(z, roomAABB[2] + rad, roomAABB[3] - rad);
+        return { x, z };
+      },
+      // Keep the follow-camera inside the walls and under the (virtual) ceiling.
+      clampCam(x, y, z, m) {
+        return { x: clamp(x, roomAABB[0] + m, roomAABB[1] - m), y: Math.min(y, ceilingY - 0.25), z: clamp(z, roomAABB[2] + m, roomAABB[3] - m) };
+      },
+    });
+  }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
+  return () => { cancelled = true; };
+}

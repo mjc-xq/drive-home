@@ -1671,6 +1671,7 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('drive'); camInit = false;
     setInside(false);
     DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false;
+    freeRoamPath = null; _frReq++; _frT = 0;   // fresh free-roam road probe; invalidate any in-flight one from a prior drive
     guideLine.visible = false; destPin.visible = false; if (navMarker) navMarker.visible = false;
     emit('dest', null); emit('autodrive', false);
     // Default to the Roblox-style CHASE cam ('Close') so driving leads with the
@@ -1715,6 +1716,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function exitDrive() {
     setMode('explore');
+    freeRoamPath = null; _frReq++;   // don't let a stale far-from-home road snap leak into non-drive nearestRoadPoint callers
     camera.up.set(0, 1, 0);
     hideJoy();
     navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
