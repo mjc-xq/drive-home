@@ -732,22 +732,26 @@ export function createEngine({ canvas, ui, emit }) {
   function actorGroundY(x, z, prevY) {
     const tA = terrainAt(x, z);
     if (!p3dtiles || !p3dtiles.holder.visible) return tA;
+    // Inside the procedural neighborhood (±330 m) the FLAT heightfield is ground
+    // truth — ride it DIRECTLY. That's the whole point of the game: keep the
+    // photoreal tiles fully VISIBLE for the high-res look, but drive on smooth,
+    // aligned terrain with no photogrammetry bumps — no lumps under parked cars,
+    // no climbing trees/curbs/roofs. (Bonus: skips the per-sample tile raycasts in
+    // the common near-home case, so it's cheaper too.)
+    if (x * x + z * z <= 330 * 330) return tA;
+    // Far out, beyond the heightfield, there's no procedural topology to ride, so
+    // follow the real photoreal ROAD. Cast DOWN from just above the actor's roof:
+    // a tree canopy / eave ABOVE the car is skipped (the ray starts beneath it), so
+    // we read the road under the foliage, not the leaves. Retry from progressively
+    // higher only when that misses — i.e. the road climbed above the car (steep
+    // hill / onto a bridge), the one case we DO want to follow upward.
     const base = prevY != null ? prevY : tA;
-    // Cast DOWN from just above the actor's roof: a tree canopy / eave sitting
-    // ABOVE the car is skipped (the ray starts beneath it), so we read the ROAD
-    // under the foliage, not the leaves. Retry from progressively higher only when
-    // that misses — i.e. the road has climbed above the car (steep hill / onto a
-    // bridge), the one case we DO want to follow upward.
     let y = rawTileY(x, z, base + 2.2);
     if (y == null) y = rawTileY(x, z, base + 10);
     if (y == null && prevY != null) y = rawTileY(x, z, base + 26);
     if (y == null && prevY == null) y = rawTileY(x, z);
     if (y == null) return prevY != null ? prevY : tA;             // tile not streamed yet: hold height
-    // Inside the procedural neighborhood the heightfield is ground truth: clamp the
-    // tile sample to it so a photogrammetry tree can never lift the actor off the
-    // road topology.
-    if (x * x + z * z <= 330 * 330) return clamp(y, tA - 2, tA + 2);
-    // Far out, terrainAt is just a clamped edge value — useless as a reference — so
+    // Out here terrainAt is just a clamped edge value — useless as a reference — so
     // bound by CONTINUITY instead: a real road never steps UP more than ~1.5 m
     // between samples, but a photogrammetry tree/roof blob does, so reject the
     // sudden climb (ride the surface beneath it) while letting the car settle
@@ -1286,7 +1290,17 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   // ---------- keyboard ----------
+  // True while the user is typing in a form field (the address search, etc.).
+  // The game's key handler preventDefault()s Space + WASD + arrows; without this
+  // guard those keystrokes never reach a focused <input>, so addresses with
+  // spaces ("Circle Ave", "Castro Valley") couldn't be typed at all.
+  function isEditable(t) {
+    if (!t) return false;
+    const tag = t.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
+  }
   function onKeyDown(e) {
+    if (isEditable(e.target)) return;   // let typing through — never hijack form input
     if (mode === 'drive' || mode === 'scoop') {
       if (mode === 'scoop' && e.key === 'Shift' && !e.repeat) {
         shiftLock = !shiftLock; emit('shiftLock', shiftLock);
@@ -1316,6 +1330,9 @@ export function createEngine({ canvas, ui, emit }) {
     e.preventDefault();
   }
   function onKeyUp(e) {
+    // No editable-guard here on purpose: keyup never preventDefault()s (so it can't
+    // block typing) and CLEARING a movement flag is always safe — guarding it could
+    // strand a held key as "down" if focus moved to an input mid-press.
     if (mode === 'explore') return;
     if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = 0;
     if (e.key === 'ArrowDown' || e.key === 's') inp2.ky = 0;
@@ -1830,16 +1847,48 @@ export function createEngine({ canvas, ui, emit }) {
       });
     })).catch(() => []);
   }
-  // Relocate the START: teleport the car to an address (snap onto the nearest road if one is
-  // near), clear any destination, re-settle the camera. Lets you start anywhere on the map.
+  // Relocate the START: teleport the car to an address, land it on a ROAD (so it matches
+  // where Drive-to arrives — Google geocodes to a rooftop/parcel, not the curb), clear any
+  // destination, re-settle the camera. Lets you start anywhere on the map.
+  let jumpReqId = 0;
   function jumpTo(lat, lon, label) {
+    const ox = car.x, oz = car.z;                         // origin for the road-end query (captured before we teleport)
     const w = geoToWorld(lat, lon);
     car.x = w[0]; car.z = w[1]; car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.groundY = null;
+    // Snap onto the local street graph when one is near (the generous radius matches the
+    // tap-to-drive snap, so jumps inside the neighborhood land in the street like a drive).
     const np = nearestRoadPoint(car.x, car.z);
-    if (np && np.d < 40) { car.x = np.x; car.z = np.z; }
+    const onLocalRoad = np && np.d < 90;
+    if (onLocalRoad) { car.x = np.x; car.z = np.z; }
     clearDestination();
     camInit = false; recoverCooldown = 1.8;
     toast('📍 Jumped to ' + esc(label || 'there'), 1500);
+    // Far from the neighborhood there's no local road graph, so the geocode rooftop would
+    // strand the car ON a building. Match Drive-to EXACTLY: ask Google for the route and slide
+    // the car to the route's curb-side end when it resolves (a few-metre nudge onto the road).
+    if (!onLocalRoad) snapJumpToRoad(ox, oz, lat, lon, ++jumpReqId);
+  }
+  // One-shot road-snap for a FAR jump: route origin→destination and move the car to the
+  // route's final point — the same curb Drive-to arrives at. Bails if a newer jump fired or
+  // the player has since set a destination, so it never yanks the car out from under them.
+  function snapJumpToRoad(ox, oz, lat, lon, reqId) {
+    loadMapsSDK().then(maps => {
+      const o = worldToGeo(ox, oz);
+      new maps.DirectionsService().route(
+        { origin: { lat: o.lat, lng: o.lon }, destination: { lat, lng: lon }, travelMode: 'DRIVING' },
+        (result, status) => {
+          if (reqId !== jumpReqId || DEST) return;
+          if (status !== 'OK' || !result.routes || !result.routes[0]) return;
+          const path = [];
+          for (const leg of result.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) path.push(p);
+          const src = path.length ? path : result.routes[0].overview_path;
+          if (!src || !src.length) return;
+          const end = src[src.length - 1], e = geoToWorld(end.lat(), end.lng());
+          car.x = e[0]; car.z = e[1]; car.speed = 0; car.vlat = 0; car.groundY = null;
+          camInit = false;
+        }
+      );
+    }).catch(() => {});
   }
   // Destination by address / place — geocode then route there (and auto-drive on request).
   function setDestinationByText(text, drive) {
