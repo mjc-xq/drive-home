@@ -62,6 +62,7 @@ export default function App() {
   const [scoopMenuOpen, setScoopMenuOpen] = useState(false);   // collapsible Scoop side menu
   const [scoopChar, setScoopChar] = useState('drew');          // which avatar you control (Drew/CeCe)
   const [scoopActions, setScoopActions] = useState([]);        // the active avatar's emote buttons
+  const [house, setHouse] = useState({ inside: false, ready: false });   // house-interior entry/exit state
   const [nearCar, setNearCar] = useState(false);
   const [driveHint, setDriveHint] = useState(false);    // brief "how to drive" hint
   const [driveScore, setDriveScore] = useState({ got: 0, total: 0, best: 0, bestStr: '', combo: 0 });
@@ -100,6 +101,7 @@ export default function App() {
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'avatar': setScoopChar(p.name); if (p.actions) setScoopActions(p.actions); break;
+        case 'house': setHouse(p); break;
         case 'nearCar': setNearCar(p); break;
         case 'dest': setDest(p); if (!p) setAutoDrive(false); break;
         case 'driveScore': setDriveScore(p); break;
@@ -554,6 +556,8 @@ export default function App() {
             </div>
             <button id="jumpBtn" className="btn primary icon" aria-label="Jump" onClick={() => eng().jump()}>🦘</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
+            {house.ready && !house.inside && !nearCar && <button id="goInside" className="btn primary" onClick={() => eng().enterHouse()}>Go inside 🏠</button>}
+            {house.inside && <button id="goInside" className="btn primary" onClick={() => eng().leaveHouse()}>Leave house 🚪</button>}
             <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · ☰ menu: characters, actions &amp; exit</div>
           </div>
         )}

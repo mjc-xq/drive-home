@@ -316,7 +316,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .carSpec{font-size:11px;font-weight:500;color:rgba(255,255,255,.5)}
 .carTag{flex:0 0 auto;font-size:9px;font-weight:700;letter-spacing:.06em;color:rgba(255,255,255,.55)}
 .carRow.current .carTag{color:var(--go)}
-#getInCar{position:absolute;bottom:calc(118px + var(--safe-b));left:50%;transform:translateX(-50%);animation:popIn .2s ease}
+#getInCar,#goInside{position:absolute;bottom:calc(118px + var(--safe-b));left:50%;transform:translateX(-50%);animation:popIn .2s ease}
 @keyframes popIn{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
 
 /* ---- start menu (pick a mode) ---- */
