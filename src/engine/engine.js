@@ -31,23 +31,29 @@ export function createEngine({ canvas, ui, emit }) {
   //         verification, where software WebGL grinds at 1-5 fps otherwise.
   // ?nocar: skip the GLB swap (fast test loop; procedural car stays).
   const flags = new URLSearchParams(location.search);
-  const LITE = flags.has('lite');
   // Phones: cap pixel ratio and lighten shadows. The shadow pass re-renders every
   // caster into the depth map each frame, so this is a real per-frame saving and
-  // a defence against GPU-memory pressure on iOS Safari.
-  const MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  // a defence against GPU-memory pressure on iOS Safari. Also catch iPadOS-13+, which
+  // reports a desktop "Macintosh" UA but has touch — it was getting the heaviest path.
+  const MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+  // Auto-LITE on low-end phones (few cores / little RAM) — previously LITE only triggered
+  // with ?lite in the URL, so every DPR/AA/shadow mitigation below was dead code on a real
+  // phone opened normally. This flips a weak device to DPR1 / no-AA / no-shadows.
+  const LITE = flags.has('lite') ||
+    (MOBILE && ((navigator.hardwareConcurrency || 4) <= 4 || (navigator.deviceMemory || 4) <= 3));
 
   // Upgraded to three r184. The scene's colours and light intensities were all
   // hand-tuned under r128's un-managed, linear-output pipeline, so opt back out
   // of r152+ colour management and keep linear output to preserve that look;
   // the lights are re-scaled below for r155+ physically-correct units.
   THREE.ColorManagement.enabled = false;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE, powerPreference: 'high-performance' });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE && !MOBILE, powerPreference: 'high-performance' });   // skip the MSAA resolve on mobile (fill-rate bound)
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   // Cap pixel ratio: 1.5 on phones (the fill-rate dial — at DPR 2 a 3x phone draws ~1.8×
   // the fragments of the photoreal tiles + additive overlays + speed-line compositing for
   // little visible gain), 2 on desktop. LITE stays at 1x.
-  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.5 : 2));
+  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.25 : 2));   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles
@@ -349,7 +355,7 @@ export function createEngine({ canvas, ui, emit }) {
       const cab = new THREE.Mesh(cabGeo, cabMat); cab.position.set(0, 1.18, -0.25);
       g.add(body); g.add(cab); g.frustumCulled = false; g.visible = false; scene.add(g);
       const seg = tSegs[(i * 9 + 3) % tSegs.length];
-      traffic.push({ group: g, box: [body, cab], a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false });
+      traffic.push({ group: g, box: [body, cab], a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false, ti: i });
     }
     traffic._segs = tSegs;
     // upgrade the placeholder boxes to REAL (cloned) car models once they load — a few
@@ -399,9 +405,10 @@ export function createEngine({ canvas, ui, emit }) {
     else { const tmp = c.a; c.a = c.b; c.b = tmp; }   // dead end → U-turn
     c.t = 0;
   }
+  let trafficTick = 0;
   function updateTraffic(dt, now) {
+    trafficTick++;
     for (const c of traffic) {
-      c.group.visible = true;
       const dx = c.b[0] - c.a[0], dz = c.b[1] - c.a[1], len = Math.hypot(dx, dz) || 1;
       const fdx = dx / len, fdz = dz / len, rgx = fdz, rgz = -fdx;   // forward + right (for lanes)
       let cxp = c.a[0] + dx * c.t, czp = c.a[1] + dz * c.t;          // centreline point
@@ -420,7 +427,15 @@ export function createEngine({ canvas, ui, emit }) {
       const off = (yielding && pPerp > -1.2) ? -2.0 : 1.5;
       const x = cxp + rgx * off, z = czp + rgz * off;
       c.x = x; c.z = z;
-      c.group.position.set(x, groundAt(x, z) + 0.05, z);
+      // GATE: cars far from the player are off-screen — hide them and skip the costly tile
+      // raycast entirely (these 8 unthrottled casts were the biggest per-frame CPU chunk).
+      if ((car.x - x) * (car.x - x) + (car.z - z) * (car.z - z) > 200 * 200) { c.group.visible = false; continue; }
+      c.group.visible = true;
+      // STAGGER the ground raycast (≤2 cars/frame) and low-pass it so streamed-in tiles don't
+      // pop the car vertically — same look, a fraction of the cost.
+      if (c.gy === undefined || (trafficTick + c.ti) % 4 === 0) c.gyT = groundAt(x, z) + 0.05;
+      c.gy = c.gy === undefined ? c.gyT : c.gy + (c.gyT - c.gy) * Math.min(1, dt * 6);
+      c.group.position.set(x, c.gy, z);
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);
     }
   }
@@ -660,6 +675,7 @@ export function createEngine({ canvas, ui, emit }) {
   // anchor the tileset to the house centroid's lat/lon (origin of the local
   // frame). LAT0/LON0 = the geocode origin; C is the house centroid (orig E/N).
   let p3dtiles = null;
+  let _tilesUpdT = 0;   // throttle the (expensive, full-tree) tiles LOD traversal to ~18 Hz
   const DEG = Math.PI / 180;
   // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
   // yOffset lifts the photoreal ground to the procedural terrain height; xOffset/
@@ -1816,6 +1832,7 @@ export function createEngine({ canvas, ui, emit }) {
   let _lookV = null;                       // smoothed chase look point — lags so the car whips toward frame edge
   let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
   let camFloorRef = null;                   // low-passed anti-clip floor so per-bump groundAt spikes don't POP the cam
+  let _camFloorT = 0, _camFloorRaw = 0;     // throttle the floor raycast (~14 Hz) — its output is low-passed to ~3 Hz anyway
   let camMode = 0;
   let camInit = false;
   let driveCamUserPicked = false;
@@ -2331,7 +2348,12 @@ export function createEngine({ canvas, ui, emit }) {
       camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * 1.0);
       const camT = _camT.set(car.x + r * Math.sin(po) * Math.sin(a), camGroundRef + r * Math.cos(po), car.z + r * Math.sin(po) * Math.cos(a));
       if (!camInit) { camV.copy(camT); camInit = true; }
-      camV.lerp(camT, 1 - Math.exp(-4.6 * dt));
+      // track TIGHTER the faster you go so a 700 mph autodrive never outruns the orbit cam
+      camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));
+      // hard backstop: never let the camera trail the orbit target by more than ~45% of the
+      // range, so a hard turn at top speed can't swing the car out of frame (invisible car).
+      const lagMax = r * 0.45, dxc = camV.x - camT.x, dzc = camV.z - camT.z, lc = Math.hypot(dxc, dzc);
+      if (lc > lagMax) { const f = lagMax / lc; camV.x = camT.x + dxc * f; camV.z = camT.z + dzc * f; }
       camera.position.copy(camV);
       camera.lookAt(car.x + fx * sp * 26, camGroundRef + 1, car.z + fz * sp * 26);   // bias the gaze where you're heading
       const fovT = 46 + 5 * sp;
@@ -2346,7 +2368,7 @@ export function createEngine({ canvas, ui, emit }) {
       // rushing up — the overhead read of velocity.
       const camT = _camT.set(car.x - fx * (CAM.dist + sp * 4), yC + (CAM.h + sp * 9) * czoom, car.z - fz * (CAM.dist + sp * 4));
       if (!camInit) { camV.copy(camT); camInit = true; }
-      camV.lerp(camT, 1 - Math.exp(-5 * dt));
+      camV.lerp(camT, 1 - Math.exp(-(5 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // keep up at top speed
       camera.position.copy(camV);
       camera.up.set(fx, 0, fz); // heading-up
       const spHiT = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
@@ -2378,12 +2400,12 @@ export function createEngine({ canvas, ui, emit }) {
         if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
       }
       if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; camFloorRef = null; }
-      camV.lerp(camT, 1 - Math.exp(-4.6 * dt));                       // frame-rate-independent smoothing
+      camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed
       // Anti-clip floor, LOW-PASSED: a raw Math.max against groundAt() snaps the camera up
       // on every photogrammetry bump (the "jump" in Close/Cruise). Smooth the floor so it
       // rises/falls gently and only ever lifts the cam — never a per-frame pop.
-      const rawFloor = groundAt(camV.x, camV.z) + 1.3;
-      camFloorRef = camFloorRef == null ? rawFloor : camFloorRef + (rawFloor - camFloorRef) * (1 - Math.exp(-dt * 3));
+      if (now - _camFloorT > 70) { _camFloorRaw = groundAt(camV.x, camV.z) + 1.3; _camFloorT = now; }   // ~14 Hz raycast
+      camFloorRef = camFloorRef == null ? _camFloorRaw : camFloorRef + (_camFloorRaw - camFloorRef) * (1 - Math.exp(-dt * 3));
       if (camV.y < camFloorRef) camV.y = camFloorRef;
       camera.position.copy(camV);
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
@@ -2483,9 +2505,11 @@ export function createEngine({ canvas, ui, emit }) {
     } else if (mode === 'scoop') {
       updateScoop(dt, now);
     } else {
-      const k = reduceMotion ? 1 : 0.16;
+      // frame-rate-INDEPENDENT blend (was a fixed 0.16/frame → converged twice as fast on a
+      // 120 Hz phone and micro-stuttered under variable dt — the "aerial orbit isn't smooth").
+      const k = reduceMotion ? 1 : (1 - Math.exp(-rawDt * 10.6));
       if (!reduceMotion && !ptrs.size && (Math.abs(azVel) > 1e-4 || Math.abs(poVel) > 1e-4)) {
-        ctl.gaz += azVel; ctl.gpo = clamp(ctl.gpo + poVel, 0.14, 1.46);
+        ctl.gaz += azVel * rawDt * 60; ctl.gpo = clamp(ctl.gpo + poVel * rawDt * 60, 0.14, 1.46);
         const decay = Math.exp(-dt * 4); azVel *= decay; poVel *= decay; // flick momentum
       }
       ctl.tx += (ctl.gtx - ctl.tx) * k; ctl.ty += (ctl.gty - ctl.ty) * k; ctl.tz += (ctl.gtz - ctl.tz) * k;
@@ -2500,7 +2524,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
-    if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); p3dtiles.update(); updateAttribution(now); }
+    if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); if (now - _tilesUpdT > 55) { p3dtiles.update(); _tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
     if (mode === 'drive' && ui.minimap && now - _miniT > 80) {       // ~12fps minimap
       _miniT = now;
