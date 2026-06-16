@@ -53,6 +53,8 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         if (!m) continue;
         if (wall) m.side = THREE.DoubleSide;
         if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3);
+        if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.9);   // less shiny -> less blown out
+        if (m.color) m.color.multiplyScalar(0.7);                                  // tame the bright scan albedo (was washed out)
       }
     });
 
@@ -66,16 +68,19 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const ctrX = (overall.min.x + overall.max.x) / 2, ctrZ = (overall.min.z + overall.max.z) / 2;
     const ceilingH = overall.max.y - floorTop;
 
+    // Scale the house up so the real-height kids (Drew 5'4", CeCe 4'10") have room to move around
+    // the small scanned rooms — at 1:1 they felt boxed-in. Colliders below are read AFTER this
+    // scale (world space), so they track it.
+    const S = 1.4;
     const group = new THREE.Group();
     group.add(model);
-    group.position.set(cx - ctrX, floorY - floorTop, cz - ctrZ);
+    group.scale.setScalar(S);
+    group.position.set(cx - ctrX * S, floorY - floorTop * S, cz - ctrZ * S);
     group.visible = false;
-    // Interior light rig (same ×Math.PI physical convention as the scene sun/hemi). The scan has
-    // no ceiling so the scene sun reaches in too; this is gentle fill so shadowed corners read.
-    group.add(new THREE.AmbientLight(0xfff4e6, 0.35 * Math.PI));
-    group.add(new THREE.HemisphereLight(0xfff2e0, 0x6b5a48, 0.4 * Math.PI));
-    const fill = new THREE.DirectionalLight(0xffffff, 0.3 * Math.PI);
-    fill.position.set(2, 6, 3); fill.castShadow = false; group.add(fill);
+    // The roofless scan is already lit by the GLOBAL scene sun + hemi, so just a faint ambient fill
+    // to keep shadowed corners from going black. A full interior rig ON TOP of the scene sun blew
+    // the bright scan albedo out (washed out).
+    group.add(new THREE.AmbientLight(0xfff4e6, 0.12 * Math.PI));
     scene.add(group);
     group.updateMatrixWorld(true);
 
@@ -94,19 +99,23 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const rooms = floors.map(f => { tmp.setFromObject(f); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2, area: (tmp.max.x - tmp.min.x) * (tmp.max.z - tmp.min.z) }; });
     rooms.sort((a, b) => b.area - a.area);
     const sp = rooms[0] || { x: cx, z: cz };
-    const spawn = { x: sp.x, z: sp.z, yaw: Math.atan2(cx - sp.x, cz - sp.z) };
-    const ceilingY = floorY + ceilingH;
+    // Spawn must be clear of furniture/walls (you were starting INSIDE a table). Spiral out from the
+    // room centre to the nearest open floor.
+    const occupied = (x, z) => { for (const f of furnitureColliders) if (x > f[0] && x < f[1] && z > f[2] && z < f[3]) return true; for (const w of wallColliders) if (x > w[0] && x < w[1] && z > w[2] && z < w[3]) return true; return false; };
+    let sx = sp.x, sz = sp.z;
+    if (occupied(sx, sz)) { outer: for (let r = 0.5; r <= 5; r += 0.5) for (let a = 0; a < 16; a++) { const x = sp.x + Math.cos(a / 16 * 6.283) * r, z = sp.z + Math.sin(a / 16 * 6.283) * r; if (!occupied(x, z) && x > roomAABB[0] && x < roomAABB[1] && z > roomAABB[2] && z < roomAABB[3]) { sx = x; sz = z; break outer; } } }
+    const spawn = { x: sx, z: sz, yaw: Math.atan2(cx - sx, cz - sz) };
+    const ceilingY = floorY + ceilingH * S;
 
     const inPortal = (x, z, rad) => { for (const d of doorPortals) if (x > d[0] - rad && x < d[1] + rad && z > d[2] - rad && z < d[3] + rad) return true; return false; };
     const blocked = (x, z, rad) => {
       if (inPortal(x, z, rad)) return false;                 // doorways pass straight through
       for (const w of wallColliders) if (x > w[0] - rad && x < w[1] + rad && z > w[2] - rad && z < w[3] + rad) return true;
-      for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;
-      return false;
+      return false;   // furniture is walk-through: small, furniture-dense rooms would otherwise box you in
     };
 
     onReady({
-      group, floorY, ceilingY, roomAABB, spawn,
+      group, floorY, ceilingY, roomAABB, spawn, walls,
       // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
       // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
       collide(px, pz, nx, nz, rad) {

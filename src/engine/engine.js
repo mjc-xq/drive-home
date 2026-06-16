@@ -1636,7 +1636,7 @@ export function createEngine({ canvas, ui, emit }) {
       const rad = 0.42;
       if (inside) {
         // per-wall + furniture pushout/slide with passable doorways (interior.collide)
-        const r = interior.collide(CHAR.x, CHAR.z, nx, nz, rad); nx = r.x; nz = r.z;
+        const r = interior.collide(CHAR.x, CHAR.z, nx, nz, 0.34); nx = r.x; nz = r.z;   // slimmer radius so doorways/tight spots pass
       } else {
         // collide against real building/structure footprints (not the oversized
         // AABBs) and slide along the wall — otherwise the house's AABB walls off
@@ -1749,6 +1749,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
   }
   // Indoor follow cam + the exit pad (movement/grounding/collision already ran in updateScoop).
+  const _wallRay = new THREE.Raycaster();
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
     // EXIT pad: stand where you came in to head back out (hysteresis so arrival doesn't re-trigger)
@@ -1761,12 +1762,12 @@ export function createEngine({ canvas, ui, emit }) {
     // small indoor follow cam: pull IN before it pokes through a wall, clamp under the ceiling
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
     const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB;
-    let dist = (3.1 + Math.max(0, scPitch) * 1.0) * szi;
+    let dist = (4.0 + Math.max(0, scPitch) * 1.2) * szi;
     let camX = CHAR.x - fx * dist, camZ = CHAR.z - fz * dist;
     for (let k = 0; k < 6 && (camX < ra[0] + 0.3 || camX > ra[1] - 0.3 || camZ < ra[2] + 0.3 || camZ > ra[3] - 0.3); k++) {
       dist *= 0.78; camX = CHAR.x - fx * dist; camZ = CHAR.z - fz * dist;
     }
-    const camY = interior.floorY + 1.7 + scPitch * 3.2 * Math.max(0.75, szi);
+    const camY = interior.floorY + 2.1 + scPitch * 3.4 * Math.max(0.75, szi);
     const cc = interior.clampCam(camX, camY, camZ, 0.3);
     const camT = _camT.set(cc.x, cc.y, cc.z);
     if (!camInit) { camV.copy(camT); camInit = true; }
@@ -1775,6 +1776,17 @@ export function createEngine({ canvas, ui, emit }) {
     camV.set(cl.x, Math.max(cl.y, interior.floorY + 0.7), cl.z);
     camera.position.copy(camV);
     camera.lookAt(CHAR.x, interior.floorY + 1.1, CHAR.z);
+    // SEE-THROUGH WALLS: hide any wall mesh between the camera and the avatar so you never lose them
+    // behind a partition. Collision uses precomputed AABBs, so hidden walls still block movement.
+    if (interior.walls) {
+      for (const w of interior.walls) w.visible = true;
+      const cp = camera.position, dx = CHAR.x - cp.x, dy = (interior.floorY + 1.1) - cp.y, dz = CHAR.z - cp.z;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      _wallRay.set(cp, _camT.set(dx / len, dy / len, dz / len));
+      _wallRay.far = Math.max(0.1, len - 0.5);
+      const hits = _wallRay.intersectObjects(interior.walls, false);
+      for (const h of hits) h.object.visible = false;
+    }
   }
   // hop from walking straight into driving (the car spawns at the driveway)
   function driveFromScoop() {
