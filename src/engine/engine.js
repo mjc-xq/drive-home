@@ -1716,9 +1716,13 @@ export function createEngine({ canvas, ui, emit }) {
     const turn = distToNextTurn();
     const straight = clamp((turn - 12) / 95, 0, 1);          // reach full speed on shorter straights
     const far = clamp((dDest - 35) / 220, 0, 1);
-    const cruise = 34 + straight * 250 + far * 30;          // up to ~700 mph on a long open straight; turns still slow it so it stays on the road
+    const cruise = 34 + straight * 250 + far * 30;          // up to ~700 mph on a long open straight
     const approach = dDest < 85 ? clamp(14 + dDest * 0.52, 14, 54) : cruise;
     let s = Math.min(cruise, approach);
+    // HARD turn cap: never go faster than you can comfortably slow for the next bend, scaled
+    // by distance to it. Without this the chauffeur blasts a highway at 450 mph and overshoots
+    // the onramp/exit, looping the interchange. ~40 u/s near a turn → ~400 on a long straight.
+    s = Math.min(s, 16 + distToNextTurn() * 1.25);
     if (autoMaxMph) s = Math.min(s, autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
     return s;
   }
@@ -2087,8 +2091,16 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky)) {
       autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
     }
-    // advance the route waypoint as the car passes it (drives the guide + auto-drive)
-    if (ROUTE && routeIdx < ROUTE.length && Math.hypot(ROUTE[routeIdx].x - car.x, ROUTE[routeIdx].z - car.z) < 16) routeIdx++;
+    // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
+    // has travelled along the current segment), not just proximity — at high speed the car
+    // overshoots a 16 m radius without ever entering it, so routeIdx would stick and the car
+    // would circle the same point. The while-loop clears several waypoints in one fast frame.
+    while (ROUTE && routeIdx < ROUTE.length - 1) {
+      const a = ROUTE[routeIdx], b = ROUTE[routeIdx + 1];
+      const vx = b.x - a.x, vz = b.z - a.z, L2 = vx * vx + vz * vz || 1;
+      const t = ((car.x - a.x) * vx + (car.z - a.z) * vz) / L2;
+      if (t > 0.8 || Math.hypot(a.x - car.x, a.z - car.z) < 16) routeIdx++; else break;
+    }
     // auto-drive: follow the road ROUTE. Arrival is reaching the END OF THE ROUTE (the road
     // point nearest the target) — NOT the raw target, so a tap that lands off-road doesn't
     // make the car circle forever trying to reach a point with no road. While no route is
@@ -2531,10 +2543,12 @@ export function createEngine({ canvas, ui, emit }) {
       }
       if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; camFloorRef = null; }
       camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed
-      // Anti-clip floor, LOW-PASSED: a raw Math.max against groundAt() snaps the camera up
-      // on every photogrammetry bump (the "jump" in Close/Cruise). Smooth the floor so it
-      // rises/falls gently and only ever lifts the cam — never a per-frame pop.
-      if (now - _camFloorT > 70) { _camFloorRaw = groundAt(camV.x, camV.z) + 1.3; _camFloorT = now; }   // ~14 Hz raycast
+      // Anti-clip floor based on the CAR's road level (yC = actorGroundY, which is
+      // overpass/canopy-skipped). A high groundAt() raycast at the camera's xz used to hit an
+      // OVERPASS deck above and shove the camera up over it — hiding the car under an
+      // underpass / when changing levels. Tracking the car's own level fixes that (and the
+      // low-pass keeps photogrammetry bumps from popping the cam).
+      _camFloorRaw = yC + 1.3;
       camFloorRef = camFloorRef == null ? _camFloorRaw : camFloorRef + (_camFloorRaw - camFloorRef) * (1 - Math.exp(-dt * 3));
       if (camV.y < camFloorRef) camV.y = camFloorRef;
       camera.position.copy(camV);

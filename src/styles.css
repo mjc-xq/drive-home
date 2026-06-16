@@ -252,17 +252,22 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #navPanel .navErr{color:var(--reverse);font-size:12.5px;margin-top:10px;text-align:center}
 
 /* ---- car picker ---- */
-#carPicker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;width:min(86vw,360px);pointer-events:auto}
-#carPicker h3{font-size:18px;font-weight:700;margin-bottom:12px}
-.carList{display:flex;flex-direction:column;gap:8px}
-.carRow{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--glass);color:var(--txt);cursor:pointer;transition:background .15s ease}
-.carRow:hover:not(:disabled){background:var(--glass-hi)}
-.carRow:disabled{opacity:.5;cursor:default}
-.carRow.current{background:var(--poppy);border-color:transparent}
-.carName{font-size:16px;font-weight:700;font-style:italic;letter-spacing:.03em}
-.carSpec{font-size:11px;font-weight:600;opacity:.85;letter-spacing:.06em}
-.carCredit{font-size:10px;opacity:.55}
-#carPicker .navClose{margin-top:12px;width:100%}
+/* ---- car picker (square nav-app sheet) ---- */
+#carPicker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;width:min(92vw,380px);max-height:84vh;display:flex;flex-direction:column;overflow:hidden;pointer-events:auto}
+.cpTitle{font-family:'AGC';font-weight:800;font-size:22px;text-transform:uppercase;letter-spacing:-.01em;margin:0}
+.carList{display:flex;flex-direction:column;overflow-y:auto;margin-top:6px}
+.carRow{display:flex;align-items:center;gap:13px;text-align:left;padding:12px 14px;border:0;border-top:1px solid rgba(255,255,255,.08);background:transparent;color:#fff;cursor:pointer;font-family:'Chakra Petch'}
+.carRow:first-child{border-top:0}
+.carRow:hover:not(:disabled){background:rgba(255,255,255,.05)}
+.carRow:disabled{cursor:default}
+.carRow.current{background:rgba(43,232,79,.12)}
+.carThumb{flex:0 0 auto;width:48px;height:32px;display:grid;place-items:center;background:rgba(255,255,255,.06);color:rgba(255,255,255,.7)}
+.carRow.current .carThumb{color:var(--go);background:rgba(43,232,79,.14)}
+.carInfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.carName{font-size:15px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.carSpec{font-size:11px;font-weight:500;color:rgba(255,255,255,.5)}
+.carTag{flex:0 0 auto;font-size:9px;font-weight:700;letter-spacing:.06em;color:rgba(255,255,255,.55)}
+.carRow.current .carTag{color:var(--go)}
 #getInCar{position:absolute;bottom:calc(118px + var(--safe-b));left:50%;transform:translateX(-50%);animation:popIn .2s ease}
 @keyframes popIn{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
 
@@ -270,12 +275,26 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #startMenu{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
   background:rgba(18,22,26,.5);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);animation:fadeIn .25s ease}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.startCard{text-align:center;padding:26px 30px;border-radius:20px;background:var(--glass);border:1px solid var(--line);box-shadow:var(--shadow);max-width:90vw}
-.startCard h1{font-size:30px;font-weight:700;letter-spacing:.02em}
-.startCard h1 em{font-style:italic;color:var(--poppy)}
-.startCard p{opacity:.72;margin:6px 0 18px;font-size:13px}
-.startBtns{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
-.startBtns .btn{font-size:16px;padding:12px 20px}
+.menuSheet{position:relative;width:min(94vw,560px);padding:22px 22px 24px;color:#fff;
+  background:linear-gradient(160deg,#1a2236,#0a0c12);border:1px solid rgba(255,255,255,.14);box-shadow:0 30px 80px rgba(0,0,0,.6);
+  font-family:'Chakra Petch',system-ui,sans-serif;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.startSheet{min-height:300px;display:flex;flex-direction:column}
+.menuHead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+.menuKick{font-weight:600;font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--nav)}
+.menuTitle{font-family:'AGC';font-weight:900;font-size:clamp(30px,7vw,40px);line-height:.86;letter-spacing:-.01em;text-transform:uppercase;margin:8px 0 0}
+.placesBadge{display:flex;align-items:center;gap:8px;padding:9px 13px;flex:0 0 auto;background:rgba(43,232,79,.1);border:1px solid rgba(43,232,79,.4)}
+.pbNum{font-weight:600;font-size:13px;color:#fff}.pbNum i{font-style:normal;color:rgba(255,255,255,.45)}
+.pbLbl{font-weight:500;font-size:9px;line-height:1.1;color:rgba(255,255,255,.5);max-width:54px}
+.modeCards{display:flex;gap:12px;margin-top:auto;padding-top:30px}
+.modeCard{flex:1;display:flex;flex-direction:column;gap:10px;padding:16px 14px;text-align:left;color:#fff;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);transition:background .15s ease,transform .1s ease}
+.modeCard:hover{background:rgba(255,255,255,.09)}
+.modeCard:active{transform:scale(.98)}
+.modeCard.drive{background:rgba(43,232,79,.14);border-color:var(--go);box-shadow:0 0 20px rgba(43,232,79,.2)}
+.mcTitle{font-family:'AGC';font-weight:800;font-size:22px;text-transform:uppercase}
+.modeCard.drive .mcTitle{color:var(--go)}
+.mcSub{font-weight:500;font-size:11px;line-height:1.2;color:rgba(255,255,255,.5)}
+@media (max-width:600px){.modeCards{flex-direction:column;gap:9px}.modeCard{flex-direction:row;align-items:center;gap:14px;padding:13px 14px}.modeCard svg{flex:0 0 auto}.modeCard .mcTitle{font-size:18px}.modeCard .mcSub{margin-left:auto;text-align:right}}
 #shiftLock.on{background:var(--poppy);border-color:transparent}
 
 /* ---- Google 3D Tiles attribution (required when photoreal is shown) ---- */
@@ -409,14 +428,21 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 @media (prefers-reduced-motion:reduce){.stickRing.pulse{animation:none}}
 .poiBadge{margin-top:12px;font-size:12.5px;font-weight:700;color:#ffcf66;opacity:.95}
 
-/* ---- loading ---- */
-#loading{position:fixed;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;
-  background:#1a1d22;color:var(--txt);z-index:10;transition:opacity .5s ease;
-  font-family:'Bricolage Grotesque',system-ui,sans-serif}
+/* ---- loading (cinematic dusk → square nav-app) ---- */
+#loading{position:fixed;inset:0;display:grid;place-items:center;background:#0a0c12;z-index:60;transition:opacity .5s ease;
+  font-family:'Chakra Petch',system-ui,sans-serif;color:#fff}
+#loading::before{content:'';position:absolute;inset:0;opacity:.4;
+  background:linear-gradient(180deg,#0a1024 0%,#26315c 55%,#6e4f76 78%,#d77f4f 100%)}
+#loading::after{content:'';position:absolute;left:0;right:0;bottom:0;height:34%;background:#0a0c12}
 #loading.done{opacity:0;pointer-events:none}
-#loading .dot{width:10px;height:10px;border-radius:50%;background:var(--poppy);animation:pulse 1s ease infinite}
-#loading span{font-size:13px;font-weight:500;opacity:.7}
-@keyframes pulse{50%{transform:scale(1.6);opacity:.5}}
+.loadInner{position:relative;text-align:center}
+.loadKick{font-weight:600;font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--nav);margin-bottom:14px}
+.loadTitle{font-family:'AGC';font-weight:900;font-size:clamp(40px,11vw,58px);line-height:.84;letter-spacing:-.01em;text-transform:uppercase}
+.loadBar{position:relative;margin:26px auto 0;width:min(62vw,260px);height:5px;background:rgba(255,255,255,.14);overflow:hidden}
+.loadBar i{position:absolute;top:0;left:0;height:100%;width:35%;background:linear-gradient(90deg,var(--nav),#7fc0ff);animation:loadSlide 1.25s ease-in-out infinite}
+@keyframes loadSlide{0%{left:-35%}100%{left:100%}}
+.loadSub{font-weight:500;font-size:12px;color:rgba(255,255,255,.6);margin-top:12px}
+@media (prefers-reduced-motion:reduce){.loadBar i{animation:none;width:60%}}
 
 @media (prefers-reduced-motion:reduce){ #loading .dot{animation:none} .btn{transition:none} }
 @media (max-width:480px){ #title h1{font-size:16px} #hint{display:none} #btns{width:132px} }

@@ -175,8 +175,12 @@ export default function App() {
   return (
     <>
       <div id="loading" className={(ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
-        <div className="dot" />
-        <span>Loading the neighborhood…</span>
+        <div className="loadInner">
+          <div className="loadKick">1840 Dahill Lane</div>
+          <div className="loadTitle">Neighborhood<br />Drive</div>
+          <div className="loadBar"><i /></div>
+          <div className="loadSub">Building the neighborhood…</div>
+        </div>
       </div>
       <canvas
         id="scene" ref={canvasRef} tabIndex={0}
@@ -185,15 +189,33 @@ export default function App() {
       <div id="fx" ref={el => (uiRefs.current.fx = el)} />
       {ready && picking && (
         <div id="startMenu">
-          <div className="startCard">
-            <h1><em>1840</em> Dahill Lane</h1>
-            <p>Choose how to explore</p>
-            <div className="startBtns">
-              <button className="btn primary" onClick={() => setPicking(false)}>🛰️ Explore</button>
-              <button className="btn primary" onClick={() => { setPicking(false); eng().enterDrive(); }}>🏎️ Drive</button>
-              <button className="btn primary" onClick={() => { setPicking(false); eng().enterScoop(); }}>💩 Scoop</button>
+          <div className="menuSheet startSheet">
+            <div className="menuHead">
+              <div>
+                <div className="menuKick">Welcome back</div>
+                <h1 className="menuTitle">1840 Dahill<br />Lane</h1>
+              </div>
+              {poi.found > 0 && (
+                <div className="placesBadge">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--go)" strokeWidth="2.2" strokeLinecap="round"><path d="M12 21s-7-5.2-7-11a7 7 0 0 1 14 0c0 5.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.2" /></svg>
+                  <span className="pbNum">{poi.found}<i>/{poi.total}</i></span><span className="pbLbl">places found</span>
+                </div>
+              )}
             </div>
-            {poi.found > 0 && <p className="poiBadge">🏆 {poi.found}/{poi.total} neighborhood places found{poi.found < poi.total ? ' — drive to the rest!' : ' — all done! 🎉'}</p>}
+            <div className="modeCards">
+              <button className="modeCard" onClick={() => setPicking(false)}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+                <span className="mcTitle">Explore</span><span className="mcSub">Free look around</span>
+              </button>
+              <button className="modeCard drive" onClick={() => { setPicking(false); eng().enterDrive(); }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--go)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /><circle cx="7.5" cy="17.5" r="1.4" /><circle cx="16.5" cy="17.5" r="1.4" /></svg>
+                <span className="mcTitle">Drive</span><span className="mcSub">Arcade controls</span>
+              </button>
+              <button className="modeCard" onClick={() => { setPicking(false); eng().enterScoop(); }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12a7 7 0 0 1 14 0v5H5z" /><path d="M9 17v3M15 17v3" /></svg>
+                <span className="mcTitle">Scoop</span><span className="mcSub">Collect &amp; deliver</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -427,19 +449,18 @@ export default function App() {
               </div>
             )}
             {carPicker && (
-              <div id="carPicker" className="startCard">
-                <h3>Choose your ride</h3>
+              <div id="carPicker" className="menuSheet">
+                <div className="menuHead"><h3 className="cpTitle">Choose your ride</h3><button className="navX" aria-label="Close" onClick={() => setCarPicker(false)}>✕</button></div>
                 <div className="carList">
                   {cars.map(c => (
                     <button key={c.slot} className={'carRow' + (c.current ? ' current' : '') + (c.locked ? ' locked' : '')} disabled={!c.loaded || c.locked}
                       onClick={() => { eng().pickCar(c.slot); setCars(eng().getCars()); if (!c.locked) setCarPicker(false); }}>
-                      <span className="carName">{c.locked ? '🔒 ' : ''}{c.name}{c.current ? ' ✓' : ''}</span>
-                      <span className="carSpec">{c.spec}</span>
-                      <span className="carCredit">{c.locked ? 'find all 5 places to unlock' : (c.loaded ? c.credit : 'loading…')}</span>
+                      <span className="carThumb"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /><circle cx="7.5" cy="17.5" r="1.4" /><circle cx="16.5" cy="17.5" r="1.4" /></svg></span>
+                      <span className="carInfo"><span className="carName">{c.name}</span><span className="carSpec">{c.locked ? 'Find all 5 places to unlock' : (c.loaded ? c.credit : 'loading…')}</span></span>
+                      <span className="carTag">{c.locked ? '🔒' : c.current ? '✓ ON' : c.spec}</span>
                     </button>
                   ))}
                 </div>
-                <button className="btn navClose" onClick={() => setCarPicker(false)}>Close</button>
               </div>
             )}
           </div>
