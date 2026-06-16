@@ -27,6 +27,10 @@ import battistaUrl from '../assets/battista.glb';
 export function createEngine({ canvas, ui, emit }) {
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const toast = (html, ms) => emit('toast', { html, ms: ms || 1800 });
+  // The toast is rendered via dangerouslySetInnerHTML, so any dynamic value that can carry
+  // user/network text (geocoded addresses, place names) MUST be escaped before it goes in.
+  // Static literals in toast() calls don't need this; only interpolated place/address text does.
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ?lite : no shadows + 1x pixel ratio — for older phones and for headless
   //         verification, where software WebGL grinds at 1-5 fps otherwise.
@@ -281,7 +285,7 @@ export function createEngine({ canvas, ui, emit }) {
     autoDrive = false;
     setDestination(best.lat, best.lon, best.label, true);
     if (DEST) DEST.poiKey = best.key;   // tag so the chain only continues for places you chose
-    toast('🏁 Next stop: floor it to ' + best.label + ' — follow the pink beam! 🏁', 2600);
+    toast('🏁 Next stop: floor it to ' + esc(best.label) + ' — follow the pink beam! 🏁', 2600);
   }
   function checkPOIs(now) {
     for (const poi of POIS) {
@@ -475,7 +479,9 @@ export function createEngine({ canvas, ui, emit }) {
 
   // the finish-line moment: a big gold burst, a fanfare, a beat of slow-mo + flash, and
   // an 'ARRIVED' card. Fires for reaching a real place (or any nav destination).
+  let arriveCenterT = 0;   // while now < this, the drive cams zero their look-ahead so the car frames dead-centre on arrival
   function arriveCelebrate(label, points, now) {
+    arriveCenterT = now + 2600;
     const y = car.group ? car.group.position.y : 1;
     for (let k = 0; k < 4; k++) spawnCoinBurst(car.x + (k - 1.5) * 1.2, car.z, y, now);   // ~24 sparks
     if (audio.sfxChime) audio.sfxChime([523, 659, 784, 1047, 1319]);
@@ -1689,7 +1695,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ROUTE) snapDestinationToRouteEnd(ROUTE);
     destPin.userData.groundY = null;
     emit('dest', { label: DEST.label });
-    if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200); }
+    if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + esc(DEST.label) + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
     if (opts.drive) {
       autoDrive = true; inp2.navActive = false;
@@ -1833,7 +1839,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (np && np.d < 40) { car.x = np.x; car.z = np.z; }
     clearDestination();
     camInit = false; recoverCooldown = 1.8;
-    toast('📍 Jumped to ' + (label || 'there'), 1500);
+    toast('📍 Jumped to ' + esc(label || 'there'), 1500);
   }
   // Destination by address / place — geocode then route there (and auto-drive on request).
   function setDestinationByText(text, drive) {
@@ -1853,6 +1859,10 @@ export function createEngine({ canvas, ui, emit }) {
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
   let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
   function setAutoMaxMph(mph) { autoMaxMph = Math.max(0, mph | 0); try { localStorage.setItem('dahill.automax', String(autoMaxMph)); } catch (e) { } emit('automax', autoMaxMph); }
+  // Global driving-speed/accel multiplier (settings slider). Scales top speed AND accel so the
+  // whole envelope slows together — a parent can dial it down for little kids on tight streets.
+  let speedMul = (() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } })();
+  function setSpeedMul(v) { speedMul = clamp(+v || 1, 0.3, 2); try { localStorage.setItem('dahill.speedmul', String(speedMul)); } catch (e) { } }
   // Tap-to-drive from the minimap: set a raw world point as the destination and let
   // the robot drive there (no Google route needed for a nearby local point). Reuses
   // DEST + auto-drive, so the guide ribbon, pin, ETA and arrival all just work.
@@ -2310,7 +2320,7 @@ export function createEngine({ canvas, ui, emit }) {
     // Stick-only "auto-creep": cruise GENTLY toward ~18 u/s (≈40 mph) instead of
     // flooring it — a kid who only steers should roll at a corner-able pace, never
     // pin to the 220 mph top end. Push up for the real speed.
-    else if (Math.abs(jx) > 0.05) throttleTarget = clamp((18 - car.speed) / 18, 0, 0.5);
+    else if (Math.abs(jx) > 0.05) throttleTarget = clamp((13 - car.speed) / 13, 0, 0.42);   // steer-only: roll at a gentle, corner-able pace
     // ANALOG pedal: squeeze the throttle up over ~0.4 s and bleed it off faster, so the
     // gas feels like a pedal you press (feather power out of a slide), not a switch.
     const cur = car.throttle || 0;
@@ -2409,8 +2419,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); if (!reduceMotion) { shakeMag = Math.max(shakeMag, 0.6); if (ui.fx) { ui.fx.classList.add('boost'); setTimeout(() => ui.fx && ui.fx.classList.remove('boost'), 160); } } } }   // hard-earned nitro gets a real punch: camera kick + a brief flash
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
-    let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul; const maxR = -11;   // highway = supersonic; lawns crawl
-    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 330 * boostMul);   // the chauffeur can hit ~700 mph on a clear straight
+    let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
+    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 330 * boostMul * speedMul);   // the chauffeur can hit ~700 mph on a clear straight
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -2422,11 +2432,16 @@ export function createEngine({ canvas, ui, emit }) {
     // a soft coast when you lift above it. So light pedal SETTLES at a low cruise (precise
     // manoeuvring) while flooring it pulls hard to the top (fast) — and because it eases in
     // as you approach the target, it never overshoots off the road.
-    const pedalTgt = Math.pow(throttle, 2.4) * maxF;                 // curved pedal → target speed; steeper = easy SLOW crawl at the bottom
+    // Driving BY HAND gets a steeper pedal curve (a feather of gas = a true slow crawl you can
+    // hold on a residential street) and a softer accel cap, so building speed takes longer and
+    // is controllable; flooring it still reaches the same top. Auto-drive keeps the snappier
+    // numbers so the chauffeur still makes good time.
+    const manual = !autoDrive;
+    const pedalTgt = Math.pow(throttle, manual ? 3.0 : 2.4) * maxF;  // curved pedal → target speed; steeper = easier SLOW crawl at the bottom
     const aGap = pedalTgt - car.speed;
-    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul;   // peak engine pull (cap)
-    let acc = clamp(aGap * (aGap > 0 ? 2.6 : 0.9), -aMax, aMax);     // chase target; gentler on lift-off coast
-    if (aGap > 0) acc *= 0.75 + 0.25 * clamp(Math.abs(car.speed) / 6, 0, 1);   // gentle off-the-line ramp (the ^2.4 pedal curve already kills standstill jerk) — keeps a floored stab feeling punchy, not sluggish
+    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul * speedMul * (manual ? 0.62 : 1);   // peak engine pull (cap); manual builds speed more gradually
+    let acc = clamp(aGap * (aGap > 0 ? (manual ? 1.7 : 2.6) : 0.9), -aMax, aMax);     // chase target; gentler manual pull + lift-off coast
+    if (aGap > 0) acc *= 0.75 + 0.25 * clamp(Math.abs(car.speed) / 6, 0, 1);   // gentle off-the-line ramp — keeps a floored stab feeling punchy, not sluggish
     // PROGRESSIVE brake: ramp the brake force in over ~0.25 s so a quick tap trail-brakes
     // lightly (corner-entry finesse) while a long hold still hauls it down hard.
     const braking = brake > 0.1;
@@ -2601,9 +2616,15 @@ export function createEngine({ canvas, ui, emit }) {
     if (yr != null && car.groundY < yr - 0.8) car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up
     const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
-    const tF = actorGroundY(car.x + fx * 1.4, car.z + fz * 1.4, car.groundY), tB = actorGroundY(car.x - fx * 1.4, car.z - fz * 1.4, car.groundY);
-    const tR = actorGroundY(car.x + rxv * 0.9, car.z + rzv * 0.9, car.groundY), tL = actorGroundY(car.x - rxv * 0.9, car.z - rzv * 0.9, car.groundY);
-    const pitch = Math.atan2(tB - tF, 2.8), roll = Math.atan2(tR - tL, 1.8);
+    // The 4 corner probes feed only the visual pitch/roll, which tolerates a lower rate, so
+    // refresh these tile raycasts ~every 3rd frame and reuse the result between. (These were
+    // the single biggest per-frame CPU cost on mobile — 4 brute-force tile casts every frame.)
+    if ((car._tiltTick = (car._tiltTick | 0) + 1) % 3 === 0 || car._pitchS == null) {
+      const tF = actorGroundY(car.x + fx * 1.4, car.z + fz * 1.4, car.groundY), tB = actorGroundY(car.x - fx * 1.4, car.z - fz * 1.4, car.groundY);
+      const tR = actorGroundY(car.x + rxv * 0.9, car.z + rzv * 0.9, car.groundY), tL = actorGroundY(car.x - rxv * 0.9, car.z - rzv * 0.9, car.groundY);
+      car._pitchS = Math.atan2(tB - tF, 2.8); car._rollS = Math.atan2(tR - tL, 1.8);
+    }
+    const pitch = car._pitchS, roll = car._rollS;
     car.group.position.set(car.x, yC + 0.06, car.z);
     car.group.rotation.set(0, 0, 0);
     // point the body slightly into the slide so drifts read visually
@@ -2619,6 +2640,9 @@ export function createEngine({ canvas, ui, emit }) {
     car.dispScale = car.dispScale == null ? dispTarget : car.dispScale + (dispTarget - car.dispScale) * (1 - Math.exp(-dt * 6));
     car.group.scale.setScalar(car.dispScale);
     const overhead = _camV.aerial || _camV.topdown;
+    // On arrival, briefly ease the camera's look-ahead to 0 so the car frames DEAD-CENTRE
+    // (the constant look-ahead otherwise leaves it offset toward the bottom even when stopped).
+    const aheadScale = 1 - (arriveCenterT && now < arriveCenterT ? clamp((arriveCenterT - now) / 1400, 0, 1) : 0);
     carLocator.visible = overhead;
     if (overhead) {
       carLocator.position.set(car.x, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, car.z);
@@ -2756,7 +2780,7 @@ export function createEngine({ canvas, ui, emit }) {
       const lagMax = r * 0.45, dxc = camV.x - camT.x, dzc = camV.z - camT.z, lc = Math.hypot(dxc, dzc);
       if (lc > lagMax) { const f = lagMax / lc; camV.x = camT.x + dxc * f; camV.z = camT.z + dzc * f; }
       camera.position.copy(camV);
-      camera.lookAt(car.x + fx * sp * 26, camGroundRef + 1, car.z + fz * sp * 26);   // bias the gaze where you're heading
+      camera.lookAt(car.x + fx * sp * 26 * aheadScale, camGroundRef + 1, car.z + fz * sp * 26 * aheadScale);   // bias the gaze where you're heading (→ centred on arrival)
       const fovT = 46 + 5 * sp;
       camera.fov += (fovT - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix();
     } else if (DRIVE_CAMS[camMode].topdown) {
@@ -2773,7 +2797,7 @@ export function createEngine({ canvas, ui, emit }) {
       camera.position.copy(camV);
       camera.up.set(fx, 0, fz); // heading-up
       const spHiT = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
-      const ahead = CAM.ahead + sp * sp * 16 + spHiT * 14;     // see further down the road flat-out
+      const ahead = (CAM.ahead + sp * sp * 16 + spHiT * 14) * aheadScale;     // see further down the road flat-out (→ centred on arrival)
       camera.lookAt(car.x + fx * ahead, yC, car.z + fz * ahead);
       const fovT = 46 + 9 * sp + 12 * spHiT;                   // a real widen when truly flying
       camera.fov += (fovT - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix();
@@ -2818,9 +2842,9 @@ export function createEngine({ canvas, ui, emit }) {
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
       // lead from the drift/steer, so on a hard corner the car slides toward the edge of
       // frame then snaps back. Sells corners far more than a rigid lookAt.
-      const lookAhead = CAM.ahead + sp * 6;
+      const lookAhead = (CAM.ahead + sp * 6) * aheadScale;   // → centred on arrival
       const rpxL = Math.cos(car.yaw), rpzL = -Math.sin(car.yaw);
-      const latLead = (car.vlat * 0.05 + car.steer * 2.0) * (1 - 0.3 * sp);
+      const latLead = (car.vlat * 0.05 + car.steer * 2.0) * (1 - 0.3 * sp) * aheadScale;
       _lookT.set(car.x + fx * lookAhead + rpxL * latLead, yC + 1.0, car.z + fz * lookAhead + rpzL * latLead);
       if (!_lookV) _lookV = _lookT.clone(); else _lookV.lerp(_lookT, 1 - Math.exp(-7 * dt));
       camera.up.set(0, 1, 0);
@@ -2876,13 +2900,26 @@ export function createEngine({ canvas, ui, emit }) {
     const h = vv ? Math.round(vv.height) : document.documentElement.clientHeight || innerHeight;
     return [Math.max(1, w), Math.max(1, h)];
   }
+  let _rw = 0, _rh = 0, _resizeRaf = 0;
   function resize() {
     const [w, h] = viewportSize();
+    _rw = w; _rh = h;
     renderer.setSize(w, h, false);
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
     if (ui.box) { ui.box.style.width = w + 'px'; ui.box.style.height = h + 'px'; }
     camera.aspect = w / h; camera.updateProjectionMatrix();
     if (p3dtiles) p3dtiles.setResolutionFromRenderer(camera, renderer);
+  }
+  // rAF-coalesced resize for the event listeners. On iOS, visualViewport 'scroll' fires
+  // continuously during the URL-bar show/hide, and a raw resize() per event churns the GL
+  // viewport + tile-resolution recompute mid-gesture. Skip when the size hasn't changed.
+  function requestResize() {
+    if (_resizeRaf) return;
+    _resizeRaf = requestAnimationFrame(() => {
+      _resizeRaf = 0;
+      const [w, h] = viewportSize();
+      if (w !== _rw || h !== _rh) resize();
+    });
   }
 
   // ---------- loop ----------
@@ -2973,10 +3010,10 @@ export function createEngine({ canvas, ui, emit }) {
   addEventListener('pageshow', resume); addEventListener('resume', resume);
   addEventListener('keydown', onKeyDown);
   addEventListener('keyup', onKeyUp);
-  addEventListener('resize', resize);
+  addEventListener('resize', requestResize);
   if (window.visualViewport) {
-    visualViewport.addEventListener('resize', resize);
-    visualViewport.addEventListener('scroll', resize);
+    visualViewport.addEventListener('resize', requestResize);
+    visualViewport.addEventListener('scroll', requestResize);
   }
   resize();
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
@@ -3012,11 +3049,12 @@ export function createEngine({ canvas, ui, emit }) {
     removeEventListener('pageshow', resume); removeEventListener('resume', resume);
     removeEventListener('keydown', onKeyDown);
     removeEventListener('keyup', onKeyUp);
-    removeEventListener('resize', resize);
+    removeEventListener('resize', requestResize);
     if (window.visualViewport) {
-      visualViewport.removeEventListener('resize', resize);
-      visualViewport.removeEventListener('scroll', resize);
+      visualViewport.removeEventListener('resize', requestResize);
+      visualViewport.removeEventListener('scroll', requestResize);
     }
+    cancelAnimationFrame(_resizeRaf);
     audio.engineStop();
     if (audio.stopMusic) audio.stopMusic();      // kill the 30ms music scheduler interval (was leaking)
     if (audio.close) audio.close();              // close the AudioContext so it isn't left running
@@ -3063,6 +3101,7 @@ export function createEngine({ canvas, ui, emit }) {
     driveToText: (text) => setDestinationByText(text, true),
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
+    setSpeedMul, getSpeedMul: () => speedMul,
     preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
     initMiniMap,                                         // mount the live Google minimap into a div
     setHandbrake: (on) => { inp2.hbrake = !!on; },
