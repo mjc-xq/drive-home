@@ -291,6 +291,7 @@ export function setVehicle(car, slot) {
   if (!car.models[slot]) return null;
   car.userPicked = true;
   car.modelIdx = slot;
+  car.pendingPick = null;   // a resolved pick cancels any earlier lazy pending pick (else that one would hijack the car when its GLB finally arrives)
   showOnly(car, slot);
   return car.models[slot];
 }
@@ -302,7 +303,7 @@ export function vehicleList(car) {
 // Advance to the next loaded vehicle; returns its meta (or null if none loaded).
 export function cycleVehicle(car) {
   const loaded = car.models.map((m, i) => (m ? i : -1)).filter(i => i >= 0);
-  if (!loaded.length) return null;
+  if (loaded.length <= 1) return null;   // with lazy loading only a couple are loaded — nothing to cycle to (caller points the player at the garage)
   car.userPicked = true;
   const next = loaded[(loaded.indexOf(car.modelIdx) + 1) % loaded.length];
   car.modelIdx = next;

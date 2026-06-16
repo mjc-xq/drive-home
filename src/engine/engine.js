@@ -949,6 +949,7 @@ export function createEngine({ canvas, ui, emit }) {
   const CROWD_VIS_CAP = 16;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
   const SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
   const CROWD_POOL_CAP = 120;     // total persistent clones at density 1 (×D). Spread EVENLY across the whole hood; the visibility cap keeps only the nearest 16 animating, so this stays cheap while looking populated everywhere. Bounds boot-time SkeletonUtils.clone cost.
+  let _crowdReplaceT = 0, _crowdVisT = 0;   // debounce the slider re-pool; throttle the nearest-N visibility scan
   function placeCrowd() {
     const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
       if (!crowd) return;
@@ -1036,7 +1037,11 @@ export function createEngine({ canvas, ui, emit }) {
   function setCrowdDensity(v) {
     CROWD_DENSITY = clamp(+v || 0, 0, 2);
     try { localStorage.setItem('dahill.peddensity', String(CROWD_DENSITY)); } catch (e) { }
-    if (ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); }   // re-place at the new density (both rigs loaded)
+    // DEBOUNCE the re-pool: a slider drag fires every step, and clearCrowd()+placeCrowd()
+    // re-clones the whole pedestrian pool (skinned-mesh clones) — doing that per step stalls the
+    // main thread. Re-pool once, ~220 ms after the drag settles.
+    clearTimeout(_crowdReplaceT);
+    _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
     return CROWD_DENSITY;
   }
   let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
@@ -1065,22 +1070,22 @@ export function createEngine({ canvas, ui, emit }) {
     if (inScoop) {
       for (const sp of crowdSpots) sp.rec.grp.visible = sp.zone === 'yard';
     } else if (inDrive) {
-      // VISIBILITY CAP: with a big spread-out pool we can't animate them all (skinned meshes are
-      // costly). Show only the nearest CROWD_VIS_CAP within a cull radius — bounds per-frame cost
-      // to N regardless of how many pedestrians exist across the map.
-      const CULL2 = 240 * 240;
-      const cand = [];
-      for (const sp of crowdSpots) {
-        if (sp.zone === 'yard') { sp.rec.grp.visible = false; continue; }
-        const d2 = (sp.rec.x - car.x) ** 2 + (sp.rec.z - car.z) ** 2;
-        if (d2 < CULL2) cand.push({ sp, d2 }); else sp.rec.grp.visible = false;
+      // VISIBILITY CAP: with a spread-out pool we can't animate them all (skinned meshes are
+      // costly). Show only the nearest CROWD_VIS_CAP within a cull radius — bounds the per-frame
+      // mixer work to N. The scan/sort itself is throttled to ~9 Hz (pedestrians barely move).
+      if (now - _crowdVisT > 110) {
+        _crowdVisT = now;
+        const CULL2 = 240 * 240;
+        const cand = [];
+        for (const sp of crowdSpots) {
+          if (sp.zone === 'yard') { sp.rec.grp.visible = false; continue; }
+          const d2 = (sp.rec.x - car.x) ** 2 + (sp.rec.z - car.z) ** 2;
+          if (d2 < CULL2) cand.push({ sp, d2 }); else sp.rec.grp.visible = false;
+        }
+        cand.sort((a, b) => a.d2 - b.d2);
+        for (let i = 0; i < cand.length; i++) cand[i].sp.rec.grp.visible = i < CROWD_VIS_CAP;
       }
-      cand.sort((a, b) => a.d2 - b.d2);
-      for (let i = 0; i < cand.length; i++) {
-        const vis = i < CROWD_VIS_CAP;
-        cand[i].sp.rec.grp.visible = vis;
-        if (vis) settleCrowdSpot(cand[i].sp, dt);
-      }
+      for (const sp of crowdSpots) if (sp.rec.grp.visible) settleCrowdSpot(sp, dt);   // settle ground height each frame for the visible few
     } else {
       for (const sp of crowdSpots) sp.rec.grp.visible = false;
     }
@@ -1177,7 +1182,7 @@ export function createEngine({ canvas, ui, emit }) {
     emit('carCard', { name: meta.name, spec: meta.spec, credit: meta.credit || '' });
   }
   function cycleCar() {
-    if (!cycleVehicle(car)) { toast('Only one vehicle loaded'); return; }
+    if (!cycleVehicle(car)) { toast('Open the garage (☰ → Cars) to pick another ride'); return; }
     showCarCard();
     audio.blip();
   }
@@ -2684,7 +2689,7 @@ export function createEngine({ canvas, ui, emit }) {
     // (up to ~7 u/s ≈ 15 mph) you can HOLD for precise manoeuvring, instead of the cube curve's
     // near-zero-then-lunge bottom. Above that the cube curve takes over toward the top; floored
     // (throttle=1) the cube far exceeds the crawl band, so top speed is untouched.
-    const fine = manual ? Math.min(throttle, 0.18) / 0.18 * 7 : 0;
+    const fine = manual ? Math.min(throttle, 0.18) / 0.18 * Math.min(7, maxF * 0.5) : 0;   // cap the crawl band under maxF so a tiny lawn/slow-car maxF doesn't flat-line the upper pedal
     const pedalTgt = Math.max(fine, Math.pow(throttle, manual ? 3.4 : 2.4) * maxF);  // curved pedal → target speed; steeper manual = easier SLOW crawl at the bottom
     const aGap = pedalTgt - car.speed;
     const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul * speedMul * (manual ? 0.50 : 1);   // peak engine pull (cap); manual builds speed more gradually (gentler off the line)
@@ -2793,7 +2798,9 @@ export function createEngine({ canvas, ui, emit }) {
     // the collision below collapses every move candidate to its own spot (can't budge in any
     // gear). If we're already inside one, snap back to the road now (resetToRoad uses the live
     // route far from home); the heading is re-derived from the corrected state just below.
-    if (insideBuilding(car.x, car.z)) resetToRoad();
+    // Gate on recoverCooldown so it can't 60 Hz-spam (blip/toast/reset) if a snap point ever
+    // lands back inside a footprint — it retries at most every ~1.8 s instead.
+    if (recoverCooldown <= 0 && insideBuilding(car.x, car.z)) resetToRoad();
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -3315,7 +3322,7 @@ export function createEngine({ canvas, ui, emit }) {
   function dispose() {
     disposed = true;
     cancelAnimationFrame(raf);
-    clearTimeout(t1); clearTimeout(t2);
+    clearTimeout(t1); clearTimeout(t2); clearTimeout(_crowdReplaceT);
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerEnd);
