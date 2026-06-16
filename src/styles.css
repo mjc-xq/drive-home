@@ -119,11 +119,15 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .scoreStrip.onFire .tripNum{color:var(--coin)}
 @keyframes firePulseShadow{0%,100%{box-shadow:0 0 0 0 rgba(255,120,30,.5)}50%{box-shadow:0 0 20px 3px rgba(255,120,30,.85)}}
 
-.miniFrame{position:relative;width:116px;height:100px;overflow:hidden;border:1px solid rgba(255,255,255,.22);
+.miniFrame{position:relative;width:168px;height:140px;overflow:hidden;border:1px solid rgba(255,255,255,.22);
   box-shadow:0 8px 22px rgba(0,0,0,.5);background:#1f303d;cursor:pointer}
-.miniFrame #minimap{position:absolute;inset:0;width:116px;height:100px;display:block;cursor:pointer}
+.miniFrame #minimap{position:absolute;inset:0;width:168px;height:140px;display:block;cursor:pointer}
 .miniFrame #gmap{position:absolute;inset:0;z-index:2;pointer-events:auto;cursor:pointer;background:#1b2027}
 .miniFrame #gmap:empty{display:none}   /* before the map mounts, let the canvas fallback show */
+/* The minimap is tiny; the Google "Map data / Terms" bar + logo cover most of it. Hide them
+   here — the required Google attribution still shows full-size in the #credits line below. */
+.miniFrame #gmap .gm-style-cc,.miniFrame #gmap a[href^="https://maps.google"],
+.miniFrame #gmap a[href*="maps.google.com"],.miniFrame #gmap img[alt="Google"]{display:none!important}
 .miniTag{position:absolute;left:6px;top:5px;z-index:3;font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.14em;color:rgba(255,255,255,.8);text-shadow:0 1px 2px #000;pointer-events:none}
 .miniHint{font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.62)}
 
@@ -257,7 +261,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .addrGo:active{transform:translateY(1px)}
 .addrGo:disabled{opacity:.6}
 .addrSug{list-style:none;margin:7px 0 0;padding:5px;position:absolute;left:0;right:0;top:100%;z-index:5;
-  background:rgba(12,14,20,.99);border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 36px rgba(0,0,0,.55);max-height:220px;overflow-y:auto}
+  background:rgba(12,14,20,.99);border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 36px rgba(0,0,0,.55);max-height:220px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .addrSug li button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:10px 11px;border:0;
   background:transparent;color:rgba(255,255,255,.92);font-family:'Chakra Petch';font-size:13.5px;line-height:1.25;cursor:pointer}
 .addrSug li button:hover,.addrSug li button:active{background:rgba(45,140,255,.16)}
@@ -277,7 +281,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* ---- car picker (square nav-app sheet) ---- */
 #carPicker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;width:min(92vw,380px);max-height:84vh;display:flex;flex-direction:column;overflow:hidden;pointer-events:auto}
 .cpTitle{font-family:'AGC';font-weight:800;font-size:22px;text-transform:uppercase;letter-spacing:0;margin:0}
-.carList{display:flex;flex-direction:column;overflow-y:auto;margin-top:6px}
+.carList{display:flex;flex-direction:column;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;margin-top:6px}
 .carRow{display:flex;align-items:center;gap:13px;text-align:left;padding:12px 14px;border:0;border-top:1px solid rgba(255,255,255,.08);background:transparent;color:#fff;cursor:pointer;font-family:'Chakra Petch'}
 .carRow:first-child{border-top:0}
 .carRow:hover:not(:disabled){background:rgba(255,255,255,.05)}
@@ -508,7 +512,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   .dashSpeed b{font-size:46px}
   .dashCol{padding:0 11px}
   /* the expandable menu can be tall — let it scroll instead of running off-screen */
-  .segMenuPanel{max-height:calc(100dvh - 140px - var(--safe-t) - var(--safe-b));overflow-y:auto}
+  .segMenuPanel{max-height:calc(100dvh - 140px - var(--safe-t) - var(--safe-b));overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 }
 
 @media (max-width:520px){
