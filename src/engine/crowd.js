@@ -114,6 +114,9 @@ function makeCrowd(base, clips, nativeH, moveNames, innerYaw, hitNames = []) {
       }
     },
     dispose() { for (const i of insts) { i.mixer.stopAllAction(); if (i.grp.parent) i.grp.parent.remove(i.grp); } insts.length = 0; },
+    // Like dispose but reusable: drop every instance so the engine can re-place a fresh pool
+    // (used when the pedestrian-density slider changes). The base rig + clips stay loaded.
+    removeAll() { for (const i of insts) { i.mixer.stopAllAction(); if (i.grp.parent) i.grp.parent.remove(i.grp); } insts.length = 0; },
   };
 }
 

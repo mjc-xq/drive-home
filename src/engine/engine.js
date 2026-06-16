@@ -114,6 +114,9 @@ export function createEngine({ canvas, ui, emit }) {
   let soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   let roadLifeOn = (() => { try { return localStorage.getItem('dahill.roadlife') !== '0'; } catch (e) { return true; } })();   // pedestrians + traffic on by default
+  let trafficDensity = (() => { try { const v = parseFloat(localStorage.getItem('dahill.trafficdensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();   // traffic amount slider (0..2, 1 = default)
+  const TRAFFIC_MAX = 18;   // hard pool ceiling (perf); density scales how many are ACTIVE
+  const trafficActiveCount = () => Math.round(clamp(trafficDensity, 0, 2) / 2 * TRAFFIC_MAX);   // d:0→0, d:1→9, d:2→18
   // Soft-wall / gravity-well that keeps the car on the street: past LANE_HALF metres off the
   // nearest road it gets pulled back, ramping in softly and clamped to WALL_MAX m/s so it never
   // overpowers a deliberate drive (and fades as the player steers).
@@ -363,13 +366,13 @@ export function createEngine({ canvas, ui, emit }) {
   const modelLoadCancels = [];
   const traffic = [];
   {
-    const tSegs = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 330 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);
+    const tSegs = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 700 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);   // wider radius so the bigger pool covers outer streets too
     const cols = [0xb53a32, 0x2f5fb0, 0xd9d9d9, 0x2a2a2a, 0xd6a52e, 0x3f9e63, 0x8a8f96];
     const bodyGeo = new THREE.BoxGeometry(1.9, 1.0, 4.0), cabGeo = new THREE.BoxGeometry(1.6, 0.72, 1.9);
     // shared materials: one cab + 7 body colours, reused across all cars (was 22 clones)
     const bodyMats = cols.map(c => new THREE.MeshStandardMaterial({ color: c, metalness: 0.35, roughness: 0.55 }));
     const cabMat = new THREE.MeshStandardMaterial({ color: 0x1b2735, metalness: 0.2, roughness: 0.35 });
-    for (let i = 0; i < 8 && tSegs.length; i++) {
+    for (let i = 0; i < TRAFFIC_MAX && tSegs.length; i++) {
       const g = new THREE.Group();
       const body = new THREE.Mesh(bodyGeo, bodyMats[i % bodyMats.length]); body.position.y = 0.6; body.castShadow = true;
       const cab = new THREE.Mesh(cabGeo, cabMat); cab.position.set(0, 1.18, -0.25);
@@ -428,8 +431,11 @@ export function createEngine({ canvas, ui, emit }) {
   let trafficTick = 0;
   function updateTraffic(dt, now) {
     if (!roadLifeOn) { hideTraffic(); return; }
+    const active = trafficActiveCount();
     trafficTick++;
-    for (const c of traffic) {
+    for (let ci = 0; ci < traffic.length; ci++) {
+      const c = traffic[ci];
+      if (ci >= active) { if (c.group.visible) c.group.visible = false; continue; }   // parked by the density slider
       const dx = c.b[0] - c.a[0], dz = c.b[1] - c.a[1], len = Math.hypot(dx, dz) || 1;
       const fdx = dx / len, fdz = dz / len, rgx = fdz, rgz = -fdx;   // forward + right (for lanes)
       let cxp = c.a[0] + dx * c.t, czp = c.a[1] + dz * c.t;          // centreline point
@@ -932,6 +938,12 @@ export function createEngine({ canvas, ui, emit }) {
   // distance-gated so only a handful animate at once (skinned meshes aren't cheap).
   let ceceCrowd = null, drewCrowd = null;
   const crowdSpots = [];   // { rec, zone }
+  // Pedestrian density (settings slider): scales the spread-out pool size. 1 = default.
+  let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
+  const CROWD_VIS_CAP = 16;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
+  const SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
+  const SIDEWALK_STEP = 22;       // ~one pedestrian per 22 m of curb at density 1
+  const CROWD_POOL_CAP = 300;     // hard ceiling on persistent sidewalk+scatter clones (GPU/RAM guard)
   function placeCrowd() {
     const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
       if (!crowd) return;
@@ -952,13 +964,39 @@ export function createEngine({ canvas, ui, emit }) {
     // YARD (Scoop): a few CeCes + Drews dancing around the front yard (clear of the walls)
     for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + 0.5, r = 6 + i * 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * r, hz + Math.sin(a) * r); put(ceceCrowd, px, pz, 'yard', false); }
     for (let i = 0; i < 2; i++) { const a = i * 2.3 + 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * 8.5, hz + Math.sin(a) * 8.5); put(drewCrowd, px, pz, 'yard', false, { clip: 'dance' }); }
-    // STREETS near home (Drive): on the sidewalk beside nearby road segments, facing the road
-    const nearRoads = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2 - hx, (s[0][1] + s[1][1]) / 2 - hz) < 150 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 6);
-    for (let i = 0; i < Math.min(6, nearRoads.length); i++) {
-      const s = nearRoads[(i * 7 + 2) % nearRoads.length];
-      const mx = (s[0][0] + s[1][0]) / 2, mz = (s[0][1] + s[1][1]) / 2;
-      const dx = s[1][0] - s[0][0], dz = s[1][1] - s[0][1], L = Math.hypot(dx, dz) || 1, nx = -dz / L, nz = dx / L, side = (i % 2) ? 2.6 : -2.6;
-      put(i % 2 ? ceceCrowd : drewCrowd, mx + nx * side, mz + nz * side, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });
+    // STREETS (Drive): walk EVERY drivable road segment and drop pedestrians along its whole
+    // length, on randomized sidewalk offsets and either side — so they line the sidewalks
+    // across the WHOLE neighbourhood, not just near home. Denser slider → smaller spacing.
+    const D = CROWD_DENSITY;
+    let placed = 0;
+    if (D > 0) for (const s of roadSegs) {
+      const ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
+      const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
+      if (L < 6) continue;                                         // skip stubs
+      const ux = dx / L, uz = dz / L, nx = -uz, nz = ux;           // unit-along + unit-normal
+      const step = SIDEWALK_STEP / Math.max(0.25, D);
+      for (let t = step * 0.5; t < L; t += step) {
+        if (placed >= CROWD_POOL_CAP * D) break;
+        const jt = clamp(t + (Math.random() - 0.5) * step * 0.6, 0, L);   // jitter along the curb
+        const cx = ax + ux * jt, cz = az + uz * jt;
+        const side = Math.random() < 0.5 ? 1 : -1;                 // random side each time
+        const off = SIDEWALK_OFF + Math.random() * 1.4;
+        const px = cx + nx * side * off, pz = cz + nz * side * off;
+        if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
+        const crowd = (placed & 1) ? ceceCrowd : drewCrowd;
+        put(crowd, px, pz, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });   // face the road
+        placed++;
+      }
+      if (placed >= CROWD_POOL_CAP * D) break;
+    }
+    // SCATTER (Drive): random open-ground spots across the whole hood (yards/parks/verges) so
+    // pedestrians aren't only on the curb. terrainAt height (kept inside ±310 = the flat field).
+    const SCATTER = Math.round(60 * D);
+    for (let i = 0; i < SCATTER; i++) {
+      const px = (Math.random() - 0.5) * 620, pz = (Math.random() - 0.5) * 620;
+      if (Math.hypot(px, pz) < 28) continue;                       // not on top of the house
+      if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
+      put((i & 1) ? ceceCrowd : drewCrowd, px, pz, 'street', false);
     }
     // DESTINATIONS (Drive): every preset stop gets Drew/Cece right on or beside
     // the arrival point, so there is something visible and hittable when you get there.
@@ -974,6 +1012,19 @@ export function createEngine({ canvas, ui, emit }) {
         });
       }
     });
+  }
+  // Remove every placed pedestrian (stop mixers, detach groups, drop the clone pool) so a
+  // density change can re-place from scratch without leaking clones/mixers.
+  function clearCrowd() {
+    for (const sp of crowdSpots) { if (sp.rec.grp.parent) sp.rec.grp.parent.remove(sp.rec.grp); sp.rec.mixer.stopAllAction(); }
+    crowdSpots.length = 0;
+    if (ceceCrowd) ceceCrowd.removeAll(); if (drewCrowd) drewCrowd.removeAll();
+  }
+  function setCrowdDensity(v) {
+    CROWD_DENSITY = clamp(+v || 0, 0, 2);
+    try { localStorage.setItem('dahill.peddensity', String(CROWD_DENSITY)); } catch (e) { }
+    if (ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); }   // re-place at the new density (both rigs loaded)
+    return CROWD_DENSITY;
   }
   let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
   if (!flags.has('nochar')) {
@@ -998,11 +1049,27 @@ export function createEngine({ canvas, ui, emit }) {
     if (!crowdSpots.length) return;
     if (!roadLifeOn) { hideCrowd(); return; }
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
-    for (const sp of crowdSpots) {
-      const driveRange = sp.zone === 'street' ? 190 : 260;
-      sp.rec.grp.visible = sp.zone === 'yard' ? inScoop
-        : inDrive && Math.hypot(sp.rec.x - car.x, sp.rec.z - car.z) < driveRange;
-      if (sp.rec.grp.visible) settleCrowdSpot(sp, dt);
+    if (inScoop) {
+      for (const sp of crowdSpots) sp.rec.grp.visible = sp.zone === 'yard';
+    } else if (inDrive) {
+      // VISIBILITY CAP: with a big spread-out pool we can't animate them all (skinned meshes are
+      // costly). Show only the nearest CROWD_VIS_CAP within a cull radius — bounds per-frame cost
+      // to N regardless of how many pedestrians exist across the map.
+      const CULL2 = 240 * 240;
+      const cand = [];
+      for (const sp of crowdSpots) {
+        if (sp.zone === 'yard') { sp.rec.grp.visible = false; continue; }
+        const d2 = (sp.rec.x - car.x) ** 2 + (sp.rec.z - car.z) ** 2;
+        if (d2 < CULL2) cand.push({ sp, d2 }); else sp.rec.grp.visible = false;
+      }
+      cand.sort((a, b) => a.d2 - b.d2);
+      for (let i = 0; i < cand.length; i++) {
+        const vis = i < CROWD_VIS_CAP;
+        cand[i].sp.rec.grp.visible = vis;
+        if (vis) settleCrowdSpot(cand[i].sp, dt);
+      }
+    } else {
+      for (const sp of crowdSpots) sp.rec.grp.visible = false;
     }
     // COMEDY: plough into a pedestrian and they cartwheel off the road (then pop back up).
     if (inDrive && Math.abs(car.speed) > 6 && now - _crowdHitT > 250) {
@@ -3261,6 +3328,15 @@ export function createEngine({ canvas, ui, emit }) {
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
     setSpeedMul, getSpeedMul: () => speedMul,
+    setCrowdDensity, getCrowdDensity: () => CROWD_DENSITY,
+    setTrafficDensity: (d) => {
+      trafficDensity = clamp(+d || 0, 0, 2);
+      try { localStorage.setItem('dahill.trafficdensity', String(trafficDensity)); } catch (e) { }
+      const active = trafficActiveCount();
+      for (let i = active; i < traffic.length; i++) traffic[i].group.visible = false;   // park any now-over-cap cars at once
+      return trafficDensity;
+    },
+    getTrafficDensity: () => trafficDensity,
     preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
     initMiniMap,                                         // mount the live Google minimap into a div
     setHandbrake: (on) => { inp2.hbrake = !!on; },
