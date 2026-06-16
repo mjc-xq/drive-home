@@ -41,6 +41,8 @@ export default function App() {
   const engineRef = useRef(null);
 
   const [ready, setReady] = useState(false);
+  const [photoreal, setPhotoreal] = useState(false);   // real Google tiles are up (vs the procedural placeholder)
+  const [revealTimedOut, setRevealTimedOut] = useState(false);   // fallback so the loader never hangs if tiles fail
   const [picking, setPicking] = useState(true);   // start menu: pick a mode before playing
   const [mode, setMode] = useState('explore');
   const [subline, setSubline] = useState('Hayward, CA');
@@ -74,6 +76,7 @@ export default function App() {
     const emit = (type, p) => {
       switch (type) {
         case 'ready': setReady(true); break;
+        case 'photoreal': setPhotoreal(true); break;
         case 'mode': setMode(p); break;
         case 'subline': setSubline(p); break;
         case 'shiftLock': setShiftLock(p); break;
@@ -123,6 +126,10 @@ export default function App() {
     return () => clearTimeout(t);
   }, [mode]);
 
+  // Hold the loading veil until the real Google tiles are up, so the procedural placeholder
+  // world doesn't flash in first. A 5.5 s fallback ensures the loader never hangs (e.g. no key).
+  useEffect(() => { if (!ready) return; const t = setTimeout(() => setRevealTimedOut(true), 5500); return () => clearTimeout(t); }, [ready]);
+
   const eng = () => engineRef.current;
   // Right-thumb LOOK stick: pointer drag feeds the engine's camera orbit (nudgeLook)
   // and nudges the knob within the ring. Self-contained — no React re-render per move.
@@ -167,9 +174,9 @@ export default function App() {
 
   return (
     <>
-      <div id="loading" className={ready ? 'done' : ''}>
+      <div id="loading" className={(ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
         <div className="dot" />
-        <span>Building the neighborhood…</span>
+        <span>Loading the neighborhood…</span>
       </div>
       <canvas
         id="scene" ref={canvasRef} tabIndex={0}

@@ -896,6 +896,9 @@ export function createEngine({ canvas, ui, emit }) {
   let cancelCarLoad = null;
   if (!flags.has('nocar')) {
     installDracoDecoder();
+    car.heldForDefault = true;   // don't reveal a car until the default (Granvia) loads — no wrong-car flash
+    // fallback: if slot 0 is slow/fails, after ~2.8 s show whatever HAS loaded so there's always a car
+    setTimeout(() => { if (!disposed && car.heldForDefault) { car.heldForDefault = false; const f = car.models.findIndex(Boolean); if (f >= 0) setVehicle(car, f); } }, 2800);
     cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
     // The swappable roster (🚗). All the new GLBs were Draco+WebP compressed and run nose
     // -Z, so flip:true points them forward (matches the Granvia). Ferrari is slot 2 (loaded

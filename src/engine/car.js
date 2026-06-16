@@ -223,13 +223,18 @@ function registerVehicle(car, group, slot, meta) {
   for (const ch of car.group.children) {
     if (!car.models.some(m => m && m.group === ch)) ch.visible = false;
   }
-  // until the user picks, show the lowest loaded slot (Ferrari if present)
+  // until the user picks, show the DEFAULT (slot 0). Hold the reveal until slot 0 arrives so
+  // the player never sees a wrong car flash in first (e.g. the Ferrari loading before the
+  // Granvia); the engine clears `heldForDefault` after a short fallback timeout so a slow or
+  // failed slot-0 still ends up showing whatever loaded.
   if (!car.userPicked) {
-    const first = car.models.findIndex(Boolean);
+    if (car.heldForDefault && slot !== 0 && !car.models[0]) return;
+    const first = (car.heldForDefault && car.models[0]) ? 0 : car.models.findIndex(Boolean);
     if (first < 0) return;                          // unreachable (slot just set), but never deref [-1]
     car.modelIdx = first;
     for (const m of car.models) if (m) m.group.visible = false;
     car.models[first].group.visible = true;
+    car.heldForDefault = false;
   }
 }
 
