@@ -54,6 +54,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
         m.toneMapped = false;
         m.color.setScalar(tileGain.value);
         o.material = m;
+        if (src && src !== m) src.dispose();   // free the orphaned GLTF MeshStandardMaterial (the map texture lives on in m)
       });
       return Promise.resolve();
     }
