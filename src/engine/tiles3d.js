@@ -58,6 +58,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
         if (map) { map.colorSpace = THREE.NoColorSpace; map.anisotropy = maxAniso; }   // sharp roads/roofs at grazing angles
         const m = new THREE.MeshBasicMaterial({ map, side: THREE.FrontSide });
         m.clippingPlanes = clipPlanes;   // shared ref → Drive cutaway; empty in Explore/Scoop so nothing clips
+        m.clipIntersection = true;       // a fragment survives if it's on the kept side of EITHER plane → the two planes AND-clip (above street level AND between camera & car) only the sightline occluders
         m.toneMapped = false;
         m.color.setScalar(tileGain.value);
         o.material = m;

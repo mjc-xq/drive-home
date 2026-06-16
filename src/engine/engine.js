@@ -131,6 +131,11 @@ export function createEngine({ canvas, ui, emit }) {
   let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
   let routeIdx = 0;       // current target waypoint along ROUTE
+  // FAR-FROM-HOME road reference: the procedural road graph only covers the ~±330 m neighbourhood,
+  // so out on the open photoreal tiles the lane-keep assist has nothing to hug unless you're
+  // navigating. This is a rolling polyline of the REAL road ahead, snapped via Google Directions,
+  // refreshed as you drive — it lets the assist + soft-wall work everywhere, not just at home.
+  let freeRoamPath = null, _frT = 0, _frX = 1e9, _frZ = 1e9, _frReq = 0;
   let autoDrive = false;
 
   // ---- drive collectibles: gold coins scattered along the neighbourhood roads ----
@@ -1749,6 +1754,10 @@ export function createEngine({ canvas, ui, emit }) {
     };
     if (ROUTE && ROUTE.length > 1) {
       for (let i = 0; i < ROUTE.length - 1; i++) consider(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
+    } else if (freeRoamPath && freeRoamPath.length > 1 && Math.hypot(car.x, car.z) > 320) {
+      // far from home: snap to the rolling real-road reference, NOT the hood graph (which would
+      // teleport the car all the way back to the neighbourhood).
+      for (let i = 0; i < freeRoamPath.length - 1; i++) consider(freeRoamPath[i].x, freeRoamPath[i].z, freeRoamPath[i + 1].x, freeRoamPath[i + 1].z);
     } else {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
@@ -2207,11 +2216,61 @@ export function createEngine({ canvas, ui, emit }) {
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; bx = px; bz = pz; }
     };
-    // Live Google route first (real roads, works far from the procedural hood), then EVERY
-    // mapped road. So the steer-back + soft wall + reset always have a target to aim at.
+    // Live Google route first (real roads, works far from the procedural hood), then the rolling
+    // free-roam road snap, then EVERY mapped neighbourhood road. So the steer-back + soft wall +
+    // reset always have a target to aim at, anywhere on the map.
     if (ROUTE && ROUTE.length > 1) for (let i = 0; i < ROUTE.length - 1; i++) tryAB(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
+    if (freeRoamPath && freeRoamPath.length > 1) for (let i = 0; i < freeRoamPath.length - 1; i++) tryAB(freeRoamPath[i].x, freeRoamPath[i].z, freeRoamPath[i + 1].x, freeRoamPath[i + 1].z);
     for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return { x: bx, z: bz, d: Math.sqrt(bd) };
+  }
+  // A look-ahead aim point along a polyline: snap to the nearest point on the path, then walk
+  // `look` metres forward along it. Drives the free-roam assist (and mirrors navTarget's feel).
+  function aheadOnPath(path, x, z, speed) {
+    if (!path || path.length < 2) return null;
+    let bi = 0, bt = 0, bd = 1e18, bpx = x, bpz = z;
+    for (let i = 0; i < path.length - 1; i++) {
+      const ax = path[i].x, az = path[i].z, vx = path[i + 1].x - ax, vz = path[i + 1].z - az, L2 = vx * vx + vz * vz || 1;
+      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d < bd) { bd = d; bi = i; bt = t; bpx = px; bpz = pz; }
+    }
+    let look = clamp(Math.abs(speed) * 0.5, 12, 40), px = bpx, pz = bpz;
+    for (let i = bi; i < path.length - 1; i++) {
+      const ax = (i === bi) ? bpx : path[i].x, az = (i === bi) ? bpz : path[i].z;
+      const bx2 = path[i + 1].x, bz2 = path[i + 1].z, seg = Math.hypot(bx2 - ax, bz2 - az);
+      if (seg >= look) { const f = look / (seg || 1); return { x: ax + (bx2 - ax) * f, z: az + (bz2 - az) * f }; }
+      look -= seg;
+    }
+    return { x: path[path.length - 1].x, z: path[path.length - 1].z };
+  }
+  // Rolling free-roam road snap: out past the procedural hood and NOT navigating, ask Google
+  // Directions for the road from the car to a point ~280 m ahead and cache its polyline as the
+  // assist's road reference. Throttled hard (every ~2.5 s and only after the car has moved) so it
+  // costs ~1 Directions call every few seconds while you free-roam far away — and degrades to
+  // "no assist" (the prior behaviour) if there's no Maps key.
+  function updateFreeRoamRoad(now) {
+    if (mode !== 'drive' || !autoSteer) { freeRoamPath = null; return; }
+    const fromHome = Math.hypot(car.x, car.z);
+    if (fromHome < 320 || (ROUTE && routeIdx < ROUTE.length)) { freeRoamPath = null; return; }   // hood has roadSegs; a route already feeds the assist
+    if (now - _frT < 2500 && Math.hypot(car.x - _frX, car.z - _frZ) < 70) return;   // throttle: time + distance
+    _frT = now; _frX = car.x; _frZ = car.z;
+    const reqId = ++_frReq;
+    const aheadX = car.x + Math.sin(car.yaw) * 280, aheadZ = car.z + Math.cos(car.yaw) * 280;
+    const o = worldToGeo(car.x, car.z), a = worldToGeo(aheadX, aheadZ);
+    loadMapsSDK().then(maps => {
+      new maps.DirectionsService().route(
+        { origin: { lat: o.lat, lng: o.lon }, destination: { lat: a.lat, lng: a.lon }, travelMode: 'DRIVING' },
+        (res, status) => {
+          if (reqId !== _frReq || mode !== 'drive') return;                 // a newer probe (or left drive) supersedes this
+          if (status !== 'OK' || !res.routes || !res.routes[0]) { freeRoamPath = null; return; }
+          const pts = [];
+          for (const leg of res.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) pts.push(p);
+          const src = pts.length ? pts : res.routes[0].overview_path;
+          freeRoamPath = (src && src.length > 1) ? src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; }) : null;
+        }
+      );
+    }).catch(() => { freeRoamPath = null; });
   }
   // Local street fallback for minimap/tap auto-drive. Google Directions handles real
   // address trips; this keeps nearby "drive there" pins on neighborhood roads instead
@@ -2511,34 +2570,32 @@ export function createEngine({ canvas, ui, emit }) {
     return g;
   }
 
-  // R8 — keep nothing rendering BETWEEN the camera and the car, in EVERY drive view, so trees /
-  // eaves / power-lines can never hide it. Applied ONLY to the photoreal tile materials (the
-  // shared clipPlanes array); the car/HUD/guide ribbon carry no planes, so they always draw.
-  //   • CHASE views (Cruise/Close): a plane PERPENDICULAR to the camera→car axis, placed just
-  //     short of the car — clips the whole near wedge between the eye and the car (the real fix
-  //     for "car hidden under trees" in the forward views; a horizontal cut can't, since the
-  //     occluders sit at the car's own height between you and it).
-  //   • OVERHEAD (Top-down/Aerial): a horizontal cut just above the car — shaves the canopy off
-  //     while keeping the wide map intact (a perpendicular clip would gouge a huge hole there).
-  const _tileClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+  // R8 — un-hide the car from trees/eaves/power-lines WITHOUT gouging the road. A tile fragment
+  // is removed ONLY when it is BOTH (a) above street level AND (b) between the camera and the car
+  // — i.e. exactly an overhead occluder sitting on the sightline. Everything at/below street level
+  // (the road, ground, low walls) and everything at/beyond the car (the forward scene, distant
+  // buildings) is KEPT. Done with TWO planes + clipIntersection=true on the tile materials, so a
+  // fragment survives if it's on the kept side of EITHER plane (union of kept = the AND-clip above).
+  // Applied only to the photoreal tile materials; the car/HUD/guide ribbon carry no planes.
+  const _clipHoriz = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);   // kept side: BELOW street + clearance
+  const _clipDepth = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);    // kept side: AT/BEYOND the car along the camera→car axis
   const _clipN = new THREE.Vector3(), _clipP = new THREE.Vector3();
   function updateTileClip(carX, carY, carZ, view) {
     const planes = p3dtiles && p3dtiles.clipPlanes;
     if (!planes) return;
-    if (view.topdown || view.aerial) {
-      _clipN.set(0, -1, 0);
-      _tileClipPlane.normal.copy(_clipN);
-      _tileClipPlane.constant = carY + (view.aerial ? 8 : 6);   // keep y < that, clip everything above
-    } else {
-      _clipN.set(carX - camera.position.x, carY - camera.position.y, carZ - camera.position.z);
-      const dist = _clipN.length();
-      if (dist < 1e-3) { planes.length = 0; return; }
-      _clipN.multiplyScalar(1 / dist);                          // unit camera→car
-      _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);   // a point 2.6 m in front of the car toward the camera
-      _tileClipPlane.normal.copy(_clipN);
-      _tileClipPlane.constant = -_clipN.dot(_clipP);            // camera side (closer than the plane) → clipped
-    }
-    if (planes.length === 0) planes.push(_tileClipPlane);       // contents-mutate the SHARED array (no per-tile work)
+    // Height gate: keep everything at/below street level + a small clearance (never clip the road).
+    _clipHoriz.normal.set(0, -1, 0);
+    _clipHoriz.constant = carY + (view.topdown || view.aerial ? 6 : 4.5);
+    // Depth gate: keep everything at/beyond the car along the eye→car axis (never clip the car or
+    // the road ahead). Camera side (nearer than ~2.6 m short of the car) is the only clipped side.
+    _clipN.set(carX - camera.position.x, carY - camera.position.y, carZ - camera.position.z);
+    const dist = _clipN.length();
+    if (dist < 1e-3) { planes.length = 0; return; }
+    _clipN.multiplyScalar(1 / dist);
+    _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);
+    _clipDepth.normal.copy(_clipN);
+    _clipDepth.constant = -_clipN.dot(_clipP);
+    planes.length = 0; planes.push(_clipHoriz, _clipDepth);   // contents-mutate the SHARED array (clipIntersection makes it an AND-clip)
   }
 
   function updateDrive(dt, now) {
@@ -2736,9 +2793,10 @@ export function createEngine({ canvas, ui, emit }) {
     // 200 mph straight tracks with small corrections.
     const yawDamp = clamp(1 - (Math.abs(car.speed) - 20) * 0.008, 0.55, 1);   // keep enough authority to DODGE at speed
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
+    updateFreeRoamRoad(now);   // keep a snapped real-road reference ahead when free-roaming far from home (self-throttled)
     // Distance to the nearest road, ALWAYS measured at the car's EXACT current position
-    // (nearestRoadPoint now consults the live ROUTE + every mapped road, so it's valid even
-    // far from the procedural hood). inHood still gates the discrete snap-back below.
+    // (nearestRoadPoint now consults the live ROUTE + free-roam snap + every mapped road, so it's
+    // valid even far from the procedural hood). inHood still gates the discrete snap-back below.
     const inHood = Math.hypot(car.x, car.z) < 330;
     const nrp = nearestRoadPoint(car.x, car.z);
     const offRoadDist = nrp.d;
@@ -2751,7 +2809,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 4) {
       let dir = null, recover = false; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - car.x, t.z - car.z]; }
-      else if (nrp && offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - car.x, nrp.z - car.z]; recover = true; }
+      else if (freeRoamPath && offRoadDist < 80) { const t = aheadOnPath(freeRoamPath, car.x, car.z, car.speed); if (t) { dir = [t.x - car.x, t.z - car.z]; recover = offRoadDist > 8; } }   // FAR FROM HOME: hug the snapped real road ahead
+      else if (offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - car.x, nrp.z - car.z]; recover = true; }
       else { const tp = roadTargetAhead(car.x, car.z, car.yaw, car.speed); if (tp) dir = [tp[0] - car.x, tp[1] - car.z]; }
       if (dir && (dir[0] || dir[1])) {
         let d = Math.atan2(dir[0], dir[1]) - car.yaw;
@@ -2825,7 +2884,7 @@ export function createEngine({ canvas, ui, emit }) {
     // can't. Ramps in over a few metres (soft edge), clamps under driving speed (never yanks), and
     // fades as you steer, so it reads like an invisible berm on the shoulder. Only where a road
     // graph exists (the hood or a live route) so it never tugs you back into town from the open road.
-    if (autoSteer && !hb && (inHood || onRouteNow) && offRoadDist > LANE_HALF && offRoadDist < 120) {
+    if (autoSteer && !hb && (inHood || onRouteNow || freeRoamPath) && offRoadDist > LANE_HALF && offRoadDist < 120) {
       const over = offRoadDist - LANE_HALF;
       const ramp = clamp(over / 6, 0, 1);                       // ease in over the first 6 m
       const yours = clamp(Math.abs(jx) * 1.5, 0, 1);            // fade out as the player steers hard

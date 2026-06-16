@@ -3,6 +3,7 @@ import { merge, critterBuilder, makeRand } from './geom.js';
 import { clamp } from './coords.js';
 import { loadPigPrototype, loadPoopGeometry } from './models.js';
 import { loadDrew } from './drew.js';
+import { loadCeceController } from './cece.js';
 import pigUrl from '../assets/pig.glb';
 import poopUrl from '../assets/poop.glb';
 
@@ -275,14 +276,42 @@ export function createCharacter(scene, SREC) {
   CHAR.group.visible = false;
   scene.add(CHAR.group);
 
-  // Swap the voxel keeper for the rigged "Drew" model once it loads (fail-soft:
-  // the voxel stays on any error). Drew carries its own walk/idle/run + reactions.
+  // Swap the voxel keeper for a rigged avatar once it loads (fail-soft: the voxel stays on any
+  // error). CHAR.drew is the GENERIC "active avatar" controller slot (kept that name to avoid a
+  // wide rename) — it holds Drew OR CeCe, both sharing the {group,locomotion,react,reset,tick}
+  // interface. The side-menu switch flips between them; the inactive controller is cached so the
+  // swap is instant the second time.
   CHAR.drew = null;
-  loadDrew(ctrl => {
+  CHAR.avatar = 'drew';        // which avatar is active
+  CHAR.wantAvatar = 'drew';    // which the player last asked for (guards async-load races)
+  const avatars = { drew: null, cece: null };
+  let swapping = false;
+  function mount(name, ctrl) {
+    if (CHAR.drew === ctrl) return;
+    if (CHAR.drew && CHAR.drew.group.parent) CHAR.group.remove(CHAR.drew.group);
+    if (CHAR.drew && CHAR.drew.reset) CHAR.drew.reset();   // stop the one we're leaving mid-emote
     bm.visible = false;
     for (const s of CHAR.scoops) s.visible = false;
+    if (ctrl.reset) ctrl.reset();
     CHAR.group.add(ctrl.group);
-    CHAR.drew = ctrl;
-  });
+    CHAR.drew = ctrl; CHAR.avatar = name;
+  }
+  loadDrew(ctrl => { avatars.drew = ctrl; if (CHAR.wantAvatar === 'drew') mount('drew', ctrl); });
+
+  // Switch the playable avatar (avatar swap only — no companion). Lazy-loads CeCe the first time.
+  CHAR.swapAvatar = (name, onDone) => {
+    if (name !== 'drew' && name !== 'cece') return;
+    CHAR.wantAvatar = name;
+    if (avatars[name]) { mount(name, avatars[name]); onDone && onDone(name); return; }
+    if (name === 'drew') { onDone && onDone(CHAR.avatar); return; }   // Drew still loading; stay put
+    if (swapping) return;
+    swapping = true;
+    loadCeceController(
+      ctrl => { swapping = false; avatars.cece = ctrl; if (CHAR.wantAvatar === 'cece') mount('cece', ctrl); onDone && onDone(CHAR.avatar); },
+      () => { swapping = false; CHAR.wantAvatar = CHAR.avatar; onDone && onDone(CHAR.avatar); }
+    );
+  };
+  // The active avatar's emote list ([{key,label}]) for the HUD action menu.
+  CHAR.getActions = () => (CHAR.drew && CHAR.drew.actions) || [];
   return CHAR;
 }
