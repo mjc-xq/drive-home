@@ -4,6 +4,7 @@ import { clamp } from './coords.js';
 import { merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
+import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
 import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
@@ -844,6 +845,50 @@ export function createEngine({ canvas, ui, emit }) {
   const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
   const CHAR = createCharacter(scene, SREC);
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
+
+  // ---- CROWD: dancing CeCe + Drew characters. Yard dancers liven up Scoop; street
+  // dancers + a cluster at Stanton Elementary liven up Drive. Visibility is mode- and
+  // distance-gated so only a handful animate at once (skinned meshes aren't cheap).
+  let ceceCrowd = null, drewCrowd = null;
+  const crowdSpots = [];   // { rec, zone }
+  function placeCrowd() {
+    const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
+      if (!crowd) return;
+      const y = (onRoadHt ? actorGroundY(x, z) : terrainAt(x, z)) + 0.02;
+      const yaw = opts.yaw != null ? opts.yaw : Math.random() * Math.PI * 2;
+      crowdSpots.push({ rec: crowd.add(scene, { x, y, z, yaw, clip: opts.clip }), zone });
+    };
+    const hx = house.c[0], hz = house.c[1];
+    // YARD (Scoop): a few CeCes + Drews dancing around the front yard
+    for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + 0.5, r = 6 + i * 1.6; put(ceceCrowd, hx + Math.cos(a) * r, hz + Math.sin(a) * r, 'yard', false); }
+    for (let i = 0; i < 2; i++) { const a = i * 2.3 + 1.6; put(drewCrowd, hx + Math.cos(a) * 8.5, hz + Math.sin(a) * 8.5, 'yard', false, { clip: 'dance' }); }
+    // STREETS near home (Drive): on the sidewalk beside nearby road segments, facing the road
+    const nearRoads = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2 - hx, (s[0][1] + s[1][1]) / 2 - hz) < 150 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 6);
+    for (let i = 0; i < Math.min(6, nearRoads.length); i++) {
+      const s = nearRoads[(i * 7 + 2) % nearRoads.length];
+      const mx = (s[0][0] + s[1][0]) / 2, mz = (s[0][1] + s[1][1]) / 2;
+      const dx = s[1][0] - s[0][0], dz = s[1][1] - s[0][1], L = Math.hypot(dx, dz) || 1, nx = -dz / L, nz = dx / L, side = (i % 2) ? 3.6 : -3.6;
+      put(i % 2 ? ceceCrowd : drewCrowd, mx + nx * side, mz + nz * side, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });
+    }
+    // STANTON ELEMENTARY (Drive): a cluster of CeCes dancing at the school
+    const stanton = POIS.find(p => p.key === 'stanton');
+    if (stanton) for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2, r = 4 + (i % 2) * 2.5; put(ceceCrowd, stanton.x + Math.cos(a) * r, stanton.z + Math.sin(a) * r, 'stanton', true); }
+  }
+  let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) placeCrowd(); };
+  if (!flags.has('nochar')) {
+    loadCeceCrowd(c => { ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadDrewCrowd(c => { drewCrowd = c; _onCrowd(); }, () => _onCrowd());
+  }
+  function updateCrowd(dt) {
+    if (!crowdSpots.length) return;
+    const inDrive = mode === 'drive', inScoop = mode === 'scoop';
+    for (const sp of crowdSpots) {
+      sp.rec.grp.visible = sp.zone === 'yard' ? inScoop
+        : inDrive && Math.hypot(sp.rec.x - car.x, sp.rec.z - car.z) < 150;
+    }
+    if (ceceCrowd) ceceCrowd.tick(dt);   // tick() only advances VISIBLE mixers
+    if (drewCrowd) drewCrowd.tick(dt);
+  }
 
   let disposed = false;
   const car = createCar(scene);
@@ -2512,6 +2557,7 @@ export function createEngine({ canvas, ui, emit }) {
     const dt = rawDt * timeScale;
     if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
     updateAnimals(dt, now); // ambient life in every mode
+    updateCrowd(dt);        // dancing CeCe/Drew crowd (mode + distance gated)
     if (mode === 'drive') {
       updateDrive(dt, now);
     } else if (mode === 'scoop') {
@@ -2619,6 +2665,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (audio.stopMusic) audio.stopMusic();      // kill the 30ms music scheduler interval (was leaking)
     if (audio.close) audio.close();              // close the AudioContext so it isn't left running
     if (cancelCarLoad) cancelCarLoad();          // late car load/timeout can't touch a dead scene
+    if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
+    if (drewCrowd) drewCrowd.dispose();
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
     scene.traverse(o => {
@@ -2680,6 +2728,7 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
+    crowd: () => ({ cece: !!ceceCrowd, drew: !!drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - car.x, s.rec.z - car.z)) })) }),
     p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
     nudge: applyP3DT,
     tiles: () => p3dtiles,
