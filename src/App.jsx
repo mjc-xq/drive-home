@@ -9,7 +9,8 @@ function AddressSearch({ placeholder, actionLabel, suggest, onPick, onText }) {
   const [busy, setBusy] = useState(false);
   const tRef = useRef(0);
   const reqRef = useRef(0);
-  useEffect(() => () => { clearTimeout(tRef.current); reqRef.current++; }, []);
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; clearTimeout(tRef.current); reqRef.current++; }, []);
   const onChange = (v) => {
     const q = v.trim().replace(/\s+/g, ' ');
     setVal(v);
@@ -22,8 +23,8 @@ function AddressSearch({ placeholder, actionLabel, suggest, onPick, onText }) {
         .catch(() => { if (req === reqRef.current) setSugs([]); });
     }, 360);
   };
-  const choose = (item) => { setBusy(true); setSugs([]); setVal(item.description); Promise.resolve(onPick(item)).finally(() => setBusy(false)); };
-  const submit = (e) => { e.preventDefault(); if (!val.trim()) return; setBusy(true); setSugs([]); Promise.resolve(onText(val.trim())).finally(() => setBusy(false)); };
+  const choose = (item) => { setBusy(true); setSugs([]); setVal(item.description); Promise.resolve(onPick(item)).finally(() => { if (aliveRef.current) setBusy(false); }); };
+  const submit = (e) => { e.preventDefault(); if (!val.trim()) return; setBusy(true); setSugs([]); Promise.resolve(onText(val.trim())).finally(() => { if (aliveRef.current) setBusy(false); }); };
   return (
     <form className="addrBox" onSubmit={submit} autoComplete="off">
       <div className="addrRow">
@@ -82,6 +83,9 @@ export default function App() {
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
   const toastTimer = useRef(0);
   const cardTimer = useRef(0);
+  const resizeFrameRef = useRef(0);
+  const resizeTimerRef = useRef(0);
+  const fullscreenSessionRef = useRef(false);
 
   useEffect(() => {
     const emit = (type, p) => {
@@ -124,6 +128,9 @@ export default function App() {
     engineRef.current = engine;
     return () => {
       engine.dispose();
+      engineRef.current = null;
+      cancelAnimationFrame(resizeFrameRef.current);
+      clearTimeout(resizeTimerRef.current);
       clearTimeout(toastTimer.current);
       clearTimeout(cardTimer.current);
       clearTimeout(arrivedTimer.current);
@@ -145,14 +152,26 @@ export default function App() {
   const resizeMapSoon = () => {
     const api = eng();
     if (!api || !api.resize) return;
-    requestAnimationFrame(() => {
+    cancelAnimationFrame(resizeFrameRef.current);
+    clearTimeout(resizeTimerRef.current);
+    resizeFrameRef.current = requestAnimationFrame(() => {
       api.resize();
-      setTimeout(() => api.resize(), 250);
+      resizeTimerRef.current = setTimeout(() => {
+        if (engineRef.current === api) api.resize();
+      }, 250);
     });
   };
 
   useEffect(() => {
-    const onFullscreenChange = () => setNativeFullscreen(!!document.fullscreenElement);
+    const onFullscreenChange = () => {
+      const isFull = !!document.fullscreenElement;
+      setNativeFullscreen(isFull);
+      if (!isFull && fullscreenSessionRef.current) {
+        fullscreenSessionRef.current = false;
+        setMapExpanded(false);
+        resizeMapSoon();
+      }
+    };
     document.addEventListener('fullscreenchange', onFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
@@ -165,6 +184,7 @@ export default function App() {
     const fullscreenElement = document.fullscreenElement;
     if (mapExpanded || fullscreenElement) {
       setMapExpanded(false);
+      fullscreenSessionRef.current = false;
       if (fullscreenElement && document.exitFullscreen) {
         try { await document.exitFullscreen(); } catch (e) { /* CSS collapse still applies. */ }
       }
@@ -177,8 +197,10 @@ export default function App() {
     if (document.fullscreenEnabled && el && el.requestFullscreen) {
       try {
         await el.requestFullscreen({ navigationUI: 'hide' });
+        fullscreenSessionRef.current = true;
         setNativeFullscreen(true);
       } catch (e) {
+        fullscreenSessionRef.current = false;
         setNativeFullscreen(false);
       }
     }
@@ -254,8 +276,8 @@ export default function App() {
           </div>
         </div>
       )}
-      <div id="ui" ref={el => (uiRefs.current.box = el)} className={mode}>
-        <button id="mapExpandBtn" className={'mapExpandBtn ' + mode + (mapExpanded ? ' on' : '')}
+      <div id="ui" ref={el => (uiRefs.current.box = el)} className={mode + (dest ? ' hasDest' : '') + (menuOpen ? ' menuOpen' : '')}>
+        <button id="mapExpandBtn" className={'mapExpandBtn ' + mode + (dest ? ' hasDest' : '') + (menuOpen ? ' menuOpen' : '') + (mapExpanded ? ' on' : '')}
           aria-label={mapExpanded ? 'Exit expanded map' : 'Expand map'}
           aria-pressed={mapExpanded}
           onClick={toggleMapExpanded}>
@@ -480,7 +502,7 @@ export default function App() {
                         setNavErr('');
                         const run = p.home
                           ? eng().driveHome()
-                          : eng().driveToText(p.q).catch(() => eng().setDestination(p.ll[0], p.ll[1], p.label));
+                          : eng().driveToText(p.q).catch(() => eng().driveToLatLon(p.ll[0], p.ll[1], p.label));
                         Promise.resolve(run).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that destination"));
                       }}>{p.label}</button>
                     ))}

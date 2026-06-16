@@ -564,7 +564,7 @@ export function createEngine({ canvas, ui, emit }) {
   // depthTest TRUE so the solid CAR (and hills/buildings) occlude the ribbon — the car
   // drives OVER the line, the line never paints on top of the car. depthWrite stays off so
   // it doesn't disturb other transparent sorting.
-  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x28c9ff, transparent: true, opacity: 0.54, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, side: THREE.DoubleSide }));
+  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x28c9ff, transparent: true, opacity: 0.82, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, side: THREE.DoubleSide }));
   guideLine.renderOrder = 6; guideLine.visible = false; guideLine.frustumCulled = false;
   scene.add(guideLine);
   const destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
@@ -789,12 +789,14 @@ export function createEngine({ canvas, ui, emit }) {
     const houseLat = (LAT0 + C[1] / 110540) * DEG;
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
+      if (disposed) return;
       p3dtiles = createPhotorealTiles(scene, camera, renderer, {
         // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
         // is the dominant iOS memory cost, and Drive can now roam far and stream more.
         lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: MOBILE ? 16 : 10, mobile: MOBILE
       });
       if (!p3dtiles) return;
+      if (disposed) { if (p3dtiles.disposeAll) p3dtiles.disposeAll(); p3dtiles = null; return; }
       applyP3DT();
       let tries = 0;
       p3dtiles.addEventListener('load-model', () => {
@@ -1582,14 +1584,28 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // fromSearch = the player explicitly chose this place from the GO address search;
   // only THOSE arrivals earn the "Arrived" banner (a casual map tap does not).
-  function setDestination(lat, lon, label, isChain, fromSearch) {
+  function setDestination(lat, lon, label, isChain, fromSearch, opts = {}) {
     const w = geoToWorld(lat, lon);
-    DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch };   // geo kept so a failed route can self-retry
-    ROUTE = null; routeIdx = 0;
+    let seedRoute = null;
+    if (opts.drive) {
+      seedRoute = localRoadRoute(car.x, car.z, w[0], w[1]);
+      if (!seedRoute) {
+        const np = nearestRoadPoint(w[0], w[1]);
+        if (np && np.d < 90) seedRoute = localRoadRoute(car.x, car.z, np.x, np.z);
+      }
+    }
+    DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch || !!opts.celebrate };   // geo kept so a failed route can self-retry
+    ROUTE = seedRoute || null; routeIdx = 0;
+    if (ROUTE) snapDestinationToRouteEnd(ROUTE);
     destPin.userData.groundY = null;
     emit('dest', { label: DEST.label });
     if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
+    if (opts.drive) {
+      autoDrive = true; inp2.navActive = false;
+      emit('autodrive', true);
+      faceRouteStart();
+    }
   }
   function clearDestination() { routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null; emit('dest', null); emit('autodrive', false); }
   // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
@@ -1720,15 +1736,18 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Destination by address / place — geocode then route there (and auto-drive on request).
   function setDestinationByText(text, drive) {
-    return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+    return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label, false, true, { drive, celebrate: true }); return g; });
   }
   function setDestinationByPlace(placeId, label, drive) {
-    return geocodePlaceId(placeId, label).then(g => { _acTok = null; setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+    return geocodePlaceId(placeId, label).then(g => { _acTok = null; setDestination(g.lat, g.lon, g.label, false, true, { drive, celebrate: true }); return g; });
   }
   function driveHome() {
-    setDestination(homeGeo.lat, homeGeo.lon, 'Home', false, true);
-    autoDrive = true; emit('autodrive', true); faceRouteStart();
+    setDestination(homeGeo.lat, homeGeo.lon, 'Home', false, true, { drive: true, celebrate: true });
     return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
+  }
+  function driveToLatLon(lat, lon, label) {
+    setDestination(lat, lon, label, false, true, { drive: true, celebrate: true });
+    return Promise.resolve({ lat, lon, label: label || 'Destination' });
   }
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
   let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
@@ -1972,12 +1991,12 @@ export function createEngine({ canvas, ui, emit }) {
       for (let s = 1; s <= steps; s++) { const t = s / steps; pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]); }
     }
     if (pts.length < 2) { guideLine.visible = false; return; }
-    const hw = 1.15;
+    const hw = 1.55;
     for (let i = 0; i < GUIDE_N; i++) {
       const k = Math.min(i, pts.length - 1), p = pts[k];
       const pp = pts[Math.max(0, k - 1)], pn = pts[Math.min(pts.length - 1, k + 1)];
       let tx = pn[0] - pp[0], tz = pn[1] - pp[1]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      const nx = -tz, nz = tx, y = p[2] + 0.18, o = i * 6;
+      const nx = -tz, nz = tx, y = p[2] + 0.38, o = i * 6;
       guidePos[o] = p[0] + nx * hw; guidePos[o + 1] = y; guidePos[o + 2] = p[1] + nz * hw;
       guidePos[o + 3] = p[0] - nx * hw; guidePos[o + 4] = y; guidePos[o + 5] = p[1] - nz * hw;
     }
@@ -2479,8 +2498,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (yr != null && car.groundY < yr - 0.12) car.groundY = yr - 0.12;
     const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
-    const tF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), tB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
-    const tR = terrainAt(car.x + rxv * 0.9, car.z + rzv * 0.9), tL = terrainAt(car.x - rxv * 0.9, car.z - rzv * 0.9);
+    const tF = actorGroundY(car.x + fx * 1.4, car.z + fz * 1.4, car.groundY), tB = actorGroundY(car.x - fx * 1.4, car.z - fz * 1.4, car.groundY);
+    const tR = actorGroundY(car.x + rxv * 0.9, car.z + rzv * 0.9, car.groundY), tL = actorGroundY(car.x - rxv * 0.9, car.z - rzv * 0.9, car.groundY);
     const pitch = Math.atan2(tB - tF, 2.8), roll = Math.atan2(tR - tL, 1.8);
     car.group.position.set(car.x, yC + 0.06, car.z);
     car.group.rotation.set(0, 0, 0);
