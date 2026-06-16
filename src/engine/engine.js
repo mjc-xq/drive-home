@@ -948,8 +948,7 @@ export function createEngine({ canvas, ui, emit }) {
   let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
   const CROWD_VIS_CAP = 16;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
   const SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
-  const SIDEWALK_STEP = 22;       // ~one pedestrian per 22 m of curb at density 1
-  const CROWD_POOL_CAP = 300;     // hard ceiling on persistent sidewalk+scatter clones (GPU/RAM guard)
+  const CROWD_POOL_CAP = 120;     // total persistent clones at density 1 (×D). Spread EVENLY across the whole hood; the visibility cap keeps only the nearest 16 animating, so this stays cheap while looking populated everywhere. Bounds boot-time SkeletonUtils.clone cost.
   function placeCrowd() {
     const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
       if (!crowd) return;
@@ -974,35 +973,43 @@ export function createEngine({ canvas, ui, emit }) {
     // length, on randomized sidewalk offsets and either side — so they line the sidewalks
     // across the WHOLE neighbourhood, not just near home. Denser slider → smaller spacing.
     const D = CROWD_DENSITY;
+    const POOL = Math.round(CROWD_POOL_CAP * D);   // total persistent pedestrians this density (hard bound on clone count)
     let placed = 0;
-    if (D > 0) for (const s of roadSegs) {
-      const ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
-      const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
-      if (L < 6) continue;                                         // skip stubs
-      const ux = dx / L, uz = dz / L, nx = -uz, nz = ux;           // unit-along + unit-normal
-      const step = SIDEWALK_STEP / Math.max(0.25, D);
-      for (let t = step * 0.5; t < L; t += step) {
-        if (placed >= CROWD_POOL_CAP * D) break;
-        const jt = clamp(t + (Math.random() - 0.5) * step * 0.6, 0, L);   // jitter along the curb
-        const cx = ax + ux * jt, cz = az + uz * jt;
-        const side = Math.random() < 0.5 ? 1 : -1;                 // random side each time
-        const off = SIDEWALK_OFF + Math.random() * 1.4;
-        const px = cx + nx * side * off, pz = cz + nz * side * off;
+    if (D > 0 && POOL > 0) {
+      // Spacing is derived from the TOTAL curb length so the sidewalk pass spreads its share
+      // EVENLY across the whole hood instead of clustering near the first segments and hitting
+      // the cap there. ~70% of the pool lines sidewalks; the rest scatters on open ground.
+      const sidewalkTarget = Math.round(POOL * 0.7);
+      let totalCurb = 0;
+      for (const s of roadSegs) { const L = Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]); if (L >= 6) totalCurb += L; }
+      const step = totalCurb > 0 ? Math.max(12, totalCurb / Math.max(1, sidewalkTarget)) : 1e9;
+      for (const s of roadSegs) {
+        if (placed >= sidewalkTarget) break;
+        const ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
+        const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
+        if (L < 6) continue;                                         // skip stubs
+        const ux = dx / L, uz = dz / L, nx = -uz, nz = ux;           // unit-along + unit-normal
+        for (let t = step * 0.5; t < L && placed < sidewalkTarget; t += step) {
+          const jt = clamp(t + (Math.random() - 0.5) * step * 0.5, 0, L);   // jitter along the curb
+          const cx = ax + ux * jt, cz = az + uz * jt;
+          const side = Math.random() < 0.5 ? 1 : -1;                 // random side each time
+          const off = SIDEWALK_OFF + Math.random() * 1.4;
+          const px = cx + nx * side * off, pz = cz + nz * side * off;
+          if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
+          const crowd = (placed & 1) ? ceceCrowd : drewCrowd;
+          put(crowd, px, pz, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });   // face the road
+          placed++;
+        }
+      }
+      // SCATTER: fill the rest of the pool with random open-ground spots across the whole hood
+      // (yards/parks/verges) so pedestrians aren't only on the curb. Bounded by the same POOL.
+      for (let i = 0; placed < POOL && i < POOL * 3; i++) {
+        const px = (Math.random() - 0.5) * 600, pz = (Math.random() - 0.5) * 600;   // ≤ ±300 = the flat field
+        if (Math.hypot(px, pz) < 28) continue;                       // not on top of the house
         if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
-        const crowd = (placed & 1) ? ceceCrowd : drewCrowd;
-        put(crowd, px, pz, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });   // face the road
+        put((placed & 1) ? ceceCrowd : drewCrowd, px, pz, 'street', false);
         placed++;
       }
-      if (placed >= CROWD_POOL_CAP * D) break;
-    }
-    // SCATTER (Drive): random open-ground spots across the whole hood (yards/parks/verges) so
-    // pedestrians aren't only on the curb. terrainAt height (kept inside ±310 = the flat field).
-    const SCATTER = Math.round(60 * D);
-    for (let i = 0; i < SCATTER; i++) {
-      const px = (Math.random() - 0.5) * 620, pz = (Math.random() - 0.5) * 620;
-      if (Math.hypot(px, pz) < 28) continue;                       // not on top of the house
-      if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
-      put((i & 1) ? ceceCrowd : drewCrowd, px, pz, 'street', false);
     }
     // DESTINATIONS (Drive): every preset stop gets Drew/Cece right on or beside
     // the arrival point, so there is something visible and hittable when you get there.
