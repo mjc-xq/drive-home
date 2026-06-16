@@ -2619,6 +2619,7 @@ export function createEngine({ canvas, ui, emit }) {
     driveToText: (text) => setDestinationByText(text, true),
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
+    preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
     setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
     setGas: (on) => { inp2.gas = on ? 1 : 0; if (on) showT = 0; },   // gas pedal (hold)
     setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)

@@ -124,6 +124,9 @@ export default function App() {
   }, [mode]);
 
   const eng = () => engineRef.current;
+  // Warm the Google Maps SDK the moment the nav panel opens, so the first keystroke in the
+  // address box doesn't jank (the SDK script parse used to land on ~the 3rd character typed).
+  useEffect(() => { if (navOpen && eng() && eng().preloadMaps) eng().preloadMaps(); }, [navOpen]);
 
   // Quick destinations (live-geocoded for accuracy; hardcoded fallback so they
   // always work even if the Geocoding API isn't enabled on the key).
@@ -294,7 +297,7 @@ export default function App() {
 
                 <div className="navPresets">
                   {PRESETS.map(p => (
-                    <button key={p.label} className="chip" onClick={() => { setNavErr(''); eng().driveToText(p.q).then(() => setNavOpen(false)).catch(() => { eng().setDestination(p.ll[0], p.ll[1], p.label); setNavOpen(false); }); }}>{p.label}</button>
+                    <button key={p.label} className="navChip" onClick={() => { setNavErr(''); eng().driveToText(p.q).then(() => setNavOpen(false)).catch(() => { eng().setDestination(p.ll[0], p.ll[1], p.label); setNavOpen(false); }); }}>{p.label}</button>
                   ))}
                 </div>
 

@@ -166,9 +166,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .addrSug li button:hover,.addrSug li button:active{background:rgba(120,170,255,.16)}
 .addrSug .pin{flex:0 0 auto;font-size:12px;opacity:.8}
 .navPresets{display:flex;flex-wrap:wrap;gap:7px;margin:9px 0 2px}
-.navPresets .chip{font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:999px;cursor:pointer;
+.navPresets .navChip{position:static;font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:999px;cursor:pointer;white-space:nowrap;
   background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.92)}
-.navPresets .chip:active{background:rgba(255,255,255,.18)}
+.navPresets .navChip:active{background:rgba(255,255,255,.18)}
 .navSlider{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
 .navSlider>label{display:block;font-size:13px;font-weight:600;color:rgba(255,255,255,.8);margin-bottom:9px}
 .navSlider>label b{color:#ffb060;font-weight:800}
@@ -225,9 +225,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 /* ---- sense of speed: white speed-lines radiating from centre + a soft vignette ---- */
 #fx{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .2s ease;overflow:hidden}
 #fx.on{opacity:1}
-/* peripheral optic-flow streaks — a fine sunburst, masked clear in the middle so the
-   road stays readable; intensity rides --spd, with a gentle outward rush animation. */
-#fx::before{content:'';position:absolute;inset:-25%;opacity:var(--spd,0);
+/* peripheral optic-flow streaks REMOVED — the radial white speed-lines read as "weird".
+   Speed is conveyed by the FOV kick, the gauge and the engine note instead. */
+#fx::before{display:none;content:'';position:absolute;inset:-25%;opacity:var(--spd,0);
   background:repeating-conic-gradient(from 0deg at var(--ox,50%) 48%,
     rgba(255,255,255,0) 0deg,rgba(255,255,255,0) 2.6deg,
     rgba(255,255,255,.55) 3deg,rgba(255,255,255,0) 3.5deg);
