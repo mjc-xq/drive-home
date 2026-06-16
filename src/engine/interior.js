@@ -89,6 +89,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const wallColliders = walls.map(w => boxXZ(tmp.setFromObject(w)));
     const doorPortals = doors.map(d => boxXZ(tmp.setFromObject(d), 0.18));
     const furnitureColliders = furniture.map(f => boxXZ(tmp.setFromObject(f)));
+    const occluders = walls.concat(furniture);   // meshes the see-through cut-away can hide (walls + furniture; the couch is added on load)
     // Outer shell = union of walls; the hard clamp that keeps the player in the building.
     const roomAABB = [Infinity, -Infinity, Infinity, -Infinity];
     for (const w of wallColliders) { roomAABB[0] = Math.min(roomAABB[0], w[0]); roomAABB[1] = Math.max(roomAABB[1], w[1]); roomAABB[2] = Math.min(roomAABB[2], w[2]); roomAABB[3] = Math.max(roomAABB[3], w[3]); }
@@ -115,7 +116,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     };
 
     onReady({
-      group, floorY, ceilingY, roomAABB, spawn, walls,
+      group, floorY, ceilingY, roomAABB, spawn, walls, occluders,
       // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
       // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
       collide(px, pz, nx, nz, rad) {
@@ -151,15 +152,17 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         if (cancelled || !dog) return;
         dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
         const dgrp = new THREE.Group(); dgrp.add(dog);
-        const ds = new THREE.Box3().setFromObject(dog).getSize(new THREE.Vector3());
-        const ss = tBox.getSize(new THREE.Vector3());
+        scene.add(dgrp);                                  // parent to the SCENE, not the 1.4x interior group, so the
+        dgrp.updateMatrixWorld(true);                     // house scale doesn't double-apply and overshoot the placement
+        const ds = new THREE.Box3().setFromObject(dgrp).getSize(new THREE.Vector3());   // native couch size
+        const ss = tBox.getSize(new THREE.Vector3());     // tBox = the already-house-scaled sofa, in world space
         if ((ss.z > ss.x) !== (ds.z > ds.x)) dgrp.rotation.y = Math.PI / 2;   // align the long axis with the couch
         dgrp.scale.setScalar(Math.max(ss.x, ss.z) / (Math.max(ds.x, ds.z) || 1));   // match the couch's length
-        group.add(dgrp);
         dgrp.updateMatrixWorld(true);
         const gb = new THREE.Box3().setFromObject(dgrp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
-        dgrp.position.x += tc.x - gc.x; dgrp.position.z += tc.z - gc.z; dgrp.position.y += tBox.min.y - gb.min.y;   // drop on the couch's spot (group is translation-only)
-        target.visible = false;   // hide the original couch (its collider remains, covering the dog couch)
+        dgrp.position.set(tc.x - gc.x, tBox.min.y - gb.min.y, tc.z - gc.z);   // drop exactly on the sofa's spot (scene == world space)
+        dgrp.traverse(o => { if (o.isMesh) occluders.push(o); });   // the couch is a see-through occluder too
+        target.visible = false;   // hide the original couch (its furniture collider remains, so the couch still blocks)
       }, undefined, e => console.warn('[interior] couch (usdz) failed, keeping the original sofa', e));
     }
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });

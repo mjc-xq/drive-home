@@ -1236,11 +1236,14 @@ export function createEngine({ canvas, ui, emit }) {
 
   // Inward normal from the curb toward the house (frontDir is the ROAD TANGENT — never inward),
   // and a back-door pad on the yard/patio side (near where Scoop is played).
-  const _toHouse = frontPt ? [house.c[0] - frontPt[0], house.c[1] - frontPt[1]] : [0, 1];
-  const _uL = Math.hypot(_toHouse[0], _toHouse[1]) || 1;
-  const entryU = [_toHouse[0] / _uL, _toHouse[1] / _uL];
+  // Put the "go inside" pad on the house side FACING the Scoop play area (the sanctuary spawn), so
+  // the player walks straight into it. entryU points from the house centre toward that spawn.
+  const _spawnPt = [(SREC.coop[0] + SREC.pen[0]) / 2, (SREC.coop[1] + SREC.pen[1]) / 2];
+  const _toSpawn = [_spawnPt[0] - house.c[0], _spawnPt[1] - house.c[1]];
+  const _uL = Math.hypot(_toSpawn[0], _toSpawn[1]) || 1;
+  const entryU = [_toSpawn[0] / _uL, _toSpawn[1] / _uL];
   const _halfExt = 0.5 * (Math.abs(entryU[0]) * (house.bbox[1] - house.bbox[0]) + Math.abs(entryU[1]) * (house.bbox[3] - house.bbox[2]));
-  const entryPt = frontPt ? [house.c[0] + entryU[0] * (_halfExt + 1.3), house.c[1] + entryU[1] * (_halfExt + 1.3)] : null;
+  const entryPt = [house.c[0] + entryU[0] * (_halfExt + 1.6), house.c[1] + entryU[1] * (_halfExt + 1.6)];
 
   if (!flags.has('nointerior')) {
     modelLoadCancels.push(createInterior(scene, { cx: INT_CX, cz: INT_CZ, floorY: INT_FLOOR },
@@ -1609,7 +1612,10 @@ export function createEngine({ canvas, ui, emit }) {
 
   function updateScoop(dt, now) {
     const inside = scoopScene === 'interior' && interior;
-    let jx = clamp(inp2.jx + inp2.kx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
+    // Keyboard Left/Right TURN the keeper (tank-style) instead of strafing sideways; the touch
+    // joystick still strafes camera-relative. (Walking sideways on arrow keys felt wrong.)
+    if (inp2.kx) { camYawS += inp2.kx * 2.6 * dt; CHAR.yaw = camYawS; lastLookT = now; }
+    let jx = clamp(inp2.jx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     const mag = Math.min(1, Math.hypot(jx, jy));
     if (shiftLock) CHAR.yaw = camYawS; // Roblox shift-lock: keeper faces the camera
     if (mag > MOVE_DEADZONE) {
@@ -1778,13 +1784,14 @@ export function createEngine({ canvas, ui, emit }) {
     camera.lookAt(CHAR.x, interior.floorY + 1.1, CHAR.z);
     // SEE-THROUGH WALLS: hide any wall mesh between the camera and the avatar so you never lose them
     // behind a partition. Collision uses precomputed AABBs, so hidden walls still block movement.
-    if (interior.walls) {
-      for (const w of interior.walls) w.visible = true;
+    const occ = interior.occluders;
+    if (occ) {
+      for (const w of occ) w.visible = true;
       const cp = camera.position, dx = CHAR.x - cp.x, dy = (interior.floorY + 1.1) - cp.y, dz = CHAR.z - cp.z;
       const len = Math.hypot(dx, dy, dz) || 1;
       _wallRay.set(cp, _camT.set(dx / len, dy / len, dz / len));
       _wallRay.far = Math.max(0.1, len - 0.5);
-      const hits = _wallRay.intersectObjects(interior.walls, false);
+      const hits = _wallRay.intersectObjects(occ, true);
       for (const h of hits) h.object.visible = false;
     }
   }
