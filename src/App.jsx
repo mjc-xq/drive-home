@@ -52,7 +52,6 @@ export default function App() {
   const [carPicker, setCarPicker] = useState(false);    // car select menu open
   const [cars, setCars] = useState([]);
   const [navOpen, setNavOpen] = useState(false);        // address picker open
-  const [navAddr, setNavAddr] = useState('');           // custom address input
   const [navErr, setNavErr] = useState('');
   const [autoMax, setAutoMax] = useState(() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } });   // auto-drive top-speed cap (mph; 0 = unlimited)
   const [dest, setDest] = useState(null);               // { label }
@@ -136,19 +135,6 @@ export default function App() {
     { label: 'Stanton Elem', q: 'Stanton Elementary School, Castro Valley, CA', ll: [37.6905, -122.079] },
     { label: "Dad's work", q: '807 Broadway, Oakland, CA', ll: [37.8004778, -122.2739559] },
   ];
-  const goTo = async (q, label, fallback) => {
-    const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
-    if (key) {
-      try {
-        const r = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${key}`);
-        const j = await r.json();
-        const loc = j.results && j.results[0] && j.results[0].geometry && j.results[0].geometry.location;
-        if (loc) { eng().setDestination(loc.lat, loc.lng, label || q); setNavOpen(false); return; }
-      } catch (e) { /* fall back below */ }
-    }
-    if (fallback) { eng().setDestination(fallback[0], fallback[1], label || q); setNavOpen(false); }
-    else setNavErr('Couldn’t find that address');
-  };
   const traceDrive = camName === 'Top-down' || camName === 'Aerial';
   const driveHelp = traceDrive
     ? 'drag the road to drive · release to coast · GO boosts · STOP reverses · tap map to route'

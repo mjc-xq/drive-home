@@ -37,9 +37,11 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   tiles.tileGain = tileGain;
   // Cap anisotropy on mobile: iOS reports 16, and 16× sampling on the full-screen photoreal
   // ground (the highest-overdraw surface at grazing driving angles) is a big fill-rate cost
-  // for little visible gain. 4× keeps nearly all the grazing-angle sharpness.
-  const _mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
-  const maxAniso = _mobile ? Math.min(4, renderer.capabilities.getMaxAnisotropy()) : renderer.capabilities.getMaxAnisotropy();
+  // for little visible gain. 4× keeps nearly all the grazing-angle sharpness. The engine
+  // already detects mobile (incl. iPadOS-13+ desktop UA) and passes it in; fall back to the
+  // same check so the module still works standalone.
+  const isMobile = opts.mobile ?? (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
+  const maxAniso = isMobile ? Math.min(4, renderer.capabilities.getMaxAnisotropy()) : renderer.capabilities.getMaxAnisotropy();
   tiles.registerPlugin({
     name: 'DAHILL_LOOK',
     processTileModel(scene) {

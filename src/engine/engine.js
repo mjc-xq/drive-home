@@ -50,9 +50,9 @@ export function createEngine({ canvas, ui, emit }) {
   THREE.ColorManagement.enabled = false;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE && !MOBILE, powerPreference: 'high-performance' });   // skip the MSAA resolve on mobile (fill-rate bound)
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  // Cap pixel ratio: 1.5 on phones (the fill-rate dial — at DPR 2 a 3x phone draws ~1.8×
-  // the fragments of the photoreal tiles + additive overlays + speed-line compositing for
-  // little visible gain), 2 on desktop. LITE stays at 1x.
+  // Cap pixel ratio: 1.25 on phones (the fill-rate dial — at DPR 2 a 3x phone draws ~2.6×
+  // the fragments of the full-screen photoreal tiles for little visible gain; 1.25 supersampling
+  // still softens edges), 2 on desktop. LITE stays at 1x.
   renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.25 : 2));   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
@@ -782,7 +782,7 @@ export function createEngine({ canvas, ui, emit }) {
       p3dtiles = createPhotorealTiles(scene, camera, renderer, {
         // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
         // is the dominant iOS memory cost, and Drive can now roam far and stream more.
-        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: MOBILE ? 16 : 10
+        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: MOBILE ? 16 : 10, mobile: MOBILE
       });
       if (!p3dtiles) return;
       applyP3DT();
@@ -1472,7 +1472,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function setDestination(lat, lon, label, isChain) {
     const w = geoToWorld(lat, lon);
-    DEST = { x: w[0], z: w[1], label: label || 'Destination' };
+    DEST = { x: w[0], z: w[1], label: label || 'Destination', geo: { lat, lon } };   // geo kept so a failed route can self-retry
     ROUTE = null; routeIdx = 0; userDest = !isChain;
     emit('dest', { label: DEST.label });
     if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200); }
@@ -1557,7 +1557,7 @@ export function createEngine({ canvas, ui, emit }) {
     const g = worldToGeo(wx, wz);
     let route = localRoadRoute(car.x, car.z, wx, wz);
     if (!route) { const np = nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(car.x, car.z, np.x, np.z); }
-    DEST = { x: wx, z: wz, label: 'the map point' }; ROUTE = route || null; routeIdx = 0;
+    DEST = { x: wx, z: wz, label: 'the map point', geo: g }; ROUTE = route || null; routeIdx = 0;   // geo kept so a failed route can self-retry
     fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
     autoDrive = true; inp2.navActive = false;
     emit('dest', { label: DEST.label }); emit('autodrive', true);
@@ -1971,7 +1971,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoDrive && DEST) {
       const end = ROUTE && ROUTE.length ? ROUTE[ROUTE.length - 1] : null;
       const atEnd = end && (routeIdx >= ROUTE.length || Math.hypot(end.x - car.x, end.z - car.z) < 12);
-      if (!ROUTE) { inp2.navActive = false; }                       // routing pending → hold, never straight-line
+      if (!ROUTE) { inp2.navActive = false; if (DEST.geo && now - (DEST._retryT || 0) > 4000) { DEST._retryT = now; fetchRoute(DEST.geo.lat, DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
       else if (atEnd) {
         autoDrive = false; inp2.navActive = false; emit('autodrive', false);
         if (!DEST.reached) { DEST.reached = true; if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
