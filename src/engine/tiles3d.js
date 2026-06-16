@@ -42,6 +42,12 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   // same check so the module still works standalone.
   const isMobile = opts.mobile ?? (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
   const maxAniso = isMobile ? Math.min(4, renderer.capabilities.getMaxAnisotropy()) : renderer.capabilities.getMaxAnisotropy();
+  // Shared cutaway planes for Drive: the engine fills/empties this ONE array per camera view
+  // (overhead slices the canopy just above the car, chase lifts the cut higher). Every tile
+  // material references it by the SAME reference, so mutating its CONTENTS each frame updates
+  // all streamed tiles for free — and new tiles inherit the live planes on load.
+  const clipPlanes = [];
+  tiles.clipPlanes = clipPlanes;
   tiles.registerPlugin({
     name: 'DAHILL_LOOK',
     processTileModel(scene) {
@@ -51,6 +57,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
         const map = src && src.map ? src.map : null;
         if (map) { map.colorSpace = THREE.NoColorSpace; map.anisotropy = maxAniso; }   // sharp roads/roofs at grazing angles
         const m = new THREE.MeshBasicMaterial({ map, side: THREE.FrontSide });
+        m.clippingPlanes = clipPlanes;   // shared ref → Drive cutaway; empty in Explore/Scoop so nothing clips
         m.toneMapped = false;
         m.color.setScalar(tileGain.value);
         o.material = m;

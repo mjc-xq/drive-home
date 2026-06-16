@@ -62,6 +62,7 @@ export function createEngine({ canvas, ui, emit }) {
   renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.25 : 2));   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+  renderer.localClippingEnabled = true;   // Drive-mode tile cutaway: only the photoreal tile materials carry clip planes, so the car/HUD/guide stay unclipped (see updateTileClip + tiles3d.clipPlanes)
   const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xc8d6da);
@@ -843,6 +844,7 @@ export function createEngine({ canvas, ui, emit }) {
   function applyModeVisuals() {
     const photoOn = photoModes(mode) && p3dtiles && tilesReady;
     if (p3dtiles) p3dtiles.holder.visible = photoModes(mode);
+    if (p3dtiles && p3dtiles.clipPlanes && mode !== 'drive') p3dtiles.clipPlanes.length = 0;   // R8 cutaway is Drive-only; never slice the Explore high-orbit / Scoop
     staticGroup.visible = mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     carsGroup.visible = mode === 'drive' || mode === 'scoop';   // parked cars: ground modes only
     if (ring) ring.visible = mode === 'explore';   // marker only makes sense from the air
@@ -2391,6 +2393,27 @@ export function createEngine({ canvas, ui, emit }) {
     return g;
   }
 
+  // R8 — keep nothing rendering BETWEEN the camera and the car: a single down-facing horizontal
+  // clip plane (normal (0,-1,0) keeps geometry BELOW it, removes everything above) at the car's
+  // road height + a clearance, applied ONLY to the photoreal tile materials (shared clipPlanes
+  // array). Overhead views slice the canopy/power-lines just above the car; the low chase lifts
+  // the cut well above so the forward road/buildings stay and only high wires/branches drop;
+  // the high drone Cruise/Aerial keep their clean framing unclipped. The car/HUD/guide ribbon
+  // carry no planes, so they always draw.
+  const _tileClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+  function updateTileClip(yC, view) {
+    const planes = p3dtiles && p3dtiles.clipPlanes;
+    if (!planes) return;
+    let clearance = null;
+    if (view.topdown) clearance = 6;          // straight-down map view: shave the canopy right off
+    else if (!view.drone && !view.aerial) clearance = 16;   // low 'Close' chase: lift the cut well above the car (keep buildings/road)
+    // Cruise (drone) + Aerial high orbit: no clip — their framing already clears the canopy.
+    if (clearance == null) { planes.length = 0; return; }
+    _tileClipPlane.normal.set(0, -1, 0);
+    _tileClipPlane.constant = yC + clearance;   // plane y = yC+clearance; keep y < that, remove above
+    if (planes.length === 0) planes.push(_tileClipPlane);   // contents-mutate the SHARED array (no per-tile work)
+  }
+
   function updateDrive(dt, now) {
     // Mix stick (jx/jy), keyboard (kx/ky), and legacy pedal inputs. The left
     // thumbstick is a Roblox-style move stick: X steers, up is gas, down is
@@ -2744,6 +2767,7 @@ export function createEngine({ canvas, ui, emit }) {
     else { const rate = yr > car.groundY ? dt * 18 : dt * 9; car.groundY += (yr - car.groundY) * Math.min(1, rate); }
     if (yr != null && car.groundY < yr - 0.8) car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up
     const yC = car.groundY;
+    updateTileClip(yC, DRIVE_CAMS[camMode] || {});   // R8: cut tile canopy/wires between the camera and the car for the current view
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     // The 4 corner probes feed only the visual pitch/roll, which tolerates a lower rate, so
     // refresh these tile raycasts ~every 3rd frame and reuse the result between. (These were
