@@ -421,14 +421,16 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #lookHint{bottom:calc(12px + var(--safe-b));right:calc(12px + var(--safe-r));padding:7px 11px;font-size:11px;opacity:.85;font-weight:500}
 
 /* ---- car name card (center pop · square glass, AGC name) ---- */
-#carCard{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) translateY(10px) scale(.96);text-align:center;
-  pointer-events:none;opacity:0;transition:opacity .4s ease,transform .4s cubic-bezier(.2,1.2,.4,1);color:#fff;
-  background:var(--hud-glass);padding:16px 30px;border:1px solid var(--hud-line);
+/* Car-change confirmation: a brief flash near the TOP (under the search bar) — NOT a
+   modal dead-centre over the car/road. Slides down, auto-dismisses (see App.jsx). */
+#carCard{position:absolute;top:calc(76px + var(--safe-t));left:50%;transform:translate(-50%,0) translateY(-8px) scale(.96);text-align:center;
+  pointer-events:none;opacity:0;transition:opacity .35s ease,transform .35s cubic-bezier(.2,1.2,.4,1);color:#fff;
+  background:var(--hud-glass);padding:12px 26px;border:1px solid var(--hud-line);
   border-top:2px solid var(--nav);box-shadow:var(--hud-shadow);
   backdrop-filter:var(--hud-blur);-webkit-backdrop-filter:var(--hud-blur);z-index:8}
-#carCard.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
-#carCard h2{font-family:'AGC';font-weight:900;font-size:30px;letter-spacing:0;text-transform:uppercase;line-height:.92;color:#fff}
-#carCard p{font-family:'Chakra Petch';font-size:12px;opacity:.8;font-weight:500;letter-spacing:.04em;margin-top:6px;line-height:1.4}
+#carCard.show{opacity:1;transform:translate(-50%,0) scale(1)}
+#carCard h2{font-family:'AGC';font-weight:900;font-size:26px;letter-spacing:0;text-transform:uppercase;line-height:.92;color:#fff}
+#carCard p{font-family:'Chakra Petch';font-size:12px;opacity:.8;font-weight:500;letter-spacing:.04em;margin-top:5px;line-height:1.4}
 
 /* ---- arrival "finish line" card (square glass · green accent · AGC) ---- */
 /* Arrival = a slim glass banner that slides up above the dash and auto-dismisses —
@@ -513,6 +515,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   .dashCol{padding:0 11px}
   /* the expandable menu can be tall — let it scroll instead of running off-screen */
   .segMenuPanel{max-height:calc(100dvh - 140px - var(--safe-t) - var(--safe-b));overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  /* the search row is full-width at the top here, so drop the car-change flash below it */
+  #carCard{top:calc(112px + var(--safe-t));padding:11px 20px}
+  #carCard h2{font-size:22px}
 }
 
 @media (max-width:520px){

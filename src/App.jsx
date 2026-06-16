@@ -111,7 +111,7 @@ export default function App() {
         case 'carCard':
           setCarCard({ name: p.name, spec: p.spec, credit: p.credit || '', show: true });
           clearTimeout(cardTimer.current);
-          cardTimer.current = setTimeout(() => setCarCard(c => ({ ...c, show: false })), 3200);
+          cardTimer.current = setTimeout(() => setCarCard(c => ({ ...c, show: false })), 1900);
           break;
         case 'toast':
           setToast({ html: p.html, show: true });
