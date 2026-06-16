@@ -100,7 +100,6 @@ export function createEngine({ canvas, ui, emit }) {
     return { lat: GEO0.lat + N / M_LAT, lon: GEO0.lon + E / M_LON };
   }
   let DEST = null;        // { x, z, label }
-  let userDest = false;   // true when the player set the destination (not an auto-chain)
   let musicPref = (() => { try { return localStorage.getItem('dahill.music') !== '0'; } catch (e) { return true; } })();   // soundtrack on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
@@ -235,7 +234,7 @@ export function createEngine({ canvas, ui, emit }) {
     else if (combo === 5) { toast('🔥🔥 ON FIRE! ×5', 1500); if (audio.sfxChime) audio.sfxChime([784, 988, 1319, 1568]); if (ui.fx && !reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 420); } }
     else if (combo >= 8 && combo % 3 === 2) { toast('🔥🔥🔥 UNSTOPPABLE! ×' + combo, 1500); }
   }
-  function resetRun() { runActive = false; runStart = 0; lastRunMs = 0; combo = 0; comboExpired = true; }
+  function resetRun() { runActive = false; runStart = 0; lastRunMs = 0; combo = 0; comboExpired = true; tripScore = 0; }   // tripScore resets per drive so combo/score chips start clean (was carrying over)
   // close-call reward: skim a tree/animal/car at speed without hitting it → ramp the
   // same combo, a whoosh, and a 'Close!' beat. Turns every hazard into a thrill.
   let lastNearT = -1e9, driftState = false, driftAccum = 0;
@@ -274,7 +273,7 @@ export function createEngine({ canvas, ui, emit }) {
     let best = null, bd = 1e18;
     for (const p of POIS) { if (poiFound.has(p.key)) continue; const d = Math.hypot(p.x - car.x, p.z - car.z); if (d < 35) continue; if (d < bd) { bd = d; best = p; } }   // skip the one you're at
     if (!best) return;
-    autoDrive = false; userDest = false;
+    autoDrive = false;
     setDestination(best.lat, best.lon, best.label, true);
     if (DEST) DEST.poiKey = best.key;   // tag so the chain only continues for places you chose
     toast('🏁 Next stop: floor it to ' + best.label + ' — follow the pink beam! 🏁', 2600);
@@ -1110,7 +1109,7 @@ export function createEngine({ canvas, ui, emit }) {
         return;
       }
       const dx = e.clientX - ox, dy = e.clientY - oy;
-      if (Math.abs(dx) + Math.abs(dy) < 2) return; // look deadzone (kill jitter)
+      if (Math.abs(dx) + Math.abs(dy) < 4) return; // look deadzone (kill resting-finger jitter on high-DPI screens)
       if (mode === 'drive') {
         camOrbit.yaw -= dx * LOOK_SENS;
         camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
@@ -1239,7 +1238,7 @@ export function createEngine({ canvas, ui, emit }) {
     pushScoopHud();
   }
   function enterScoop() {
-    setMode('scoop'); camInit = false; camGroundRef = null; CHAR.groundY = null;
+    setMode('scoop'); camInit = false; szoom = 1; camGroundRef = null; CHAR.groundY = null;   // fresh framing per scoop entry (pinch-zoom shouldn't leak in)
     setInside(false);
     for (const s of labelSprites) s.visible = false;
     CHAR.group.visible = true;
@@ -1544,7 +1543,7 @@ export function createEngine({ canvas, ui, emit }) {
   function setDestination(lat, lon, label, isChain, fromSearch) {
     const w = geoToWorld(lat, lon);
     DEST = { x: w[0], z: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch };   // geo kept so a failed route can self-retry
-    ROUTE = null; routeIdx = 0; userDest = !isChain;
+    ROUTE = null; routeIdx = 0;
     emit('dest', { label: DEST.label });
     if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
@@ -1727,7 +1726,11 @@ export function createEngine({ canvas, ui, emit }) {
   function laneOffset(i) {
     const a = ROUTE[Math.max(0, i - 1)], b = ROUTE[Math.min(ROUTE.length - 1, i + 1)];
     let dx = b.x - a.x, dz = b.z - a.z; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-    const off = clamp((Math.abs(car.speed) - 22) / 30, 0, 1) * 1.1;   // small lane offset, ONLY at highway speed (was shoving the car off narrow streets)
+    // Lane offset only at highway speed, and SMALLER on the tight procedural
+    // neighbourhood streets (onRoad mask, or within the ~340 m home block) so it
+    // hugs the lane out on the wide real roads without scraping the curb in town.
+    const narrow = onRoad(ROUTE[i].x, ROUTE[i].z) || Math.hypot(ROUTE[i].x, ROUTE[i].z) < 340;
+    const off = clamp((Math.abs(car.speed) - 22) / 30, 0, 1) * (narrow ? 0.45 : 1.1);
     return { x: ROUTE[i].x + dz * off, z: ROUTE[i].z - dx * off };   // right perpendicular = (dz, -dx)
   }
   // distance along the route to the next real TURN (>~25° heading change) — lets the
@@ -1754,7 +1757,7 @@ export function createEngine({ canvas, ui, emit }) {
     // HARD turn cap: never go faster than you can comfortably slow for the next bend, scaled
     // by distance to it. Without this the chauffeur blasts a highway at 450 mph and overshoots
     // the onramp/exit, looping the interchange. ~40 u/s near a turn → ~400 on a long straight.
-    s = Math.min(s, 16 + distToNextTurn() * 1.25);
+    s = Math.min(s, 16 + turn * 1.25);   // reuse the `turn` computed above — don't walk the route twice
     if (autoMaxMph) s = Math.min(s, autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
     return s;
   }
@@ -2144,17 +2147,18 @@ export function createEngine({ canvas, ui, emit }) {
       const atEnd = end && (routeIdx >= ROUTE.length || Math.hypot(end.x - car.x, end.z - car.z) < 12);
       if (!ROUTE) { inp2.navActive = false; if (DEST.geo && now - (DEST._retryT || 0) > 4000) { DEST._retryT = now; fetchRoute(DEST.geo.lat, DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
       else if (atEnd) {
-        autoDrive = false; inp2.navActive = false; emit('autodrive', false);
         if (!DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
+        clearDestination();   // arrived — drop the nav card + route line (was sticking on "arriving…") and end auto-drive
       } else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
     }
-    // ARRIVAL payoff — ONLY for a destination chosen from the GO address search
-    // (DEST.celebrate). A casual tap-to-trace on the map is NOT an "arrival" worth a
-    // banner (the user: it should only show if you pick an address from GO). POIs run
-    // their own richer celebration via checkPOIs (45 m).
-    else if (DEST && DEST.celebrate && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
+    // Reached a self-driven destination: clear the route either way, but only show the
+    // ARRIVAL banner for a place chosen from the GO address search (DEST.celebrate). A
+    // casual tap-to-trace is not an "arrival" worth a banner (the user: only show it if
+    // you pick an address from GO). POIs run their own richer celebration via checkPOIs.
+    else if (DEST && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
       DEST.reached = true;
-      if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now);
+      if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now);
+      clearDestination();
     }
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
     // ground point. Speed scales with DISTANCE (drag far = floor it, near = creep),
@@ -2228,7 +2232,7 @@ export function createEngine({ canvas, ui, emit }) {
     const aGap = pedalTgt - car.speed;
     const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul;   // peak engine pull (cap)
     let acc = clamp(aGap * (aGap > 0 ? 2.6 : 0.9), -aMax, aMax);     // chase target; gentler on lift-off coast
-    if (aGap > 0) acc *= 0.55 + 0.45 * clamp(Math.abs(car.speed) / 6, 0, 1);   // soft off-the-line so a standstill stab isn't a jerk
+    if (aGap > 0) acc *= 0.75 + 0.25 * clamp(Math.abs(car.speed) / 6, 0, 1);   // gentle off-the-line ramp (the ^2.4 pedal curve already kills standstill jerk) — keeps a floored stab feeling punchy, not sluggish
     // PROGRESSIVE brake: ramp the brake force in over ~0.25 s so a quick tap trail-brakes
     // lightly (corner-entry finesse) while a long hold still hauls it down hard.
     const braking = brake > 0.1;
@@ -2258,7 +2262,7 @@ export function createEngine({ canvas, ui, emit }) {
     // tighter turns at speed (makes corners) but softened up high so the open-road blast
     // the design invites stays pointable instead of going numb.
     const steerTarget = (-jx) * 0.5 / (1 + Math.abs(car.speed) * 0.05);   // tame yaw authority up top so the blast stays pointable
-    car.steer += (steerTarget - car.steer) * Math.min(1, dt * 9);
+    car.steer += (steerTarget - car.steer) * Math.min(1, dt * 12);   // snappier wheel — less lag between thumb and tyres
     // brake-to-drift: stab the brake while turning fast (or the Space handbrake) and
     // the tail steps out; a handbrake yaw kick helps rotate through tight corners.
     const hb = (inp2.hbrake || (brake > 0.1 && Math.abs(car.speed) > 8)) ? 1 : 0;
@@ -2582,7 +2586,10 @@ export function createEngine({ canvas, ui, emit }) {
       const camT = _camT.set(car.x + Math.sin(a) * dist, camGroundRef + h, car.z + Math.cos(a) * dist);
       if (!CAM.drone) {
         const g = resolveCam(car.x, yC + 1.2, car.z, camT.x, camT.y, camT.z);
-        if (g < 1) { camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g, car.z + (camT.z - car.z) * g); }
+        // Boxed in by buildings (e.g. arriving on a tight residential street): pull the
+        // camera in toward the car, but RISE as it closes so it looks DOWN at the car from
+        // above instead of burying into the wall / staring at the car's own roof.
+        if (g < 1) { const lift = (1 - g) * 7; camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g + lift, car.z + (camT.z - car.z) * g); }
       }
       if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; camFloorRef = null; }
       camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed

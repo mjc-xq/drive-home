@@ -236,7 +236,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   background:rgba(255,255,255,.06);color:#fff;font-family:'Chakra Petch';font-size:15px;font-weight:500;outline:none;pointer-events:auto}
 .navTool.drive .addrBox input:focus{border-color:rgba(43,232,79,.7);box-shadow:0 0 0 3px rgba(43,232,79,.16)}
 .navTool.jump .addrBox input:focus{border-color:rgba(155,123,255,.7);box-shadow:0 0 0 3px rgba(155,123,255,.16)}
-.addrBox input::placeholder{color:rgba(255,255,255,.42)}
+.addrBox input::placeholder{color:rgba(255,255,255,.6)}
 .addrGo{flex:0 0 auto;padding:0 20px;border:0;font-family:'Chakra Petch';font-size:13px;font-weight:700;letter-spacing:.04em;cursor:pointer;display:grid;place-items:center}
 .addrGo:active{transform:translateY(1px)}
 .addrGo:disabled{opacity:.6}
@@ -398,7 +398,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 
 /* ---- scoop info chips ---- */
 #toolChip{top:calc(12px + var(--safe-t));left:calc(12px + var(--safe-l));padding:9px 14px;font-size:13px;font-weight:700}
-#toolChip span{opacity:.65;font-size:12px}
+#toolChip span{opacity:.85;font-size:13px;font-weight:700}
 #pooHud{top:calc(12px + var(--safe-t));left:50%;transform:translateX(-50%);padding:9px 14px;
   font-size:13px;font-weight:700;white-space:nowrap}
 #lookHint{bottom:calc(12px + var(--safe-b));right:calc(12px + var(--safe-r));padding:7px 11px;font-size:11px;opacity:.85;font-weight:500}
@@ -483,6 +483,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   .searchBar:active{transform:scale(.99)}
   .navCard{justify-content:space-between}
   .navCard .ncTurn{flex:1;min-width:0}
+  .ncDest b{max-width:none}   /* let the destination name use the full-width card before truncating */
   /* minimap (left) and VIEW/FIX/menu (right) tuck just below that search row */
   .dvLeft{top:calc(64px + var(--safe-t))}
   .dvTopRight{top:calc(64px + var(--safe-t))}

@@ -388,7 +388,7 @@ export default function App() {
               <div className="stickLabel">SWIPE TO LOOK</div>
             </div>
             </>)}
-            {traceDrive && <div className="dragDriveHint">✦ Drag the map to drive · tap a spot to route there</div>}
+            {traceDrive && <div className="dragDriveHint" aria-hidden="true">✦ Drag the map to drive · tap a spot to route there</div>}
             <button className="hornBtn" aria-label="Horn" onClick={() => eng().horn()}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M16 9a5 5 0 0 1 0 6" /></svg>
             </button>
