@@ -237,6 +237,25 @@ export function loadParkedCar(parent, url, opts = {}, onReady) {
 // Each driven model is one group parented under car.group, stored at a FIXED
 // slot so cycle order is stable no matter which GLB resolves first. Exactly one
 // model (or, until any loads, the procedural fallback) is visible at a time.
+
+// Hide the procedural FALLBACK meshes — every car.group child that isn't a
+// registered model group (createCar adds the placeholder supercar as loose
+// meshes straight under car.group). This is the single guarantee that the red
+// placeholder never lingers BENEATH a real car: it must run on EVERY path that
+// reveals a model — first load, the slow-default reveal-timeout, AND every user
+// swap — not just the first registerVehicle (the bug was that swaps skipped it).
+function retireFallback(car) {
+  for (const ch of car.group.children) {
+    if (!car.models.some(m => m && m.group === ch)) ch.visible = false;
+  }
+}
+// Show exactly one model group (and retire the fallback), hiding all others.
+function showOnly(car, slot) {
+  retireFallback(car);
+  for (const m of car.models) if (m) m.group.visible = false;
+  car.models[slot].group.visible = true;
+}
+
 function registerVehicle(car, group, slot, meta) {
   group.visible = false;
   car.group.add(group);
@@ -247,15 +266,10 @@ function registerVehicle(car, group, slot, meta) {
   // failed slot-0 still ends up showing whatever loaded.
   if (!car.userPicked) {
     if (car.heldForDefault && slot !== 0 && !car.models[0]) return;
-    // retire the procedural fallback meshes only when a real model is actually visible
     const first = (car.heldForDefault && car.models[0]) ? 0 : car.models.findIndex(Boolean);
     if (first < 0) return;                          // unreachable (slot just set), but never deref [-1]
-    for (const ch of car.group.children) {
-      if (!car.models.some(m => m && m.group === ch)) ch.visible = false;
-    }
     car.modelIdx = first;
-    for (const m of car.models) if (m) m.group.visible = false;
-    car.models[first].group.visible = true;
+    showOnly(car, first);
     car.heldForDefault = false;
   }
 }
@@ -265,8 +279,7 @@ export function setVehicle(car, slot) {
   if (!car.models[slot]) return null;
   car.userPicked = true;
   car.modelIdx = slot;
-  for (const m of car.models) if (m) m.group.visible = false;
-  car.models[slot].group.visible = true;
+  showOnly(car, slot);
   return car.models[slot];
 }
 // Roster snapshot for the picker UI: every known vehicle + whether it's loaded/current.
@@ -281,8 +294,7 @@ export function cycleVehicle(car) {
   car.userPicked = true;
   const next = loaded[(loaded.indexOf(car.modelIdx) + 1) % loaded.length];
   car.modelIdx = next;
-  for (const m of car.models) if (m) m.group.visible = false;
-  car.models[next].group.visible = true;
+  showOnly(car, next);
   return car.models[next];
 }
 
