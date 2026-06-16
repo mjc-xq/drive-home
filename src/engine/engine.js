@@ -874,11 +874,11 @@ export function createEngine({ canvas, ui, emit }) {
     const stanton = POIS.find(p => p.key === 'stanton');
     if (stanton) for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2, r = 4 + (i % 2) * 2.5; put(ceceCrowd, stanton.x + Math.cos(a) * r, stanton.z + Math.sin(a) * r, 'stanton', true); }
   }
-  let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) placeCrowd(); };
+  let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
   if (!flags.has('nochar')) {
     loadCeceCrowd(c => { ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
     loadDrewCrowd(c => { drewCrowd = c; _onCrowd(); }, () => _onCrowd());
-  }
+  } else geocodePOIs();
   function updateCrowd(dt) {
     if (!crowdSpots.length) return;
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
@@ -1536,6 +1536,28 @@ export function createEngine({ canvas, ui, emit }) {
         else rej(new Error('geocode ' + status));
       });
     }));
+  }
+  // Correct the preset POIs to their REAL coordinates via Google geocoding (the hardcoded
+  // lat/lons were approximate). Updates each POI's world position so proximity/'found' and
+  // the in-world beacon+label point at the actual place; shifts the Stanton dancers along.
+  const POI_ADDR = {
+    meemaw: '4311 Circle Drive, Castro Valley, CA 94546',
+    canyon: 'Canyon Middle School, Castro Valley, CA',
+    stanton: 'Stanton Elementary School, Castro Valley, CA',
+    dad: '807 Broadway, Oakland, CA 94607',
+  };
+  function geocodePOIs() {
+    for (const p of POIS) {
+      const addr = POI_ADDR[p.key];
+      if (!addr) continue;
+      geocodeAddress(addr).then(g => {
+        const w = geoToWorld(g.lat, g.lon), ox = p.x, oz = p.z;
+        p.x = w[0]; p.z = w[1]; p.lat = g.lat; p.lon = g.lon;
+        const b = poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
+        const lb = poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
+        if (p.key === 'stanton') for (const sp of crowdSpots) if (sp.zone === 'stanton') { sp.rec.grp.position.x += p.x - ox; sp.rec.grp.position.z += p.z - oz; sp.rec.x += p.x - ox; sp.rec.z += p.z - oz; }
+      }).catch(() => { });
+    }
   }
   function geocodePlaceId(placeId, fallbackLabel) {
     return loadMapsSDK().then(maps => new Promise((res, rej) => {
