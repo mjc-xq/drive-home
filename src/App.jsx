@@ -8,11 +8,19 @@ function AddressSearch({ placeholder, actionLabel, suggest, onPick, onText }) {
   const [sugs, setSugs] = useState([]);
   const [busy, setBusy] = useState(false);
   const tRef = useRef(0);
+  const reqRef = useRef(0);
+  useEffect(() => () => { clearTimeout(tRef.current); reqRef.current++; }, []);
   const onChange = (v) => {
+    const q = v.trim().replace(/\s+/g, ' ');
     setVal(v);
     clearTimeout(tRef.current);
-    if (v.trim().length < 3) { setSugs([]); return; }
-    tRef.current = setTimeout(() => { suggest(v).then(s => setSugs(s || [])).catch(() => setSugs([])); }, 220);
+    if (q.length < 4) { reqRef.current++; setSugs([]); return; }
+    const req = ++reqRef.current;
+    tRef.current = setTimeout(() => {
+      suggest(q)
+        .then(s => { if (req === reqRef.current) setSugs((s || []).slice(0, 4)); })
+        .catch(() => { if (req === reqRef.current) setSugs([]); });
+    }, 360);
   };
   const choose = (item) => { setBusy(true); setSugs([]); setVal(item.description); Promise.resolve(onPick(item)).finally(() => setBusy(false)); };
   const submit = (e) => { e.preventDefault(); if (!val.trim()) return; setBusy(true); setSugs([]); Promise.resolve(onText(val.trim())).finally(() => setBusy(false)); };
@@ -143,6 +151,7 @@ export default function App() {
   // Quick destinations (live-geocoded for accuracy; hardcoded fallback so they
   // always work even if the Geocoding API isn't enabled on the key).
   const PRESETS = [
+    { label: 'Home', home: true },
     { label: "Meemaw's", q: '4311 Circle Ave, Castro Valley, CA', ll: [37.6995618, -122.0639216] },
     { label: 'Canyon Middle', q: 'Canyon Middle School, Castro Valley, CA', ll: [37.7046462, -122.0524363] },
     { label: 'Stanton Elem', q: 'Stanton Elementary School, Castro Valley, CA', ll: [37.7005734, -122.0940411] },
@@ -151,7 +160,8 @@ export default function App() {
   const traceDrive = camName === 'Top-down' || camName === 'Aerial';
   const driveHelp = traceDrive
     ? 'Drag the road to drive · right stick to orbit the camera · tap the map to route'
-    : 'Left stick to move · pull back to reverse · right stick to look · tap the map to route';
+    : 'Left stick moves · push up for gas · pull back to reverse · swipe right side to look';
+  const carColor = slot => ['#48ff6a', '#62b6ff', '#ff3f2f', '#ffb23a', '#8df0ff', '#ff4747', '#f5f0dc', '#f4f7ff', '#9b7bff'][slot] || '#ffffff';
 
   return (
     <>
@@ -228,7 +238,7 @@ export default function App() {
           </div>
         )}
         {mode === 'drive' && (
-          <div id="hud" className="driveHud">
+          <div id="hud" className={'driveHud' + (traceDrive ? ' tracing' : '')}>
 
             {/* ══ TOP-LEFT: score strip (scored run only) above the framed minimap ══ */}
             <div className="dvLeft">
@@ -345,6 +355,7 @@ export default function App() {
                 <div className="dashSpeedMeta">
                   <span className="dashKick">MPH</span>
                   <div className="dashBar"><i ref={el => (uiRefs.current.speedBar = el)} /></div>
+                  <div className="boostBar" aria-hidden="true"><i ref={el => (uiRefs.current.boostBar = el)} /></div>
                 </div>
               </div>
               <div className="dashDiv" />
@@ -408,7 +419,13 @@ export default function App() {
                     onText={t => eng().driveToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
                   <div className="navPresets">
                     {PRESETS.map(p => (
-                      <button key={p.label} className="navChip" onClick={() => { setNavErr(''); eng().driveToText(p.q).then(() => setNavOpen(false)).catch(() => { eng().setDestination(p.ll[0], p.ll[1], p.label); setNavOpen(false); }); }}>{p.label}</button>
+                      <button key={p.label} className="navChip" onClick={() => {
+                        setNavErr('');
+                        const run = p.home
+                          ? eng().driveHome()
+                          : eng().driveToText(p.q).catch(() => eng().setDestination(p.ll[0], p.ll[1], p.label));
+                        Promise.resolve(run).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that destination"));
+                      }}>{p.label}</button>
                     ))}
                   </div>
                 </div>
@@ -438,7 +455,7 @@ export default function App() {
                   {cars.map(c => (
                     <button key={c.slot} className={'carRow' + (c.current ? ' current' : '') + (c.locked ? ' locked' : '')} disabled={!c.loaded || c.locked}
                       onClick={() => { eng().pickCar(c.slot); setCars(eng().getCars()); if (!c.locked) setCarPicker(false); }}>
-                      <span className="carThumb"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /><circle cx="7.5" cy="17.5" r="1.4" /><circle cx="16.5" cy="17.5" r="1.4" /></svg></span>
+                      <span className="carThumb" style={{ '--car-accent': carColor(c.slot) }}><svg width="24" height="20" viewBox="0 0 30 22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 12 8 6h14l2 6" /><rect x="3" y="11" width="24" height="7" rx="2" /><circle cx="8.5" cy="18" r="2" /><circle cx="21.5" cy="18" r="2" /></svg></span>
                       <span className="carInfo"><span className="carName">{c.name}</span><span className="carSpec">{c.locked ? 'Find all 5 places to unlock' : (c.loaded ? c.credit : 'loading…')}</span></span>
                       <span className="carTag">{c.locked ? '🔒' : c.current ? '✓ ON' : c.spec}</span>
                     </button>

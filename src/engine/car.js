@@ -220,14 +220,17 @@ function normalizeCarGLB(scene, length, black) {
 // (so the caller can add a footprint collider only when the car actually exists).
 export function loadParkedCar(parent, url, opts = {}, onReady) {
   const { x = 0, y = 0, z = 0, yaw = 0, length = 4.6, black = true, flip = false } = opts;
+  let cancelled = false;
   new GLTFLoader().load(url, g => {
+    if (cancelled) return;
     const grp = new THREE.Group();
     grp.add(normalizeCarGLB(g.scene, length, black));
     grp.position.set(x, y, z);
     grp.rotation.y = yaw + (flip ? Math.PI : 0);   // some GLBs' nose runs the opposite way
     parent.add(grp);
     if (onReady) onReady(grp);
-  }, undefined, err => console.warn('parked car failed', url, err));
+  }, undefined, err => { if (!cancelled) console.warn('parked car failed', url, err); });
+  return () => { cancelled = true; };
 }
 
 // ---- Drivable vehicle roster ------------------------------------------------
@@ -238,18 +241,18 @@ function registerVehicle(car, group, slot, meta) {
   group.visible = false;
   car.group.add(group);
   car.models[slot] = { group, ...meta };
-  // retire the procedural fallback meshes the moment any real model arrives
-  for (const ch of car.group.children) {
-    if (!car.models.some(m => m && m.group === ch)) ch.visible = false;
-  }
   // until the user picks, show the DEFAULT (slot 0). Hold the reveal until slot 0 arrives so
   // the player never sees a wrong car flash in first (e.g. the Ferrari loading before the
   // Granvia); the engine clears `heldForDefault` after a short fallback timeout so a slow or
   // failed slot-0 still ends up showing whatever loaded.
   if (!car.userPicked) {
     if (car.heldForDefault && slot !== 0 && !car.models[0]) return;
+    // retire the procedural fallback meshes only when a real model is actually visible
     const first = (car.heldForDefault && car.models[0]) ? 0 : car.models.findIndex(Boolean);
     if (first < 0) return;                          // unreachable (slot just set), but never deref [-1]
+    for (const ch of car.group.children) {
+      if (!car.models.some(m => m && m.group === ch)) ch.visible = false;
+    }
     car.modelIdx = first;
     for (const m of car.models) if (m) m.group.visible = false;
     car.models[first].group.visible = true;
@@ -291,26 +294,32 @@ export function cycleVehicle(car) {
 // ground) for AMBIENT TRAFFIC — the engine clone()s it across many cars (shared
 // geometry/materials, cheap). onReady(group) fires on success only.
 export function loadCarProto(url, length, flip, onReady) {
+  let cancelled = false;
   const gl = new GLTFLoader(); gl.setDRACOLoader(DracoShim);
   gl.load(url, g => {
+    if (cancelled) return;
     const inner = new THREE.Group();
     inner.rotation.y = flip ? Math.PI : 0;          // face nose +Z (traffic groups rotate by atan2(dx,dz))
     inner.add(normalizeCarGLB(g.scene, length, false));
     onReady(inner);
-  }, undefined, err => console.warn('traffic model failed', url, err));
+  }, undefined, err => { if (!cancelled) console.warn('traffic model failed', url, err); });
+  return () => { cancelled = true; };
 }
 
 export function loadDrivableCar(car, url, slot, opts = {}) {
   const { length = 4.6, black = true, flip = false, meta = {} } = opts;
   const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z
+  let cancelled = false;
   const gl = new GLTFLoader();
   gl.setDRACOLoader(DracoShim);                   // decode Draco-compressed GLBs (e.g. the Granvia)
   gl.load(url, g => {
+    if (cancelled) return;
     const inner = new THREE.Group();
     inner.rotation.y = spin;
     const model = normalizeCarGLB(g.scene, length, black);
     liftVehicleMaterials(model, black ? 0.16 : 0.22);
     inner.add(model);
     registerVehicle(car, inner, slot, meta);
-  }, undefined, err => console.warn('drivable car failed', url, err));
+  }, undefined, err => { if (!cancelled) console.warn('drivable car failed', url, err); });
+  return () => { cancelled = true; };
 }

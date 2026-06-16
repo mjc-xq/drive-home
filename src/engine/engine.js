@@ -43,6 +43,7 @@ export function createEngine({ canvas, ui, emit }) {
   // phone opened normally. This flips a weak device to DPR1 / no-AA / no-shadows.
   const LITE = flags.has('lite') ||
     (MOBILE && ((navigator.hardwareConcurrency || 4) <= 4 || (navigator.deviceMemory || 4) <= 3));
+  document.documentElement.classList.toggle('lite3d', LITE || MOBILE);
 
   // Upgraded to three r184. The scene's colours and light intensities were all
   // hand-tuned under r128's un-managed, linear-output pipeline, so opt back out
@@ -84,7 +85,7 @@ export function createEngine({ canvas, ui, emit }) {
   // World-frame road segments for the minimap (drawn as a 2D map).
   const roadSegs = [];
   for (const r of S.roads) {
-    if (r.k !== 'residential' && r.k !== 'tertiary') continue;
+    if (r.k !== 'residential' && r.k !== 'tertiary' && r.k !== 'service') continue;
     for (let k = 0; k < r.p.length - 1; k++) roadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
   }
   // geo -> world: the orig/tile frame is anchored at 1840 Dahill Lane (flat tangent
@@ -120,9 +121,10 @@ export function createEngine({ canvas, ui, emit }) {
       const s = near[i], mx = (s[0][0] + s[1][0]) / 2, mz = (s[0][1] + s[1][1]) / 2;
       const m = new THREE.Mesh(coinGeo, coinMat); m.castShadow = true; m.frustumCulled = false; m.visible = false;
       m.position.set(mx, terrainAt(mx, mz) + 1.1, mz);
-      scene.add(m); coins.push({ mesh: m, x: mx, z: mz, got: false });
+      scene.add(m); coins.push({ mesh: m, x: mx, z: mz, got: false, groundY: null });
     }
   }
+  let coinGroundCursor = 0;
 
   // ---- drive particles: skid decals + tyre smoke + coin sparks (all pooled) ----
   const FX = { skids: [], smoke: [], sparks: [], si: 0, mi: 0, pi: 0 };
@@ -343,6 +345,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- ambient TRAFFIC: simple cars roaming the neighbourhood roads, so there's
   // finally something alive to weave through. They feed the near-miss/combo economy
   // and bounce on contact. Lives only on the ±330 m procedural street network. ----
+  const modelLoadCancels = [];
   const traffic = [];
   {
     const tSegs = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 330 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);
@@ -369,7 +372,7 @@ export function createEngine({ canvas, ui, emit }) {
     // surface (emissiveMap = the texture) so the car reads bright while keeping ALL its
     // texture detail. (The earlier flat-colour recolour is exactly what looked "lame".)
     [[rav4Url, 4.6], [miniUrl, 3.85], [granviaUrl, 5.1]].forEach((def, mi, defs) => {
-      loadCarProto(def[0], def[1], false, proto => {
+      modelLoadCancels.push(loadCarProto(def[0], def[1], false, proto => {
         for (let i = mi; i < traffic.length; i += defs.length) {
           const c = traffic[i];
           for (const m of c.box) c.group.remove(m);     // drop the box
@@ -393,7 +396,7 @@ export function createEngine({ canvas, ui, emit }) {
           });
           c.group.add(inst);
         }
-      });
+      }));
     });
   }
   function nextTrafficSeg(c) {
@@ -556,12 +559,12 @@ export function createEngine({ canvas, ui, emit }) {
   const GUIDE_N = 90;                                   // max cross-sections (~5 m apart)
   const guidePos = new Float32Array(GUIDE_N * 2 * 3);
   const guideGeo = new THREE.BufferGeometry();
-  guideGeo.setAttribute('position', new THREE.BufferAttribute(guidePos, 3));
+  guideGeo.setAttribute('position', new THREE.BufferAttribute(guidePos, 3).setUsage(THREE.DynamicDrawUsage));
   { const idx = []; for (let i = 0; i < GUIDE_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } guideGeo.setIndex(idx); }
   // depthTest TRUE so the solid CAR (and hills/buildings) occlude the ribbon — the car
   // drives OVER the line, the line never paints on top of the car. depthWrite stays off so
   // it doesn't disturb other transparent sorting.
-  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x2f8bff, transparent: true, opacity: 0.7, depthWrite: false, depthTest: true, side: THREE.DoubleSide }));
+  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x28c9ff, transparent: true, opacity: 0.54, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, side: THREE.DoubleSide }));
   guideLine.renderOrder = 6; guideLine.visible = false; guideLine.frustumCulled = false;
   scene.add(guideLine);
   const destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
@@ -721,7 +724,12 @@ export function createEngine({ canvas, ui, emit }) {
   function actorGroundY(x, z, prevY) {
     const tA = terrainAt(x, z);
     if (!p3dtiles || !p3dtiles.holder.visible) return tA;
-    const y = rawTileY(x, z, (prevY != null ? prevY : tA) + 3);   // first surface below the actor = road
+    const base = prevY != null ? prevY : tA;
+    // Cast from above the actor, not the sky, so foliage is skipped; retry higher
+    // if a steep hill/bridge has risen above the previous car height.
+    let y = rawTileY(x, z, base + 8);
+    if (y == null && prevY != null) y = rawTileY(x, z, base + 24);
+    if (y == null && prevY == null) y = rawTileY(x, z);
     if (y == null) return prevY != null ? prevY : tA;             // tile not streamed yet: hold height
     // Far from the procedural neighborhood the terrain grid (±340 m) is just a
     // clamped edge value, so don't tie the car to it — ride the real photoreal
@@ -923,14 +931,14 @@ export function createEngine({ canvas, ui, emit }) {
     // The swappable roster (🚗). All the new GLBs were Draco+WebP compressed and run nose
     // -Z, so flip:true points them forward (matches the Granvia). Ferrari is slot 2 (loaded
     // above via loadRealCar). Profiles live in VEHICLES.
-    loadDrivableCar(car, granviaUrl, 0, { length: 5.1, flip: true, black: false, meta: VEHICLES[0] });
-    loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] });
-    loadDrivableCar(car, mustangUrl, 3, { length: 4.9, flip: true, black: false, meta: VEHICLES[3] });
-    loadDrivableCar(car, miniUrl, 4, { length: 3.85, flip: true, black: false, meta: VEHICLES[4] });
-    loadDrivableCar(car, corvetteUrl, 5, { length: 4.6, flip: true, black: false, meta: VEHICLES[5] });
-    loadDrivableCar(car, rollsroyceUrl, 6, { length: 5.4, flip: true, black: false, meta: VEHICLES[6] });
-    loadDrivableCar(car, scgUrl, 7, { length: 4.5, flip: true, black: false, meta: VEHICLES[7] });
-    loadDrivableCar(car, battistaUrl, 8, { length: 4.8, flip: true, black: false, meta: VEHICLES[8] });
+    modelLoadCancels.push(loadDrivableCar(car, granviaUrl, 0, { length: 5.1, flip: true, black: false, meta: VEHICLES[0] }));
+    modelLoadCancels.push(loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] }));
+    modelLoadCancels.push(loadDrivableCar(car, mustangUrl, 3, { length: 4.9, flip: true, black: false, meta: VEHICLES[3] }));
+    modelLoadCancels.push(loadDrivableCar(car, miniUrl, 4, { length: 3.85, flip: true, black: false, meta: VEHICLES[4] }));
+    modelLoadCancels.push(loadDrivableCar(car, corvetteUrl, 5, { length: 4.6, flip: true, black: false, meta: VEHICLES[5] }));
+    modelLoadCancels.push(loadDrivableCar(car, rollsroyceUrl, 6, { length: 5.4, flip: true, black: false, meta: VEHICLES[6] }));
+    modelLoadCancels.push(loadDrivableCar(car, scgUrl, 7, { length: 4.5, flip: true, black: false, meta: VEHICLES[7] }));
+    modelLoadCancels.push(loadDrivableCar(car, battistaUrl, 8, { length: 4.8, flip: true, black: false, meta: VEHICLES[8] }));
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
@@ -944,10 +952,10 @@ export function createEngine({ canvas, ui, emit }) {
       parkedSpots.push({ x: cx, z: cz });          // walk-to-drive targets
       // add the footprint collider only once the car actually loads, so a failed
       // load doesn't leave an invisible wall the driven car bounces off.
-      loadParkedCar(carsGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
+      modelLoadCancels.push(loadParkedCar(carsGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
         const hl = len / 2, hw = 1.05;
         bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
-      });
+      }));
     };
     park(rav4Url, 1, 4.6, false, false);  // RAV4 nose runs +Z → carYaw already faces it; black baked in (keeps taillights)
     park(siennaUrl, -1, 5.1, false, false);   // GLB nose runs -Z; black baked in (keeps taillights)
@@ -1025,7 +1033,8 @@ export function createEngine({ canvas, ui, emit }) {
   // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
-  const LOOK_SENS = 0.0072, PITCH_SENS = 0.0048, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.12;   // more responsive free-look
+  const LOOK_SENS = 0.0072, PITCH_SENS = 0.0048, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.10;   // more responsive free-look
+  const JOY_R = 66, JOY_MAX = 52;
   const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
@@ -1070,7 +1079,7 @@ export function createEngine({ canvas, ui, emit }) {
         movePtr = e.pointerId; joyBX = e.clientX; joyBY = e.clientY;
         if (ui.joy) {
           ui.joy.style.display = 'block';
-          ui.joy.style.left = (e.clientX - 61) + 'px'; ui.joy.style.top = (e.clientY - 61) + 'px';
+          ui.joy.style.left = (e.clientX - JOY_R) + 'px'; ui.joy.style.top = (e.clientY - JOY_R) + 'px';
         }
         if (ui.knob) ui.knob.style.transform = 'translate(-50%,-50%)';
       } else {
@@ -1097,7 +1106,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (e.pointerId === navPtr) { if (Math.hypot(e.clientX - navDownX, e.clientY - navDownY) > 12) navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
       if (e.pointerId === movePtr) {
         let dx = e.clientX - joyBX, dy = e.clientY - joyBY;
-        const d = Math.hypot(dx, dy), mx = 46;
+        const d = Math.hypot(dx, dy), mx = JOY_MAX;
         if (d > mx) { dx *= mx / d; dy *= mx / d; }
         inp2.jx = dx / mx; inp2.jy = dy / mx;
         if (ui.knob) ui.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
@@ -1431,7 +1440,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     czoom = 1;                                            // fresh zoom (pinch shouldn't leak between drives)
     poiSeen.clear();                                      // re-arm the neighbourhood callouts
-    for (const c of coins) c.got = false; coinsGot = 0;   // fresh coins each drive
+    for (const c of coins) { c.got = false; c.groundY = null; } coinsGot = 0;   // fresh coins each drive
     resetRun(); resetParticles();
     emitScore({ finishMs: 0 });
     emit('driveCam', DRIVE_CAMS[camMode].name);
@@ -1515,6 +1524,7 @@ export function createEngine({ canvas, ui, emit }) {
   // browser — the Directions web service is CORS-blocked). Falls back to a straight
   // line if the SDK/Directions API isn't enabled on the key.
   let _mapsSDK = null;
+  let routeReqId = 0;
   function loadMapsSDK() {
     if (window.google && window.google.maps && window.google.maps.DirectionsService) return Promise.resolve(window.google.maps);
     if (_mapsSDK) return _mapsSDK;
@@ -1522,7 +1532,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (!key) return Promise.reject(new Error('no key'));
     _mapsSDK = new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + key + '&libraries=places';   // places = address autocomplete
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + key + '&libraries=places&loading=async';   // places = address autocomplete
       s.async = true; s.defer = true;
       s.onload = () => (window.google && window.google.maps) ? res(window.google.maps) : rej(new Error('maps unavailable'));
       s.onerror = () => rej(new Error('maps script failed'));
@@ -1531,15 +1541,23 @@ export function createEngine({ canvas, ui, emit }) {
     return _mapsSDK;
   }
   function fetchRoute(destLat, destLon) {
+    const reqId = ++routeReqId;
     loadMapsSDK().then(maps => {
       const o = worldToGeo(car.x, car.z);
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat: destLat, lng: destLon }, travelMode: 'DRIVING' },
         (result, status) => {
-          if (status === 'OK' && result.routes && result.routes[0] && DEST) {
-            const pts = result.routes[0].overview_path.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
+          if (reqId !== routeReqId || !DEST || !DEST.geo ||
+            Math.abs(DEST.geo.lat - destLat) > 1e-7 || Math.abs(DEST.geo.lon - destLon) > 1e-7) return;
+          if (status === 'OK' && result.routes && result.routes[0]) {
+            const route = result.routes[0];
+            const stepPath = [];
+            for (const leg of route.legs || []) for (const step of leg.steps || []) for (const p of step.path || []) stepPath.push(p);
+            const src = stepPath.length ? stepPath : route.overview_path;
+            const pts = src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
             if (pts.length > 1) {
               ROUTE = pts; routeIdx = 0;
+              snapDestinationToRouteEnd(pts);
               if (autoDrive && Math.abs(car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
               toast('🗺️ Route ready — follow the line', 1500);
             }
@@ -1548,17 +1566,32 @@ export function createEngine({ canvas, ui, emit }) {
       );
     }).catch(e => console.warn('[maps sdk] route unavailable, using straight line —', e && e.message));
   }
+  function snapDestinationToRouteEnd(pts) {
+    if (!DEST || !pts || pts.length < 2) return;
+    const end = pts[pts.length - 1];
+    const rawX = DEST.rawX == null ? DEST.x : DEST.rawX;
+    const rawZ = DEST.rawZ == null ? DEST.z : DEST.rawZ;
+    // Google geocodes addresses to parcels/rooftops, but cars need to arrive at
+    // the drivable road endpoint. Keep the raw geo for retries; move the in-world
+    // pin/arrival target to the route's curb-side finish when it is plausibly close.
+    const maxSnap = DEST.celebrate ? 450 : 240;
+    if (Math.hypot(end.x - rawX, end.z - rawZ) > maxSnap) return;
+    DEST.rawX = rawX; DEST.rawZ = rawZ;
+    DEST.x = end.x; DEST.z = end.z;
+    destPin.userData.groundY = null;
+  }
   // fromSearch = the player explicitly chose this place from the GO address search;
   // only THOSE arrivals earn the "Arrived" banner (a casual map tap does not).
   function setDestination(lat, lon, label, isChain, fromSearch) {
     const w = geoToWorld(lat, lon);
-    DEST = { x: w[0], z: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch };   // geo kept so a failed route can self-retry
+    DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch };   // geo kept so a failed route can self-retry
     ROUTE = null; routeIdx = 0;
+    destPin.userData.groundY = null;
     emit('dest', { label: DEST.label });
     if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + DEST.label + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
   }
-  function clearDestination() { DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; emit('dest', null); emit('autodrive', false); }
+  function clearDestination() { routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null; emit('dest', null); emit('autodrive', false); }
   // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
   // Geocoding/Directions endpoints are CORS-blocked, which is why the old fetch box failed) ----
   function geocodeAddress(text) {
@@ -1603,12 +1636,20 @@ export function createEngine({ canvas, ui, emit }) {
     { featureType: 'poi', stylers: [{ visibility: 'off' }] },
     { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#222831' }] },
   ];
-  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0;
+  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapClick = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0;
+  function disposeMiniMap() {
+    if (_gmapClick) { _gmapClick.remove(); _gmapClick = null; }
+    if (_gmapCar) { _gmapCar.setMap(null); _gmapCar = null; }
+    if (_gmapRoute) { _gmapRoute.setMap(null); _gmapRoute = null; }
+    if (_gmaps && _gmap) _gmaps.event.clearInstanceListeners(_gmap);
+    _gmap = null; _gmapDiv = null; _gmapRouteFor = null; _gmapOverviewUntil = 0;
+  }
   function initMiniMap(div) {
     if (!div || _gmapDiv === div) return;
+    disposeMiniMap();
     _gmapDiv = div;
     loadMapsSDK().then(maps => {
-      if (_gmapDiv !== div) return;
+      if (disposed || _gmapDiv !== div) return;
       _gmaps = maps;
       const o = worldToGeo(car.x, car.z);
       _gmap = new maps.Map(div, {
@@ -1619,7 +1660,7 @@ export function createEngine({ canvas, ui, emit }) {
       _gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: _gmap, zIndex: 5,
         icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5, scale: 1.05, rotation: 0, anchor: new maps.Point(0, 0) } });
       _gmapRoute = new maps.Polyline({ map: _gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
-      _gmap.addListener('click', e => { const w = geoToWorld(e.latLng.lat(), e.latLng.lng()); setDriveTarget(w[0], w[1]); });
+      _gmapClick = _gmap.addListener('click', e => { const w = geoToWorld(e.latLng.lat(), e.latLng.lng()); setDriveTarget(w[0], w[1]); });
     }).catch(() => { });
   }
   function updateMiniMap(now) {
@@ -1648,14 +1689,21 @@ export function createEngine({ canvas, ui, emit }) {
     }));
   }
   let _acSvc = null, _acTok = null;
+  const _acCache = new Map();
   function placeSuggest(text) {
-    if (!text || text.trim().length < 3) return Promise.resolve([]);
+    const q = (text || '').trim().replace(/\s+/g, ' ');
+    if (q.length < 4) return Promise.resolve([]);
+    const key = q.toLowerCase();
+    if (_acCache.has(key)) return Promise.resolve(_acCache.get(key));
     return loadMapsSDK().then(maps => new Promise(res => {
       if (!maps.places) { res([]); return; }
       if (!_acSvc) _acSvc = new maps.places.AutocompleteService();
       if (!_acTok) _acTok = new maps.places.AutocompleteSessionToken();
-      _acSvc.getPlacePredictions({ input: text, sessionToken: _acTok }, (preds, status) => {
-        res((status === 'OK' && preds) ? preds.slice(0, 5).map(p => ({ description: p.description, placeId: p.place_id })) : []);
+      _acSvc.getPlacePredictions({ input: q, sessionToken: _acTok, componentRestrictions: { country: 'us' } }, (preds, status) => {
+        const out = (status === 'OK' && preds) ? preds.slice(0, 4).map(p => ({ description: p.description, placeId: p.place_id })) : [];
+        _acCache.set(key, out);
+        if (_acCache.size > 40) _acCache.delete(_acCache.keys().next().value);
+        res(out);
       });
     })).catch(() => []);
   }
@@ -1675,7 +1723,12 @@ export function createEngine({ canvas, ui, emit }) {
     return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
   }
   function setDestinationByPlace(placeId, label, drive) {
-    return geocodePlaceId(placeId, label).then(g => { setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+    return geocodePlaceId(placeId, label).then(g => { _acTok = null; setDestination(g.lat, g.lon, g.label, false, true); if (drive) { autoDrive = true; emit('autodrive', true); faceRouteStart(); } return g; });
+  }
+  function driveHome() {
+    setDestination(homeGeo.lat, homeGeo.lon, 'Home', false, true);
+    autoDrive = true; emit('autodrive', true); faceRouteStart();
+    return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
   }
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
   let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
@@ -1707,7 +1760,8 @@ export function createEngine({ canvas, ui, emit }) {
     const g = worldToGeo(wx, wz);
     let route = localRoadRoute(car.x, car.z, wx, wz);
     if (!route) { const np = nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(car.x, car.z, np.x, np.z); }
-    DEST = { x: wx, z: wz, label: 'the map point', geo: g }; ROUTE = route || null; routeIdx = 0;   // geo kept so a failed route can self-retry
+    DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ROUTE = route || null; routeIdx = 0; destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
+    if (ROUTE) snapDestinationToRouteEnd(ROUTE);
     fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
     autoDrive = true; inp2.navActive = false;
     emit('dest', { label: DEST.label }); emit('autodrive', true);
@@ -1878,15 +1932,26 @@ export function createEngine({ canvas, ui, emit }) {
   // ~170 m of route (its real turns), resample to ~5 m steps, drape each cross-section
   // to the ground (relative to the car's road height so it sits ON the street), and
   // write the triangle-strip vertices. Falls back to a straight line to a routeless DEST.
-  // Cached canopy-skipped ROAD height per ROUTE point (one raycast each, reused every
-  // frame). Auto-invalidates when ROUTE changes identity. This is what lets the ribbon
-  // sit ON the street instead of floating on the tree/roof canopy that a top-down
-  // groundAt() (cast from far above) hits first.
+  // Cached canopy-skipped ROAD height per ROUTE point. Fallback heights retry until
+  // tiles stream, so a route line never gets stuck forever at a procedural/clamped y.
   let _routeYFor = null, _routeY = [];
   function guideHeightAt(i) {
     if (_routeYFor !== ROUTE) { _routeYFor = ROUTE; _routeY = []; }
-    if (_routeY[i] == null) _routeY[i] = actorGroundY(ROUTE[i].x, ROUTE[i].z);
-    return _routeY[i];
+    const p = ROUTE[i], tA = terrainAt(p.x, p.z), nowMs = performance.now();
+    let rec = _routeY[i];
+    if (!rec || (!rec.confirmed && nowMs >= (rec.retryAt || 0))) {
+      const base = rec ? rec.y : tA;
+      let y = rawTileY(p.x, p.z, base + 8);
+      if (y == null && rec) y = rawTileY(p.x, p.z, base + 24);
+      if (y == null && !rec) y = rawTileY(p.x, p.z);
+      if (y != null) {
+        const inHood = p.x * p.x + p.z * p.z <= 330 * 330;
+        rec = { y: inHood ? clamp(y, tA - 2, tA + 2) : y, confirmed: true, retryAt: 0 };
+      } else if (!rec) rec = { y: tA, confirmed: false, retryAt: nowMs + 350 };
+      else rec.retryAt = nowMs + 350;
+      _routeY[i] = rec;
+    }
+    return rec.y;
   }
   function updateGuide(yC) {
     // Rebuild EVERY frame (no move-throttle) so the ribbon GLIDES forward instead of
@@ -1907,12 +1972,12 @@ export function createEngine({ canvas, ui, emit }) {
       for (let s = 1; s <= steps; s++) { const t = s / steps; pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]); }
     }
     if (pts.length < 2) { guideLine.visible = false; return; }
-    const hw = 1.8;
+    const hw = 1.15;
     for (let i = 0; i < GUIDE_N; i++) {
       const k = Math.min(i, pts.length - 1), p = pts[k];
       const pp = pts[Math.max(0, k - 1)], pn = pts[Math.min(pts.length - 1, k + 1)];
       let tx = pn[0] - pp[0], tz = pn[1] - pp[1]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      const nx = -tz, nz = tx, y = p[2] + 0.12, o = i * 6;
+      const nx = -tz, nz = tx, y = p[2] + 0.18, o = i * 6;
       guidePos[o] = p[0] + nx * hw; guidePos[o + 1] = y; guidePos[o + 2] = p[1] + nz * hw;
       guidePos[o + 3] = p[0] - nx * hw; guidePos[o + 4] = y; guidePos[o + 5] = p[1] - nz * hw;
     }
@@ -2016,7 +2081,7 @@ export function createEngine({ canvas, ui, emit }) {
     // clean look — NOT the low 'eye-level horror' of Close).
     { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false },
     { name: 'Close', dist: 19, h: 12.5, ahead: 12, drone: false, topdown: false },   // Roblox chase: sit back + look well down the road so you SEE where you're going (not just the roof of the car)
-    { name: 'Top-down', dist: 7, h: 85, ahead: 12, drone: true, topdown: true, dragdrive: true },   // proper high overhead map view
+    { name: 'Top-down', dist: 10, h: 122, ahead: 16, drone: true, topdown: true, dragdrive: true },   // higher overhead map view
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
   function cycleCamera() {
@@ -2104,10 +2169,9 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function updateDrive(dt, now) {
-    // mix stick (jx/jy) + keyboard (kx/ky) + dedicated touch steer/gas/brake
-    // DECOUPLED controls: the left stick STEERS only (X). Throttle is the gas pedal
-    // (or W), brake is the brake pedal (or S); just steering gently auto-accelerates
-    // so kids who only push the stick still cruise. (Touch jy is no longer throttle.)
+    // Mix stick (jx/jy), keyboard (kx/ky), and legacy pedal inputs. The left
+    // thumbstick is a Roblox-style move stick: X steers, up is gas, down is
+    // brake/reverse. Just steering gently auto-accelerates so kids still cruise.
     // keyboard arrows are binary ±1 — ramp them over ~0.15 s so desktop steering eases
     // in like the touch stick instead of snapping (kSteer feeds jx; touch jx stays direct).
     car.kSteer = (car.kSteer || 0) + (inp2.kx - (car.kSteer || 0)) * Math.min(1, dt * 7);
@@ -2411,8 +2475,8 @@ export function createEngine({ canvas, ui, emit }) {
     // road ABOVE it, so it stayed buried. The hard floor keeps that from ever happening.
     const yr = actorGroundY(car.x, car.z, car.groundY);
     if (car.groundY == null) car.groundY = yr;
-    else { const rate = yr > car.groundY ? dt * 12 : dt * 5; car.groundY += (yr - car.groundY) * Math.min(1, rate); }
-    if (yr != null && car.groundY < yr - 0.25) car.groundY = yr - 0.25;
+    else { const rate = yr > car.groundY ? dt * 18 : dt * 9; car.groundY += (yr - car.groundY) * Math.min(1, rate); }
+    if (yr != null && car.groundY < yr - 0.12) car.groundY = yr - 0.12;
     const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     const tF = terrainAt(car.x + fx * 1.4, car.z + fz * 1.4), tB = terrainAt(car.x - fx * 1.4, car.z - fz * 1.4);
@@ -2429,21 +2493,30 @@ export function createEngine({ canvas, ui, emit }) {
     // — roughly street-sized on the map. Purely cosmetic: collision uses fixed radii, never
     // this scale. Lerp so cycling views doesn't pop; aerial floats highest so it gets biggest.
     const _camV = DRIVE_CAMS[camMode] || {};
-    const dispTarget = _camV.aerial ? 4.0 : _camV.topdown ? 2.6 : 1.1;   // big enough to spot from up high, not cartoonish
+    const dispTarget = _camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.18;   // big enough to spot from up high, not cartoonish
     car.dispScale = car.dispScale == null ? dispTarget : car.dispScale + (dispTarget - car.dispScale) * (1 - Math.exp(-dt * 6));
     car.group.scale.setScalar(car.dispScale);
-    // car locator removed — the scaled-up car IS its own marker in the overhead views, so
-    // the bobbing chevron/ring was just "garbage on the car" obscuring it.
-    carLocator.visible = false;
+    const overhead = _camV.aerial || _camV.topdown;
+    carLocator.visible = overhead;
+    if (overhead) {
+      carLocator.position.set(car.x, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, car.z);
+      carLocator.scale.setScalar(_camV.aerial ? 1.25 : 0.9);
+      if (carLocator.children[0]) carLocator.children[0].material.opacity = _camV.aerial ? 0.75 : 0.55;
+      if (carLocator.children[1]) carLocator.children[1].material.opacity = _camV.aerial ? 0.5 : 0.34;
+    }
     // collectible coins: spin + bob, picked up by driving over them
-    for (const c of coins) {
+    coinGroundCursor = coins.length ? (coinGroundCursor + 1) % coins.length : 0;
+    for (let i = 0; i < coins.length; i++) {
+      const c = coins[i];
       c.mesh.visible = !c.got;
       if (c.got) continue;
       c.mesh.rotation.y += dt * 3.2;
-      c.mesh.position.y = terrainAt(c.x, c.z) + 1.0 + Math.abs(Math.sin(now * 0.004 + c.x)) * 0.3;
+      if (c.groundY == null || i === coinGroundCursor) c.groundY = actorGroundY(c.x, c.z, c.groundY);
+      const coinY = c.groundY != null ? c.groundY : terrainAt(c.x, c.z);
+      c.mesh.position.y = coinY + 1.15 + Math.abs(Math.sin(now * 0.004 + c.x)) * 0.35;
       if (Math.hypot(car.x - c.x, car.z - c.z) < 3.4) {
         c.got = true; coinsGot++;
-        spawnCoinBurst(c.x, c.z, terrainAt(c.x, c.z), now);
+        spawnCoinBurst(c.x, c.z, coinY, now);
         const wasBest = !bestMs || (now - runStart) <= bestMs;
         collectCoin(now);
         if (coinsGot === coins.length) {
@@ -2503,7 +2576,10 @@ export function createEngine({ canvas, ui, emit }) {
     }
     if (navMarker) {
       navMarker.visible = inp2.navActive && !autoDrive;   // hide the finger ring during auto-drive
-      if (navMarker.visible) navMarker.position.set(inp2.navX, yC + 0.12, inp2.navZ);
+      if (navMarker.visible) {
+        navMarker.userData.groundY = actorGroundY(inp2.navX, inp2.navZ, navMarker.userData.groundY);
+        navMarker.position.set(inp2.navX, navMarker.userData.groundY + 0.16, inp2.navZ);
+      } else navMarker.userData.groundY = null;
     }
     // address guide: a continuous line along the actual ROUTE (every turn), draped on
     // the road just ahead of the car; + a pin at the destination when near.
@@ -2511,7 +2587,10 @@ export function createEngine({ canvas, ui, emit }) {
       updateGuide(yC);
       const ddDest = Math.hypot(DEST.x - car.x, DEST.z - car.z);
       destPin.visible = ddDest < 700;
-      if (destPin.visible) destPin.position.set(DEST.x, terrainAt(DEST.x, DEST.z) + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, DEST.z);
+      if (destPin.visible) {
+        destPin.userData.groundY = actorGroundY(DEST.x, DEST.z, destPin.userData.groundY);
+        destPin.position.set(DEST.x, destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, DEST.z);
+      }
     } else { guideLine.visible = false; destPin.visible = false; }
     // The flat aerial patch under the car read as an ugly disc (a different, lower-res
     // texture than the Google tiles). Keep the car riding the same sampled road
@@ -2818,6 +2897,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (audio.stopMusic) audio.stopMusic();      // kill the 30ms music scheduler interval (was leaking)
     if (audio.close) audio.close();              // close the AudioContext so it isn't left running
     if (cancelCarLoad) cancelCarLoad();          // late car load/timeout can't touch a dead scene
+    for (const cancel of modelLoadCancels) if (cancel) cancel();
+    disposeMiniMap();
     if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
     if (drewCrowd) drewCrowd.dispose();
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
@@ -2831,6 +2912,7 @@ export function createEngine({ canvas, ui, emit }) {
       }
     });
     renderer.dispose();
+    document.documentElement.classList.remove('lite3d');
     delete window.__dahill;
   }
 
@@ -2847,7 +2929,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (audio.blip) audio.blip();
     },
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad,
-    setDestination, clearDestination, toggleAutoDrive,
+    setDestination, clearDestination, toggleAutoDrive, driveHome,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
     placeSuggest, geocodeAddress, geocodePlaceId,
     jumpToAddress: (lat, lon, label) => jumpTo(lat, lon, label),
