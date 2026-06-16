@@ -62,7 +62,7 @@ export default function App() {
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
   const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
-  const [music, setMusic] = useState(true);             // soundtrack on/off (🔊 toggle)
+  const [sound, setSound] = useState(true);             // master sound on/off (🔊 toggle)
   const [autoSteer, setAutoSteer] = useState(true);     // lane-keep assist (🛟 toggle)
   const [drifting, setDrifting] = useState(false);      // sustained-drift glow + DRIFT chip
   const arrivedTimer = useRef(0);
@@ -88,7 +88,7 @@ export default function App() {
         case 'driveCam': setCamName(p); break;
         case 'poiProgress': setPoi(p); break;
         case 'cars': setCars(p); break;
-        case 'music': setMusic(p); break;
+        case 'sound': setSound(p); break;
         case 'autosteer': setAutoSteer(p); break;
         case 'drift': setDrifting(p); break;
         case 'arrived':
@@ -317,9 +317,9 @@ export default function App() {
                     <span className="miIcon go"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2 5 4-12 2 7h6" /></svg></span>
                     <span className="miTxt"><b>Assist</b><i className={autoSteer ? 'go' : 'off'}>{autoSteer ? 'On' : 'Off'}</i></span>
                   </button>
-                  <button className="menuItem" onClick={() => { eng().toggleMusic(); }}>
-                    <span className="miIcon nav"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.6" /><circle cx="16" cy="16" r="2.6" /></svg></span>
-                    <span className="miTxt"><b>Music</b><i className={music ? 'nav' : 'off'}>{music ? 'On' : 'Muted'}</i></span>
+                  <button className="menuItem" onClick={() => { eng().toggleSound(); }}>
+                    <span className="miIcon nav"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" />{sound ? <><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M19 5.5a9 9 0 0 1 0 13" /></> : <path d="m22 9-6 6M16 9l6 6" />}</svg></span>
+                    <span className="miTxt"><b>Sound</b><i className={sound ? 'nav' : 'off'}>{sound ? 'On' : 'Off'}</i></span>
                   </button>
                   <button className={'menuItem' + (traceDrive ? ' on' : '')} onClick={() => { eng().traceDrive(); }}>
                     <span className="miIcon jump"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 19l14-9M5 19l3-6 6-3" /></svg></span>
@@ -389,9 +389,6 @@ export default function App() {
             </div>
             </>)}
             {traceDrive && <div className="dragDriveHint" aria-hidden="true">✦ Drag the map to drive · tap a spot to route there</div>}
-            <button className="hornBtn" aria-label="Horn" onClick={() => eng().horn()}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M16 9a5 5 0 0 1 0 6" /></svg>
-            </button>
 
             {drifting && <div id="driftChip">💨 DRIFT!</div>}
             {driveHint && <div className="driveHintCard">{driveHelp}</div>}

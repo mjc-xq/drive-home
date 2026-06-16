@@ -100,7 +100,7 @@ export function createEngine({ canvas, ui, emit }) {
     return { lat: GEO0.lat + N / M_LAT, lon: GEO0.lon + E / M_LON };
   }
   let DEST = null;        // { x, z, label }
-  let musicPref = (() => { try { return localStorage.getItem('dahill.music') !== '0'; } catch (e) { return true; } })();   // soundtrack on by default
+  let soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
   let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
   let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
@@ -858,9 +858,18 @@ export function createEngine({ canvas, ui, emit }) {
       crowdSpots.push({ rec: crowd.add(scene, { x, y, z, yaw, clip: opts.clip }), zone });
     };
     const hx = house.c[0], hz = house.c[1];
-    // YARD (Scoop): a few CeCes + Drews dancing around the front yard
-    for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + 0.5, r = 6 + i * 1.6; put(ceceCrowd, hx + Math.cos(a) * r, hz + Math.sin(a) * r, 'yard', false); }
-    for (let i = 0; i < 2; i++) { const a = i * 2.3 + 1.6; put(drewCrowd, hx + Math.cos(a) * 8.5, hz + Math.sin(a) * 8.5, 'yard', false, { clip: 'dance' }); }
+    // Keep a yard dancer out of any building footprint: if the ring spot lands inside a
+    // wall (the house/garage), walk it OUTWARD from the yard centre until it's on open
+    // ground (CeCe was spawning inside the houses).
+    const clearYard = (x, z) => {
+      if (!insideScoopBuilding(x, z)) return [x, z];
+      let dx = x - hx, dz = z - hz; const d = Math.hypot(dx, dz) || 1; dx /= d; dz /= d;
+      for (let r = d + 2; r < d + 22; r += 1.5) { const nx = hx + dx * r, nz = hz + dz * r; if (!insideScoopBuilding(nx, nz)) return [nx, nz]; }
+      return [x, z];
+    };
+    // YARD (Scoop): a few CeCes + Drews dancing around the front yard (clear of the walls)
+    for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + 0.5, r = 6 + i * 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * r, hz + Math.sin(a) * r); put(ceceCrowd, px, pz, 'yard', false); }
+    for (let i = 0; i < 2; i++) { const a = i * 2.3 + 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * 8.5, hz + Math.sin(a) * 8.5); put(drewCrowd, px, pz, 'yard', false, { clip: 'dance' }); }
     // STREETS near home (Drive): on the sidewalk beside nearby road segments, facing the road
     const nearRoads = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2 - hx, (s[0][1] + s[1][1]) / 2 - hz) < 150 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 6);
     for (let i = 0; i < Math.min(6, nearRoads.length); i++) {
@@ -1194,7 +1203,6 @@ export function createEngine({ canvas, ui, emit }) {
       if (mode === 'scoop' && (e.key === 'e' || e.key === 'E') && nearCar) { driveFromScoop(); e.preventDefault(); return; }
       if (mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
       if (mode === 'drive' && e.key === ' ') { inp2.hbrake = true; e.preventDefault(); return; }        // Space = handbrake
-      if (mode === 'drive' && (e.key === 'h' || e.key === 'H')) { audio.horn && audio.horn(); e.preventDefault(); return; }
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;
       if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = -1;
@@ -1444,7 +1452,7 @@ export function createEngine({ canvas, ui, emit }) {
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
-    if (musicPref && audio.startMusic) audio.startMusic();
+    if (soundOn && audio.startMusic) audio.startMusic();
     showCarCard();
     // TRUE free roam: never auto-set a destination on entry. The pink POI beacons still
     // point the way; pick a place with 🧭 or by tapping the map when YOU want a route+ETA.
@@ -2772,7 +2780,8 @@ export function createEngine({ canvas, ui, emit }) {
   renderer.render(scene, camera);
   emit('ready');
   emitPOIs();                 // seed the start-card "places found" badge from saved progress
-  emit('music', musicPref);   // seed the 🔊 toggle state
+  if (audio.setMuted) audio.setMuted(!soundOn);   // sync the master mute with the saved pref
+  emit('sound', soundOn);   // seed the 🔊 toggle state
   emit('autosteer', autoSteer);
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
   if (document.hidden) paused = true;   // born in a background tab → don't render/stream until shown
@@ -2845,7 +2854,7 @@ export function createEngine({ canvas, ui, emit }) {
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
     preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
     initMiniMap,                                         // mount the live Google minimap into a div
-    setHandbrake: (on) => { inp2.hbrake = !!on; }, horn: () => audio.horn && audio.horn(),
+    setHandbrake: (on) => { inp2.hbrake = !!on; },
     // LOOK stick (right thumb): orbit the drive camera. dx/dy are screen-pixel deltas,
     // same convention as a look-drag on the canvas, so it feeds the existing camOrbit.
     nudgeLook: (dx, dy) => {
@@ -2858,7 +2867,8 @@ export function createEngine({ canvas, ui, emit }) {
     setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)
     setBoost: (on) => { inp2.boost = !!on; },                        // nitro (hold while charged)
     setBrake: (on) => { inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
-    toggleMusic: () => { musicPref = !musicPref; try { localStorage.setItem('dahill.music', musicPref ? '1' : '0'); } catch (e) { } if (mode === 'drive' && audio.setMusic) audio.setMusic(musicPref); emit('music', musicPref); return musicPref; },
+    // "Sound" toggle = master mute over EVERYTHING (engine drone + sfx + music), not just the soundtrack.
+    toggleSound: () => { soundOn = !soundOn; try { localStorage.setItem('dahill.sound', soundOn ? '1' : '0'); } catch (e) { } if (audio.ensure) audio.ensure(); if (audio.setMuted) audio.setMuted(!soundOn); if (mode === 'drive' && audio.setMusic) audio.setMusic(soundOn); emit('sound', soundOn); return soundOn; },
     toggleAutoSteer: () => { autoSteer = !autoSteer; try { localStorage.setItem('dahill.autosteer', autoSteer ? '1' : '0'); } catch (e) { } emit('autosteer', autoSteer); toast(autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return autoSteer; },
     // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
     // and let the robot drive there. range/scale mirror drawMinimap exactly.

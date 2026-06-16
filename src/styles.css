@@ -366,11 +366,6 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   font-family:'Chakra Petch';font-weight:600;font-size:9px;letter-spacing:.2em;color:rgba(255,255,255,.7);white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.85)}
 .lookHint .stickLabel{position:static;transform:none}
 .stickLabel.move{color:rgba(110,180,255,1)}
-/* horn — subtle square button just inboard of the LOOK stick */
-.hornBtn{position:absolute;bottom:calc(40px + var(--safe-b));right:calc(160px + var(--safe-r));width:34px;height:34px;
-  background:rgba(10,12,16,.4);border:1px solid rgba(255,255,255,.14);display:grid;place-items:center;
-  color:rgba(255,255,255,.55);cursor:pointer;z-index:5;transition:background .12s ease,transform .1s ease}
-.hornBtn:active{transform:scale(.94);background:rgba(45,140,255,.3);color:#fff}
 
 /* drive hint card — square glass strip above the dash */
 .driveHintCard{position:absolute;left:50%;bottom:calc(110px + var(--safe-b));transform:translateX(-50%);max-width:min(86vw,460px);

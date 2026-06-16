@@ -3,6 +3,8 @@
 export function createAudio() {
   let AC = null;
   let eng = null;
+  let master = null;           // master gain bus — every voice routes through it
+  let muted = false;           // user "Sound off" → master gain 0 (mutes engine + sfx + music)
   let wantSuspended = false;   // true while the tab is backgrounded → don't auto-resume
 
   function ensure() {
@@ -19,6 +21,8 @@ export function createAudio() {
           if (wantSuspended) { if (AC.state === 'running') AC.suspend().catch(() => {}); return; }
           if (AC.state !== 'running') AC.resume().catch(() => {});
         };
+        // master bus: a single gain every voice connects to, so "Sound off" is one knob
+        master = AC.createGain(); master.gain.value = muted ? 0 : 1; master.connect(AC.destination);
       }
       if (!wantSuspended) AC.resume();
     } catch (e) { /* no audio is fine */ }
@@ -54,19 +58,19 @@ export function createAudio() {
       const o3 = AC.createOscillator(); o3.type = 'square';
       const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 1.2;
       const gain = AC.createGain(); gain.gain.value = 0;
-      o1.connect(lp); o2.connect(lp); o3.connect(lp); lp.connect(gain); gain.connect(AC.destination);
+      o1.connect(lp); o2.connect(lp); o3.connect(lp); lp.connect(gain); gain.connect(master);
       const nb = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
       const d = nb.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
       const ns = AC.createBufferSource(); ns.buffer = nb; ns.loop = true;
       const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.5;
       const noiseGain = AC.createGain(); noiseGain.gain.value = 0;
-      ns.connect(bp); bp.connect(noiseGain); noiseGain.connect(AC.destination);
+      ns.connect(bp); bp.connect(noiseGain); noiseGain.connect(master);
       // tyre-screech voice: the SAME looping noise through a tight high band, gated by
       // a gain we ride from the drift amount — silent until the tail steps out.
       const sbp = AC.createBiquadFilter(); sbp.type = 'bandpass'; sbp.frequency.value = 1550; sbp.Q.value = 5.5;
       const screechGain = AC.createGain(); screechGain.gain.value = 0;
-      ns.connect(sbp); sbp.connect(screechGain); screechGain.connect(AC.destination);
+      ns.connect(sbp); sbp.connect(screechGain); screechGain.connect(master);
       o1.start(); o2.start(); o3.start(); ns.start();
       eng = { o1, o2, o3, ns, lp, gain, noiseGain, screechGain, lastThrottle: 0 };
     } catch (e) { eng = null; }
@@ -106,7 +110,7 @@ export function createAudio() {
       bp.frequency.setValueAtTime(380, t); bp.frequency.exponentialRampToValueAtTime(2400, t + 0.28);
       const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t);
       g.gain.linearRampToValueAtTime(vol, t + 0.08); g.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
-      ns.connect(bp); bp.connect(g); g.connect(AC.destination); ns.start(); ns.stop(t + 0.36);
+      ns.connect(bp); bp.connect(g); g.connect(master); ns.start(); ns.stop(t + 0.36);
     } catch (e) { }
   }
 
@@ -125,7 +129,7 @@ export function createAudio() {
       g.gain.setValueAtTime(0.12, AC.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + 0.18);
       o.frequency.exponentialRampToValueAtTime(1500, AC.currentTime + 0.15);
-      o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + 0.2);
+      o.connect(g); g.connect(master); o.start(); o.stop(AC.currentTime + 0.2);
     } catch (e) { }
   }
 
@@ -137,7 +141,7 @@ export function createAudio() {
       o.frequency.exponentialRampToValueAtTime(90, AC.currentTime + 0.09);
       g.gain.setValueAtTime(0.14, AC.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + 0.12);
-      o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + 0.13);
+      o.connect(g); g.connect(master); o.start(); o.stop(AC.currentTime + 0.13);
     } catch (e) { }
   }
 
@@ -149,28 +153,17 @@ export function createAudio() {
       const o = AC.createOscillator(), g = AC.createGain();
       o.type = 'sine'; o.frequency.setValueAtTime(155, t); o.frequency.exponentialRampToValueAtTime(46, t + 0.18);
       g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
-      o.connect(g); g.connect(AC.destination); o.start(); o.stop(t + 0.24);
+      o.connect(g); g.connect(master); o.start(); o.stop(t + 0.24);
       const nb = AC.createBuffer(1, Math.floor(AC.sampleRate * 0.16), AC.sampleRate), d = nb.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
       const ns = AC.createBufferSource(); ns.buffer = nb;
       const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.7;
       const ng = AC.createGain(); ng.gain.setValueAtTime(vol * 0.7, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
-      ns.connect(bp); bp.connect(ng); ng.connect(AC.destination); ns.start(); ns.stop(t + 0.18);
+      ns.connect(bp); bp.connect(ng); ng.connect(master); ns.start(); ns.stop(t + 0.18);
     } catch (e) { }
   }
-  // two stacked squares — a friendly car horn
-  function horn() {
-    try {
-      if (!AC) return; const t = AC.currentTime;
-      for (const fr of [440, 554]) {
-        const o = AC.createOscillator(), g = AC.createGain();
-        o.type = 'square'; o.frequency.value = fr;
-        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.045, t + 0.02);
-        g.gain.setValueAtTime(0.045, t + 0.3); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-        o.connect(g); g.connect(AC.destination); o.start(); o.stop(t + 0.42);
-      }
-    } catch (e) { }
-  }
+  // master mute for the "Sound" toggle — one knob over engine drone + sfx + music
+  function setMuted(m) { muted = !!m; try { if (master) master.gain.value = muted ? 0 : 1; } catch (e) { } }
 
   function sfxChime(notes) {
     try {
@@ -182,7 +175,7 @@ export function createAudio() {
         g.gain.setValueAtTime(0.0001, t0);
         g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
         g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.22);
-        o.connect(g); g.connect(AC.destination); o.start(t0); o.stop(t0 + 0.25);
+        o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 0.25);
       });
     } catch (e) { }
   }
@@ -196,7 +189,7 @@ export function createAudio() {
     try {
       ensure();
       if (!AC || music) return;
-      const out = AC.createGain(); out.gain.value = 0; out.connect(AC.destination);
+      const out = AC.createGain(); out.gain.value = 0; out.connect(master);
       const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1500; lp.Q.value = 0.5; lp.connect(out);
       music = { out, lp, step: 0, timer: 0, nextT: AC.currentTime + 0.12 };
       out.gain.linearRampToValueAtTime(0.15, AC.currentTime + 1.4);   // gentle fade-in
@@ -256,5 +249,5 @@ export function createAudio() {
   function musicSpeed(frac) { if (music && music.lp) { try { music.lp.frequency.setTargetAtTime(1100 + clamp01(frac) * 2800, AC.currentTime, 0.25); } catch (e) { } } }
   function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
-  return { ensure, suspendAudio, resumeAudio, close, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, horn, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
+  return { ensure, suspendAudio, resumeAudio, close, engineStart, engineUpdate, engineStop, screech, sfxWhoosh, blip, sfxScoop, sfxChime, sfxThunk, setMuted, startMusic, stopMusic, setMusic, musicOn, musicSpeed };
 }
