@@ -48,6 +48,7 @@ export default function App() {
   const canvasRef = useRef(null);
   const uiRefs = useRef({ box: null, mph: null, gear: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
   const engineRef = useRef(null);
+  const dvTopRightRef = useRef(null);   // the top-right ☰ cluster: outside-tap dismiss tests against this
 
   const [ready, setReady] = useState(false);
   const [photoreal, setPhotoreal] = useState(false);   // real Google tiles are up (vs the procedural placeholder)
@@ -67,6 +68,8 @@ export default function App() {
   const [navErr, setNavErr] = useState('');
   const [autoMax, setAutoMax] = useState(() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } });   // auto-drive top-speed cap (mph; 0 = unlimited)
   const [speedMul, setSpeedMul] = useState(() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } });   // global driving-speed multiplier
+  const [pedDensity, setPedDensity] = useState(() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return v >= 0 && v <= 2 ? v : 1; } catch (e) { return 1; } });   // pedestrian density
+  const [trafficDensity, setTrafficDensity] = useState(() => { try { const v = parseFloat(localStorage.getItem('dahill.trafficdensity')); return v >= 0 && v <= 2 ? v : 1; } catch (e) { return 1; } });   // traffic density
   const [dest, setDest] = useState(null);               // { label }
   const [autoDrive, setAutoDrive] = useState(false);
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
@@ -139,6 +142,17 @@ export default function App() {
     return () => clearTimeout(t);
   }, [mode]);
 
+  // Auto-dismiss the top-right ☰ menu when you tap/drag anywhere outside it. Scoped to the
+  // whole .dvTopRight wrapper so taps on the ☰ toggle itself (no double-toggle race) and drags
+  // on the density sliders inside the panel both count as "inside" and DON'T close it. Capture
+  // phase + pointerdown = snappy touch-first dismissal.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e) => { const root = dvTopRightRef.current; if (root && !root.contains(e.target)) setMenuOpen(false); };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [menuOpen]);
+
   // Hold the loading veil until the real Google tiles are up, so the procedural placeholder
   // world doesn't flash in first. A 5.5 s fallback ensures the loader never hangs (e.g. no key).
   useEffect(() => { if (!ready) return; const t = setTimeout(() => setRevealTimedOut(true), 5500); return () => clearTimeout(t); }, [ready]);
@@ -166,7 +180,7 @@ export default function App() {
   const driveHelp = traceDrive
     ? 'Drag the road to drive · right stick to orbit the camera · tap the map to route'
     : 'Left stick moves · push up for gas · pull back to reverse · swipe right side to look';
-  const carColor = slot => ['#48ff6a', '#62b6ff', '#ff3f2f', '#ffb23a', '#8df0ff', '#ff4747', '#f5f0dc', '#f4f7ff', '#9b7bff'][slot] || '#ffffff';
+  const carColor = slot => ['#48ff6a', '#62b6ff', '#ff3f2f', '#ffb23a', '#8df0ff', '#ff4747', '#f5f0dc', '#f4f7ff', '#9b7bff', '#ffd23a', '#5affc8', '#ff8a3a', '#c0ff5a', '#ff5ad0', '#a0a4ad'][slot] || '#ffffff';
 
   return (
     <div id="appShell">
@@ -286,7 +300,7 @@ export default function App() {
             )}
 
             {/* ══ TOP-RIGHT: segmented VIEW / FIX-ROAD / ☰ menu ══ */}
-            <div className="dvTopRight">
+            <div className="dvTopRight" ref={dvTopRightRef}>
               <div className="segBar">
                 <button className="segBtn" aria-label={'Camera: ' + camName} onClick={() => eng().cycleCamera()}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2D8CFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="14" height="10" rx="2" /><path d="m16 10 6-3v10l-6-3z" /></svg>
@@ -332,6 +346,20 @@ export default function App() {
                     <span className="miIcon reverse"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg></span>
                     <span className="miTxt"><b>Exit drive</b><i className="off">Back to menu</i></span>
                   </button>
+                  <div className="menuSlider">
+                    <div className="navSlider">
+                      <label>People <b>{Math.round(pedDensity * 100)}%</b></label>
+                      <input type="range" min="0" max="2" step="0.25" value={pedDensity}
+                        onChange={e => { const v = +e.target.value; setPedDensity(v); eng().setCrowdDensity?.(v); }} />
+                      <div className="sliderEnds"><span>none</span><span>lots</span></div>
+                    </div>
+                    <div className="navSlider">
+                      <label>Traffic <b>{Math.round(trafficDensity * 100)}%</b></label>
+                      <input type="range" min="0" max="2" step="0.25" value={trafficDensity}
+                        onChange={e => { const v = +e.target.value; setTrafficDensity(v); eng().setTrafficDensity?.(v); }} />
+                      <div className="sliderEnds"><span>none</span><span>lots</span></div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -439,10 +467,10 @@ export default function App() {
                 <div className="menuHead"><h3 className="cpTitle">Choose your ride</h3><button className="navX" aria-label="Close" onClick={() => setCarPicker(false)}>✕</button></div>
                 <div className="carList">
                   {cars.map(c => (
-                    <button key={c.slot} className={'carRow' + (c.current ? ' current' : '') + (c.locked ? ' locked' : '')} disabled={!c.loaded || c.locked}
+                    <button key={c.slot} className={'carRow' + (c.current ? ' current' : '') + (c.locked ? ' locked' : '')} disabled={c.locked}
                       onClick={() => { eng().pickCar(c.slot); setCars(eng().getCars()); if (!c.locked) setCarPicker(false); }}>
                       <span className="carThumb" style={{ '--car-accent': carColor(c.slot) }}><svg width="24" height="20" viewBox="0 0 30 22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 12 8 6h14l2 6" /><rect x="3" y="11" width="24" height="7" rx="2" /><circle cx="8.5" cy="18" r="2" /><circle cx="21.5" cy="18" r="2" /></svg></span>
-                      <span className="carInfo"><span className="carName">{c.name}</span><span className="carSpec">{c.locked ? 'Find all 5 places to unlock' : (c.loaded ? c.credit : 'loading…')}</span></span>
+                      <span className="carInfo"><span className="carName">{c.name}</span><span className="carSpec">{c.locked ? 'Find all 5 places to unlock' : (c.loaded ? c.credit : 'tap to drive')}</span></span>
                       <span className="carTag">{c.locked ? '🔒' : c.current ? '✓ ON' : c.spec}</span>
                     </button>
                   ))}

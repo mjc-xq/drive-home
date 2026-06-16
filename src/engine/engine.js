@@ -19,6 +19,12 @@ import corvetteUrl from '../assets/corvette.glb';
 import rollsroyceUrl from '../assets/rollsroyce.glb';
 import scgUrl from '../assets/scg.glb';
 import battistaUrl from '../assets/battista.glb';
+import murcielagoUrl from '../assets/murcielago.glb';
+import caspitaUrl from '../assets/caspita.glb';
+import mustang65Url from '../assets/mustang65.glb';
+import mini65Url from '../assets/mini65.glb';
+import hotrodUrl from '../assets/hotrod.glb';
+import ratrodUrl from '../assets/ratrod.glb';
 
 // The whole game lives here, imperative three.js — React only renders the HUD.
 // Communication: engine -> UI via emit(type, payload) for low-frequency state,
@@ -1085,23 +1091,56 @@ export function createEngine({ canvas, ui, emit }) {
   const car = createCar(scene);
   car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
   let cancelCarLoad = null;
+  // LAZY vehicle roster: each slot's GLB is only fetched when that car is actually driven (the
+  // random start car at boot, or a garage pick). Unpicked cars never download — so a big garage
+  // doesn't weigh down a session. Slot 2 (Ferrari) is the Draco loadRealCar path; the rest are
+  // loadDrivableCar. All these GLBs run nose -Z, so flip:true points them forward.
+  const CAR_DEFS = {
+    0: { url: granviaUrl, length: 5.1 },
+    1: { url: rav4Url, length: 4.6 },
+    3: { url: mustangUrl, length: 4.9 },
+    4: { url: miniUrl, length: 3.85 },
+    5: { url: corvetteUrl, length: 4.6 },
+    6: { url: rollsroyceUrl, length: 5.4 },
+    7: { url: scgUrl, length: 4.5 },
+    8: { url: battistaUrl, length: 4.8 },
+    9: { url: murcielagoUrl, length: 4.7 },
+    10: { url: caspitaUrl, length: 4.6 },
+    11: { url: mustang65Url, length: 4.8 },
+    12: { url: mini65Url, length: 3.4 },
+    13: { url: hotrodUrl, length: 4.5 },
+    14: { url: ratrodUrl, length: 4.6 },
+  };
+  const vehLoading = new Set();
+  let ferrariLoadStarted = false;
+  function ensureVehicle(slot) {
+    if (flags.has('nocar') || disposed) return;
+    if (slot === 2) {   // Ferrari — Draco, lazy on first need (its own fallback toast)
+      if (ferrariLoadStarted) return;
+      ferrariLoadStarted = true;
+      installDracoDecoder();
+      cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
+      return;
+    }
+    if (car.models[slot] || vehLoading.has(slot)) return;   // already loaded / in flight
+    const def = CAR_DEFS[slot];
+    if (!def) return;
+    vehLoading.add(slot);
+    modelLoadCancels.push(loadDrivableCar(car, def.url, slot, {
+      length: def.length, flip: true, black: false, meta: VEHICLES[slot],
+      onReady: (s) => { vehLoading.delete(s); emit('cars', getCars()); if (car.modelIdx === s) showCarCard(); }
+    }));
+  }
   if (!flags.has('nocar')) {
     installDracoDecoder();
-    car.heldForDefault = true;   // don't reveal a car until the default (Granvia) loads — no wrong-car flash
-    // fallback: if slot 0 is slow/fails, after ~2.8 s show whatever HAS loaded so there's always a car
-    setTimeout(() => { if (!disposed && car.heldForDefault) { car.heldForDefault = false; const f = car.models.findIndex(Boolean); if (f >= 0) setVehicle(car, f); } }, 2800);
-    cancelCarLoad = loadRealCar(car, carGlbUrl, () => { if (!disposed) toast('Using fallback car model'); });
-    // The swappable roster (🚗). All the new GLBs were Draco+WebP compressed and run nose
-    // -Z, so flip:true points them forward (matches the Granvia). Ferrari is slot 2 (loaded
-    // above via loadRealCar). Profiles live in VEHICLES.
-    modelLoadCancels.push(loadDrivableCar(car, granviaUrl, 0, { length: 5.1, flip: true, black: false, meta: VEHICLES[0] }));
-    modelLoadCancels.push(loadDrivableCar(car, rav4Url, 1, { length: 4.6, flip: true, black: false, meta: VEHICLES[1] }));
-    modelLoadCancels.push(loadDrivableCar(car, mustangUrl, 3, { length: 4.9, flip: true, black: false, meta: VEHICLES[3] }));
-    modelLoadCancels.push(loadDrivableCar(car, miniUrl, 4, { length: 3.85, flip: true, black: false, meta: VEHICLES[4] }));
-    modelLoadCancels.push(loadDrivableCar(car, corvetteUrl, 5, { length: 4.6, flip: true, black: false, meta: VEHICLES[5] }));
-    modelLoadCancels.push(loadDrivableCar(car, rollsroyceUrl, 6, { length: 5.4, flip: true, black: false, meta: VEHICLES[6] }));
-    modelLoadCancels.push(loadDrivableCar(car, scgUrl, 7, { length: 4.5, flip: true, black: false, meta: VEHICLES[7] }));
-    modelLoadCancels.push(loadDrivableCar(car, battistaUrl, 8, { length: 4.8, flip: true, black: false, meta: VEHICLES[8] }));
+    // START ON A RANDOM CAR: pick a random non-Ferrari roster slot as this session's default,
+    // load ONLY that one (others stay lazy), and hold the reveal until it arrives.
+    const startable = Object.keys(CAR_DEFS).map(Number);
+    car.defaultSlot = startable[(Math.random() * startable.length) | 0];
+    car.heldForDefault = true;
+    // fallback: if the random default is slow/fails, after ~2.8 s show whatever HAS loaded
+    setTimeout(() => { if (!disposed && car.heldForDefault) { car.heldForDefault = false; const f = car.models.findIndex(Boolean); if (f >= 0) setVehicle(car, f); else ensureVehicle(0); } }, 2800);
+    ensureVehicle(car.defaultSlot);
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
   // staticGroup, so they show at ground level, not over the photoreal aerial).
@@ -1148,9 +1187,9 @@ export function createEngine({ canvas, ui, emit }) {
   function getCars() { return vehicleList(car).map(v => v.slot === 2 ? Object.assign({}, v, { locked: !ferrariUnlocked }) : v); }
   function pickCar(slot) {
     if (slot === 2 && !ferrariUnlocked) { toast('🔒 Find all 5 neighbourhood places to unlock the Ferrari!', 2400); return; }
-    if (!setVehicle(car, slot)) { toast('That one is still loading…'); return; }
-    showCarCard();
-    audio.blip();
+    ensureVehicle(slot);                              // lazy: fetch its GLB now if it isn't loaded yet
+    if (setVehicle(car, slot)) { showCarCard(); audio.blip(); }
+    else { car.pendingPick = slot; toast('Loading ' + (VEHICLES[slot] ? esc(VEHICLES[slot].name) : 'car') + '…', 1500); }   // it swaps in (registerVehicle) the moment it arrives
   }
 
   // (Street-view photo billboards removed — they read as odd roadside signs.
@@ -2460,25 +2499,34 @@ export function createEngine({ canvas, ui, emit }) {
     return g;
   }
 
-  // R8 — keep nothing rendering BETWEEN the camera and the car: a single down-facing horizontal
-  // clip plane (normal (0,-1,0) keeps geometry BELOW it, removes everything above) at the car's
-  // road height + a clearance, applied ONLY to the photoreal tile materials (shared clipPlanes
-  // array). Overhead views slice the canopy/power-lines just above the car; the low chase lifts
-  // the cut well above so the forward road/buildings stay and only high wires/branches drop;
-  // the high drone Cruise/Aerial keep their clean framing unclipped. The car/HUD/guide ribbon
-  // carry no planes, so they always draw.
+  // R8 — keep nothing rendering BETWEEN the camera and the car, in EVERY drive view, so trees /
+  // eaves / power-lines can never hide it. Applied ONLY to the photoreal tile materials (the
+  // shared clipPlanes array); the car/HUD/guide ribbon carry no planes, so they always draw.
+  //   • CHASE views (Cruise/Close): a plane PERPENDICULAR to the camera→car axis, placed just
+  //     short of the car — clips the whole near wedge between the eye and the car (the real fix
+  //     for "car hidden under trees" in the forward views; a horizontal cut can't, since the
+  //     occluders sit at the car's own height between you and it).
+  //   • OVERHEAD (Top-down/Aerial): a horizontal cut just above the car — shaves the canopy off
+  //     while keeping the wide map intact (a perpendicular clip would gouge a huge hole there).
   const _tileClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
-  function updateTileClip(yC, view) {
+  const _clipN = new THREE.Vector3(), _clipP = new THREE.Vector3();
+  function updateTileClip(carX, carY, carZ, view) {
     const planes = p3dtiles && p3dtiles.clipPlanes;
     if (!planes) return;
-    let clearance = null;
-    if (view.topdown) clearance = 6;          // straight-down map view: shave the canopy right off
-    else if (!view.drone && !view.aerial) clearance = 16;   // low 'Close' chase: lift the cut well above the car (keep buildings/road)
-    // Cruise (drone) + Aerial high orbit: no clip — their framing already clears the canopy.
-    if (clearance == null) { planes.length = 0; return; }
-    _tileClipPlane.normal.set(0, -1, 0);
-    _tileClipPlane.constant = yC + clearance;   // plane y = yC+clearance; keep y < that, remove above
-    if (planes.length === 0) planes.push(_tileClipPlane);   // contents-mutate the SHARED array (no per-tile work)
+    if (view.topdown || view.aerial) {
+      _clipN.set(0, -1, 0);
+      _tileClipPlane.normal.copy(_clipN);
+      _tileClipPlane.constant = carY + (view.aerial ? 8 : 6);   // keep y < that, clip everything above
+    } else {
+      _clipN.set(carX - camera.position.x, carY - camera.position.y, carZ - camera.position.z);
+      const dist = _clipN.length();
+      if (dist < 1e-3) { planes.length = 0; return; }
+      _clipN.multiplyScalar(1 / dist);                          // unit camera→car
+      _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);   // a point 2.6 m in front of the car toward the camera
+      _tileClipPlane.normal.copy(_clipN);
+      _tileClipPlane.constant = -_clipN.dot(_clipP);            // camera side (closer than the plane) → clipped
+    }
+    if (planes.length === 0) planes.push(_tileClipPlane);       // contents-mutate the SHARED array (no per-tile work)
   }
 
   function updateDrive(dt, now) {
@@ -2834,7 +2882,6 @@ export function createEngine({ canvas, ui, emit }) {
     else { const rate = yr > car.groundY ? dt * 18 : dt * 9; car.groundY += (yr - car.groundY) * Math.min(1, rate); }
     if (yr != null && car.groundY < yr - 0.8) car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up
     const yC = car.groundY;
-    updateTileClip(yC, DRIVE_CAMS[camMode] || {});   // R8: cut tile canopy/wires between the camera and the car for the current view
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     // The 4 corner probes feed only the visual pitch/roll, which tolerates a lower rate, so
     // refresh these tile raycasts ~every 3rd frame and reuse the result between. (These were
@@ -3092,6 +3139,7 @@ export function createEngine({ canvas, ui, emit }) {
       camera.position.z += (Math.random() - 0.5) * shakeMag;
       shakeMag *= Math.exp(-dt * 9);
     } else shakeMag = 0;
+    updateTileClip(car.x, yC, car.z, DRIVE_CAMS[camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
     if (ui.mph) ui.mph.textContent = Math.round(Math.abs(car.speed) * 2.237);
     {
       const f = clamp(Math.abs(car.speed) / feelRef, 0, 1);

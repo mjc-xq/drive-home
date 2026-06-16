@@ -21,7 +21,15 @@ export const VEHICLES = [
   { slot: 5, name: 'Corvette Stingray', spec: 'LEGO TECHNIC · 6.2L V8 VIBES', credit: 'model: Sketchfab', profile: { accel: 1.25, top: 0.92, grip: 1.05, slip: 0.95 } },
   { slot: 6, name: 'Rolls-Royce Dawn', spec: '6.6L V12 · LUXURY CRUISER', credit: 'model: Sketchfab', profile: { accel: 0.8, top: 0.88, grip: 1.25, slip: 0.45 } },
   { slot: 7, name: 'SCG 004CS', spec: 'TWIN-TURBO V8 · TRACK WEAPON', credit: 'model: Sketchfab', profile: { accel: 1.4, top: 1.0, grip: 1.0, slip: 1.0 } },
-  { slot: 8, name: 'Pininfarina Battista', spec: '1900 HP · ELECTRIC HYPERCAR', credit: 'model: Sketchfab', profile: { accel: 1.55, top: 1.15, grip: 0.95, slip: 1.1 } }
+  { slot: 8, name: 'Pininfarina Battista', spec: '1900 HP · ELECTRIC HYPERCAR', credit: 'model: Sketchfab', profile: { accel: 1.55, top: 1.15, grip: 0.95, slip: 1.1 } },
+  // Newer additions — loaded LAZILY (only fetched when picked from the garage), so they never
+  // weigh down a session where they're not driven.
+  { slot: 9, name: 'Lamborghini Murciélago', spec: '6.2L V12 · AWD · 580 HP', credit: 'model: Sketchfab', profile: { accel: 1.35, top: 1.02, grip: 1.05, slip: 0.95 } },
+  { slot: 10, name: 'Jiotto Caspita', spec: 'F1-DERIVED · GROUP-C V12', credit: 'model: alex.ka', profile: { accel: 1.45, top: 1.05, grip: 1.0, slip: 1.0 } },
+  { slot: 11, name: "'65 Mustang Convertible", spec: 'CLASSIC PONY · 4.7L V8 · RWD', credit: 'model: Sketchfab', profile: { accel: 1.05, top: 0.85, grip: 0.85, slip: 1.15 } },
+  { slot: 12, name: "'65 Mini Cooper S", spec: 'CLASSIC · 1.3L · GO-KART', credit: 'model: Sketchfab', profile: { accel: 0.9, top: 0.7, grip: 1.45, slip: 0.6 } },
+  { slot: 13, name: 'Hot Rod Coupe', spec: 'CHOPPED · BIG-BLOCK V8', credit: 'model: Sketchfab', profile: { accel: 1.2, top: 0.9, grip: 0.85, slip: 1.2 } },
+  { slot: 14, name: 'Rat Rod', spec: 'BARE-METAL · BLOWN V8', credit: 'model: Sketchfab', profile: { accel: 1.25, top: 0.88, grip: 0.8, slip: 1.25 } }
 ];
 
 function liftVehicleMaterials(scene, lift = 0.22) {
@@ -260,13 +268,17 @@ function registerVehicle(car, group, slot, meta) {
   group.visible = false;
   car.group.add(group);
   car.models[slot] = { group, ...meta };
-  // until the user picks, show the DEFAULT (slot 0). Hold the reveal until slot 0 arrives so
-  // the player never sees a wrong car flash in first (e.g. the Ferrari loading before the
-  // Granvia); the engine clears `heldForDefault` after a short fallback timeout so a slow or
-  // failed slot-0 still ends up showing whatever loaded.
+  // A car the player asked for while it was still loading (lazy garage pick) wins as soon as it
+  // arrives — show it and mark the choice made.
+  if (car.pendingPick === slot) { car.userPicked = true; car.modelIdx = slot; showOnly(car, slot); car.pendingPick = null; return; }
+  // until the user picks, show the DEFAULT slot (random per session — car.defaultSlot). Hold the
+  // reveal until the default arrives so the player never sees a wrong car flash in first; the
+  // engine clears `heldForDefault` after a short fallback timeout so a slow/failed default still
+  // ends up showing whatever loaded.
   if (!car.userPicked) {
-    if (car.heldForDefault && slot !== 0 && !car.models[0]) return;
-    const first = (car.heldForDefault && car.models[0]) ? 0 : car.models.findIndex(Boolean);
+    const def = car.defaultSlot || 0;
+    if (car.heldForDefault && slot !== def && !car.models[def]) return;
+    const first = (car.heldForDefault && car.models[def]) ? def : car.models.findIndex(Boolean);
     if (first < 0) return;                          // unreachable (slot just set), but never deref [-1]
     car.modelIdx = first;
     showOnly(car, first);
@@ -319,7 +331,7 @@ export function loadCarProto(url, length, flip, onReady) {
 }
 
 export function loadDrivableCar(car, url, slot, opts = {}) {
-  const { length = 4.6, black = true, flip = false, meta = {} } = opts;
+  const { length = 4.6, black = true, flip = false, meta = {}, onReady } = opts;
   const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z
   let cancelled = false;
   const gl = new GLTFLoader();
@@ -332,6 +344,7 @@ export function loadDrivableCar(car, url, slot, opts = {}) {
     liftVehicleMaterials(model, black ? 0.16 : 0.22);
     inner.add(model);
     registerVehicle(car, inner, slot, meta);
-  }, undefined, err => { if (!cancelled) console.warn('drivable car failed', url, err); });
+    if (onReady) onReady(slot);
+  }, undefined, err => { if (!cancelled) { console.warn('drivable car failed', url, err); if (onReady) onReady(slot, err); } });
   return () => { cancelled = true; };
 }
