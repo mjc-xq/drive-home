@@ -2460,6 +2460,7 @@ export function createEngine({ canvas, ui, emit }) {
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
     // ground point. Speed scales with DISTANCE (drag far = floor it, near = creep),
     // and if the target is BEHIND the car it reverses toward it instead of looping.
+    let autoTurnLimit = Infinity;   // robot's heading-error speed governor; also feeds the autoCap below
     if (inp2.navActive) {
       const dx = inp2.navX - car.x, dz = inp2.navZ - car.z, dd = Math.hypot(dx, dz);
       let dyaw = Math.atan2(dx, dz) - car.yaw;
@@ -2478,10 +2479,14 @@ export function createEngine({ canvas, ui, emit }) {
         const align = clamp(1 - Math.abs(dyaw) / 1.7, robot ? 0.42 : 0.22, 1); // robot keeps pace through bends
         if (robot) {
           const dDest = Math.hypot(DEST.x - car.x, DEST.z - car.z);
-          const want = autoDriveTargetSpeed(dDest);
+          // HEADING-ERROR GOVERNOR: the sharper the angle to the aim point, the slower the car
+          // must be to actually make the turn. Without this the chauffeur blasts straight
+          // through bends at top speed and leaves the route — "autodrive breaks when fast".
+          autoTurnLimit = clamp(64 - Math.abs(dyaw) * 80, 12, 64);
+          const want = Math.min(autoDriveTargetSpeed(dDest), autoTurnLimit);
           const gap = want - Math.abs(car.speed);
           throttle = clamp(0.42 + gap / Math.max(22, want) * 0.95, 0, 1) * align;
-          brake = gap < -12 ? clamp((-gap - 8) / 30, 0, 0.58) : 0;
+          brake = gap < -6 ? clamp((-gap - 4) / 22, 0, 0.85) : 0;   // brake sooner + harder when overspeed for the bend
           if (brake > 0.05) throttle = 0;
         } else {
           throttle = clamp((0.22 + farT * 0.78) * align, 0, 1);
@@ -2513,7 +2518,7 @@ export function createEngine({ canvas, ui, emit }) {
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
     let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
-    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 330 * boostMul * speedMul);   // the chauffeur can hit ~700 mph on a clear straight
+    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 240 * boostMul * speedMul);   // the chauffeur stays fast on a clear straight, but capped low enough to STILL make the next turn (was 330 → it overshot bends and lost the route)
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -2557,14 +2562,16 @@ export function createEngine({ canvas, ui, emit }) {
     let autoCap = 200;
     if (autoDrive) {
       const dDest = DEST ? Math.hypot(DEST.x - car.x, DEST.z - car.z) : 1e9;
-      // FAST on the straights, still turn-aware. The throttle controller above aims at
-      // this pace; this cap is only a soft guardrail so auto-drive feels quick, not jerky.
-      autoCap = autoDriveTargetSpeed(dDest) + (highway ? 70 : 18);
+      // FAST on the straights, still turn-aware. The throttle controller above aims at this
+      // pace; this cap is the guardrail. The old +70 highway bonus let the cap stay high right
+      // at a bend (so it blew the turn) — keep it modest, and ALSO respect the heading-error
+      // governor so the cap actually drops as the route bends ahead.
+      autoCap = Math.min(autoDriveTargetSpeed(dDest) + 20, autoTurnLimit + 16);
     }
     car.speed += acc * dt;
     car.speed -= car.speed * (highway ? 0.06 : openRoad ? 0.1 : 0.28) * dt;   // highway = slippery-fast, lawns drag
     car.speed = clamp(car.speed, maxR, maxF);
-    if (autoDrive && car.speed > autoCap) car.speed += (autoCap - car.speed) * Math.min(1, dt * 3.2);   // soft capped cruise while the robot drives
+    if (autoDrive && car.speed > autoCap) car.speed += (autoCap - car.speed) * Math.min(1, dt * 7);   // brake to the cap FAST so a fast leg can still slow for the next turn (was dt*3.2 → too slow, overshot)
     if (throttle < 0.1 && brake < 0.1 && Math.abs(car.speed) < 0.4) car.speed = 0;
     // tighter turns at speed (makes corners) but softened up high so the open-road blast
     // the design invites stays pointable instead of going numb.
@@ -2632,6 +2639,10 @@ export function createEngine({ canvas, ui, emit }) {
       if (offRoadDist > 14) offRoadT += dt; else offRoadT = 0;
       const stuck = Math.abs(car.speed) < 3;
       if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
+    } else if (autoDrive && onRouteNow && recoverCooldown <= 0 && offRoadDist > 55) {
+      // The chauffeur wandered far off the ROUTE line (a fast bend it couldn't hold) — snap it
+      // back onto the route so it re-syncs instead of circling/getting lost far from home.
+      offRoadT = 0; resetToRoad();
     } else offRoadT = 0;
     // HARD UNSTICK: a bad teleport/landing can bury the car inside a building footprint, where
     // the collision below collapses every move candidate to its own spot (can't budge in any
