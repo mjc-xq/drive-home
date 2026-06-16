@@ -51,15 +51,19 @@ character, with no per-object yard hide. `interior.clampCam` keeps the small ind
 cam inside the walls and under the ceiling; `updateScoopInterior` also pulls the camera in
 before it would poke through a wall.
 
-## The dog couch swap
+## The couch swap (couchy.usdz)
 
 The couch nearest a window (`sofa_*` closest to a `window_*` centre — currently
-`sofa_rect0`, 0.57 m from `window_1`) is replaced by `src/assets/dog-couch.glb`. It loads
-**non-blocking** (it's a large ~40 MB asset), scaled to the original couch's length with
-its long axis aligned, dropped on the couch's spot. The original sofa is hidden once it
-lands (its furniture collider stays, so the dog couch still blocks); on load failure the
-original sofa simply remains. **Note:** 40 MB is heavy — decimating the mesh / shrinking
-its textures (e.g. via `@gltf-transform` once `sharp` is available) would cut it a lot.
+`sofa_rect0`, 0.57 m from `window_1`) is replaced by **`src/assets/couchy.usdz`**, loaded
+with three's **`USDLoader`** (`USDZLoader` is deprecated). That loader reads the binary
+**USDC** crate + **AVIF** textures in pure JS (fflate unzip — no wasm/workers, fine for the
+artifact-webview constraints) and auto-converts Z-up→Y-up. `**/*.usdz**` is added to Vite's
+`assetsInclude`. It loads **non-blocking** (the original sofa shows until it lands and stays
+on failure), is scaled to the original couch's length with its long axis aligned, and dropped
+on the couch's spot — the original sofa's furniture collider stays, so the new couch blocks.
+~14.5 MB (binary USDC parses on the main thread, so a brief hitch on first load is expected).
+Its facing isn't guaranteed (USD orientation varies) — flip the `Math.PI/2` long-axis rotation
+in `interior.js` if it sits the wrong way.
 
 ## Build size
 

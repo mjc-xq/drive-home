@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clamp } from './coords.js';
 import interiorUrl from '../assets/house-interior.glb';
-import dogCouchUrl from '../assets/dog-couch.glb';
+import { USDLoader } from 'three/examples/jsm/loaders/USDLoader.js';
+import couchyUrl from '../assets/couchy.usdz';
 
 // The house interior is a furniture-segmented room scan (PLAIN GLB — no Draco, no animations,
 // no extensions, so the stock GLTFLoader loads it). Names live on NODES (every mesh.name is
@@ -125,10 +126,11 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       },
     });
 
-    // Swap a custom "dog couch" GLB in for the couch nearest a window. Loaded non-blocking (it's a
-    // big asset) so it never holds up the room; the original sofa shows until it lands and stays on
-    // failure. Scaled to the original couch's length and dropped on its spot — the original's
-    // furniture collider stays, so the dog couch still blocks. The original sofa is then hidden.
+    // Swap couchy.usdz in for the couch nearest a window. Loaded non-blocking so it never holds up
+    // the room; the original sofa shows until it lands and stays on failure. three's USDLoader reads
+    // the binary USDC + AVIF textures (pure JS, no wasm) and auto-converts Z-up. Scaled to the
+    // original couch's length and dropped on its spot — the original's furniture collider stays, so
+    // the new couch still blocks. The original sofa is then hidden.
     if (sofas.length && windows.length) {
       const wCtr = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
       let target = null, tBox = null, bd = Infinity;
@@ -136,9 +138,8 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         const b = new THREE.Box3().setFromObject(s), c = b.getCenter(new THREE.Vector3());
         for (const w of wCtr) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; target = s; tBox = b; } }
       }
-      if (target) new GLTFLoader().load(dogCouchUrl, dg => {
-        if (cancelled) return;
-        const dog = dg.scene;
+      if (target) new USDLoader().load(couchyUrl, dog => {
+        if (cancelled || !dog) return;
         dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
         const dgrp = new THREE.Group(); dgrp.add(dog);
         const ds = new THREE.Box3().setFromObject(dog).getSize(new THREE.Vector3());
@@ -150,7 +151,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         const gb = new THREE.Box3().setFromObject(dgrp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
         dgrp.position.x += tc.x - gc.x; dgrp.position.z += tc.z - gc.z; dgrp.position.y += tBox.min.y - gb.min.y;   // drop on the couch's spot (group is translation-only)
         target.visible = false;   // hide the original couch (its collider remains, covering the dog couch)
-      }, undefined, e => console.warn('[interior] dog couch failed, keeping the original sofa', e));
+      }, undefined, e => console.warn('[interior] couch (usdz) failed, keeping the original sofa', e));
     }
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
   return () => { cancelled = true; };

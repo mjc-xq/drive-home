@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
   const googleKey = env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
   return {
     plugins: [react()],
-    assetsInclude: ['**/*.glb'],
+    assetsInclude: ['**/*.glb', '**/*.usdz'],
     define: {
       'import.meta.env.VITE_GOOGLE_MAPS_KEY': JSON.stringify(googleKey)
     },
