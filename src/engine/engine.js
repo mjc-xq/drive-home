@@ -867,27 +867,37 @@ export function createEngine({ canvas, ui, emit }) {
     for (let i = 0; i < Math.min(6, nearRoads.length); i++) {
       const s = nearRoads[(i * 7 + 2) % nearRoads.length];
       const mx = (s[0][0] + s[1][0]) / 2, mz = (s[0][1] + s[1][1]) / 2;
-      const dx = s[1][0] - s[0][0], dz = s[1][1] - s[0][1], L = Math.hypot(dx, dz) || 1, nx = -dz / L, nz = dx / L, side = (i % 2) ? 3.6 : -3.6;
+      const dx = s[1][0] - s[0][0], dz = s[1][1] - s[0][1], L = Math.hypot(dx, dz) || 1, nx = -dz / L, nz = dx / L, side = (i % 2) ? 2.6 : -2.6;
       put(i % 2 ? ceceCrowd : drewCrowd, mx + nx * side, mz + nz * side, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });
     }
     // STANTON ELEMENTARY (Drive): a cluster of CeCes dancing at the school
     const stanton = POIS.find(p => p.key === 'stanton');
     if (stanton) for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2, r = 4 + (i % 2) * 2.5; put(ceceCrowd, stanton.x + Math.cos(a) * r, stanton.z + Math.sin(a) * r, 'stanton', true); }
+    // CANYON MIDDLE (Drive): a few dancing Drews at the school
+    const canyon = POIS.find(p => p.key === 'canyon');
+    if (canyon) for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2 + 0.6, r = 4 + (i % 2) * 2.5; put(drewCrowd, canyon.x + Math.cos(a) * r, canyon.z + Math.sin(a) * r, 'canyon', true, { clip: i % 2 ? 'dance' : 'cheer' }); }
   }
   let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
   if (!flags.has('nochar')) {
     loadCeceCrowd(c => { ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
     loadDrewCrowd(c => { drewCrowd = c; _onCrowd(); }, () => _onCrowd());
   } else geocodePOIs();
-  function updateCrowd(dt) {
+  let _crowdHitT = 0;
+  function updateCrowd(dt, now) {
     if (!crowdSpots.length) return;
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
     for (const sp of crowdSpots) {
       sp.rec.grp.visible = sp.zone === 'yard' ? inScoop
         : inDrive && Math.hypot(sp.rec.x - car.x, sp.rec.z - car.z) < 150;
     }
-    if (ceceCrowd) ceceCrowd.tick(dt);   // tick() only advances VISIBLE mixers
-    if (drewCrowd) drewCrowd.tick(dt);
+    // COMEDY: plough into a pedestrian and they cartwheel off the road (then pop back up).
+    if (inDrive && Math.abs(car.speed) > 6 && now - _crowdHitT > 250) {
+      const dir = Math.sign(car.speed) || 1, vx = Math.sin(car.yaw) * dir, vz = Math.cos(car.yaw) * dir, sp = Math.abs(car.speed);
+      const hit = (ceceCrowd && ceceCrowd.launchNear(car.x, car.z, vx, vz, sp)) || (drewCrowd && drewCrowd.launchNear(car.x, car.z, vx, vz, sp));
+      if (hit) { _crowdHitT = now; if (audio.sfxThunk) audio.sfxThunk(0.5); toast('🎳 WHEEE!', 700); if (navigator.vibrate) { try { navigator.vibrate(22); } catch (e) { } } }
+    }
+    if (ceceCrowd) ceceCrowd.tick(dt, now);   // tick() advances visible mixers + any in-flight launch
+    if (drewCrowd) drewCrowd.tick(dt, now);
   }
 
   let disposed = false;
@@ -1555,7 +1565,7 @@ export function createEngine({ canvas, ui, emit }) {
         p.x = w[0]; p.z = w[1]; p.lat = g.lat; p.lon = g.lon;
         const b = poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
         const lb = poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
-        if (p.key === 'stanton') for (const sp of crowdSpots) if (sp.zone === 'stanton') { sp.rec.grp.position.x += p.x - ox; sp.rec.grp.position.z += p.z - oz; sp.rec.x += p.x - ox; sp.rec.z += p.z - oz; }
+        for (const sp of crowdSpots) if (sp.zone === p.key) { sp.rec.grp.position.x += p.x - ox; sp.rec.grp.position.z += p.z - oz; sp.rec.x += p.x - ox; sp.rec.z += p.z - oz; }   // shift this POI's dancers (stanton/canyon)
       }).catch(() => { });
     }
   }
@@ -1585,7 +1595,7 @@ export function createEngine({ canvas, ui, emit }) {
         styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
       });
       _gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: _gmap, zIndex: 5,
-        icon: { path: 'M0,-7 L4.5,6 L0,3 L-4.5,6 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.2, scale: 1.5, rotation: 0 } });
+        icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.7, rotation: 0, anchor: new maps.Point(0, 0) } });
       _gmapRoute = new maps.Polyline({ map: _gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
       _gmap.addListener('click', e => { const w = geoToWorld(e.latLng.lat(), e.latLng.lng()); setDriveTarget(w[0], w[1]); });
     }).catch(() => { });
@@ -2644,7 +2654,7 @@ export function createEngine({ canvas, ui, emit }) {
     const dt = rawDt * timeScale;
     if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
     updateAnimals(dt, now); // ambient life in every mode
-    updateCrowd(dt);        // dancing CeCe/Drew crowd (mode + distance gated)
+    updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch
     if (mode === 'drive') {
       updateDrive(dt, now);
     } else if (mode === 'scoop') {

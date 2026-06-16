@@ -239,9 +239,10 @@ export default function App() {
         {mode !== 'drive' && (
           <div id="compass" className="chip" aria-hidden="true">
             <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
-              <polygon points="20,5 24,22 20,19 16,22" fill="#d94f1e" />
-              <polygon points="20,35 24,18 20,21 16,18" fill="#28241d" opacity=".35" />
-              <text x="20" y="3.5" fontSize="7" fontWeight="700" textAnchor="middle" fill="#28241d" opacity=".55">N</text>
+              <text x="20" y="6.2" fontSize="6.5" fontWeight="700" textAnchor="middle" fill="var(--nav)" fontFamily="'Chakra Petch'">N</text>
+              <polygon points="20,8.5 24,21 20,17.6 16,21" fill="var(--nav)" />
+              <polygon points="20,32 24,19 20,22.4 16,19" fill="#fff" opacity=".4" />
+              <circle cx="20" cy="20" r="2" fill="#fff" />
             </svg>
           </div>
         )}
@@ -373,9 +374,10 @@ export default function App() {
               <div className="dashDiv" />
               <div className="dashCompass">
                 <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
-                  <polygon points="20,5 24,22 20,19 16,22" fill="#FF5247" />
-                  <polygon points="20,35 24,18 20,21 16,18" fill="#fff" opacity=".35" />
-                  <text x="20" y="4" fontSize="7" fontWeight="700" textAnchor="middle" fill="#FF5247">N</text>
+                  <text x="20" y="6.2" fontSize="6.5" fontWeight="700" textAnchor="middle" fill="var(--nav)" fontFamily="'Chakra Petch'">N</text>
+                  <polygon points="20,8.5 24,21 20,17.6 16,21" fill="var(--nav)" />
+                  <polygon points="20,32 24,19 20,22.4 16,19" fill="#fff" opacity=".4" />
+                  <circle cx="20" cy="20" r="2" fill="#fff" />
                 </svg>
               </div>
               <div className="dashDiv" />

@@ -48,12 +48,36 @@ function makeCrowd(base, clips, nativeH, danceNames, innerYaw) {
       const name = clip || danceNames[(Math.random() * danceNames.length) | 0];
       const cl = clips[name] || clips[danceNames[0]] || Object.values(clips)[0];
       if (cl) { const act = mixer.clipAction(cl); act.play(); mixer.setTime(Math.random() * (cl.duration || 1)); }   // desync the loops
-      const rec = { grp, mixer, x, z };
+      const rec = { grp, mixer, x, z, baseX: x, baseY: y, baseZ: z, baseYaw: yaw, vel: null, spin: 0, axisX: 1, axisZ: 0, respawnAt: 0 };
       insts.push(rec);
       return rec;
     },
     list: insts,
-    tick(dt) { for (const i of insts) if (i.grp.visible) i.mixer.update(dt); },
+    // HIT: launch the nearest VISIBLE, not-already-flying dancer within `rad` of (x,z)
+    // comically through the air along the car's heading. Returns true on a hit.
+    launchNear(x, z, vx, vz, speed, rad = 3.2) {
+      let best = null, bd = rad * rad;
+      for (const i of insts) { if (!i.grp.visible || i.vel) continue; const dx = i.grp.position.x - x, dz = i.grp.position.z - z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; best = i; } }
+      if (!best) return false;
+      const L = Math.hypot(vx, vz) || 1, s = Math.max(10, speed);
+      best.vel = { x: vx / L * s * 0.9, y: 8 + s * 0.32, z: vz / L * s * 0.9 };   // up + away
+      best.spin = (9 + Math.random() * 9) * (Math.random() < 0.5 ? -1 : 1);       // tumble
+      best.axisX = Math.random(); best.axisZ = 1 - best.axisX;
+      return true;
+    },
+    tick(dt, now) {
+      for (const i of insts) {
+        if (i.vel) {                                                              // mid-flight: ballistic + tumble
+          i.grp.position.x += i.vel.x * dt; i.grp.position.y += i.vel.y * dt; i.grp.position.z += i.vel.z * dt;
+          i.vel.y -= 26 * dt;
+          i.grp.rotation.x += i.spin * i.axisX * dt; i.grp.rotation.z += i.spin * i.axisZ * dt;
+          if (i.grp.position.y <= i.baseY && i.vel.y < 0) { i.grp.position.y = i.baseY; i.vel = null; i.respawnAt = (now || 0) + 2600; }
+          i.mixer.update(dt);                                                     // keep flailing — funnier
+        } else if (i.respawnAt && now >= i.respawnAt) {                           // pop back up where it started
+          i.grp.position.set(i.baseX, i.baseY, i.baseZ); i.grp.rotation.set(0, i.baseYaw, 0); i.respawnAt = 0;
+        } else if (i.grp.visible) i.mixer.update(dt);
+      }
+    },
     dispose() { for (const i of insts) { i.mixer.stopAllAction(); if (i.grp.parent) i.grp.parent.remove(i.grp); } insts.length = 0; },
   };
 }
