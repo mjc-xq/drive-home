@@ -1,11 +1,12 @@
 # 1840 Dahill Lane — Interactive 3D Neighborhood
 
 A real-data 3D model of 1840 Dahill Lane, Hayward CA 94541, with two
-mini-games for the kids: **Drive** (collect 6 rings in a Ferrari 458) and
+mini-games for the kids: **Drive** (collect rings in a roster of cars) and
 **Scoop 💩** (clean up after the animal sanctuary: 5 potbelly pigs, 2 ducks,
-1 iguana). Real building footprints, streets, San Lorenzo Creek, terrain and
-aerial imagery. Mobile-first — it ships as **one self-contained HTML file**
-that runs inside the Claude app's artifact viewer.
+1 iguana — play as Drew **or** CeCe, and walk **inside the house**). Real
+building footprints, streets, San Lorenzo Creek, terrain and aerial imagery.
+Mobile-first. The build is multi-file (`dist/index.html` + lazy `dist/assets/*.glb`
+fetches). See `docs/drive-mode.md`, `docs/scoop-mode.md`, `docs/house-interior.md`.
 
 ## Commands
 
@@ -32,11 +33,15 @@ src/engine/
   terrain.js   bilinear heightfield sampler
   roadmask.js  drivable-surface occupancy grid (onRoad)
   world.js     terrain/creek/roads/buildings/yard/sanctuary/trees/labels
-  animals.js   pigs, ducks, iguana, poop pools, the keeper
+  animals.js   pigs, ducks, iguana, poop pools, the playable kid (Drew/CeCe avatar)
+  drew.js      rigged Drew + the shared playable-character controller (makeController)
+  cece.js      rigged CeCe playable avatar (reuses makeController; cece.glb is Draco)
+  crowd.js     ambient dancing Drew/CeCe crowd (yard, streets, destinations, indoors)
+  interior.js  the walk-inside house scan (see docs/house-interior.md)
   car.js       procedural Ferrari + GLB swap-in
   draco-install.js / draco-shim.js / vendor: main-thread Draco (see below)
   audio.js     engine + sfx (WebAudio)
-  engine.js    modes (explore/drive/scoop), controls, cameras, rings, render loop
+  engine.js    modes (explore/drive/scoop + interior sub-scene), controls, cameras, render loop
 ```
 
 ## The Draco constraint (important)

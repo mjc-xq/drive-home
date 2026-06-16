@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clamp } from './coords.js';
 import interiorUrl from '../assets/house-interior.glb';
+import dogCouchUrl from '../assets/dog-couch.glb';
 
 // The house interior is a furniture-segmented room scan (PLAIN GLB — no Draco, no animations,
 // no extensions, so the stock GLTFLoader loads it). Names live on NODES (every mesh.name is
@@ -31,7 +32,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     if (cancelled) return;
     const model = g.scene;
     model.updateMatrixWorld(true);
-    const floors = [], walls = [], doors = [], furniture = [];
+    const floors = [], walls = [], doors = [], furniture = [], sofas = [], windows = [];
     model.traverse(o => {
       if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; }
       const n = o.name;
@@ -39,7 +40,8 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       if (FLOOR_RE.test(n)) floors.push(o);
       else if (WALL_RE.test(n)) walls.push(o);
       else if (DOOR_RE.test(n)) doors.push(o);
-      else if (FURN_RE.test(n)) furniture.push(o);
+      else if (FURN_RE.test(n)) { furniture.push(o); if (/^sofa/.test(n)) sofas.push(o); }
+      else if (/^window/.test(n)) windows.push(o);
     });
     // Double-side the walls so inward-facing faces aren't black, and lift any near-black scan
     // material a touch so rooms read (the scan's albedo can be very dark).
@@ -122,6 +124,34 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         return { x: clamp(x, roomAABB[0] + m, roomAABB[1] - m), y: Math.min(y, ceilingY - 0.25), z: clamp(z, roomAABB[2] + m, roomAABB[3] - m) };
       },
     });
+
+    // Swap a custom "dog couch" GLB in for the couch nearest a window. Loaded non-blocking (it's a
+    // big asset) so it never holds up the room; the original sofa shows until it lands and stays on
+    // failure. Scaled to the original couch's length and dropped on its spot — the original's
+    // furniture collider stays, so the dog couch still blocks. The original sofa is then hidden.
+    if (sofas.length && windows.length) {
+      const wCtr = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
+      let target = null, tBox = null, bd = Infinity;
+      for (const s of sofas) {
+        const b = new THREE.Box3().setFromObject(s), c = b.getCenter(new THREE.Vector3());
+        for (const w of wCtr) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; target = s; tBox = b; } }
+      }
+      if (target) new GLTFLoader().load(dogCouchUrl, dg => {
+        if (cancelled) return;
+        const dog = dg.scene;
+        dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
+        const dgrp = new THREE.Group(); dgrp.add(dog);
+        const ds = new THREE.Box3().setFromObject(dog).getSize(new THREE.Vector3());
+        const ss = tBox.getSize(new THREE.Vector3());
+        if ((ss.z > ss.x) !== (ds.z > ds.x)) dgrp.rotation.y = Math.PI / 2;   // align the long axis with the couch
+        dgrp.scale.setScalar(Math.max(ss.x, ss.z) / (Math.max(ds.x, ds.z) || 1));   // match the couch's length
+        group.add(dgrp);
+        dgrp.updateMatrixWorld(true);
+        const gb = new THREE.Box3().setFromObject(dgrp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
+        dgrp.position.x += tc.x - gc.x; dgrp.position.z += tc.z - gc.z; dgrp.position.y += tBox.min.y - gb.min.y;   // drop on the couch's spot (group is translation-only)
+        target.visible = false;   // hide the original couch (its collider remains, covering the dog couch)
+      }, undefined, e => console.warn('[interior] dog couch failed, keeping the original sofa', e));
+    }
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
   return () => { cancelled = true; };
 }

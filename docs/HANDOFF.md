@@ -65,9 +65,36 @@ No BufferGeometryUtils (custom non-indexed `merge()`); roads/roofs need
 InstancedMesh per-instance color unreliable (hence two poop pools);
 `toNonIndexed` warning ×516 at startup is benign.
 
+## House interior + playable CeCe (Scoop) — gotchas
+
+- **Build is multi-file, not single-file.** `vite-plugin-singlefile` is an unused dep;
+  `dist/index.html` ≈ 1.5 KB and every GLB is a separate lazy `dist/assets/*.glb` fetch.
+  The old "ships as one self-contained HTML / +1.3 MB base64 inline" claim is **stale** —
+  the interior (~946 KB) and dog couch (~40 MB) are external fetches, not inlined. (The
+  vendored main-thread Draco is still real, though — keep it; see the Draco section.)
+- **Two loaders, don't mix.** The interior + dog-couch GLBs are PLAIN → stock `GLTFLoader`.
+  CeCe (`cece.glb`) is **Draco + EXT_texture_webp** → `GLTFLoader.setDRACOLoader(DracoShim)`
+  after `installDracoDecoder()`. `cece.js` uses a timeout latch (not `DracoShim.onError`,
+  which the ambient CeCe crowd can clobber) so a failed swap falls back instead of hanging.
+- **Interior names live on NODES, not meshes** (every `mesh.name` is undefined) — traverse
+  by `object.name`. Collision is **per-`wall_*` AABB** (+ `joint_*`), NOT the union (that's
+  only the outer shell — would let you walk through partitions); `door_*` are passable
+  portals. **Recenter on floor TOP** (`floor_*` `box.max.y`), not `min.y`, or the kid sinks.
+- **Interior light rig uses `× Math.PI`** (physical units, like the scene sun/hemi) or rooms
+  render ~3× too dark. The scan has no ceiling — it's a roofless dollhouse under the sky.
+- **The interior is mounted ~2 km away;** Scoop's tight fog (near 38 / far 92) hides the
+  distant yard, so entering/leaving just teleports the kid + flips `interior.group.visible`
+  — no per-object yard hide. `terrainAt()` and `SCOOP_CAMS` are yard-only — never indoors.
+- **`CHAR.drew` is the generic "active avatar" slot** (not renamed) — holds the Drew OR CeCe
+  controller, both the same `{group,locomotion,react,reset,tick}` shape. Switch is avatar-only;
+  the decorative Drew+CeCe pair inside is the crowd system (`zone:'interior'`), distinct.
+- **`?nointerior`** skips the house load for fast verify loops. `node scripts/verify_interior_node.mjs`
+  re-checks the GLB structure + recenter math (three.js-free; JPEG textures can't decode headless).
+
 ## Tests
 
-24 vitest tests. Never change a test for convenience — justify every change
+27 vitest tests (terrain 3, tools 4, coords 5, roadmask 4, car-roster 3, scene-schema 8).
+Never change a test for convenience — justify every change
 (user rule). Implementation code is largely verbatim proven artifact code;
 tolerance changes (`toBeCloseTo`) were the only justified edits so far.
 

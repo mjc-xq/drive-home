@@ -1591,10 +1591,11 @@ export function createEngine({ canvas, ui, emit }) {
   function exitScoop() {
     setMode('explore');
     camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
+    setInside(false);                       // back to the yard scene (hide the interior if we left from inside)
     if (groundPatch) groundPatch.visible = false;
     if (scoopGrass) scoopGrass.visible = false;
     if (scoopFence) scoopFence.visible = false;
-    marker.visible = false; carMarker.visible = false; compostMarker.visible = false;
+    marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; exitMarker.visible = false;
     if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of labelSprites) s.visible = true;
