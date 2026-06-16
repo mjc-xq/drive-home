@@ -49,6 +49,7 @@ export default function App() {
   const uiRefs = useRef({ box: null, mph: null, gear: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
   const engineRef = useRef(null);
   const dvTopRightRef = useRef(null);   // the top-right ☰ cluster: outside-tap dismiss tests against this
+  const scoopMenuRef = useRef(null);    // the Scoop ☰ side menu: outside-tap dismiss tests against this
 
   const [ready, setReady] = useState(false);
   const [photoreal, setPhotoreal] = useState(false);   // real Google tiles are up (vs the procedural placeholder)
@@ -58,6 +59,9 @@ export default function App() {
   const [subline, setSubline] = useState('Hayward, CA');
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
+  const [scoopMenuOpen, setScoopMenuOpen] = useState(false);   // collapsible Scoop side menu
+  const [scoopChar, setScoopChar] = useState('drew');          // which avatar you control (Drew/CeCe)
+  const [scoopActions, setScoopActions] = useState([]);        // the active avatar's emote buttons
   const [nearCar, setNearCar] = useState(false);
   const [driveHint, setDriveHint] = useState(false);    // brief "how to drive" hint
   const [driveScore, setDriveScore] = useState({ got: 0, total: 0, best: 0, bestStr: '', combo: 0 });
@@ -95,6 +99,7 @@ export default function App() {
         case 'subline': setSubline(p); break;
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
+        case 'avatar': setScoopChar(p.name); if (p.actions) setScoopActions(p.actions); break;
         case 'nearCar': setNearCar(p); break;
         case 'dest': setDest(p); if (!p) setAutoDrive(false); break;
         case 'driveScore': setDriveScore(p); break;
@@ -141,6 +146,15 @@ export default function App() {
     const t = setTimeout(() => setDriveHint(false), 7000);
     return () => clearTimeout(t);
   }, [mode]);
+
+  // Close the Scoop side menu when leaving Scoop, and on an outside tap (same pattern as Drive).
+  useEffect(() => { if (mode !== 'scoop') setScoopMenuOpen(false); }, [mode]);
+  useEffect(() => {
+    if (!scoopMenuOpen) return;
+    const onDown = (e) => { const r = scoopMenuRef.current; if (r && !r.contains(e.target)) setScoopMenuOpen(false); };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [scoopMenuOpen]);
 
   // Auto-dismiss the top-right ☰ menu when you tap/drag anywhere outside it. Scoped to the
   // whole .dvTopRight wrapper so taps on the ☰ toggle itself (no double-toggle race) and drags
@@ -500,13 +514,47 @@ export default function App() {
           <div id="shud">
             <div id="toolChip" className="chip">{scoopHud.name} <span>{scoopHud.bag}/{scoopHud.cap}</span></div>
             <div id="pooHud" className="chip">💩 {scoopHud.total} scooped · yard {scoopHud.clean}% ✨</div>
-            <button id="exitScoop" className="btn" onClick={() => eng().exitScoop()}>Exit ✕</button>
-            <button id="shiftLock" className={'btn icon' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>{shiftLock ? '🔒' : '🔓'}</button>
-            <button id="scoopCam" className="btn icon" aria-label="Camera view" onClick={() => eng().cycleScoopCamera()}>🎥</button>
-            <button id="danceBtn" className="btn icon" aria-label="Dance" onClick={() => eng().dance()}>🕺</button>
+            {/* Collapsible side menu (mirrors the Drive ☰): Drew/CeCe switch, every action, + controls. */}
+            <div className="dvTopRight scoopTopRight" ref={scoopMenuRef}>
+              <div className="segBar">
+                <button className={'segBtn segMenu' + (scoopMenuOpen ? ' open' : '')} aria-label="Scoop menu" aria-expanded={scoopMenuOpen}
+                  onClick={() => { if (!scoopMenuOpen) { setScoopChar(eng().getAvatar()); setScoopActions(eng().getScoopActions()); } setScoopMenuOpen(o => !o); }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+                </button>
+              </div>
+              {scoopMenuOpen && (
+                <div className="segMenuPanel scoopMenuPanel">
+                  {/* who you control */}
+                  <div className="charSwitch" role="radiogroup" aria-label="Who you control">
+                    <button className={'charOpt' + (scoopChar === 'drew' ? ' on' : '')} role="radio" aria-checked={scoopChar === 'drew'} onClick={() => eng().setAvatar('drew')}>🧒 Drew</button>
+                    <button className={'charOpt' + (scoopChar === 'cece' ? ' on' : '')} role="radio" aria-checked={scoopChar === 'cece'} onClick={() => eng().setAvatar('cece')}>👧 CeCe</button>
+                  </div>
+                  {/* every action the active character can play */}
+                  {scoopActions.length > 0 && (
+                    <div className="actionWrap">
+                      <div className="actionKick">Actions</div>
+                      <div className="actionGrid">
+                        {scoopActions.map(a => (
+                          <button key={a.key} className="actionBtn" onClick={() => eng().playAction(a.key)}>{a.label}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <button className="menuItem" onClick={() => eng().cycleScoopCamera()}>
+                    <span className="miIcon nav">🎥</span><span className="miTxt"><b>Camera</b><i className="off">Cycle view</i></span>
+                  </button>
+                  <button className={'menuItem' + (shiftLock ? ' on' : '')} aria-pressed={shiftLock} onClick={() => eng().toggleShiftLock()}>
+                    <span className="miIcon jump">{shiftLock ? '🔒' : '🔓'}</span><span className="miTxt"><b>Shift-lock</b><i className={shiftLock ? 'jump' : 'off'}>{shiftLock ? 'On' : 'Off'}</i></span>
+                  </button>
+                  <button className="menuItem" onClick={() => { eng().exitScoop(); setScoopMenuOpen(false); }}>
+                    <span className="miIcon reverse">✕</span><span className="miTxt"><b>Exit scoop</b><i className="off">Back to menu</i></span>
+                  </button>
+                </div>
+              )}
+            </div>
             <button id="jumpBtn" className="btn primary icon" aria-label="Jump" onClick={() => eng().jump()}>🦘</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
-            <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · 🕺 dance · 🔒 shift-lock</div>
+            <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · ☰ menu: characters, actions &amp; exit</div>
           </div>
         )}
         <div id="joy" ref={el => (uiRefs.current.joy = el)}><div id="knob" ref={el => (uiRefs.current.knob = el)} /></div>

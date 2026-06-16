@@ -5,6 +5,8 @@ import { merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
 import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
+import { createInterior } from './interior.js';
+import { DREW_HEIGHT_M, CECE_HEIGHT_M } from './drew.js';
 import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
@@ -135,7 +137,7 @@ export function createEngine({ canvas, ui, emit }) {
   // so out on the open photoreal tiles the lane-keep assist has nothing to hug unless you're
   // navigating. This is a rolling polyline of the REAL road ahead, snapped via Google Directions,
   // refreshed as you drive — it lets the assist + soft-wall work everywhere, not just at home.
-  let freeRoamPath = null, _frT = 0, _frX = 1e9, _frZ = 1e9, _frReq = 0;
+  let freeRoamPath = null, _frT = 0, _frReq = 0;
   let autoDrive = false;
 
   // ---- drive collectibles: gold coins scattered along the neighbourhood roads ----
@@ -587,6 +589,20 @@ export function createEngine({ canvas, ui, emit }) {
     new THREE.MeshBasicMaterial({ color: 0x3a7d44, depthTest: false, transparent: true, opacity: 0.92 }));
   compostMarker.rotation.x = Math.PI; compostMarker.renderOrder = 20; compostMarker.visible = false; compostMarker.frustumCulled = false;
   scene.add(compostMarker);
+  // ---- House interior (Scoop sub-scene) ----
+  // The interior loads lazily and is mounted FAR from the yard (~2 km). Scoop's tight fog
+  // (near 38 / far 92) hides the distant yard so the indoor camera only ever frames the room —
+  // no per-object yard hide needed. scoopScene forks updateScoop between 'yard' and 'interior'.
+  let scoopScene = 'yard', interior = null, doorT = 0, entryArmed = true, exitArmed = false;
+  const INT_CX = 0, INT_CZ = 3000, INT_FLOOR = 0;
+  // Blue glowing pads: the front-yard "enter" pad and the indoor "exit" pad (drawn through walls).
+  const doorMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
+    new THREE.MeshBasicMaterial({ color: 0x49b0ff, depthTest: false, transparent: true, opacity: 0.92 }));
+  doorMarker.rotation.x = Math.PI; doorMarker.renderOrder = 20; doorMarker.visible = false; doorMarker.frustumCulled = false;
+  scene.add(doorMarker);
+  const exitMarker = new THREE.Mesh(doorMarker.geometry, doorMarker.material.clone());
+  exitMarker.rotation.x = Math.PI; exitMarker.renderOrder = 20; exitMarker.visible = false; exitMarker.frustumCulled = false;
+  scene.add(exitMarker);
   // Address guide: a ground-draped ribbon that FOLLOWS THE ROUTE through its turns — a
   // real navigation line over the road, not a single rotating bar. The geometry is a
   // triangle-strip rebuilt each frame from the route polyline just ahead of the car,
@@ -1031,6 +1047,7 @@ export function createEngine({ canvas, ui, emit }) {
         });
       }
     });
+    placeInteriorDancers();   // the decorative Drew + CeCe inside the house (survives a density re-pool)
   }
   // Remove every placed pedestrian (stop mixers, detach groups, drop the clone pool) so a
   // density change can re-place from scratch without leaking clones/mixers.
@@ -1073,7 +1090,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (!roadLifeOn) { hideCrowd(); return; }
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
     if (inScoop) {
-      for (const sp of crowdSpots) sp.rec.grp.visible = sp.zone === 'yard';
+      const wantInt = scoopScene === 'interior';   // show the indoor pair inside, the yard pair outside
+      for (const sp of crowdSpots) sp.rec.grp.visible = wantInt ? sp.zone === 'interior' : sp.zone === 'yard';
     } else if (inDrive) {
       // VISIBILITY CAP: with a spread-out pool we can't animate them all (skinned meshes are
       // costly). Show only the nearest CROWD_VIS_CAP within a cull radius — bounds the per-frame
@@ -1083,7 +1101,7 @@ export function createEngine({ canvas, ui, emit }) {
         const CULL2 = 240 * 240;
         const cand = [];
         for (const sp of crowdSpots) {
-          if (sp.zone === 'yard') { sp.rec.grp.visible = false; continue; }
+          if (sp.zone === 'yard' || sp.zone === 'interior') { sp.rec.grp.visible = false; continue; }
           const d2 = (sp.rec.x - car.x) ** 2 + (sp.rec.z - car.z) ** 2;
           if (d2 < CULL2) cand.push({ sp, d2 }); else sp.rec.grp.visible = false;
         }
@@ -1214,8 +1232,61 @@ export function createEngine({ canvas, ui, emit }) {
   //  when enabled, the procedural facade texture otherwise.)
 
   // "Look inside" (dollhouse) removed — keep the procedural interior hidden.
-  interiorGroup.visible = false;
-  const setInside = () => {}; // no-op stub for the remaining callers
+  interiorGroup.visible = false;   // legacy procedural dollhouse stays hidden; the GLB interior replaces it
+
+  // Inward normal from the curb toward the house (frontDir is the ROAD TANGENT — never inward),
+  // and a back-door pad on the yard/patio side (near where Scoop is played).
+  const _toHouse = frontPt ? [house.c[0] - frontPt[0], house.c[1] - frontPt[1]] : [0, 1];
+  const _uL = Math.hypot(_toHouse[0], _toHouse[1]) || 1;
+  const entryU = [_toHouse[0] / _uL, _toHouse[1] / _uL];
+  const _halfExt = 0.5 * (Math.abs(entryU[0]) * (house.bbox[1] - house.bbox[0]) + Math.abs(entryU[1]) * (house.bbox[3] - house.bbox[2]));
+  const entryPt = frontPt ? [house.c[0] + entryU[0] * (_halfExt + 1.3), house.c[1] + entryU[1] * (_halfExt + 1.3)] : null;
+
+  if (!flags.has('nointerior')) {
+    modelLoadCancels.push(createInterior(scene, { cx: INT_CX, cz: INT_CZ, floorY: INT_FLOOR },
+      mod => { interior = mod; interior.group.visible = scoopScene === 'interior'; placeInteriorDancers(); },
+      () => { /* fail-soft: the door pad just stays inert */ }));
+  }
+
+  // Show/hide the interior. The yard is NOT hidden object-by-object — it's 2 km away and fogged
+  // out — so this only flips the scene flag, the interior group, and yard-only pins.
+  function setInside(on) {
+    scoopScene = on ? 'interior' : 'yard';
+    if (interior) interior.group.visible = on;
+    if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (nearCar) { nearCar = false; emit('nearCar', false); } }
+    else exitMarker.visible = false;
+  }
+  function enterHouse(now) {
+    if (!interior) return;
+    setInside(true);
+    const sp = interior.spawn;
+    CHAR.x = sp.x; CHAR.z = sp.z; CHAR.yaw = sp.yaw; camYawS = sp.yaw;
+    CHAR.airY = 0; CHAR.vy = 0; camInit = false; szoom = 1; camGroundRef = null;
+    doorT = now + 1200; exitArmed = false;
+    if (audio.blip) audio.blip();
+    toast('🏠 Inside the house! Open the side menu 🎭 to play actions · stand on the 🚪 pad to head back out', 3400);
+  }
+  function leaveHouse(now) {
+    setInside(false);
+    if (entryPt) { CHAR.x = entryPt[0] + entryU[0] * 1.6; CHAR.z = entryPt[1] + entryU[1] * 1.6; CHAR.yaw = Math.atan2(entryU[0], entryU[1]); }
+    camYawS = CHAR.yaw; CHAR.airY = 0; CHAR.vy = 0; camInit = false; szoom = 1; camGroundRef = null;
+    doorT = now + 1200; entryArmed = false;
+    if (audio.blip) audio.blip();
+  }
+  // A Drew + a CeCe hanging out inside (the original "a drew and cece inside") — decorative crowd
+  // dancers, distinct from the playable avatar, gated to the interior scene. Re-added after a
+  // pedestrian-density re-pool (placeCrowd calls this) so the slider doesn't wipe them.
+  function placeInteriorDancers() {
+    if (!interior || !ceceCrowd || !drewCrowd) return;
+    if (crowdSpots.some(s => s.zone === 'interior')) return;
+    const sp = interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)], ra = interior.roomAABB;
+    const add = (crowd, ox, oz, h, clip) => {
+      const x = clamp(sp.x + ox, ra[0] + 0.6, ra[1] - 0.6), z = clamp(sp.z + oz, ra[2] + 0.6, ra[3] - 0.6);
+      crowdSpots.push({ rec: crowd.add(scene, { x, y: interior.floorY, z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', onRoadHt: false, settleT: 0 });
+    };
+    add(drewCrowd, fwd[0] * 2.4 + 1.0, fwd[1] * 2.4, DREW_HEIGHT_M, 'dance');
+    add(ceceCrowd, fwd[0] * 2.4 - 1.0, fwd[1] * 2.4, CECE_HEIGHT_M);
+  }
 
   // ---------- controls (explore) ----------
   const ctl = {
@@ -1511,9 +1582,11 @@ export function createEngine({ canvas, ui, emit }) {
     CHAR.x = (SREC.coop[0] + SREC.pen[0]) / 2; CHAR.z = (SREC.coop[1] + SREC.pen[1]) / 2;
     CHAR.yaw = Math.atan2(SREC.barn[0] - CHAR.x, SREC.barn[1] - CHAR.z);
     camYawS = CHAR.yaw;
+    scoopScene = 'yard'; entryArmed = true; exitArmed = false; doorMarker.visible = false; exitMarker.visible = false;
+    emit('avatar', { name: CHAR.avatar, actions: CHAR.getActions() });
     audio.ensure();
     setTool(CHAR.lvl);
-    toast('Scoop the sanctuary poop! 💩<br><small>Empty at the green compost bin · the 📍 pin marks a car you can drive</small>', 3200);
+    toast('Scoop the sanctuary poop! 💩<br><small>Empty at the green compost bin · the 🚪 pad takes you inside the house</small>', 3200);
   }
   function exitScoop() {
     setMode('explore');
@@ -1533,6 +1606,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function updateScoop(dt, now) {
+    const inside = scoopScene === 'interior' && interior;
     let jx = clamp(inp2.jx + inp2.kx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     const mag = Math.min(1, Math.hypot(jx, jy));
     if (shiftLock) CHAR.yaw = camYawS; // Roblox shift-lock: keeper faces the camera
@@ -1558,29 +1632,33 @@ export function createEngine({ canvas, ui, emit }) {
       const sp = 4.4 * mag;
       let nx = CHAR.x + mx * sp * dt, nz = CHAR.z + mz * sp * dt;
       const rad = 0.42;
-      // collide against real building/structure footprints (not the oversized
-      // AABBs) and slide along the wall — otherwise the house's AABB walls off
-      // half the open lawn around the keeper's spawn.
-      if (insideScoopBuilding(nx, nz)) {
-        if (!insideScoopBuilding(nx, CHAR.z)) nz = CHAR.z;
-        else if (!insideScoopBuilding(CHAR.x, nz)) nx = CHAR.x;
-        else { nx = CHAR.x; nz = CHAR.z; }
+      if (inside) {
+        // per-wall + furniture pushout/slide with passable doorways (interior.collide)
+        const r = interior.collide(CHAR.x, CHAR.z, nx, nz, rad); nx = r.x; nz = r.z;
+      } else {
+        // collide against real building/structure footprints (not the oversized
+        // AABBs) and slide along the wall — otherwise the house's AABB walls off
+        // half the open lawn around the keeper's spawn.
+        if (insideScoopBuilding(nx, nz)) {
+          if (!insideScoopBuilding(nx, CHAR.z)) nz = CHAR.z;
+          else if (!insideScoopBuilding(CHAR.x, nz)) nx = CHAR.x;
+          else { nx = CHAR.x; nz = CHAR.z; }
+        }
+        for (const t of scoopTrees) {
+          const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.55 + rad;
+          if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = t[0] + dx / d * rr; nz = t[1] + dz / d * rr; }
+        }
+        for (const a of ANIMALS) {
+          const dx = nx - a.x, dz = nz - a.z, d2 = dx * dx + dz * dz, rr = a.r + rad;
+          if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = a.x + dx / d * rr; nz = a.z + dz / d * rr; }
+        }
+        if (Math.hypot(nx, nz) > 314) { const d = Math.hypot(nx, nz); nx *= 314 / d; nz *= 314 / d; }
       }
-      for (const t of scoopTrees) {
-        const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.55 + rad;
-        if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = t[0] + dx / d * rr; nz = t[1] + dz / d * rr; }
-      }
-      for (const a of ANIMALS) {
-        const dx = nx - a.x, dz = nz - a.z, d2 = dx * dx + dz * dz, rr = a.r + rad;
-        if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = a.x + dx / d * rr; nz = a.z + dz / d * rr; }
-      }
-      if (Math.hypot(nx, nz) > 314) { const d = Math.hypot(nx, nz); nx *= 314 / d; nz *= 314 / d; }
       CHAR.x = nx; CHAR.z = nz;
       CHAR.bob += dt * 10 * mag;
     } else CHAR.bob += dt * 1.5;
-    // Stand on the procedural yard ground (terrain) — reliable, never sinks into
-    // the photoreal. The grass lawn + the actor are both at this height.
-    const cy = terrainAt(CHAR.x, CHAR.z);
+    // ground on the fixed interior floor, or the procedural yard terrain
+    const cy = inside ? interior.floorY : terrainAt(CHAR.x, CHAR.z);
     // jump arc: integrate vertical velocity under gravity; land back on the ground
     if (CHAR.vy !== 0 || CHAR.airY > 0) {
       CHAR.airY += CHAR.vy * dt; CHAR.vy -= 22 * dt;
@@ -1590,6 +1668,16 @@ export function createEngine({ canvas, ui, emit }) {
     CHAR.group.position.set(CHAR.x, cy + CHAR.airY + bobY, CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
     if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
+    if (inside) { updateScoopInterior(dt, now); return; }
+    // ===== YARD =====
+    // door ENTRY: stand on the front-yard pad to walk inside the house
+    if (interior && entryPt) {
+      doorMarker.visible = true;
+      doorMarker.position.set(entryPt[0], terrainAt(entryPt[0], entryPt[1]) + 2.6 + Math.abs(Math.sin(now * 0.005)) * 0.3, entryPt[1]);
+      const din = Math.hypot(CHAR.x - entryPt[0], CHAR.z - entryPt[1]);
+      if (din > 3.0) entryArmed = true;
+      if (entryArmed && din < 1.5 && now > doorT) { enterHouse(now); return; }
+    } else doorMarker.visible = false;
     // always-on-top marker so Drew is never lost behind a real tree
     marker.visible = true;
     marker.position.set(CHAR.x, cy + 2.6 + Math.abs(Math.sin(now * 0.004)) * 0.22, CHAR.z);
@@ -1657,6 +1745,34 @@ export function createEngine({ canvas, ui, emit }) {
     if (near !== nearCar) { nearCar = near; emit('nearCar', near); }
     carMarker.visible = !!best && !near;
     if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
+  }
+  // Indoor follow cam + the exit pad (movement/grounding/collision already ran in updateScoop).
+  function updateScoopInterior(dt, now) {
+    marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
+    // EXIT pad: stand where you came in to head back out (hysteresis so arrival doesn't re-trigger)
+    const sp = interior.spawn;
+    exitMarker.visible = true;
+    exitMarker.position.set(sp.x, interior.floorY + 2.4 + Math.abs(Math.sin(now * 0.005)) * 0.25, sp.z);
+    const dex = Math.hypot(CHAR.x - sp.x, CHAR.z - sp.z);
+    if (dex > 2.6) exitArmed = true;
+    if (exitArmed && dex < 1.4 && now > doorT) { leaveHouse(now); return; }
+    // small indoor follow cam: pull IN before it pokes through a wall, clamp under the ceiling
+    const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
+    const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB;
+    let dist = (3.1 + Math.max(0, scPitch) * 1.0) * szi;
+    let camX = CHAR.x - fx * dist, camZ = CHAR.z - fz * dist;
+    for (let k = 0; k < 6 && (camX < ra[0] + 0.3 || camX > ra[1] - 0.3 || camZ < ra[2] + 0.3 || camZ > ra[3] - 0.3); k++) {
+      dist *= 0.78; camX = CHAR.x - fx * dist; camZ = CHAR.z - fz * dist;
+    }
+    const camY = interior.floorY + 1.7 + scPitch * 3.2 * Math.max(0.75, szi);
+    const cc = interior.clampCam(camX, camY, camZ, 0.3);
+    const camT = _camT.set(cc.x, cc.y, cc.z);
+    if (!camInit) { camV.copy(camT); camInit = true; }
+    camV.lerp(camT, Math.min(1, dt * 6));
+    const cl = interior.clampCam(camV.x, camV.y, camV.z, 0.28);
+    camV.set(cl.x, Math.max(cl.y, interior.floorY + 0.7), cl.z);
+    camera.position.copy(camV);
+    camera.lookAt(CHAR.x, interior.floorY + 1.1, CHAR.z);
   }
   // hop from walking straight into driving (the car spawns at the driveway)
   function driveFromScoop() {
@@ -2237,7 +2353,7 @@ export function createEngine({ canvas, ui, emit }) {
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; bi = i; bt = t; bpx = px; bpz = pz; }
     }
-    let look = clamp(Math.abs(speed) * 0.5, 12, 40), px = bpx, pz = bpz;
+    let look = clamp(Math.abs(speed) * 0.5, 14, 70), px = bpx, pz = bpz;   // aim further ahead at speed (was capped at 40 m — too close when flat-out)
     for (let i = bi; i < path.length - 1; i++) {
       const ax = (i === bi) ? bpx : path[i].x, az = (i === bi) ? bpz : path[i].z;
       const bx2 = path[i + 1].x, bz2 = path[i + 1].z, seg = Math.hypot(bx2 - ax, bz2 - az);
@@ -2247,32 +2363,41 @@ export function createEngine({ canvas, ui, emit }) {
     return { x: path[path.length - 1].x, z: path[path.length - 1].z };
   }
   // Rolling free-roam road snap: out past the procedural hood and NOT navigating, ask Google
-  // Directions for the road from the car to a point ~280 m ahead and cache its polyline as the
-  // assist's road reference. Throttled hard (every ~2.5 s and only after the car has moved) so it
-  // costs ~1 Directions call every few seconds while you free-roam far away — and degrades to
-  // "no assist" (the prior behaviour) if there's no Maps key.
-  function updateFreeRoamRoad(now) {
+  // Directions for the REAL road ahead and cache its polyline as the assist's road reference.
+  // The fetch distance scales with SPEED (a fixed 280 m is <1 s of road at 250 u/s — the car
+  // outruns it), and it only refreshes when the cached road is running out or you've turned off
+  // it — so one call covers many seconds even flat-out, capped to ~1 call / 1.2 s. Keeps the last
+  // good path on a transient failure, and degrades to "no assist" (the prior behaviour) with no key.
+  function updateFreeRoamRoad(now, offDist) {
     if (mode !== 'drive' || !autoSteer) { freeRoamPath = null; return; }
     const fromHome = Math.hypot(car.x, car.z);
     if (fromHome < 320 || (ROUTE && routeIdx < ROUTE.length)) { freeRoamPath = null; return; }   // hood has roadSegs; a route already feeds the assist
-    if (now - _frT < 2500 && Math.hypot(car.x - _frX, car.z - _frZ) < 70) return;   // throttle: time + distance
-    _frT = now; _frX = car.x; _frZ = car.z;
+    const spd = Math.abs(car.speed);
+    let needs = !freeRoamPath || freeRoamPath.length < 2;
+    if (!needs) {
+      const end = freeRoamPath[freeRoamPath.length - 1];
+      if (Math.hypot(end.x - car.x, end.z - car.z) < Math.max(260, spd * 5)) needs = true;   // ~5 s of road left → fetch the next stretch BEFORE it runs out
+      else if (offDist != null && offDist > 60) needs = true;                                 // wandered off the cached road (took a turn) → re-snap
+    }
+    if (!needs || now - _frT < 1200) return;   // hard min interval bounds Directions QPS/cost
+    _frT = now;
     const reqId = ++_frReq;
-    const aheadX = car.x + Math.sin(car.yaw) * 280, aheadZ = car.z + Math.cos(car.yaw) * 280;
+    const D = clamp(spd * 12, 700, 3000);   // fetch ~12 s of real road ahead, speed-scaled so a fast car never outruns the cached path
+    const aheadX = car.x + Math.sin(car.yaw) * D, aheadZ = car.z + Math.cos(car.yaw) * D;
     const o = worldToGeo(car.x, car.z), a = worldToGeo(aheadX, aheadZ);
     loadMapsSDK().then(maps => {
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat: a.lat, lng: a.lon }, travelMode: 'DRIVING' },
         (res, status) => {
           if (reqId !== _frReq || mode !== 'drive') return;                 // a newer probe (or left drive) supersedes this
-          if (status !== 'OK' || !res.routes || !res.routes[0]) { freeRoamPath = null; return; }
+          if (status !== 'OK' || !res.routes || !res.routes[0]) return;     // keep the last good path on a transient failure (don't blank the assist)
           const pts = [];
           for (const leg of res.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) pts.push(p);
           const src = pts.length ? pts : res.routes[0].overview_path;
-          freeRoamPath = (src && src.length > 1) ? src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; }) : null;
+          if (src && src.length > 1) freeRoamPath = src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
         }
       );
-    }).catch(() => { freeRoamPath = null; });
+    }).catch(() => { });   // keep the last good path on error
   }
   // Local street fallback for minimap/tap auto-drive. Google Directions handles real
   // address trips; this keeps nearby "drive there" pins on neighborhood roads instead
@@ -2795,13 +2920,13 @@ export function createEngine({ canvas, ui, emit }) {
     // 200 mph straight tracks with small corrections.
     const yawDamp = clamp(1 - (Math.abs(car.speed) - 20) * 0.008, 0.55, 1);   // keep enough authority to DODGE at speed
     car.yaw += (car.speed / 2.7) * Math.tan(car.steer) * (0.8 + prof.grip * 0.25) * (1 + hb * 0.4) * yawDamp * dt;
-    updateFreeRoamRoad(now);   // keep a snapped real-road reference ahead when free-roaming far from home (self-throttled)
     // Distance to the nearest road, ALWAYS measured at the car's EXACT current position
     // (nearestRoadPoint now consults the live ROUTE + free-roam snap + every mapped road, so it's
     // valid even far from the procedural hood). inHood still gates the discrete snap-back below.
     const inHood = Math.hypot(car.x, car.z) < 330;
     const nrp = nearestRoadPoint(car.x, car.z);
     const offRoadDist = nrp.d;
+    updateFreeRoamRoad(now, offRoadDist);   // refresh the snapped real-road reference ahead (speed-scaled; self-throttled). Pass offRoadDist so it can re-snap when you turn off the cached road.
     // AUTO-STEER assist: aim the car along the ROUTE (when navigating), or — in free-roam —
     // along the nearest road via a look-ahead point that takes street corners for you. When
     // you've drifted OFF the road it switches to RECOVERY: aim straight back at the nearest
@@ -3433,13 +3558,23 @@ export function createEngine({ canvas, ui, emit }) {
     toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
     // hop: only from the ground; a keyboard Space also jumps (wired in onKeyDown)
     jump: () => { if (mode === 'scoop' && CHAR.airY <= 0 && CHAR.vy === 0) { CHAR.vy = 8.5; if (audio.blip) audio.blip(); } },
-    // random little celebration (rigged Drew only)
+    // random celebration from the active avatar's emote set
     dance: () => {
       if (mode !== 'scoop' || !CHAR.drew) return;
-      const moves = ['dance', 'cheer'];
-      CHAR.drew.react(moves[Math.floor(Math.random() * moves.length)]);
+      const a = CHAR.getActions();
+      CHAR.drew.react(a.length ? a[Math.floor(Math.random() * a.length)].key : 'dance');
       if (audio.blip) audio.blip();
     },
+    // play one specific emote (the side-menu action buttons)
+    playAction: (key) => { if (mode === 'scoop' && CHAR.drew) { CHAR.drew.react(key); if (audio.blip) audio.blip(); } },
+    // Drew <-> CeCe avatar swap (avatar only — the side-menu switch). Emits 'avatar' optimistically
+    // (the toggle flips at once) and again once the new rig + its action list are ready.
+    setAvatar: (name) => {
+      CHAR.swapAvatar(name, n => emit('avatar', { name: n, actions: CHAR.getActions() }));
+      emit('avatar', { name, actions: CHAR.getActions() });
+    },
+    getAvatar: () => CHAR.avatar,
+    getScoopActions: () => CHAR.getActions(),
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
     setDestination, clearDestination, toggleAutoDrive, driveHome,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
