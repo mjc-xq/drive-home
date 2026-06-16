@@ -1975,20 +1975,25 @@ export function createEngine({ canvas, ui, emit }) {
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
     // pin the real 180-220 mph on the open road (it just stays maxed up there).
     const feelRef = 27 * prof.top;
-    let acc = (highway ? 55 : openRoad ? 22 : 9) * prof.accel * throttle * boostMul;   // massive surge on the highway
-    // Gentle launch, strong mid-range: ease accel off the line (45%→100% by ~22 mph)
-    // so a standstill stab of gas isn't jumpy, but it still pulls hard up to the high
-    // top end once rolling. (Directly answers "accelerates too fast / jumpy".)
-    acc *= 0.45 + 0.55 * clamp(Math.abs(car.speed) / 10, 0, 1);
+    // ACCELERATION CURVE — the pedal maps to a TARGET speed through a curve that's gentle at
+    // the bottom (a feather of gas = a slow, accurate crawl you can hold) and reaches the
+    // full top only when floored. Accel CHASES that target: firm pull when you're below it,
+    // a soft coast when you lift above it. So light pedal SETTLES at a low cruise (precise
+    // manoeuvring) while flooring it pulls hard to the top (fast) — and because it eases in
+    // as you approach the target, it never overshoots off the road.
+    const pedalTgt = Math.pow(throttle, 1.8) * maxF;                 // curved pedal → target speed
+    const aGap = pedalTgt - car.speed;
+    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul;   // peak engine pull (cap)
+    let acc = clamp(aGap * (aGap > 0 ? 2.6 : 0.9), -aMax, aMax);     // chase target; gentler on lift-off coast
+    if (aGap > 0) acc *= 0.55 + 0.45 * clamp(Math.abs(car.speed) / 6, 0, 1);   // soft off-the-line so a standstill stab isn't a jerk
     // PROGRESSIVE brake: ramp the brake force in over ~0.25 s so a quick tap trail-brakes
     // lightly (corner-entry finesse) while a long hold still hauls it down hard.
     const braking = brake > 0.1;
     const bcur = car.brakeAmt || 0;
     car.brakeAmt = bcur + ((braking ? 1 : 0) - bcur) * Math.min(1, dt * (braking ? 4 : 9));
     if (braking) acc = car.speed > 0.5 ? -34 * car.brakeAmt : -13 * brake;
-    // ENGINE-BRAKING: lift off the gas (no throttle, no brake) and the car noticeably
-    // coasts down — corner entry tightens without stabbing the brake (Crazy-Taxi feel).
-    else if (throttle < 0.1 && Math.abs(car.speed) > 3) acc -= Math.sign(car.speed) * clamp(Math.abs(car.speed) * 0.45, 0, 11);
+    // (engine-braking is now implicit: lifting off drops the pedal target below your speed,
+    // so the curve above coasts you down on its own.)
     // LOAD TRANSFER: the body dives forward under braking and squats back under power —
     // gives the car visible weight (a Sienna wallows, a Ferrari is crisp via prof.grip).
     car.pitchDyn = (car.pitchDyn || 0) + (clamp(-acc * 0.012, -0.2, 0.2) / (0.6 + prof.grip * 0.5) - (car.pitchDyn || 0)) * Math.min(1, dt * 6);
