@@ -2928,7 +2928,7 @@ export function createEngine({ canvas, ui, emit }) {
       CHAR.drew.react(moves[Math.floor(Math.random() * moves.length)]);
       if (audio.blip) audio.blip();
     },
-    focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad,
+    focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
     setDestination, clearDestination, toggleAutoDrive, driveHome,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
     placeSuggest, geocodeAddress, geocodePlaceId,
