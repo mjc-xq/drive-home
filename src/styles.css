@@ -110,6 +110,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .mapExpandBtn.on{background:rgba(45,140,255,.18);border-color:rgba(45,140,255,.55);color:#bcdcff}
 .mapExpandBtn.drive{top:calc(74px + var(--safe-t))}
 .mapExpandBtn.scoop{top:calc(168px + var(--safe-t))}
+.mapExpandBtn.menuOpen{display:none}
 
 /* ── TOP-LEFT: score strip + framed minimap ── */
 .dvLeft{position:absolute;left:calc(12px + var(--safe-l));top:calc(12px + var(--safe-t));display:flex;flex-direction:column;gap:7px;z-index:6}
