@@ -355,38 +355,30 @@ export function createEngine({ canvas, ui, emit }) {
     // upgrade the placeholder boxes to REAL (cloned) car models once they load — a few
     // normal neighbourhood cars spread across the fleet; clones share geometry (cheap).
     // flip:false → the proto's nose sits at +Z so the group's atan2(dx,dz) points it
-    // ALONG travel (flip:true pointed every NPC backwards). Each clone gets its own
-    // material recoloured to a bright, varied paint with a faint emissive lift, so the
-    // cars POP out of the dim photogrammetry instead of reading as near-black metal.
-    const TRAFFIC_PAINT = [0xff5a3c, 0x2f8bff, 0xffd23c, 0x36d07a, 0xff7ad0, 0xff9a1f, 0x9b7bff, 0xe8eef5];
-    // Tiered recolour so NO body ever reads as dark, whatever the GLB named its materials
-    // (gltf-transform often strips names to generic). Glass/lamps keep their look; rubber
-    // goes dark grey; EVERYTHING ELSE becomes bright paint — the catch-all is the body.
-    const GLASS = /glass|window|windshield|screen/;
-    const LAMP = /light|lamp|head|tail|signal|indicator|chrome|mirror/;
-    const RUBBER = /tire|tyre|wheel|rubber/;
+    // ALONG travel (flip:true pointed every NPC backwards). KEEP each model's real textured
+    // paint — just lift it OUT of the dim photogrammetry so it isn't near-black: drop the
+    // metalness (metal with no env map renders black) and add a self-emissive copy of the
+    // surface (emissiveMap = the texture) so the car reads bright while keeping ALL its
+    // texture detail. (The earlier flat-colour recolour is exactly what looked "lame".)
     [[rav4Url, 4.6], [miniUrl, 3.85], [granviaUrl, 5.1]].forEach((def, mi, defs) => {
       loadCarProto(def[0], def[1], false, proto => {
         for (let i = mi; i < traffic.length; i += defs.length) {
           const c = traffic[i];
           for (const m of c.box) c.group.remove(m);     // drop the box
           const inst = proto.clone(true);
-          const paint = TRAFFIC_PAINT[i % TRAFFIC_PAINT.length];
           inst.traverse(o => {
             if (!o.isMesh) return;
             o.castShadow = false;
             const single = !Array.isArray(o.material);
             const arr = single ? [o.material] : o.material;
             const out = arr.map(m => {
-              if (!m || !m.color) return m;
-              const nm = ((m.name || '') + (o.name || '')).toLowerCase();
-              const mm = m.clone();                       // own material so the colour is per-car
-              if (GLASS.test(nm) || LAMP.test(nm)) return mm;   // leave glass + lamps alone
-              if (RUBBER.test(nm)) { mm.color.setHex(0x121316); if (mm.metalness !== undefined) mm.metalness = 0.2; if (mm.roughness !== undefined) mm.roughness = 0.85; return mm; }
-              mm.color.setHex(paint);                     // BODY (and anything unnamed) → bright paint
-              if (mm.metalness !== undefined) mm.metalness = 0.3;   // less metal → not env-map-dependent black
-              if (mm.roughness !== undefined) mm.roughness = 0.5;
-              if (mm.emissive) { mm.emissive.setHex(paint); mm.emissiveIntensity = 0.2; }   // gentle self-lift so it reads bright
+              if (!m) return m;
+              const mm = m.clone();                       // own material (cheap; keeps the texture map)
+              if (mm.metalness !== undefined) mm.metalness = Math.min(mm.metalness, 0.25);   // not env-map-dependent black
+              if (mm.emissive) {
+                if (mm.map) { mm.emissiveMap = mm.map; mm.emissive.setHex(0x8a8a8a); mm.emissiveIntensity = 0.5; }   // glow the TEXTURE itself
+                else if (mm.color) { mm.emissive.copy(mm.color).multiplyScalar(0.45); mm.emissiveIntensity = 0.55; }   // no texture → lift its own colour
+              }
               return mm;
             });
             o.material = single ? out[0] : out;
@@ -549,8 +541,11 @@ export function createEngine({ canvas, ui, emit }) {
   const guideGeo = new THREE.BufferGeometry();
   guideGeo.setAttribute('position', new THREE.BufferAttribute(guidePos, 3));
   { const idx = []; for (let i = 0; i < GUIDE_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } guideGeo.setIndex(idx); }
-  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x2f8bff, transparent: true, opacity: 0.62, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
-  guideLine.renderOrder = 17; guideLine.visible = false; guideLine.frustumCulled = false;
+  // depthTest TRUE so the solid CAR (and hills/buildings) occlude the ribbon — the car
+  // drives OVER the line, the line never paints on top of the car. depthWrite stays off so
+  // it doesn't disturb other transparent sorting.
+  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x2f8bff, transparent: true, opacity: 0.7, depthWrite: false, depthTest: true, side: THREE.DoubleSide }));
+  guideLine.renderOrder = 6; guideLine.visible = false; guideLine.frustumCulled = false;
   scene.add(guideLine);
   const destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
     new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
@@ -1449,7 +1444,11 @@ export function createEngine({ canvas, ui, emit }) {
         (result, status) => {
           if (status === 'OK' && result.routes && result.routes[0] && DEST) {
             const pts = result.routes[0].overview_path.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
-            if (pts.length > 1) { ROUTE = pts; routeIdx = 0; toast('🗺️ Route ready — follow the line', 1500); }
+            if (pts.length > 1) {
+              ROUTE = pts; routeIdx = 0;
+              if (autoDrive && Math.abs(car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
+              toast('🗺️ Route ready — follow the line', 1500);
+            }
           } else console.warn('[directions] no route:', status);
         }
       );
@@ -1467,20 +1466,36 @@ export function createEngine({ canvas, ui, emit }) {
   // Tap-to-drive from the minimap: set a raw world point as the destination and let
   // the robot drive there (no Google route needed for a nearby local point). Reuses
   // DEST + auto-drive, so the guide ribbon, pin, ETA and arrival all just work.
+  // Aim the car down the START of the route so auto-drive sets off FORWARD instead of a
+  // rough U-turn / spin-around (the user's idea: "when autodrive starts it can just point
+  // the car in the right direction"). Snaps the heading toward the first route point a few
+  // metres out (or the destination if a route isn't ready yet).
+  function faceRouteStart() {
+    let tx = null, tz = null;
+    if (ROUTE && ROUTE.length) {
+      let i = Math.max(0, routeIdx);
+      while (i < ROUTE.length - 1 && Math.hypot(ROUTE[i].x - car.x, ROUTE[i].z - car.z) < 6) i++;
+      tx = ROUTE[i].x; tz = ROUTE[i].z;
+    } else if (DEST) { tx = DEST.x; tz = DEST.z; }
+    if (tx == null || Math.hypot(tx - car.x, tz - car.z) < 1) return;
+    car.yaw = Math.atan2(tx - car.x, tz - car.z);
+    car.steer = 0; car.vlat = 0; car.assistRate = 0; camInit = false;   // re-settle the chase cam behind the new heading
+  }
   function setDriveTarget(wx, wz) {
-    // ALWAYS drive there along the roads. If the tap doesn't land on the road graph, snap it
-    // to the nearest road and route to THAT — so a tap a little into a yard still follows the
-    // streets to the spot instead of cutting straight across the grass (and never reverses
-    // awkwardly across a lawn). Only a tap with no reachable road at all is a straight line.
+    // ALWAYS follow a real ROAD path to the point — NEVER a straight line across the land.
+    // Seed an instant on-road route from the local street graph so the car sets off at once,
+    // and fetch the Google Directions path to refine/extend it. If neither is ready the car
+    // simply HOLDS (idles) until a road route exists — it never cuts across the grass. Then
+    // point the car down the route so it doesn't have to turn itself around.
+    const g = worldToGeo(wx, wz);
     let route = localRoadRoute(car.x, car.z, wx, wz);
-    if (!route) {
-      const np = nearestRoadPoint(wx, wz);
-      if (np && np.d < 90) { const r2 = localRoadRoute(car.x, car.z, np.x, np.z); if (r2) { route = r2; wx = np.x; wz = np.z; } }
-    }
+    if (!route) { const np = nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(car.x, car.z, np.x, np.z); }
     DEST = { x: wx, z: wz, label: 'the map point' }; ROUTE = route || null; routeIdx = 0;
+    fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
     autoDrive = true; inp2.navActive = false;
     emit('dest', { label: DEST.label }); emit('autodrive', true);
-    toast(ROUTE ? '🤖 Fast cruise on the streets' : '🤖 Driving to your pin', 1300);
+    faceRouteStart();
+    toast(route ? '🤖 Cruising the streets' : '🗺️ Finding a road route…', 1200);
   }
   // Live nav target: a look-ahead point ~32 m along the route from the car (so the
   // guide ribbon + auto-drive follow the road smoothly instead of snapping between
@@ -1516,11 +1531,11 @@ export function createEngine({ canvas, ui, emit }) {
     const turn = distToNextTurn();
     const straight = clamp((turn - 12) / 95, 0, 1);          // reach full speed on shorter straights
     const far = clamp((dDest - 35) / 220, 0, 1);
-    const cruise = 30 + straight * 48 + far * 12;            // FULL speed on the straights, still eased into corners so it stays on the road
+    const cruise = 34 + straight * 250 + far * 30;          // up to ~700 mph on a long open straight; turns still slow it so it stays on the road
     const approach = dDest < 85 ? clamp(14 + dDest * 0.52, 14, 54) : cruise;
     return Math.min(cruise, approach);
   }
-  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
+  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
   // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
   // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
@@ -1646,11 +1661,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ROUTE && routeIdx < ROUTE.length) {
       let acc = 0, px = car.x, pz = car.z;
       for (let i = routeIdx; i < ROUTE.length && acc < 170; i++) { acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); raw.push([ROUTE[i].x, ROUTE[i].z, guideHeightAt(i)]); px = ROUTE[i].x; pz = ROUTE[i].z; }
-    } else if (DEST) {
-      const dx = DEST.x - car.x, dz = DEST.z - car.z, dd = Math.hypot(dx, dz) || 1, cap = Math.min(dd, 130);
-      const ex = car.x + dx / dd * cap, ez = car.z + dz / dd * cap;
-      raw.push([ex, ez, actorGroundY(ex, ez, yC)]);
-    } else { guideLine.visible = false; return; }
+    } else { guideLine.visible = false; return; }   // ONLY ever follow a real road ROUTE — never a straight line across the land
     // resample to ~5 m steps, carrying the draped height through so each cross-section sits
     // on the road surface (interpolated between cached route-point heights).
     const pts = [raw[0]];
@@ -1767,8 +1778,8 @@ export function createEngine({ canvas, ui, emit }) {
     // high enough to clear the melty ground-level photogrammetry (the user's preferred
     // clean look — NOT the low 'eye-level horror' of Close).
     { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false },
-    { name: 'Close', dist: 11, h: 7.5, ahead: 4, drone: false, topdown: false },
-    { name: 'Top-down', dist: 6, h: 52, ahead: 10, drone: true, topdown: true, dragdrive: true },
+    { name: 'Close', dist: 13, h: 11, ahead: 4, drone: false, topdown: false },   // higher/back so buildings + trees don't obscure the car
+    { name: 'Top-down', dist: 7, h: 85, ahead: 12, drone: true, topdown: true, dragdrive: true },   // proper high overhead map view
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
   function shouldUseEasyDriveCamera() {
@@ -1883,17 +1894,23 @@ export function createEngine({ canvas, ui, emit }) {
     }
     // advance the route waypoint as the car passes it (drives the guide + auto-drive)
     if (ROUTE && routeIdx < ROUTE.length && Math.hypot(ROUTE[routeIdx].x - car.x, ROUTE[routeIdx].z - car.z) < 16) routeIdx++;
-    // auto-drive: steer toward the look-ahead route point (follows roads) at a capped
-    // cruise speed, arriving when close to the destination.
+    // auto-drive: follow the road ROUTE. Arrival is reaching the END OF THE ROUTE (the road
+    // point nearest the target) — NOT the raw target, so a tap that lands off-road doesn't
+    // make the car circle forever trying to reach a point with no road. While no route is
+    // ready it simply HOLDS (idles) rather than cutting straight across the land.
     if (autoDrive && DEST) {
-      if (Math.hypot(DEST.x - car.x, DEST.z - car.z) < 10) { autoDrive = false; inp2.navActive = false; emit('autodrive', false); }
-      else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
+      const end = ROUTE && ROUTE.length ? ROUTE[ROUTE.length - 1] : null;
+      const atEnd = end && (routeIdx >= ROUTE.length || Math.hypot(end.x - car.x, end.z - car.z) < 12);
+      if (!ROUTE) { inp2.navActive = false; }                       // routing pending → hold, never straight-line
+      else if (atEnd) {
+        autoDrive = false; inp2.navActive = false; emit('autodrive', false);
+        if (!DEST.reached) { DEST.reached = true; if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
+      } else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
     }
-    // ARRIVAL payoff — fires once whether you drove there yourself or auto-drove.
-    if (DEST && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
+    // ARRIVAL payoff for a destination you drove to YOURSELF (auto-drive handles its own
+    // arrival above). POIs run their own richer celebration via checkPOIs (45 m).
+    else if (DEST && !DEST.reached && Math.hypot(DEST.x - car.x, DEST.z - car.z) < 14) {
       DEST.reached = true;
-      // POIs run their own richer celebration via checkPOIs (45 m); this covers free-text
-      // address destinations that aren't one of the 5 places.
       if (!POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now);
     }
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
@@ -1913,7 +1930,7 @@ export function createEngine({ canvas, ui, emit }) {
       } else {                                             // drive forward toward it — a robot with a FAR
         // target behind it arcs around (forward U-turn) at full steering lock instead of
         // reversing the whole way across lawns into whatever's behind it.
-        jx = clamp(-dyaw * (robot ? 2.45 : 2.0), -1, 1);
+        jx = clamp(-dyaw * (robot ? 1.6 : 2.0), -1, 1);   // gentler robot gain → no overshoot/wobble on angled (non-90°) turns
         const align = clamp(1 - Math.abs(dyaw) / 1.7, robot ? 0.42 : 0.22, 1); // robot keeps pace through bends
         if (robot) {
           const dDest = Math.hypot(DEST.x - car.x, DEST.z - car.z);
@@ -1951,7 +1968,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (audio.sfxWhoosh) audio.sfxWhoosh(1); toast('🚀 NITRO!', 700); } }
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
-    const maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul, maxR = -11;   // highway = supersonic; lawns crawl
+    let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul; const maxR = -11;   // highway = supersonic; lawns crawl
+    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 330 * boostMul);   // the chauffeur can hit ~700 mph on a clear straight
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -2024,11 +2042,15 @@ export function createEngine({ canvas, ui, emit }) {
         // Wide gate: a street corner bends the road ~90° vs your heading, so a narrow gate
         // would switch the assist OFF exactly at the turn. Recovery uses the FULL circle so
         // it can haul you back even if you're pointed straight away from the road.
-        const gate = recover ? Math.PI : (onRoute ? 1.6 : 1.45);
+        // Recovery gate capped (not the full circle) so the assist never tries to spin you
+        // ALL the way around — it nudges you back toward the road, you stay in control.
+        const gate = recover ? 2.0 : (onRoute ? 1.6 : 1.45);
         if (Math.abs(d) < gate) {
-          const yours = recover ? 0 : clamp(Math.abs(jx) * (onRoute ? 1.8 : 1.7), 0, 1);   // recovery ignores input — get home first
-          const k = (1 - yours) * clamp(Math.abs(car.speed) / 16, 0.5, 1) * (recover ? 4.6 : (onRoute ? 3.6 : 3.4));
-          assistTargetRate = clamp(d, -1.3, 1.3) * k;
+          // Gentler everywhere: it HELPS you hug the road, it doesn't wrestle the wheel. Even
+          // recovery now yields to your input instead of ignoring it.
+          const yours = clamp(Math.abs(jx) * (recover ? 1.4 : onRoute ? 1.8 : 1.7), 0, 1);
+          const k = (1 - yours) * clamp(Math.abs(car.speed) / 16, 0.5, 1) * (recover ? 2.8 : (onRoute ? 3.0 : 2.6));
+          assistTargetRate = clamp(d, -1.1, 1.1) * k;
         }
       }
     }
@@ -2142,10 +2164,9 @@ export function createEngine({ canvas, ui, emit }) {
     const dispTarget = _camV.aerial ? 4.0 : _camV.topdown ? 2.6 : 1.1;   // big enough to spot from up high, not cartoonish
     car.dispScale = car.dispScale == null ? dispTarget : car.dispScale + (dispTarget - car.dispScale) * (1 - Math.exp(-dt * 6));
     car.group.scale.setScalar(car.dispScale);
-    // car locator: bob the "you are here" chevron over the car in the high overhead views
-    const highView = DRIVE_CAMS[camMode] && (DRIVE_CAMS[camMode].aerial || DRIVE_CAMS[camMode].topdown);
-    carLocator.visible = highView;
-    if (highView) { carLocator.position.set(car.x, yC + 9 + Math.sin(now * 0.005) * 0.8, car.z); carLocator.rotation.y = now * 0.0016; }
+    // car locator removed — the scaled-up car IS its own marker in the overhead views, so
+    // the bobbing chevron/ring was just "garbage on the car" obscuring it.
+    carLocator.visible = false;
     // collectible coins: spin + bob, picked up by driving over them
     for (const c of coins) {
       c.mesh.visible = !c.got;

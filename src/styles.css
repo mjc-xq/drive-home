@@ -188,7 +188,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 #nitroTrack{position:relative;flex:1 1 auto;height:9px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
 #nitroFill{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:5px;background:linear-gradient(90deg,#7a5cff,#36d6ff);transition:width .12s linear}
 #nitroTrack span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:6.5px;font-weight:900;letter-spacing:.2em;color:rgba(255,255,255,.72)}
-#nitroTrack.ready{box-shadow:0 0 10px rgba(80,200,255,.7);animation:firePulse .6s ease-in-out infinite}
+#nitroTrack.ready{box-shadow:0 0 5px rgba(80,200,255,.3)}
 #nitroTrack.firing #nitroFill{background:linear-gradient(90deg,#36d6ff,#fff)}
 
 /* ---- sense of speed: white speed-lines radiating from centre + a soft vignette ---- */
