@@ -5,9 +5,9 @@ import { installDracoDecoder } from './draco-install.js';
 import { makeController, CECE_HEIGHT_M } from './drew.js';
 import ceceUrl from '../assets/cece.glb';
 
-// CeCe's nose runs -Z out of Meshy; -PI/2 spins it to +X so she plugs into the same
-// parent yaw (CHAR.yaw - PI/2) Drew uses — i.e. an interchangeable playable avatar.
-const CECE_YAW = -Math.PI / 2;
+// CeCe's rig faces the opposite way from Drew's; +PI/2 turns her nose to run +X (forward) so she
+// plugs into the same parent yaw (CHAR.yaw - PI/2) Drew uses — an interchangeable playable avatar.
+const CECE_YAW = Math.PI / 2;
 
 // Map the engine's logical animation names onto CeCe's actual merged clips. cece.glb ships
 // real 'Walking'/'Running' (verified in the GLB) — the curated crowd list just used Funky_Walk.

@@ -1244,7 +1244,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   if (!flags.has('nointerior')) {
     modelLoadCancels.push(createInterior(scene, { cx: INT_CX, cz: INT_CZ, floorY: INT_FLOOR },
-      mod => { interior = mod; interior.group.visible = scoopScene === 'interior'; placeInteriorDancers(); },
+      mod => { interior = mod; interior.group.visible = scoopScene === 'interior'; placeInteriorDancers(); emit('house', { inside: scoopScene === 'interior', ready: true }); },
       () => { /* fail-soft: the door pad just stays inert */ }));
   }
 
@@ -1255,6 +1255,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (interior) interior.group.visible = on;
     if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (nearCar) { nearCar = false; emit('nearCar', false); } }
     else exitMarker.visible = false;
+    emit('house', { inside: on, ready: !!interior });
   }
   function enterHouse(now) {
     if (!interior) return;
@@ -1676,8 +1677,8 @@ export function createEngine({ canvas, ui, emit }) {
       doorMarker.visible = true;
       doorMarker.position.set(entryPt[0], terrainAt(entryPt[0], entryPt[1]) + 2.6 + Math.abs(Math.sin(now * 0.005)) * 0.3, entryPt[1]);
       const din = Math.hypot(CHAR.x - entryPt[0], CHAR.z - entryPt[1]);
-      if (din > 3.0) entryArmed = true;
-      if (entryArmed && din < 1.5 && now > doorT) { enterHouse(now); return; }
+      if (din > 4.0) entryArmed = true;
+      if (entryArmed && din < 2.6 && now > doorT) { enterHouse(now); return; }   // generous radius so it actually triggers
     } else doorMarker.visible = false;
     // always-on-top marker so Drew is never lost behind a real tree
     marker.visible = true;
@@ -1755,8 +1756,8 @@ export function createEngine({ canvas, ui, emit }) {
     exitMarker.visible = true;
     exitMarker.position.set(sp.x, interior.floorY + 2.4 + Math.abs(Math.sin(now * 0.005)) * 0.25, sp.z);
     const dex = Math.hypot(CHAR.x - sp.x, CHAR.z - sp.z);
-    if (dex > 2.6) exitArmed = true;
-    if (exitArmed && dex < 1.4 && now > doorT) { leaveHouse(now); return; }
+    if (dex > 3.2) exitArmed = true;
+    if (exitArmed && dex < 2.2 && now > doorT) { leaveHouse(now); return; }
     // small indoor follow cam: pull IN before it pokes through a wall, clamp under the ceiling
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
     const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB;
@@ -3576,6 +3577,9 @@ export function createEngine({ canvas, ui, emit }) {
     },
     getAvatar: () => CHAR.avatar,
     getScoopActions: () => CHAR.getActions(),
+    // Go inside / leave the house from a HUD button (proximity-free — the auto-walk door pad still works too)
+    enterHouse: () => { if (mode === 'scoop' && interior && scoopScene === 'yard') enterHouse(performance.now()); },
+    leaveHouse: () => { if (mode === 'scoop' && scoopScene === 'interior') leaveHouse(performance.now()); },
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
     setDestination, clearDestination, toggleAutoDrive, driveHome,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
@@ -3631,6 +3635,7 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
+    scoop: () => ({ scene: scoopScene, ready: !!interior, avatar: CHAR.avatar, entry: entryPt && entryPt.map(v => +v.toFixed(1)), char: [+CHAR.x.toFixed(1), +CHAR.z.toFixed(1)], dDoor: entryPt ? +Math.hypot(CHAR.x - entryPt[0], CHAR.z - entryPt[1]).toFixed(1) : null }),
     crowd: () => ({ on: roadLifeOn, cece: !!ceceCrowd, drew: !!drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - car.x, s.rec.z - car.z)) })) }),
     traffic: () => ({ on: roadLifeOn, total: traffic.length, visible: traffic.filter(c => c.group.visible).length, cars: traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
     p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
