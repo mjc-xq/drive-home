@@ -727,18 +727,27 @@ export function createEngine({ canvas, ui, emit }) {
     const tA = terrainAt(x, z);
     if (!p3dtiles || !p3dtiles.holder.visible) return tA;
     const base = prevY != null ? prevY : tA;
-    // Cast from above the actor, not the sky, so foliage is skipped; retry higher
-    // if a steep hill/bridge has risen above the previous car height.
-    let y = rawTileY(x, z, base + 8);
-    if (y == null && prevY != null) y = rawTileY(x, z, base + 24);
+    // Cast DOWN from just above the actor's roof: a tree canopy / eave sitting
+    // ABOVE the car is skipped (the ray starts beneath it), so we read the ROAD
+    // under the foliage, not the leaves. Retry from progressively higher only when
+    // that misses — i.e. the road has climbed above the car (steep hill / onto a
+    // bridge), the one case we DO want to follow upward.
+    let y = rawTileY(x, z, base + 2.2);
+    if (y == null) y = rawTileY(x, z, base + 10);
+    if (y == null && prevY != null) y = rawTileY(x, z, base + 26);
     if (y == null && prevY == null) y = rawTileY(x, z);
     if (y == null) return prevY != null ? prevY : tA;             // tile not streamed yet: hold height
-    // Far from the procedural neighborhood the terrain grid (±340 m) is just a
-    // clamped edge value, so don't tie the car to it — ride the real photoreal
-    // road directly. Inside the neighborhood, clamp to topology so the car can
-    // never climb a photogrammetry tree.
-    if (x * x + z * z > 330 * 330) return y;
-    return clamp(y, tA - 2, tA + 2);
+    // Inside the procedural neighborhood the heightfield is ground truth: clamp the
+    // tile sample to it so a photogrammetry tree can never lift the actor off the
+    // road topology.
+    if (x * x + z * z <= 330 * 330) return clamp(y, tA - 2, tA + 2);
+    // Far out, terrainAt is just a clamped edge value — useless as a reference — so
+    // bound by CONTINUITY instead: a real road never steps UP more than ~1.5 m
+    // between samples, but a photogrammetry tree/roof blob does, so reject the
+    // sudden climb (ride the surface beneath it) while letting the car settle
+    // downhill freely. This is what keeps the car off the treetops out on the open
+    // road, where there's no procedural topology to clamp against.
+    return prevY != null ? clamp(y, prevY - 6, prevY + 1.5) : y;
   }
   // One-shot vertical align: sample a ring of down-rays in the open yard/street
   // (radius 14 m, away from the house roof), take the median tile height, and
@@ -761,6 +770,44 @@ export function createEngine({ canvas, ui, emit }) {
     applyP3DT();
     alignDone = true;
     return true;
+  }
+  // ---- tile prefetch ----------------------------------------------------------
+  // A small, low-res "scout" camera swept ALONG the active route ahead of the car so the
+  // Google tiles for where you're GOING stream into the cache before you arrive (and the
+  // ground-height probe ahead has data). Only on while a destination is set — exactly when
+  // you're driving somewhere far — so free-roam near home pays nothing. Low resolution means
+  // it warms only cheap COARSE tiles, filling the LRU cache without blowing the mobile budget.
+  const scoutCam = new THREE.PerspectiveCamera(60, 1.5, 1, 4000);
+  let scoutOn = false, _scoutT = 0, _scoutPhase = 0;
+  function pointAlongRoute(dist) {
+    if (!ROUTE || ROUTE.length < 2) return null;
+    let px = car.x, pz = car.z, acc = 0;
+    for (let i = Math.max(0, routeIdx); i < ROUTE.length; i++) {
+      const dx = ROUTE[i].x - px, dz = ROUTE[i].z - pz, seg = Math.hypot(dx, dz) || 1e-3;
+      if (acc + seg >= dist) { const t = (dist - acc) / seg; return { x: px + dx * t, z: pz + dz * t }; }
+      acc += seg; px = ROUTE[i].x; pz = ROUTE[i].z;
+    }
+    return { x: px, z: pz };
+  }
+  function setScout(on) {
+    if (on === scoutOn || !p3dtiles) return;
+    scoutOn = on;
+    if (on) { p3dtiles.setCamera(scoutCam); p3dtiles.setResolution(scoutCam, 360, 240); }
+    else if (p3dtiles.deleteCamera) p3dtiles.deleteCamera(scoutCam);
+  }
+  function updateTilePrefetch(now) {
+    if (!p3dtiles || mode !== 'drive' || !p3dtiles.holder.visible || !DEST || !ROUTE || ROUTE.length < 2) { setScout(false); return; }
+    if (now - _scoutT < 220) return;                       // ~4.5 Hz
+    _scoutT = now;
+    setScout(true);
+    _scoutPhase = (_scoutPhase + 1) % 6;                   // sweep the aim through the corridor ahead…
+    const p = pointAlongRoute(80 + _scoutPhase * 76);      // …≈80–460 m along the route
+    if (!p) { setScout(false); return; }
+    const gy = car.groundY != null ? car.groundY : 0;
+    scoutCam.up.set(0, 0, -1);
+    scoutCam.position.set(p.x, gy + 260, p.z);             // high, straight down → warms the ground tiles ahead
+    scoutCam.lookAt(p.x, gy, p.z);
+    scoutCam.updateMatrixWorld(true);
   }
   // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
   // built (procedural) world at ground level (Drive/Scoop). The groundAt + camera
@@ -1568,6 +1615,23 @@ export function createEngine({ canvas, ui, emit }) {
     });
     return _mapsSDK;
   }
+  // Shift a centreline route into the correct travel lane (US = right-hand side) so the guide
+  // line sits in the lane you actually drive, not on the centre divider — most noticeable on
+  // wide/divided roads. Right-of-travel in this frame (x=east, z=south, north-up) is (-tz, tx)
+  // for unit tangent t; endpoints reuse their neighbour's tangent.
+  function laneOffsetRoute(pts, off) {
+    if (!pts || pts.length < 2 || !off) return pts;
+    const out = new Array(pts.length);
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+      let tx = b.x - a.x, tz = b.z - a.z;
+      const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
+      out[i] = { x: pts[i].x + (-tz) * off, z: pts[i].z + tx * off };
+    }
+    return out;
+  }
+  const LANE_OFFSET = 2.8;   // metres right of centreline ≈ middle of the right-hand lane
+
   function fetchRoute(destLat, destLon) {
     const reqId = ++routeReqId;
     loadMapsSDK().then(maps => {
@@ -1584,8 +1648,8 @@ export function createEngine({ canvas, ui, emit }) {
             const src = stepPath.length ? stepPath : route.overview_path;
             const pts = src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
             if (pts.length > 1) {
-              ROUTE = pts; routeIdx = 0;
-              snapDestinationToRouteEnd(pts);
+              ROUTE = laneOffsetRoute(pts, LANE_OFFSET); routeIdx = 0;   // ride the correct lane, not the divider
+              snapDestinationToRouteEnd(ROUTE);
               if (autoDrive && Math.abs(car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
               toast('🗺️ Route ready — follow the line', 1500);
             }
@@ -1700,7 +1764,7 @@ export function createEngine({ canvas, ui, emit }) {
       _gmaps = maps;
       const o = worldToGeo(car.x, car.z);
       _gmap = new maps.Map(div, {
-        center: { lat: o.lat, lng: o.lon }, zoom: 15, disableDefaultUI: true,   // neighbourhood context, not a tight street view
+        center: { lat: o.lat, lng: o.lon }, zoom: 14, disableDefaultUI: true,   // wider neighbourhood context, not a tight street view
         gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
         styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
       });
@@ -1714,7 +1778,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (!_gmap || now - _gmapT < 200) return;   // ~5 Hz pan
     _gmapT = now;
     const o = worldToGeo(car.x, car.z);
-    if (_gmapCar) { _gmapCar.setPosition({ lat: o.lat, lng: o.lon }); const ic = _gmapCar.getIcon(); ic.rotation = car.yaw * 180 / Math.PI; _gmapCar.setIcon(ic); }
+    if (_gmapCar) {
+      _gmapCar.setPosition({ lat: o.lat, lng: o.lon });
+      // North-up map: rotate the arrow to the car's COMPASS BEARING (cw from north). World is
+      // x=east, z=-north and car.yaw=atan2(east,-north), so bearing = atan2(east,north) =
+      // 180°-yaw. (Using yaw directly pointed the arrow due south when driving north.)
+      const ic = _gmapCar.getIcon(); ic.rotation = 180 - car.yaw * 180 / Math.PI; _gmapCar.setIcon(ic);
+    }
     if (_gmapRoute) {
       if (ROUTE && ROUTE.length && _gmapRouteFor !== ROUTE) {
         _gmapRouteFor = ROUTE;
@@ -1725,7 +1795,7 @@ export function createEngine({ canvas, ui, emit }) {
         if (_gmaps) { const b = new _gmaps.LatLngBounds(); b.extend({ lat: o.lat, lng: o.lon }); for (const p of pts) b.extend(p); _gmap.fitBounds(b, 12); _gmapOverviewUntil = now + 3500; }
       } else if (!ROUTE && _gmapRouteFor) { _gmapRouteFor = null; _gmapRoute.setPath([]); }
     }
-    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() < 14) _gmap.setZoom(15); }   // follow the car at neighbourhood zoom (after the overview)
+    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() < 13) _gmap.setZoom(14); }   // follow the car at a wider neighbourhood zoom (after the overview)
   }
   function geocodePlaceId(placeId, fallbackLabel) {
     return loadMapsSDK().then(maps => new Promise((res, rej) => {
@@ -2038,7 +2108,7 @@ export function createEngine({ canvas, ui, emit }) {
   // 2D minimap (north-up, centred on the car): roads, house, destination + line, car.
   function drawMinimap(ctx, w, h) {
     ctx.clearRect(0, 0, w, h);
-    const cx = w / 2, cy = h / 2, range = 460, scale = (w / 2) / range;
+    const cx = w / 2, cy = h / 2, range = 620, scale = (w / 2) / range;   // wider view to match the live map zoom-out
     const toPx = (wx, wz) => [cx + (wx - car.x) * scale, cy + (wz - car.z) * scale];
     ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath();
     for (const s of roadSegs) {
@@ -2528,7 +2598,7 @@ export function createEngine({ canvas, ui, emit }) {
     const yr = actorGroundY(car.x, car.z, car.groundY);
     if (car.groundY == null) car.groundY = yr;
     else { const rate = yr > car.groundY ? dt * 18 : dt * 9; car.groundY += (yr - car.groundY) * Math.min(1, rate); }
-    if (yr != null && car.groundY < yr - 0.12) car.groundY = yr - 0.12;
+    if (yr != null && car.groundY < yr - 0.8) car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up
     const yC = car.groundY;
     const rxv = Math.cos(car.yaw), rzv = -Math.sin(car.yaw);
     const tF = actorGroundY(car.x + fx * 1.4, car.z + fz * 1.4, car.groundY), tB = actorGroundY(car.x - fx * 1.4, car.z - fz * 1.4, car.groundY);
@@ -2862,6 +2932,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
+    updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
     if (p3dtiles && photoModes(mode)) { camera.updateMatrixWorld(); if (now - _tilesUpdT > 55) { p3dtiles.update(); _tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
     if (mode === 'drive') {
@@ -2954,6 +3025,7 @@ export function createEngine({ canvas, ui, emit }) {
     disposeMiniMap();
     if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
     if (drewCrowd) drewCrowd.dispose();
+    setScout(false);                             // unregister the prefetch scout camera
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
     scene.traverse(o => {
