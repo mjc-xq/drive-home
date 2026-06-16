@@ -66,6 +66,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);      // top-right ☰ menu expanded
   const [navErr, setNavErr] = useState('');
   const [autoMax, setAutoMax] = useState(() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } });   // auto-drive top-speed cap (mph; 0 = unlimited)
+  const [speedMul, setSpeedMul] = useState(() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } });   // global driving-speed multiplier
   const [dest, setDest] = useState(null);               // { label }
   const [autoDrive, setAutoDrive] = useState(false);
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
@@ -87,7 +88,7 @@ export default function App() {
       switch (type) {
         case 'ready': setReady(true); break;
         case 'photoreal': setPhotoreal(true); break;
-        case 'mode': setMode(p); break;
+        case 'mode': setMode(p); if (p === 'explore') setPicking(true); break;   // explore is no longer a playable mode — drop back to the Drive/Scoop menu
         case 'subline': setSubline(p); break;
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
@@ -198,10 +199,6 @@ export default function App() {
               )}
             </div>
             <div className="modeCards">
-              <button className="modeCard" onClick={() => setPicking(false)}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-                <span className="mcTitle">Explore</span><span className="mcSub">Free look around</span>
-              </button>
               <button className="modeCard drive" onClick={() => { setPicking(false); eng().enterDrive(); }}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--go)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /><circle cx="7.5" cy="17.5" r="1.4" /><circle cx="16.5" cy="17.5" r="1.4" /></svg>
                 <span className="mcTitle">Drive</span><span className="mcSub">Arcade controls</span>
@@ -215,22 +212,6 @@ export default function App() {
         </div>
       )}
       <div id="ui" ref={el => (uiRefs.current.box = el)} className={mode + (dest ? ' hasDest' : '') + (menuOpen ? ' menuOpen' : '')}>
-        {mode === 'explore' && (
-          <>
-            <div id="title" className="chip">
-              <h1><em>1840</em> Dahill Lane</h1>
-              <p>{subline}</p>
-            </div>
-            <div id="btns">
-              <button id="findBtn" className="btn" onClick={() => eng().focusHouse(true)}>Find my house</button>
-              <button id="driveBtn" className="btn primary" onClick={() => eng().enterDrive()}>Drive 🏎️</button>
-              <button id="scoopBtn" className="btn" onClick={() => eng().enterScoop()}>Scoop 💩</button>
-            </div>
-            <div id="hint" className="chip">
-              Drag to orbit · Scroll or pinch to zoom<br />Two-finger drag to pan · Tap house to visit
-            </div>
-          </>
-        )}
         {mode !== 'drive' && (
           <div id="compass" className="chip" aria-hidden="true">
             <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
@@ -349,7 +330,7 @@ export default function App() {
                   </button>
                   <button className="menuItem" onClick={() => { eng().exitDrive(); }}>
                     <span className="miIcon reverse"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg></span>
-                    <span className="miTxt"><b>Exit drive</b><i className="off">Back to explore</i></span>
+                    <span className="miTxt"><b>Exit drive</b><i className="off">Back to menu</i></span>
                   </button>
                 </div>
               )}
@@ -370,15 +351,6 @@ export default function App() {
               <div className="dashCol">
                 <span className="dashKick">GEAR</span>
                 <b className="dashGear" data-gear="P" ref={el => (uiRefs.current.gear = el)}>P</b>
-              </div>
-              <div className="dashDiv" />
-              <div className="dashCompass">
-                <svg viewBox="0 0 40 40" ref={el => (uiRefs.current.needle = el)}>
-                  <text x="20" y="6.2" fontSize="6.5" fontWeight="700" textAnchor="middle" fill="var(--nav)" fontFamily="'Chakra Petch'">N</text>
-                  <polygon points="20,8.5 24,21 20,17.6 16,21" fill="var(--nav)" />
-                  <polygon points="20,32 24,19 20,22.4 16,19" fill="#fff" opacity=".4" />
-                  <circle cx="20" cy="20" r="2" fill="#fff" />
-                </svg>
               </div>
               <div className="dashDiv" />
               <div className="dashCol">
@@ -447,6 +419,12 @@ export default function App() {
                 </div>
 
                 <div className="navSlider">
+                  <label>Driving speed <b>{Math.round(speedMul * 100)}%</b></label>
+                  <input type="range" min="0.4" max="1.5" step="0.05" value={speedMul}
+                    onChange={e => { const v = +e.target.value; setSpeedMul(v); eng().setSpeedMul(v); }} />
+                  <div className="sliderEnds"><span>gentle</span><span>fast</span></div>
+                </div>
+                <div className="navSlider">
                   <label>Auto-drive top speed <b>{autoMax ? autoMax + ' mph' : 'unlimited'}</b></label>
                   <input type="range" min="0" max="700" step="25" value={autoMax}
                     onChange={e => { const v = +e.target.value; setAutoMax(v); eng().setAutoMaxMph(v); }} />
@@ -484,7 +462,7 @@ export default function App() {
         {/* Arrival = a compact, NON-blocking banner that slides in above the dash and
             auto-dismisses. (Was a big modal dead-centre over the road — "no more!".) */}
         {arrived && (
-          <div id="arrivedCard">
+          <div id="arrivedCard" role="status" aria-live="polite">
             <span className="acFlag">🏁</span>
             <span className="acText">Arrived · <b>{arrived.label}</b></span>
             {arrived.points > 0 && <span className="acPts">+{arrived.points}</span>}
@@ -504,7 +482,7 @@ export default function App() {
           </div>
         )}
         <div id="joy" ref={el => (uiRefs.current.joy = el)}><div id="knob" ref={el => (uiRefs.current.knob = el)} /></div>
-        <div id="toast" className={toast.show ? 'show' : ''} dangerouslySetInnerHTML={{ __html: toast.html }} />
+        <div id="toast" role="status" aria-live="polite" aria-atomic="true" className={toast.show ? 'show' : ''} dangerouslySetInnerHTML={{ __html: toast.html }} />
         {attribution && (
           <div id="credits" aria-label="Map data attribution">
             <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
