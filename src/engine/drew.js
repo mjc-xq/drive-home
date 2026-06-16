@@ -67,7 +67,7 @@ export function makeController(group, mixer, actions, opts = {}) {
   const nameMap = opts.nameMap || {};
   const idleTS = opts.idleTimeScale || 1, walkTS = opts.walkTS || 1, runTS = opts.runTS || 1;
   const resolve = name => nameMap[name] || name;          // logical -> raw clip name (identity for Drew)
-  let cur = null, reacting = false;
+  let cur = null, reacting = false, _reactL = null;
   // Crossfade to a LOOPING clip (resets loop mode so a clip can serve as both idle and an emote).
   const fadeTo = (name, dur = 0.25, ts = 1) => {
     const key = resolve(name);
@@ -93,26 +93,30 @@ export function makeController(group, mixer, actions, opts = {}) {
       if (to === 'run' && actions[resolve('run')]) actions[resolve('run')].setEffectiveTimeScale(THREE.MathUtils.clamp(speed / 4.0, 0.8, 1.4) * runTS);
       fadeTo(to, 0.25, to === 'idle' ? idleTS : 1);
     },
-    // one-shot reaction (dance / cheer / any emote); returns to idle when it finishes
+    // one-shot reaction (dance / cheer / any emote); returns to idle when it finishes. INTERRUPTIBLE:
+    // a new emote crossfades straight over the current one (rapid button-mashing used to be dropped
+    // and could leave `reacting` stuck, so emotes "stopped working").
     react(name) {
       const key = resolve(name);
       const a = actions[key];
-      if (!a || reacting) return;
+      if (!a) return;
+      if (_reactL) { mixer.removeEventListener('finished', _reactL); _reactL = null; }   // drop the previous one-shot's listener
+      const prev = cur;
       reacting = true;
       a.reset().setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true;
-      a.setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
-      if (actions[cur]) actions[cur].fadeOut(0.2);
+      a.setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.15).play();
+      if (actions[prev] && prev !== key) actions[prev].fadeOut(0.15);
       cur = key;
-      const onFinished = e => {
+      _reactL = e => {
         if (e.action !== a) return;
-        mixer.removeEventListener('finished', onFinished);
+        mixer.removeEventListener('finished', _reactL); _reactL = null;
         reacting = false; cur = null; fadeTo('idle', 0.2, idleTS);
       };
-      mixer.addEventListener('finished', onFinished);
+      mixer.addEventListener('finished', _reactL);
     },
     // Hard-reset to idle (used when the avatar is swapped mid-reaction so the controller
     // we're switching AWAY from doesn't leave its mixer stuck on a clamped one-shot).
-    reset() { reacting = false; cur = null; const k = resolve('idle'); if (actions[k]) { actions[k].reset().setEffectiveTimeScale(idleTS).setEffectiveWeight(1).play(); cur = k; } },
+    reset() { if (_reactL) { mixer.removeEventListener('finished', _reactL); _reactL = null; } reacting = false; cur = null; const k = resolve('idle'); if (actions[k]) { actions[k].reset().setEffectiveTimeScale(idleTS).setEffectiveWeight(1).play(); cur = k; } },
     tick(dt) { mixer.update(dt); }
   };
 }
