@@ -45,7 +45,6 @@ function AddressSearch({ placeholder, actionLabel, suggest, onPick, onText }) {
 // values (mph, compass, joystick knob) are written by the engine straight
 // into the DOM nodes registered in uiRefs.
 export default function App() {
-  const appShellRef = useRef(null);
   const canvasRef = useRef(null);
   const uiRefs = useRef({ box: null, mph: null, gear: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
   const engineRef = useRef(null);
@@ -80,13 +79,8 @@ export default function App() {
   const [attribution, setAttribution] = useState('');   // live Google 3D Tiles data credit
   const [toast, setToast] = useState({ html: '', show: false });
   const [carCard, setCarCard] = useState({ name: '', spec: '', credit: '', show: false });
-  const [mapExpanded, setMapExpanded] = useState(false);
-  const [nativeFullscreen, setNativeFullscreen] = useState(false);
   const toastTimer = useRef(0);
   const cardTimer = useRef(0);
-  const resizeFrameRef = useRef(0);
-  const resizeTimerRef = useRef(0);
-  const fullscreenSessionRef = useRef(false);
 
   useEffect(() => {
     const emit = (type, p) => {
@@ -131,8 +125,6 @@ export default function App() {
     return () => {
       engine.dispose();
       engineRef.current = null;
-      cancelAnimationFrame(resizeFrameRef.current);
-      clearTimeout(resizeTimerRef.current);
       clearTimeout(toastTimer.current);
       clearTimeout(cardTimer.current);
       clearTimeout(arrivedTimer.current);
@@ -151,62 +143,6 @@ export default function App() {
   useEffect(() => { if (!ready) return; const t = setTimeout(() => setRevealTimedOut(true), 5500); return () => clearTimeout(t); }, [ready]);
 
   const eng = () => engineRef.current;
-  const resizeMapSoon = () => {
-    const api = eng();
-    if (!api || !api.resize) return;
-    cancelAnimationFrame(resizeFrameRef.current);
-    clearTimeout(resizeTimerRef.current);
-    resizeFrameRef.current = requestAnimationFrame(() => {
-      api.resize();
-      resizeTimerRef.current = setTimeout(() => {
-        if (engineRef.current === api) api.resize();
-      }, 250);
-    });
-  };
-
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      const isFull = !!document.fullscreenElement;
-      setNativeFullscreen(isFull);
-      if (!isFull && fullscreenSessionRef.current) {
-        fullscreenSessionRef.current = false;
-        setMapExpanded(false);
-        resizeMapSoon();
-      }
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
-
-  useEffect(() => {
-    resizeMapSoon();
-  }, [mapExpanded]);
-
-  const toggleMapExpanded = async () => {
-    const fullscreenElement = document.fullscreenElement;
-    if (mapExpanded || fullscreenElement) {
-      setMapExpanded(false);
-      fullscreenSessionRef.current = false;
-      if (fullscreenElement && document.exitFullscreen) {
-        try { await document.exitFullscreen(); } catch (e) { /* CSS collapse still applies. */ }
-      }
-      return;
-    }
-
-    setMapExpanded(true);
-    resizeMapSoon();
-    const el = appShellRef.current;
-    if (document.fullscreenEnabled && el && el.requestFullscreen) {
-      try {
-        await el.requestFullscreen({ navigationUI: 'hide' });
-        fullscreenSessionRef.current = true;
-        setNativeFullscreen(true);
-      } catch (e) {
-        fullscreenSessionRef.current = false;
-        setNativeFullscreen(false);
-      }
-    }
-  };
   // NOTE: camera LOOK has no dedicated on-screen stick anymore. Following Roblox's
   // touch convention, the whole RIGHT HALF of the screen is camera dead-space — the
   // engine's canvas pointer handler turns any single-finger drag there into a
@@ -232,7 +168,7 @@ export default function App() {
   const carColor = slot => ['#48ff6a', '#62b6ff', '#ff3f2f', '#ffb23a', '#8df0ff', '#ff4747', '#f5f0dc', '#f4f7ff', '#9b7bff'][slot] || '#ffffff';
 
   return (
-    <div id="appShell" ref={appShellRef} className={(mapExpanded ? 'mapExpanded' : '') + (nativeFullscreen ? ' nativeFullscreen' : '')}>
+    <div id="appShell">
       <div id="loading" className={(ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
         <div className="loadInner">
           <div className="loadKick">1840 Dahill Lane</div>
@@ -279,19 +215,6 @@ export default function App() {
         </div>
       )}
       <div id="ui" ref={el => (uiRefs.current.box = el)} className={mode + (dest ? ' hasDest' : '') + (menuOpen ? ' menuOpen' : '')}>
-        <button id="mapExpandBtn" className={'mapExpandBtn ' + mode + (dest ? ' hasDest' : '') + (menuOpen ? ' menuOpen' : '') + (mapExpanded ? ' on' : '')}
-          aria-label={mapExpanded ? 'Exit expanded map' : 'Expand map'}
-          aria-pressed={mapExpanded}
-          onClick={toggleMapExpanded}>
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            {mapExpanded ? (
-              <><path d="M8 3v5H3" /><path d="M16 3v5h5" /><path d="M8 21v-5H3" /><path d="M16 21v-5h5" /></>
-            ) : (
-              <><path d="M8 3H3v5" /><path d="M16 3h5v5" /><path d="M8 21H3v-5" /><path d="M16 21h5v-5" /></>
-            )}
-          </svg>
-          <span>{mapExpanded ? 'EXIT' : 'FULL'}</span>
-        </button>
         {mode === 'explore' && (
           <>
             <div id="title" className="chip">
