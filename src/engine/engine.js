@@ -96,6 +96,13 @@ export function createEngine({ canvas, ui, emit }) {
   sc2.left = -170; sc2.right = 170; sc2.top = 170; sc2.bottom = -170; sc2.far = 900;
   sun.shadow.bias = -0.0009;
   scene.add(sun);
+  const vehicleFillTarget = new THREE.Object3D();
+  scene.add(vehicleFillTarget);
+  const vehicleFill = new THREE.DirectionalLight(0xeaf4ff, 0.62 * Math.PI);
+  vehicleFill.castShadow = false;
+  vehicleFill.visible = false;
+  vehicleFill.target = vehicleFillTarget;
+  scene.add(vehicleFill);
   // Image-based lighting so the cars stop looking flat/"poopy": a metallic body (metalness ~0.45)
   // has NOTHING to reflect without an environment, so it renders near-black. A cheap procedural
   // studio (RoomEnvironment, baked once via PMREM) gives the paint + glass soft reflections and a
@@ -893,7 +900,7 @@ export function createEngine({ canvas, ui, emit }) {
     _scoutT = now;
     setScout(true);
     _scoutPhase = (_scoutPhase + 1) % 6;                   // sweep the aim through the corridor ahead…
-    const p = pointAlongRoute(80 + _scoutPhase * 76);      // …≈80–460 m along the route
+    const p = pointAlongRoute(90 + _scoutPhase * 135);     // …≈90–765 m along the route (reach matches the faster rail cruise)
     if (!p) { setScout(false); return; }
     const gy = car.groundY != null ? car.groundY : 0;
     scoutCam.up.set(0, 0, -1);
@@ -924,6 +931,7 @@ export function createEngine({ canvas, ui, emit }) {
     // Google tiles are MeshBasicMaterial (can't receive), so a full extra depth pass each
     // frame would render onto nothing. Gate the whole shadow pass off there.
     sun.castShadow = (mode === 'scoop') && !LITE;
+    vehicleFill.visible = mode === 'drive';
     renderer.shadowMap.enabled = sun.castShadow;
     if (sun.castShadow) renderer.shadowMap.needsUpdate = true;
   }
@@ -3310,11 +3318,22 @@ export function createEngine({ canvas, ui, emit }) {
     // collision step), so it phases through obstacles on the route — that's the point.
     if (autoDrive && ROUTE && ROUTE.length > 1) {
       if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; }
-      const _cruise = clamp(140 + distToNextTurn() * 1.6, 140, 440 * speedMul);   // ~140 m/s through tight bends, up to ~440 on long straights
-      car.speed += (_cruise - car.speed) * Math.min(1, dt * 2.5);
-      car.railS += Math.abs(car.speed) * dt;
-      if (car.railS >= routeTotalLen() - 4) {                                     // reached the end → arrive
-        car.railS = null;
+      const total = routeTotalLen(), remain = total - car.railS;
+      // BRAKE TO A STOP AT THE DESTINATION: cap the speed by the fastest we could still stop from in
+      // the distance that's left (v = √(2·a·d)). As `remain`→0 this cap →0, so the car decelerates
+      // smoothly and actually arrives at rest instead of clearing the route at full tilt.
+      const BRAKE_A = 200;                                                        // m/s² (supernatural, by design) → a short, punchy braking zone even from top speed
+      const stopCap = Math.sqrt(Math.max(0, 2 * BRAKE_A * remain));
+      // MUCH FASTER on the way: scale hard with the open road ahead (up to ~520 m/s), easing only for
+      // real bends. distToNextTurn looks ~500 m ahead, so long straights peg the cap.
+      const _cruise = clamp(150 + distToNextTurn() * 3.4, 150, 520 * speedMul);
+      const target = Math.min(_cruise, stopCap);
+      const rate = target < car.speed ? dt * 4.5 : dt * 3;                        // brake a touch more eagerly than it accelerates
+      car.speed += (target - car.speed) * Math.min(1, rate);
+      if (car.speed < 0) car.speed = 0;
+      car.railS = Math.min(total, car.railS + car.speed * dt);                    // never roll past the destination
+      if (remain <= 1.5 && car.speed < 6) {                                       // braked to a near-stop at the destination → arrive
+        car.speed = 0; car.railS = null;
         if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
         clearDestination();
       } else {
@@ -3594,6 +3613,12 @@ export function createEngine({ canvas, ui, emit }) {
       camera.position.z += (Math.random() - 0.5) * shakeMag;
       shakeMag *= Math.exp(-dt * 9);
     } else shakeMag = 0;
+    if (vehicleFill.visible) {
+      vehicleFill.position.copy(camera.position);
+      vehicleFill.position.y += 8;
+      vehicleFillTarget.position.set(car.x, yC + 1.1, car.z);
+      vehicleFillTarget.updateMatrixWorld();
+    }
     updateTileClip(car.x, yC, car.z, DRIVE_CAMS[camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
     if (ui.mph) ui.mph.textContent = Math.round(Math.abs(car.speed) * 2.237);
     {
