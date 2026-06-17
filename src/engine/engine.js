@@ -2771,6 +2771,32 @@ export function createEngine({ canvas, ui, emit }) {
     for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return { x: bx, z: bz, d: Math.sqrt(bd) };
   }
+  // Live "where am I" readout: reverse-geocode the car's position to a rough STREET · CITY, ST and push
+  // it to the subline. Throttled hard (every ~4 s, and only after moving ~140 m) to stay well within the
+  // geocoder quota; falls back silently on any error.
+  let _geoT = 0, _geoBusy = false, _geoLabel = '', _geoLast = null;
+  function updateLocationLabel(now) {
+    if (mode !== 'drive' || _geoBusy || now - _geoT < 4000) return;
+    if (_geoLast && Math.hypot(car.x - _geoLast.x, car.z - _geoLast.z) < 140) return;
+    _geoT = now; _geoLast = { x: car.x, z: car.z };
+    const g = worldToGeo(car.x, car.z);
+    _geoBusy = true;
+    loadMapsSDK().then(maps => {
+      new maps.Geocoder().geocode({ location: { lat: g.lat, lng: g.lon } }, (res, status) => {
+        _geoBusy = false;
+        if (status !== 'OK' || !res || !res.length) return;
+        let route = '', city = '', state = '';
+        for (const r of res) for (const c of (r.address_components || [])) {
+          if (!route && c.types.includes('route')) route = c.short_name || c.long_name;
+          if (!city && (c.types.includes('locality') || c.types.includes('sublocality') || c.types.includes('neighborhood'))) city = c.long_name;
+          if (!state && c.types.includes('administrative_area_level_1')) state = c.short_name;
+        }
+        const place = [city, state].filter(Boolean).join(', ');
+        const label = [route, place].filter(Boolean).join(' · ');
+        if (label && label !== _geoLabel) { _geoLabel = label; emit('subline', label); }
+      });
+    }).catch(() => { _geoBusy = false; });
+  }
   // Fetch the REAL road network around the car from OpenStreetMap (Overpass) in a ~2.6 km box,
   // projected through the same ENU geoToWorld as the photoreal tiles, and refresh it as you drive
   // into new areas. This gives the lane-keep assist + soft-wall + reset a true road GRAPH everywhere,
@@ -3407,6 +3433,7 @@ export function createEngine({ canvas, ui, emit }) {
     const nrp = nearestRoadPoint(car.x, car.z);
     const offRoadDist = nrp.d;
     updateAreaRoads(now);   // fetch/refresh the OSM road network around the car so the assist has real roads to hug far from home
+    updateLocationLabel(now);   // live STREET · CITY, ST readout in the subline
     // AUTO-STEER assist: aim the car along the ROUTE (when navigating), or — in free-roam —
     // along the nearest road via a look-ahead point that takes street corners for you. When
     // you've drifted OFF the road it switches to RECOVERY: aim straight back at the nearest
@@ -3582,14 +3609,19 @@ export function createEngine({ canvas, ui, emit }) {
       if (remain <= 1.5) car.railEndT = (car.railEndT || 0) + dt; else car.railEndT = 0;
       const farFromDest = DEST && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 150;
       if (remain <= 1.5 && car.speed < 6 && (!farFromDest || car.railEndT > 6)) {  // braked to a near-stop AT the destination → arrive
+        if (DEST && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 1) car.yaw = Math.atan2(DEST.x - car.x, DEST.z - car.z);   // PARK facing the address
         car.speed = 0; car.railS = null; car.railSpeed = null; car.railEndT = 0;
         if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
         clearDestination();
       } else {
         const rp = railPointAt(car.railS);
         car.x = rp.x; car.z = rp.z; routeIdx = rp.i;
-        let _dy = rp.yaw - car.yaw; while (_dy > Math.PI) _dy -= 2 * Math.PI; while (_dy < -Math.PI) _dy += 2 * Math.PI;
-        car.yaw += _dy * Math.min(1, dt * 12);                                    // ease the heading onto the route tangent
+        // PARK IN FRONT: over the last few metres, turn from the route tangent to FACE the actual
+        // address so the car pulls up looking at the building instead of stopping mid-lane.
+        let aimYaw = rp.yaw;
+        if (DEST && remain < 9) { const fy = Math.atan2(DEST.x - car.x, DEST.z - car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); }
+        let _dy = aimYaw - car.yaw; while (_dy > Math.PI) _dy -= 2 * Math.PI; while (_dy < -Math.PI) _dy += 2 * Math.PI;
+        car.yaw += _dy * Math.min(1, dt * 12);                                    // ease the heading onto the route tangent / toward the address on arrival
         car.vlat = 0; car.steer = 0;                                             // no physics slide while on rails
       }
     }
