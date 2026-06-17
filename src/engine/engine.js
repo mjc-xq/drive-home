@@ -2114,7 +2114,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
   }
   // Indoor follow cam + the exit pad (movement/grounding/collision already ran in updateScoop).
-  const _wallRay = new THREE.Raycaster();
+  const _wallRay = new THREE.Raycaster(); const _wallDir = new THREE.Vector3();
   let _wallCutT = 0;
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
@@ -2142,19 +2142,24 @@ export function createEngine({ canvas, ui, emit }) {
     if (pd < MIND) camV.y = Math.min(interior.ceilingY - 0.3, Math.max(camV.y, interior.floorY + 1.1 + (MIND - pd) * 2.0 + 1.2));
     camera.position.copy(camV);
     camera.lookAt(CHAR.x, interior.floorY + 1.1, CHAR.z);
-    // SEE-THROUGH: hide any non-floor mesh between camera and avatar (walls, cabinets, couch). Collision
-    // uses precomputed AABBs so hidden meshes still block. Throttled (~22 Hz — indoor motion is slow) and
-    // skips the permanently-hidden swapped-out sofa so it never reappears.
+    // SEE-THROUGH: hide any non-floor mesh between the camera and a BOUNDARY around the avatar — not just
+    // the one dead-centre ray (which left walls covering the kid's body/sides in the way). Cast a small fan
+    // to the torso, head, and a ring around them, so a wall blocking ANY part of the kid (or right around
+    // them) is cut — a clean cutout boundary. Collision still uses precomputed AABBs, so hidden walls block.
     const occ = interior.occluders;
     if (occ && now - _wallCutT > 45) {
       _wallCutT = now;
       for (const w of occ) if (!w.userData.permaHidden) w.visible = true;
-      const cp = camera.position, dx = CHAR.x - cp.x, dy = (interior.floorY + 1.1) - cp.y, dz = CHAR.z - cp.z;
-      const len = Math.hypot(dx, dy, dz) || 1;
-      _wallRay.set(cp, _camT.set(dx / len, dy / len, dz / len));
-      _wallRay.far = Math.max(0.1, len - 0.5);
-      const hits = _wallRay.intersectObjects(occ, false);
-      for (const h of hits) h.object.visible = false;
+      const cp = camera.position, fy = interior.floorY;
+      const hideAlong = (tx, ty, tz) => {
+        const dx = tx - cp.x, dy = ty - cp.y, dz = tz - cp.z, len = Math.hypot(dx, dy, dz) || 1;
+        _wallRay.set(cp, _wallDir.set(dx / len, dy / len, dz / len)); _wallRay.far = Math.max(0.1, len - 0.5);
+        const hits = _wallRay.intersectObjects(occ, false);
+        for (const h of hits) h.object.visible = false;
+      };
+      hideAlong(CHAR.x, fy + 1.1, CHAR.z);                                                            // torso
+      hideAlong(CHAR.x, fy + 1.75, CHAR.z);                                                           // head
+      for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; hideAlong(CHAR.x + Math.cos(a) * 0.85, fy + 0.9, CHAR.z + Math.sin(a) * 0.85); }   // ring boundary
     }
   }
   // hop from walking straight into driving (the car spawns at the driveway)
