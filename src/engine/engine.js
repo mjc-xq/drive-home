@@ -1691,6 +1691,9 @@ export function createEngine({ canvas, ui, emit }) {
   const ptrs = new Map(); let lastPinch = 0, lastMid = null, moved = 0;
   const lookPtrs = new Map();
   const camOrbit = { yaw: 0, pitch: 0, t: 0 };
+  let _orbitUserSet = false;   // has the user dragged to set the orbit angle? (until then, autodrive/follow runs cinematic "race day" camera sweeps)
+  let _viewYaw = 0;            // smoothed heading the MAP views (overhead/aerial) + minimap orient to — car-heading normally, compass in follow. Eased so turns don't shimmer.
+  let _cineAmt = 0;            // 0..1 amount of the cinematic "race day" sweep currently applied (eased out once the user takes the camera)
   let movePtr = null, joyBX = 0, joyBY = 0, pinchD = 0, czoom = 1, szoom = 1;
   // Roblox-style controls: shared look/zoom feel across drive+scoop, a steering
   // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
@@ -1757,6 +1760,15 @@ export function createEngine({ canvas, ui, emit }) {
       // Overhead views: ONE finger draws-to-drive; a SECOND finger is a pinch-zoom (the
       // phone-native way to zoom the map the user asked for) which suspends steering until
       // you lift back to one finger.
+      if (followMode) {
+        // FOLLOWING: the whole screen ORBITS/pinches the camera (one finger = look, two = pinch) — a drag
+        // must NOT draw-to-drive or grab the joystick, both of which would cancel follow. Gestures move the
+        // camera freely while the car keeps tracking you.
+        lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (mode === 'drive') camOrbit.t = performance.now();
+        if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+        return;
+      }
       if (driveTopDown()) {
         if (navPtr === null && lookPtrs.size === 0) {
           navPtr = e.pointerId; navDownX = navCurX = e.clientX; navDownY = navCurY = e.clientY; navMoved = false; showT = 0; setNavFromPointer(e.clientX, e.clientY);
@@ -1838,7 +1850,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (mode === 'drive') {
         camOrbit.yaw = clamp(camOrbit.yaw - ld.yaw, -2.4, 2.4);   // clamp so a hard drag can't orbit under the map / lose the car
         camOrbit.pitch = clamp(camOrbit.pitch + ld.pitch, -0.45, 0.8);
-        camOrbit.t = performance.now();
+        camOrbit.t = performance.now(); _orbitUserSet = true;   // user grabbed the camera → stop the cinematic sweep, hold THEIR angle (relative to the car)
         showT = 0;
       } else {
         camYawS -= ld.yaw;
@@ -2555,7 +2567,7 @@ export function createEngine({ canvas, ui, emit }) {
     // compass bearing (cw from north) = 180°−yaw. We counter-rotate the map div by that bearing (and
     // scale up to fill the corners the rotation exposes), then point the car marker the same way so it
     // sits pointing straight up. During a route OVERVIEW the map isn't car-centred, so stay north-up.
-    const bearing = 180 - car.yaw * 180 / Math.PI;
+    const bearing = 180 - viewHeading() * 180 / Math.PI;   // viewHeading = COMPASS while following (map turns like the user), else the car heading
     const overview = now < _gmapOverviewUntil;
     if (!overview) { const d = ((bearing - _gmapHeading + 180) % 360 + 360) % 360 - 180; _gmapHeading += d * 0.35; }   // smoothed, unwrapped → no shimmer / no 360° spin
     _gmapRot = overview ? 0 : _gmapHeading; _gmapScale = overview ? 1 : 1.62;   // kept in sync with the transform below so the tap handler can invert it exactly
@@ -2682,7 +2694,7 @@ export function createEngine({ canvas, ui, emit }) {
   // FOLLOW = track the user's real GPS position EXACTLY: glide straight to the live point (NO Google
   // routing — that snapped to the "wrong street" and overshot short hops) and orient the car to the
   // phone's compass heading. "Drive to me" (non-follow) still routes there once for the scenic drive.
-  let _geoWatch = null, followMode = false, _followGeo = null, _followHeading = null;
+  let _geoWatch = null, followMode = false, _followGeo = null, _followHeading = null, _followSeeded = false;
   let _headingOn = false, _headingOff = null;
   function startHeading() {
     if (_headingOn) return;
@@ -2707,7 +2719,7 @@ export function createEngine({ canvas, ui, emit }) {
   function stopFollow() {
     const was = followMode || _geoWatch != null;
     if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; }
-    followMode = false; _followGeo = null; stopHeading();
+    followMode = false; _followGeo = null; _followSeeded = false; stopHeading();
     if (was) emit('follow', false);
   }
   // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
@@ -2716,6 +2728,7 @@ export function createEngine({ canvas, ui, emit }) {
   function setFollowGeo(lat, lon) {
     const w = geoToWorld(lat, lon); let wx = w[0], wz = w[1];
     const r = Math.hypot(wx, wz); if (r > 30000) { const s = 30000 / r; wx *= s; wz *= s; }
+    if (!_followSeeded) { _followSeeded = true; car.x = wx; car.z = wz; settleAfterTeleport(); }   // JUMP to the user at the START — don't drive/glide there. Subsequent fixes glide-track.
     _followGeo = { x: wx, z: wz };
   }
   function driveToMyLocation(follow) {
@@ -2938,6 +2951,24 @@ export function createEngine({ canvas, ui, emit }) {
     for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return { x: bx, z: bz, d: Math.sqrt(bd) };
   }
+  // Unit tangent {tx,tz} of the nearest mapped road segment (so a followed car can face ALONG the street),
+  // or null if no road is known. Mirrors nearestRoadPoint's source order.
+  function nearestRoadSeg(x, z) {
+    let bd = 1e18, tx = 0, tz = 0, found = false;
+    const tryAB = (ax, az, b0, b1) => {
+      const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz; if (L2 < 1) return;
+      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d < bd) { bd = d; const L = Math.sqrt(L2); tx = vx / L; tz = vz / L; found = true; }
+    };
+    if (ROUTE && ROUTE.length > 1) for (let i = 0; i < ROUTE.length - 1; i++) tryAB(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
+    for (const s of osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
+    for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
+    return found ? { tx, tz, d: Math.sqrt(bd) } : null;
+  }
+  // The heading the MAP views (overhead/aerial main view + both minimaps) orient to: the live COMPASS
+  // heading while following (so the map turns like the user/phone), else the car's own heading.
+  function viewHeading() { return (followMode && _followHeading != null) ? _followHeading : car.yaw; }
   // Live "where am I" readout: reverse-geocode the car's position to a rough STREET · CITY, ST and push
   // it to the subline. Throttled hard (every ~4 s, and only after moving ~140 m) to stay well within the
   // geocoder quota; falls back silently on any error.
@@ -3136,8 +3167,8 @@ export function createEngine({ canvas, ui, emit }) {
   function drawMinimap(ctx, w, h) {
     ctx.clearRect(0, 0, w, h);
     const cx = w / 2, cy = h / 2, range = 620, scale = (w / 2) / range;   // wider view to match the live map zoom-out
-    let _d = car.yaw - _miniYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI;
-    _miniYaw += _d * 0.2;                                                  // ease the map's rotation so steering jitter doesn't shimmer the whole map
+    let _d = viewHeading() - _miniYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI;
+    _miniYaw += _d * 0.2;                                                  // ease the map's rotation (viewHeading = compass while following) so jitter doesn't shimmer the whole map
     const ca = Math.cos(_miniYaw), sa = Math.sin(_miniYaw);
     const toPx = (wx, wz) => { const dx = wx - car.x, dz = wz - car.z; return [cx + (-dx * ca + dz * sa) * scale, cy + (-dx * sa - dz * ca) * scale]; };   // heading-up rotation: forward → screen-up
     ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath();
@@ -3215,6 +3246,7 @@ export function createEngine({ canvas, ui, emit }) {
   const _camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
   const _lookT = new THREE.Vector3();     // desired chase look point (scratch)
   let _lookV = null;                       // smoothed chase look point — lags so the car whips toward frame edge
+  let _lookYS = null;                      // low-passed look-point height — kills the per-bump vertical pitch on photoreal ground
   let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
   let camFloorRef = null;                   // low-passed anti-clip floor so per-bump groundAt spikes don't POP the cam
   let _camFloorT = 0, _camFloorRaw = 0;     // throttle the floor raycast (~14 Hz) — its output is low-passed to ~3 Hz anyway
@@ -3232,7 +3264,7 @@ export function createEngine({ canvas, ui, emit }) {
     // Cruise leans a little lower/more-forward than before for speed feel, but stays
     // high enough to clear the melty ground-level photogrammetry (the user's preferred
     // clean look — NOT the low 'eye-level horror' of Close).
-    { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false },
+    { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false, side: 0.42 },   // side = a 3/4 hero angle: above and to the SIDE/behind, not dead astern
     { name: 'Close', dist: 19, h: 12.5, ahead: 12, drone: false, topdown: false },   // Roblox chase: sit back + look well down the road so you SEE where you're going (not just the roof of the car)
     { name: 'Top-down', dist: 10, h: 122, ahead: 16, drone: true, topdown: true, dragdrive: true },   // higher overhead map view
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
@@ -3240,7 +3272,7 @@ export function createEngine({ canvas, ui, emit }) {
   function cycleCamera() {
     driveCamUserPicked = true;
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
-    czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0;   // fresh framing per view (pinch-zoom/look don't leak)
+    czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false;   // fresh framing per view (pinch-zoom/look don't leak)
     const dd = DRIVE_CAMS[camMode].dragdrive;
     if (!DRIVE_CAMS[camMode].topdown) camera.up.set(0, 1, 0);   // only top-down is heading-up
     if (!dd) { inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
@@ -3254,13 +3286,13 @@ export function createEngine({ canvas, ui, emit }) {
     const i = DRIVE_CAMS.findIndex(c => c.topdown);
     if (i < 0) return;
     if (camMode === i) {
-      camMode = 0; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0;
+      camMode = 0; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false;
       inp2.navActive = false; navPtr = null; camera.up.set(0, 1, 0);
       emit('driveCam', DRIVE_CAMS[camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
       toast('Camera: ' + DRIVE_CAMS[camMode].name, 1100);
       return;
     }
-    camMode = i; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0;
+    camMode = i; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false;
     emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
     toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
@@ -3778,11 +3810,15 @@ export function createEngine({ canvas, ui, emit }) {
       car.x += mx; car.z += mz; car.groundY = null; car.vlat = 0; car.steer = 0;
       car.speed = Math.hypot(mx, mz) / Math.max(dt, 1e-3);   // for cam framing / wheel spin
       car.railS = null; car.railSpeed = null;
-      // ORIENT to the phone compass when we have a heading; otherwise face the way we're gliding.
-      let tgtYaw = _followHeading;
-      if (tgtYaw == null) tgtYaw = Math.hypot(dx, dz) > 0.5 ? Math.atan2(dx, dz) : car.yaw;
+      // Face the car ALONG THE STREET (nearest road tangent, oriented toward travel) — NOT the compass.
+      // The compass instead drives the MAP rotation (minimap + overhead/aerial view) via viewHeading().
+      const mvx = Math.hypot(dx, dz) > 0.4 ? dx : Math.sin(car.yaw), mvz = Math.hypot(dx, dz) > 0.4 ? dz : Math.cos(car.yaw);
+      let tgtYaw;
+      const seg = nearestRoadSeg(car.x, car.z);
+      if (seg && seg.d < 60) { const dot = seg.tx * mvx + seg.tz * mvz, tx = dot < 0 ? -seg.tx : seg.tx, tz = dot < 0 ? -seg.tz : seg.tz; tgtYaw = Math.atan2(tx, tz); }   // align to the road, in the direction we're heading
+      else tgtYaw = Math.hypot(dx, dz) > 0.5 ? Math.atan2(dx, dz) : car.yaw;   // off any known road → just face the way we're gliding
       let _fd = tgtYaw - car.yaw; while (_fd > Math.PI) _fd -= 2 * Math.PI; while (_fd < -Math.PI) _fd += 2 * Math.PI;
-      car.yaw += _fd * (1 - Math.exp(-dt * (_followHeading != null ? 8 : 5)));
+      car.yaw += _fd * (1 - Math.exp(-dt * 5));
     } else if (autoDrive && ROUTE && ROUTE.length > 1) {
       if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; car.railSpeed = Math.abs(car.speed); }
       const total = routeTotalLen(), remain = total - car.railS;
@@ -3860,7 +3896,8 @@ export function createEngine({ canvas, ui, emit }) {
     // — roughly street-sized on the map. Purely cosmetic: collision uses fixed radii, never
     // this scale. Lerp so cycling views doesn't pop; aerial floats highest so it gets biggest.
     const _camV = DRIVE_CAMS[camMode] || {};
-    const dispTarget = _camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.3;   // chase bumped 1.18→1.3 so the car reads clearly when you orbit out; overhead big enough to spot from up high
+    const _zoomGrow = clamp(Math.sqrt(Math.max(0.05, czoom)), 0.85, 2.2);   // car GROWS (within limits) as you zoom OUT so it stays findable from way up, and shrinks a touch up close
+    const dispTarget = (_camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.3) * _zoomGrow;
     car.dispScale = car.dispScale == null ? dispTarget : car.dispScale + (dispTarget - car.dispScale) * (1 - Math.exp(-dt * 6));
     car.group.scale.setScalar(car.dispScale);
     const overhead = _camV.aerial || _camV.topdown;
@@ -3976,6 +4013,14 @@ export function createEngine({ canvas, ui, emit }) {
       for (const w of car.wheels) w.rotation.z -= spin;
       for (const f of car.fronts) f.rotation.y = car.steer * 1.6;
     }
+    // Smoothed MAP-view heading (compass while following, car heading otherwise) for the overhead/aerial
+    // framing + a gentle "race day" cinematic sweep that runs during autodrive/follow until the user
+    // grabs the camera. Eased so it never shimmers and bows out smoothly when the user takes over.
+    { let _d = viewHeading() - _viewYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI; _viewYaw += _d * (1 - Math.exp(-dt * 3)); }
+    const _cineWant = (!_orbitUserSet && (autoDrive || followMode)) ? 1 : 0;
+    _cineAmt += (_cineWant - _cineAmt) * (1 - Math.exp(-dt * 1.5));
+    const _cineYaw = _cineAmt * Math.sin(now * 0.00012) * 0.6;     // slow ±0.6 rad hero orbit
+    const _cinePit = _cineAmt * Math.sin(now * 0.00009) * 0.12;    // subtle crane
     if (showT > 0) {
       // showcase orbit on entry; any input skips it
       showT -= dt;
@@ -3991,8 +4036,11 @@ export function createEngine({ canvas, ui, emit }) {
       // zooms, and the altitude is slow-smoothed so it floats like the aerial view.
       camera.up.set(0, 1, 0);
       const sp = clamp(Math.abs(car.speed) / feelRef, 0, 1);          // gentle speed breathe (keep the Explore feel)
-      const a = 0.45 + camOrbit.yaw;
-      const po = clamp(0.92 - camOrbit.pitch * 0.45, 0.18, 1.4);
+      // HEADING-UP + FOLLOWS TURNS: orbit BEHIND the (smoothed) heading so the car's forward points away/up
+      // — matches the heading-up minimap. camOrbit.yaw is the user's offset, kept RELATIVE to the car so it
+      // holds as the car turns; the cinematic sweep runs until the user grabs the camera.
+      const a = _viewYaw + Math.PI + camOrbit.yaw + _cineYaw;
+      const po = clamp(0.92 - (camOrbit.pitch + _cinePit) * 0.45, 0.18, 1.4);
       const r = (185 + sp * 38) * czoom;                             // float higher/further as you wind it out
       camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * 1.0);
       const camT = _camT.set(car.x + r * Math.sin(po) * Math.sin(a), camGroundRef + r * Math.cos(po), car.z + r * Math.sin(po) * Math.cos(a));
@@ -4015,14 +4063,15 @@ export function createEngine({ canvas, ui, emit }) {
       // At speed: float a touch higher, ease back, and push the look-ahead WAY
       // forward so the car slides toward the bottom of frame and you see the road
       // rushing up — the overhead read of velocity.
-      const camT = _camT.set(car.x - fx * (CAM.dist + sp * 4), yC + CAM.h * czoom + sp * 9, car.z - fz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
+      const vfx = Math.sin(_viewYaw), vfz = Math.cos(_viewYaw);   // map-view forward (compass while following) — keeps this overhead view oriented like the minimap
+      const camT = _camT.set(car.x - vfx * (CAM.dist + sp * 4), yC + CAM.h * czoom + sp * 9, car.z - vfz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
       if (!camInit) { camV.copy(camT); camInit = true; }
       camV.lerp(camT, 1 - Math.exp(-(5 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // keep up at top speed
       camera.position.copy(camV);
-      camera.up.set(fx, 0, fz); // heading-up
+      camera.up.set(vfx, 0, vfz); // heading-up = same orientation as the minimap
       const spHiT = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
       const ahead = (CAM.ahead + sp * sp * 16 + spHiT * 14) * aheadScale;     // see further down the road flat-out (→ centred on arrival)
-      camera.lookAt(car.x + fx * ahead, yC, car.z + fz * ahead);
+      camera.lookAt(car.x + vfx * ahead, yC, car.z + vfz * ahead);
       const fovT = 46 + 9 * sp + 12 * spHiT;                   // a real widen when truly flying
       camera.fov += (fovT - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix();
       if (!reduceMotion && spHiT > 0.1) { const r = spHiT * 0.04; camera.position.x += (Math.random() - 0.5) * r; camera.position.z += (Math.random() - 0.5) * r; }
@@ -4044,7 +4093,7 @@ export function createEngine({ canvas, ui, emit }) {
       // spHi keeps building ABOVE the feel range up to the real top (~180-220), so the
       // open-road blast the design invites actually reads as faster than a 40 mph cruise.
       const spHi = clamp((Math.abs(car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
-      const a = car.yaw + Math.PI + camOrbit.yaw - car.steer * 0.6;   // lead the camera into corners
+      const a = car.yaw + Math.PI + camOrbit.yaw - car.steer * 0.6 + (CAM.side || 0) + _cineYaw * 0.5;   // lead the camera into corners; CAM.side = a 3/4 above-and-to-the-side hero angle (Cruise); cine = gentle race-day sway during autodrive/follow
       const dist = (CAM.dist + sp * sp * 9 + spHi * 6) * czoom;       // sink the car back further when truly flying
       const h = (CAM.h + camOrbit.pitch * 4.5 + sp * 3) * Math.max(0.7, czoom);
       // hold a STATIC altitude (drone cams): slow-smooth the ground ref so terrain
@@ -4058,7 +4107,7 @@ export function createEngine({ canvas, ui, emit }) {
         // above instead of burying into the wall / staring at the car's own roof.
         if (g < 1) { const lift = (1 - g) * 7; camT.set(car.x + (camT.x - car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g + lift, car.z + (camT.z - car.z) * g); }
       }
-      if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; camFloorRef = null; }
+      if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; _lookYS = null; camFloorRef = null; }
       camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed
       // Anti-clip floor based on the CAR's road level (yC = actorGroundY, which is
       // overpass/canopy-skipped). A high groundAt() raycast at the camera's xz used to hit an
@@ -4066,7 +4115,7 @@ export function createEngine({ canvas, ui, emit }) {
       // underpass / when changing levels. Tracking the car's own level fixes that (and the
       // low-pass keeps photogrammetry bumps from popping the cam).
       _camFloorRaw = yC + 1.3;
-      camFloorRef = camFloorRef == null ? _camFloorRaw : camFloorRef + (_camFloorRaw - camFloorRef) * (1 - Math.exp(-dt * 3));
+      camFloorRef = camFloorRef == null ? _camFloorRaw : camFloorRef + (_camFloorRaw - camFloorRef) * (1 - Math.exp(-dt * 2.2));   // softer low-pass → fewer cam pops on photoreal bumps
       if (camV.y < camFloorRef) camV.y = camFloorRef;
       camera.position.copy(camV);
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
@@ -4077,7 +4126,9 @@ export function createEngine({ canvas, ui, emit }) {
       // behind the camera"); at speed it pushes forward so you read the road. Also lift the look point
       // toward the car's roof when slow so the car frames higher, not at its wheels.
       const lookAhead = (CAM.ahead * (0.32 + 0.68 * sp) + sp * 6) * aheadScale;
-      const lookY = yC + 1.0 + (1 - sp) * 0.9;
+      const lookYRaw = yC + 1.0 + (1 - sp) * 0.9;
+      _lookYS = _lookYS == null ? lookYRaw : _lookYS + (lookYRaw - _lookYS) * (1 - Math.exp(-dt * 4));   // smooth ONLY the vertical so road bumps don't pitch the whole view (x/z keep the snappy whip)
+      const lookY = _lookYS;
       const rpxL = Math.cos(car.yaw), rpzL = -Math.sin(car.yaw);
       const latLead = (car.vlat * 0.05 + car.steer * 2.0) * (1 - 0.3 * sp) * aheadScale;
       _lookT.set(car.x + fx * lookAhead + rpxL * latLead, lookY, car.z + fz * lookAhead + rpzL * latLead);
