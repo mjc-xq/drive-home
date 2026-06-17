@@ -125,8 +125,7 @@ function pushUpTri(rPos, rUV, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { rPos.push(v[0], v[1], v[2]); const uv = aerialUV(v[0], v[2]); rUV.push(uv[0], uv[1]); }
 }
-function emitBuilding(b, base, wallH, wPos, wUV, rPos, rUV) {
-  const ring = b.p.map(([e, n]) => w2(e, n));
+function emitRing(ring, base, wallH, roofRects, wPos, wUV, rPos, rUV) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
   let dist = 0;
@@ -140,38 +139,57 @@ function emitBuilding(b, base, wallH, wPos, wUV, rPos, rUV) {
   for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, [])) {
     pushUpTri(rPos, rUV, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
   }
-  if (b.r) for (const r of b.r) {                    // gables
+  if (roofRects) for (const r of roofRects) {        // gables
     const g = gableTris(r, base, wallH);
     for (let k = 0; k < g.length; k += 9)
       pushUpTri(rPos, rUV, [g[k], g[k + 1], g[k + 2]], [g[k + 3], g[k + 4], g[k + 5]], [g[k + 6], g[k + 7], g[k + 8]]);
   }
   return ring;
 }
+const emitBuilding = (b, base, wallH, wPos, wUV, rPos, rUV) =>
+  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wPos, wUV, rPos, rUV);
 
 // ---- assemble ------------------------------------------------------------
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
 scene.add(terrainMesh);
 
-const wallHeight = b => ((b.r && b.r.length) ? Math.max(2.4, (b.h || 4.5) * 0.8) : (b.h || 4.5)) + 0.5;
-const houseB = S.buildings.find(b => b.house);
+// real roof heights from LiDAR (exports/buildings_height.json, keyed by building
+// index) so the generated buildings match the photoreal instead of OSM/4.5 m guesses
+const HGT = existsSync(path.join(ROOT, 'exports/buildings_height.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_height.json'), 'utf8')) : {};
+const fullH = (b, ib) => { const lh = HGT[ib]; return (lh && lh > 2.2) ? lh : (b.h || 4.5); };
+const wallHeight = (b, ib) => { const H = fullH(b, ib); return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
+const houseIdx = S.buildings.findIndex(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
 const hwPos = [], hwUV = [], hrPos = [], hrUV = [];
-if (houseB) {
+if (houseIdx >= 0) {
+  const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
-  buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB), hwPos, hwUV, hrPos, hrUV));
+  buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB, houseIdx), hwPos, hwUV, hrPos, hrUV));
   scene.add(mkMesh(hwPos, null, 0xffffff, 'House_walls', { uvs: hwUV }));
   scene.add(mkMesh(hrPos, null, 0xffffff, 'House_roof', { uvs: hrUV }));
 }
 const bwPos = [], bwUV = [], brPos = [], brUV = [];
 let nBld = 0;
-for (const b of S.buildings) {
-  if (b.house) continue;
-  const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) continue;
+S.buildings.forEach((b, ib) => {
+  if (b.house) return;
+  const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   const base = terrainAt(cw[0], cw[1]) - 0.5;
-  buildingPolys.push(emitBuilding(b, base, wallHeight(b), bwPos, bwUV, brPos, brUV));
+  buildingPolys.push(emitBuilding(b, base, wallHeight(b, ib), bwPos, bwUV, brPos, brUV));
   nBld++;
+});
+// LiDAR-detected gap buildings (no existing footprint) — fills the missing houses
+const FILL = existsSync(path.join(ROOT, 'exports/buildings_fill.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_fill.json'), 'utf8')).buildings : [];
+let nFill = 0;
+for (const fb of FILL) {
+  const cx = fb.ring.reduce((s, p) => s + p[0], 0) / fb.ring.length, cz = fb.ring.reduce((s, p) => s + p[1], 0) / fb.ring.length;
+  if (!inPatch(cx, cz)) continue;
+  const base = terrainAt(cx, cz) - 0.5;
+  emitRing(fb.ring.map(p => [p[0], p[1]]), base, (fb.h || 4) + 0.5, null, bwPos, bwUV, brPos, brUV);
+  buildingPolys.push(fb.ring.map(p => [p[0], p[1]])); nFill++;
 }
-if (nBld) {
+if (bwPos.length) {
   scene.add(mkMesh(bwPos, null, 0xffffff, 'Buildings_walls', { uvs: bwUV }));
   scene.add(mkMesh(brPos, null, 0xffffff, 'Buildings_roofs', { uvs: brUV }));
 }
@@ -337,7 +355,7 @@ writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 const objs = [];
 scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
 console.log(`terrain: ${terrSrc}`);
-console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld}   trees: ${trees.length} (${treeSrc})`);
+console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} + ${nFill} LiDAR-fill   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
 console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);
