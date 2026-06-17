@@ -105,48 +105,87 @@ if (existsSync(DEMPATH)) {
 const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
 const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
 
-// ---- footprint extrusion -------------------------------------------------
-function extrude(polyEN, yBot, yTop) {
-  const ring = polyEN.map(([e, n]) => new THREE.Vector2(wx(e), wz(n)));
-  if (ring.length > 1 && ring[0].equals(ring[ring.length - 1])) ring.pop();
-  const tris = THREE.ShapeUtils.triangulateShape(ring, []);
-  const N = ring.length, pos = [], idx = [];
-  for (const p of ring) pos.push(p.x, yTop, p.y);
-  for (const p of ring) pos.push(p.x, yBot, p.y);
-  for (const [a, b, c] of tris) idx.push(a, c, b);
-  for (const [a, b, c] of tris) idx.push(N + a, N + b, N + c);
-  for (let i = 0; i < N; i++) { const j = (i + 1) % N; idx.push(i, N + i, j, j, N + i, N + j); }
-  return { pos, idx };
+// ---- buildings: walls + flat eave cap + gabled roofs (ported from geom.js) -
+// gablePrism: open gable shell (2 slopes + 2 end triangles) for one roof rect,
+// rotated/translated into world space.
+function gableTris(rect, base, wallH) {
+  let [rcx, rcy, w, d, deg] = rect;
+  let L = w, Sp = d, ang = deg * Math.PI / 180;
+  if (d > w) { L = d; Sp = w; ang += Math.PI / 2; }
+  const rise = Math.min(2.6, Math.max(0.85, Sp * 0.30));
+  const ov = 0.45, hw = L / 2 + ov, hd = Sp / 2 + ov, y0 = wallH - 0.04, y1 = wallH - 0.04 + rise;
+  const A = [-hw, y0, -hd], B = [hw, y0, -hd], Cc = [hw, y0, hd], D = [-hw, y0, hd], R1 = [-hw, y1, 0], R2 = [hw, y1, 0];
+  const seq = [A, R1, R2, A, R2, B, Cc, R2, R1, Cc, R1, D, B, R2, Cc, A, D, R1];
+  const ca = Math.cos(ang), sa = Math.sin(ang), tx = wx(rcx), tz = wz(rcy), out = [];
+  for (const [x, y, z] of seq) out.push(x * ca + z * sa + tx, y + base, -x * sa + z * ca + tz);
+  return out;
+}
+// returns non-indexed positions; wallVerts marks where roof verts begin (for colouring)
+function buildingTris(b, base, wallH) {
+  const ring = b.p.map(([e, n]) => [wx(e), wz(n)]);
+  if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
+  const pos = [], yb = base, yt = base + wallH;
+  for (let i = 0; i < ring.length; i++) {           // walls
+    const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
+    pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
+  }
+  const wallVerts = pos.length / 3;
+  const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));   // flat eave cap
+  for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, [])) {
+    const A = ring[a], C = ring[c], D = ring[d]; pos.push(A[0], yt, A[1], C[0], yt, C[1], D[0], yt, D[1]);
+  }
+  if (b.r) for (const r of b.r) pos.push(...gableTris(r, base, wallH));   // gables
+  return { pos, wallVerts, ring };
+}
+const WALLP = [0xe8dcc8, 0xdcc9ad, 0xcdbfae, 0xc9b79c, 0xd9cbb6, 0xbfae9a].map(c => new THREE.Color(c));
+const ROOFP = [0x8a5a3c, 0x6f5a48, 0x9a6b4a, 0x7d6b5a, 0x5e5048, 0xa05f3a, 0x736253].map(c => new THREE.Color(c));
+const pick = (arr, i) => arr[(Math.imul(i + 1, 2654435761) >>> 0) % arr.length];
+function emitBuilding(b, base, wallH, wallC, roofC, posArr, colArr) {
+  const { pos, wallVerts, ring } = buildingTris(b, base, wallH);
+  for (let k = 0; k < pos.length; k += 3) {
+    posArr.push(pos[k], pos[k + 1], pos[k + 2]);
+    const c = (k / 3) < wallVerts ? wallC : roofC; colArr.push(c.r, c.g, c.b);
+  }
+  return ring;
 }
 
 // ---- assemble ------------------------------------------------------------
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
 scene.add(terrainMesh);
 
+const wallHeight = b => ((b.r && b.r.length) ? Math.max(2.4, (b.h || 4.5) * 0.8) : (b.h || 4.5)) + 0.5;
 const houseB = S.buildings.find(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
 if (houseB) {
   const hc = centroidEN(houseB.p), base = terrainAt(wx(hc[0]), wz(hc[1])) - 0.5;
-  const { pos, idx } = extrude(houseB.p, base, base + (houseB.h || 4.5));
-  scene.add(mkMesh(pos, idx, 0xc98a5e, 'House'));
-  buildingPolys.push(houseB.p.map(([e, n]) => [wx(e), wz(n)]));
+  const hPos = [], hCol = [];
+  buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB), new THREE.Color(0xf3ead6), new THREE.Color(0xc0532a), hPos, hCol));
+  scene.add(mkMesh(hPos, null, 0xf3ead6, 'House', { colors: hCol, flat: true }));
 }
-const bPos = [], bIdx = [];
+const bPos = [], bCol = [];
 let nBld = 0;
 for (const b of S.buildings) {
   if (b.house) continue;
   const cen = centroidEN(b.p); if (!inPatch(wx(cen[0]), wz(cen[1]))) continue;
   const base = terrainAt(wx(cen[0]), wz(cen[1])) - 0.5;
-  const { pos, idx } = extrude(b.p, base, base + (b.h || 4.5));
-  const off = bPos.length / 3; for (const v of pos) bPos.push(v); for (const v of idx) bIdx.push(v + off);
-  buildingPolys.push(b.p.map(([e, n]) => [wx(e), wz(n)])); nBld++;
+  buildingPolys.push(emitBuilding(b, base, wallHeight(b), pick(WALLP, nBld), pick(ROOFP, nBld), bPos, bCol));
+  nBld++;
 }
-if (nBld) scene.add(mkMesh(bPos, bIdx, 0xb8b0a4, 'Buildings'));
+if (nBld) scene.add(mkMesh(bPos, null, 0xb8b0a4, 'Buildings', { colors: bCol, flat: true }));
 
 // roads (context) + collect world polylines for tree spacing
 const roadLines = [];
 const rPos = [], rIdx = [];
 function ribbon(lineW, width, lift, posArr, idxArr) {
+  // densify: terrain height is sampled per vertex, so subdivide long segments
+  // (parcel corners / cul-de-sacs are sparse) to make the ribbon hug the ground
+  const dense = [lineW[0]];
+  for (let k = 1; k < lineW.length; k++) {
+    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(seg / 2.5));
+    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
+  }
+  lineW = dense;
   const hw = width / 2; let row = 0;
   for (let k = 0; k < lineW.length; k++) {
     const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
