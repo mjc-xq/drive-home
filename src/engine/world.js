@@ -24,6 +24,23 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   aerialTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   aerialTex.minFilter = THREE.LinearMipmapLinearFilter;
   const aerialMat = new THREE.MeshStandardMaterial({ map: aerialTex, roughness: 1, side: THREE.DoubleSide });
+  // De-wash the procedural aerial-photo ground: under the game's un-managed linear
+  // pipeline the bright satellite photo reads blown-out (the Scoop yard's washed,
+  // overexposed grass). Pull exposure down, soft-knee the bright concrete/driveway
+  // patches so they stop clipping to white, add gamma contrast + a saturation lift.
+  // This material backs the Scoop yard ground (and the brief no-tiles Drive fallback);
+  // the photoreal tiles and the Drive clean-patch use their OWN materials, so they're
+  // untouched.
+  aerialMat.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>',
+      'vec3 yc = clamp(gl_FragColor.rgb, 0.0, 8.0);\n' +
+      'yc *= 0.80;\n' +
+      'yc = yc / (1.0 + max(yc - 0.70, 0.0) * 1.7);\n' +
+      'yc = pow(clamp(yc, 0.0, 1.0), vec3(1.18));\n' +
+      'yc = mix(vec3(dot(yc, vec3(0.299, 0.587, 0.114))), yc, 1.18);\n' +
+      'gl_FragColor.rgb = yc;\n#include <dithering_fragment>');
+  };
+  aerialMat.customProgramCacheKey = () => 'aerialDewash';
 
   // ---------- terrain ----------
   {
