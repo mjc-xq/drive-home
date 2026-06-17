@@ -193,10 +193,17 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
     }
   }
 
-  function updateAnimals(dt, now) {
+  function updateAnimals(dt, now, player) {
     if (VANISH.length) tickVanish(dt);   // scoop-pop animations
     for (const a of ANIMALS) {
-      if (a.wait > 0) { a.wait -= dt; }
+      // STARTLE: a kid rushing up spooks the critter — it bolts to a fresh target AWAY from the player
+      // and scurries (faster) for a beat, so the yard feels alive + reactive while you scoop.
+      if (player) {
+        const pdx = a.x - player.x, pdz = a.z - player.z, pd2 = pdx * pdx + pdz * pdz;
+        if (pd2 < 4) { const pd = Math.sqrt(pd2) || 1; a.tx = a.x + pdx / pd * (a.wanderR + 1.5); a.tz = a.z + pdz / pd * (a.wanderR + 1.5); a.wait = 0; a.spookT = (now || 0) + 1400; }
+      }
+      const spooked = a.spookT && (now || 0) < a.spookT;
+      if (a.wait > 0 && !spooked) { a.wait -= dt; }
       else {
         const dx = a.tx - a.x, dz = a.tz - a.z, d = Math.hypot(dx, dz);
         if (d < 0.15) {
@@ -206,11 +213,12 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
         } else {
           const want = Math.atan2(dx, dz);
           let dy = want - a.yaw; while (dy > Math.PI) dy -= 6.283; while (dy < -Math.PI) dy += 6.283;
-          a.yaw += clamp(dy, -2.4 * dt, 2.4 * dt);
-          a.x += Math.sin(a.yaw) * a.speed * dt; a.z += Math.cos(a.yaw) * a.speed * dt;
+          a.yaw += clamp(dy, (spooked ? -5 : -2.4) * dt, (spooked ? 5 : 2.4) * dt);
+          const spd = spooked ? a.speed * 3.4 : a.speed;
+          a.x += Math.sin(a.yaw) * spd * dt; a.z += Math.cos(a.yaw) * spd * dt;
         }
       }
-      a.bob += dt * (a.wait > 0 ? 2 : 7);
+      a.bob += dt * (spooked ? 13 : a.wait > 0 ? 2 : 7);
       const y = terrainAt(a.x, a.z);
       a.mesh.position.set(a.x, y + 0.02 + (a.wait > 0 ? 0 : Math.abs(Math.sin(a.bob)) * 0.04), a.z);
       a.mesh.rotation.y = a.yaw - Math.PI / 2;

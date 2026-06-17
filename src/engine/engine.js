@@ -5,7 +5,7 @@ import { clamp, makeGeoENU } from './coords.js';
 import { asNonIndexed, merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
-import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
+import { loadCeceCrowd, loadDrewCrowd, loadDadCrowd, loadMomCrowd } from './crowd.js';
 import { createInterior } from './interior.js';
 import { loadDadController } from './dad.js';
 import { loadMomController } from './mom.js';
@@ -636,6 +636,8 @@ export function createEngine({ canvas, ui, emit }) {
   let scoopScene = 'yard', interior = null, doorT = 0, entryArmed = true, exitArmed = false;
   let npcs = [], npcsLoadStarted = false;   // non-playable house NPCs (dad, mom) — walk out of rooms + dance, never playable
   const NPC_LOADERS = [loadDadController, loadMomController];
+  let _syncDance = false, _syncDanceUntil = 0, _syncDanceNext = 0;   // periodic in-house "everybody dance the SAME thing" moment
+  const SYNC_DANCES = ['All_Night_Dance'];   // clip Dad + Mom both carry, so a pose() on all of them actually lines up
   const INT_CX = 0, INT_CZ = 3000, INT_FLOOR = 0;
   // Blue glowing pads: the front-yard "enter" pad and the indoor "exit" pad (drawn through walls).
   const doorMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
@@ -1017,7 +1019,10 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- CROWD: dancing CeCe + Drew characters. Yard dancers liven up Scoop; street
   // dancers + clusters at every preset destination liven up Drive. Visibility is mode- and
   // distance-gated so only a handful animate at once (skinned meshes aren't cheap).
-  let ceceCrowd = null, drewCrowd = null;
+  let ceceCrowd = null, drewCrowd = null, dadCrowd = null, momCrowd = null;
+  // Pick a street/scatter pedestrian: mostly the CeCe/Drew kids, with the occasional grown-up Dad/Mom
+  // mixed in (taller, distinct models). Falls back to the kids if the adult rigs haven't loaded.
+  const pickPed = (i) => { const r = Math.random(); if (dadCrowd && r < 0.09) return dadCrowd; if (momCrowd && r < 0.18) return momCrowd; return (i & 1) ? ceceCrowd : drewCrowd; };
   const crowdSpots = [];   // { rec, zone }
   // Pedestrian density (settings slider): scales the spread-out pool size. 1 = default.
   let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
@@ -1077,7 +1082,7 @@ export function createEngine({ canvas, ui, emit }) {
           const off = SIDEWALK_OFF + Math.random() * 1.4;
           const px = cx + nx * side * off, pz = cz + nz * side * off;
           if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
-          const crowd = (placed & 1) ? ceceCrowd : drewCrowd;
+          const crowd = pickPed(placed);
           put(crowd, px, pz, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });   // face the road
           placed++;
         }
@@ -1088,7 +1093,7 @@ export function createEngine({ canvas, ui, emit }) {
         const px = (Math.random() - 0.5) * 600, pz = (Math.random() - 0.5) * 600;   // ≤ ±300 = the flat field
         if (Math.hypot(px, pz) < 28) continue;                       // not on top of the house
         if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
-        put((placed & 1) ? ceceCrowd : drewCrowd, px, pz, 'street', false);
+        put(pickPed(placed), px, pz, 'street', false);
         placed++;
       }
     }
@@ -1138,6 +1143,7 @@ export function createEngine({ canvas, ui, emit }) {
     for (const sp of crowdSpots) { if (sp.rec.grp.parent) sp.rec.grp.parent.remove(sp.rec.grp); sp.rec.mixer.stopAllAction(); }
     crowdSpots.length = 0;
     if (ceceCrowd) ceceCrowd.removeAll(); if (drewCrowd) drewCrowd.removeAll();
+    if (dadCrowd) dadCrowd.removeAll(); if (momCrowd) momCrowd.removeAll();
   }
   function setCrowdDensity(v) {
     CROWD_DENSITY = clamp(+v || 0, 0, 2);
@@ -1149,10 +1155,15 @@ export function createEngine({ canvas, ui, emit }) {
     _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
     return CROWD_DENSITY;
   }
-  let _crowdN = 0; const _onCrowd = () => { if (disposed) return; if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
+  let _crowdN = 0, _crowdPlaced = false;
+  const _doPlace = () => { if (disposed || _crowdPlaced || !(ceceCrowd && drewCrowd)) return; _crowdPlaced = true; placeCrowd(); geocodePOIs(); };
+  const _onCrowd = () => { if (disposed) return; if (++_crowdN >= 4) _doPlace(); };   // wait for all four rigs so Dad/Mom are mixed in from the FIRST placement (no slider needed)
   if (!flags.has('nochar')) {
-    loadCeceCrowd(c => { if (disposed) return; ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
-    loadDrewCrowd(c => { if (disposed) return; drewCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadCeceCrowd(c => { if (!disposed) ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadDrewCrowd(c => { if (!disposed) drewCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadDadCrowd(c => { if (!disposed) dadCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadMomCrowd(c => { if (!disposed) momCrowd = c; _onCrowd(); }, () => _onCrowd());
+    setTimeout(() => _doPlace(), 9000);   // …but don't let a slow Dad/Mom rig hold the whole crowd hostage
   } else geocodePOIs();
   let _crowdHitT = 0;
   function hideCrowd() {
@@ -1209,7 +1220,7 @@ export function createEngine({ canvas, ui, emit }) {
       // "People + traffic" OFF hides street/yard pedestrians — but the in-house companion is gameplay,
       // not road life, so keep showing + ticking it.
       for (const sp of crowdSpots) sp.rec.grp.visible = wantInt && sp.zone === 'interior' && sp.char !== CHAR.avatar;
-      if (wantInt) { if (ceceCrowd) ceceCrowd.tick(dt, now); if (drewCrowd) drewCrowd.tick(dt, now); }
+      if (wantInt) { if (ceceCrowd) ceceCrowd.tick(dt, now); if (drewCrowd) drewCrowd.tick(dt, now); if (dadCrowd) dadCrowd.tick(dt, now); if (momCrowd) momCrowd.tick(dt, now); }
       return;
     }
     if (inScoop) {
@@ -1244,11 +1255,13 @@ export function createEngine({ canvas, ui, emit }) {
     // COMEDY: plough into a pedestrian and they cartwheel off the road (then pop back up).
     if (inDrive && Math.abs(car.speed) > 6 && now - _crowdHitT > 250) {
       const dir = Math.sign(car.speed) || 1, vx = Math.sin(car.yaw) * dir, vz = Math.cos(car.yaw) * dir, sp = Math.abs(car.speed);
-      const hit = (ceceCrowd && ceceCrowd.launchNear(car.x, car.z, vx, vz, sp)) || (drewCrowd && drewCrowd.launchNear(car.x, car.z, vx, vz, sp));
+      const hit = (ceceCrowd && ceceCrowd.launchNear(car.x, car.z, vx, vz, sp)) || (drewCrowd && drewCrowd.launchNear(car.x, car.z, vx, vz, sp)) || (dadCrowd && dadCrowd.launchNear(car.x, car.z, vx, vz, sp)) || (momCrowd && momCrowd.launchNear(car.x, car.z, vx, vz, sp));
       if (hit) { _crowdHitT = now; if (audio.sfxThunk) audio.sfxThunk(0.5); toast('🎳 WHEEE!', 700); if (navigator.vibrate) { try { navigator.vibrate(22); } catch (e) { } } }
     }
     if (ceceCrowd) ceceCrowd.tick(dt, now);   // tick() advances visible mixers + any in-flight launch
     if (drewCrowd) drewCrowd.tick(dt, now);
+    if (dadCrowd) dadCrowd.tick(dt, now);
+    if (momCrowd) momCrowd.tick(dt, now);
   }
 
   let disposed = false;
@@ -1498,9 +1511,33 @@ export function createEngine({ canvas, ui, emit }) {
     });
   }
   function updateNpcs(dt, now) {
+    // SYNCHRONIZED DANCE PARTY: every ~30-55 s the whole house stops what it's doing and dances the
+    // SAME clip together (pose() loops it, started on the same frame for all, so they stay in lockstep).
+    if (!_syncDanceNext) _syncDanceNext = now + 20000 + Math.random() * 16000;
+    if (_syncDance && now > _syncDanceUntil) { _syncDance = false; _syncDanceNext = now + 30000 + Math.random() * 25000; for (const npc of npcs) pickNextRoom(npc, now); }
+    else if (!_syncDance && now > _syncDanceNext && npcs.length > 1 && interior) {
+      _syncDance = true; _syncDanceUntil = now + 11000 + Math.random() * 6000;
+      const clip = SYNC_DANCES[(Math.random() * SYNC_DANCES.length) | 0];
+      for (const npc of npcs) {
+        npc.state = 'act'; npc.act = 'dance'; npc.seat = null; npc.wantSeat = null; npc.baseY = interior.floorY;
+        npc.yaw = Math.atan2(interior.spawn.x - npc.x, interior.spawn.z - npc.z);   // turn in toward the middle → a little dance circle
+        if (npc.ctrl.pose) npc.ctrl.pose(clip);
+      }
+    }
     for (const npc of npcs) {
       npc.group.visible = true;
+      // GREET: when the player walks up, turn to face them and throw a quick move (not mid-party).
+      if (!_syncDance && npc.state === 'act' && now > (npc.greetT || 0)) {
+        const dpx = CHAR.x - npc.x, dpz = CHAR.z - npc.z;
+        if (dpx * dpx + dpz * dpz < 2.7 * 2.7) {
+          npc.greetT = now + 6500;
+          npc.yaw = Math.atan2(dpx, dpz);                                          // look at the player
+          const pool = (npc.ctrl.emotes && npc.ctrl.emotes.length) ? npc.ctrl.emotes : npc.ctrl.dances;
+          if (pool && pool.length && npc.ctrl.react) { npc.ctrl.react(pool[(Math.random() * pool.length) | 0]); npc.act = 'emote'; npc.nextMove = now + 2600; npc.actUntil = Math.max(npc.actUntil || 0, now + 2600); }
+        }
+      }
       let speed = 0;
+      if (_syncDance) { npc.group.position.set(npc.x, npc.baseY, npc.z); npc.group.rotation.y = npc.yaw - Math.PI / 2; npc.ctrl.tick(dt); continue; }   // partying: hold position, the pose() loops
       if (npc.state === 'travel') {
         const gx = npc.target[0], gz = npc.target[1], finalD = Math.hypot(gx - npc.x, gz - npc.z);
         if (finalD < 0.5) enterActivity(npc, now);
@@ -2005,7 +2042,7 @@ export function createEngine({ canvas, ui, emit }) {
         toast('Composted ' + dumped + ' ♻️');
       }
     }
-    if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); }
+    if (POOPS.length === 0 && !spotless) { spotless = true; toast('Yard is spotless ✨ (for now…)', 2400); if (CHAR.drew) CHAR.drew.react('dance'); _syncDanceNext = now; }   // clean yard → the house throws a dance party next time you step inside
     if (POOPS.length > 0) spotless = false;
     if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
     // Scoop renders the full procedural world (its aerial-photo terrain IS the
@@ -3858,7 +3895,7 @@ export function createEngine({ canvas, ui, emit }) {
     else timeScale += (1 - timeScale) * Math.min(1, rawDt * 4.5);   // recover from slow-mo back to real time
     const dt = rawDt * timeScale;
     if (waterMat) waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
-    updateAnimals(dt, now); // ambient life in every mode
+    updateAnimals(dt, now, (mode === 'scoop' && scoopScene === 'yard') ? CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
     updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch
     if (mode === 'drive') {
       updateDrive(dt, now);
@@ -3981,6 +4018,8 @@ export function createEngine({ canvas, ui, emit }) {
     disposeMiniMap();
     if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
     if (drewCrowd) drewCrowd.dispose();
+    if (dadCrowd) dadCrowd.dispose();
+    if (momCrowd) momCrowd.dispose();
     for (const npc of npcs) { if (npc.ctrl.reset) npc.ctrl.reset(); if (npc.group.parent) npc.group.parent.remove(npc.group); }   // tear down the house NPCs
     setScout(false);                             // unregister the prefetch scout camera
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();

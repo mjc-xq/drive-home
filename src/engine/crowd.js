@@ -4,6 +4,8 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import { DracoShim } from './draco-shim.js';
 import ceceUrl from '../assets/cece.glb';
 import drewUrl from '../assets/drew.glb';
+import dadUrl from '../assets/dad.glb';
+import momUrl from '../assets/mom.glb';
 import drewDanceUrl from '../assets/anim/drew-dance.glb';
 import drewWalkUrl from '../assets/anim/drew-walk.glb';
 import drewCheerUrl from '../assets/anim/drew-cheer.glb';
@@ -14,7 +16,7 @@ import drewIdleUrl from '../assets/anim/drew-idle.glb';
 // skeleton is deep-copied) wrapped in a group, with its OWN AnimationMixer playing a looped
 // clip. tick(dt) drives every mixer; the engine distance-gates visibility so only a handful
 // animate at a time (skinned meshes are not cheap on mobile).
-function makeCrowd(base, clips, nativeH, moveNames, innerYaw, hitNames = []) {
+function makeCrowd(base, clips, nativeH, moveNames, innerYaw, hitNames = [], defaultH = 1.75) {
   const insts = [];
   // Force the model OPAQUE + single-sided: Meshy exports the character as a BLEND /
   // double-sided material that renders near-invisible (and doubles the fill). Materials are
@@ -55,7 +57,7 @@ function makeCrowd(base, clips, nativeH, moveNames, innerYaw, hitNames = []) {
     moveNames: moves,
     // add one dancer: world (x,y,z), facing `yaw`, scaled to ~targetH metres. Starts on
     // `clip` (or a random move) and then cycles its whole move pool via tick().
-    add(scene, { x, y, z, yaw = 0, targetH = 1.75, clip }) {
+    add(scene, { x, y, z, yaw = 0, targetH = defaultH, clip }) {
       const inst = cloneSkinned(base);
       inst.rotation.y = innerYaw;                       // per-model facing correction (nose → +Z)
       const grp = new THREE.Group();
@@ -157,4 +159,23 @@ export function loadDrewCrowd(onReady, onFail) {
     const grab = (url, key) => loader.load(url, cg => { if (cg.animations[0]) clips[key] = cg.animations[0]; done(); }, undefined, () => done());
     grab(drewDanceUrl, 'dance'); grab(drewCheerUrl, 'cheer'); grab(drewWalkUrl, 'walk'); grab(drewIdleUrl, 'idle');
   }, undefined, e => { console.warn('[crowd] drew failed', e); onFail && onFail(e); });
+}
+
+// Dad + Mom as occasional GROWN-UP pedestrians mixed into the street crowd (taller than the kids).
+// Same single-merged-GLB shape as CeCe; their rigs face -Z out of Meshy → +PI/2 like the others.
+const DAD_MOVES = ['Walking', 'All_Night_Dance', 'Bass_Beats', 'Arm_Circle_Shuffle', '360_Power_Spin_Jump'];
+export function loadDadCrowd(onReady, onFail) {
+  new GLTFLoader().load(dadUrl, g => {
+    const base = g.scene; const clips = {};
+    for (const c of g.animations) clips[c.name] = c;
+    onReady(makeCrowd(base, clips, nativeHeight(base), DAD_MOVES, Math.PI / 2, [], 1.85));
+  }, undefined, e => { console.warn('[crowd] dad failed', e); onFail && onFail(e); });
+}
+const MOM_MOVES = ['Walking', 'Shake_It_Off_Dance', 'You_Groove', 'All_Night_Dance', 'Phone_Conversation'];
+export function loadMomCrowd(onReady, onFail) {
+  new GLTFLoader().load(momUrl, g => {
+    const base = g.scene; const clips = {};
+    for (const c of g.animations) clips[c.name] = c;
+    onReady(makeCrowd(base, clips, nativeHeight(base), MOM_MOVES, Math.PI / 2, [], 1.7));
+  }, undefined, e => { console.warn('[crowd] mom failed', e); onFail && onFail(e); });
 }
