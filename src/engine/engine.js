@@ -58,6 +58,7 @@ export function createEngine({ canvas, ui, emit }) {
   const LITE = flags.has('lite') ||
     (MOBILE && ((navigator.hardwareConcurrency || 4) <= 4 || (navigator.deviceMemory || 4) <= 3));
   document.documentElement.classList.toggle('lite3d', LITE || MOBILE);
+  const renderPixelRatio = () => LITE ? 1 : Math.min(window.devicePixelRatio || 1, MOBILE ? 1.25 : 2);
 
   // Upgraded to three r184. The scene's colours and light intensities were all
   // hand-tuned under r128's un-managed, linear-output pipeline, so opt back out
@@ -69,7 +70,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Cap pixel ratio: 1.25 on phones (the fill-rate dial — at DPR 2 a 3x phone draws ~2.6×
   // the fragments of the full-screen photoreal tiles for little visible gain; 1.25 supersampling
   // still softens edges), 2 on desktop. LITE stays at 1x.
-  renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio, MOBILE ? 1.25 : 2));   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
+  renderer.setPixelRatio(renderPixelRatio());   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   renderer.localClippingEnabled = true;   // Drive-mode tile cutaway: only the photoreal tile materials carry clip planes, so the car/HUD/guide stay unclipped (see updateTileClip + tiles3d.clipPlanes)
@@ -1395,10 +1396,11 @@ export function createEngine({ canvas, ui, emit }) {
   // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
-  const LOOK_SENS = 0.0072, PITCH_SENS = 0.0048, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.10;   // more responsive free-look
+  const LOOK_YAW_PER_SCREEN = 2.8, LOOK_PITCH_PER_SCREEN = 2.4, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.10;   // screen-normalized free-look
   const JOY_R = 66, JOY_MAX = 52;
   const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
   let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
+  let scoopMoveYaw = 0, scoopMoveActive = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
   // path with one finger. (Joystick/keyboard still drive the other camera views.)
@@ -1415,11 +1417,33 @@ export function createEngine({ canvas, ui, emit }) {
     if (_navRay.ray.intersectPlane(_navPlane, _navHit)) { inp2.navX = _navHit.x; inp2.navZ = _navHit.z; inp2.navActive = true; }
   }
   let lastLookT = -1e9;   // last manual look-drag time (ms); suppresses scoop follow-cam briefly
-  let shiftLock = false, moveMag = 0, azVel = 0, poVel = 0;
+  let shiftLock = false, azVel = 0, poVel = 0;
+
+  function lookDelta(dx, dy) {
+    const w = Math.max(320, canvas.clientWidth || innerWidth || 800);
+    const h = Math.max(320, canvas.clientHeight || innerHeight || 600);
+    return { yaw: dx / w * LOOK_YAW_PER_SCREEN, pitch: dy / h * LOOK_PITCH_PER_SCREEN };
+  }
+  function scaledDeadzoneMagnitude(x, y) {
+    const m = Math.min(1, Math.hypot(x, y));
+    return m <= MOVE_DEADZONE ? 0 : (m - MOVE_DEADZONE) / (1 - MOVE_DEADZONE);
+  }
 
   function hideJoy() {
     movePtr = null; inp2.jx = 0; inp2.jy = 0;
+    if (mode === 'scoop') scoopMoveActive = false;
     if (ui.joy) ui.joy.style.display = 'none';
+  }
+
+  function clearLiveInput() {
+    navPtr = null; lookPtrs.clear(); ptrs.clear();
+    lastPinch = 0; lastMid = null; pinchD = 0; moved = 0;
+    inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
+    inp2.steer = inp2.gas = inp2.brake = 0;
+    inp2.hbrake = false; inp2.boost = false; inp2.navActive = false;
+    scoopMoveActive = false;
+    if (ui.joy) ui.joy.style.display = 'none';
+    canvas.classList.remove('dragging');
   }
 
   function onPointerDown(e) {
@@ -1450,6 +1474,7 @@ export function createEngine({ canvas, ui, emit }) {
       const steerZoneTop = mode === 'drive' ? 0.14 : 0.18;
       if (movePtr === null && e.clientX < VW * steerZoneW && e.clientY > VH * steerZoneTop) {
         movePtr = e.pointerId; joyBX = e.clientX; joyBY = e.clientY;
+        if (mode === 'scoop') { scoopMoveYaw = camYawS; scoopMoveActive = true; }
         if (ui.joy) {
           ui.joy.style.display = 'block';
           ui.joy.style.left = (e.clientX - JOY_R) + 'px'; ui.joy.style.top = (e.clientY - JOY_R) + 'px';
@@ -1504,14 +1529,15 @@ export function createEngine({ canvas, ui, emit }) {
       }
       const dx = e.clientX - ox, dy = e.clientY - oy;
       if (Math.abs(dx) + Math.abs(dy) < 4) return; // look deadzone (kill resting-finger jitter on high-DPI screens)
+      const ld = lookDelta(dx, dy);
       if (mode === 'drive') {
-        camOrbit.yaw = clamp(camOrbit.yaw - dx * LOOK_SENS, -2.4, 2.4);   // clamp so a hard drag can't orbit under the map / lose the car
-        camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
+        camOrbit.yaw = clamp(camOrbit.yaw - ld.yaw, -2.4, 2.4);   // clamp so a hard drag can't orbit under the map / lose the car
+        camOrbit.pitch = clamp(camOrbit.pitch + ld.pitch, -0.45, 0.8);
         camOrbit.t = performance.now();
         showT = 0;
       } else {
-        camYawS -= dx * LOOK_SENS;
-        scPitch = clamp(scPitch + dy * PITCH_SENS, -0.3, 0.8);
+        camYawS -= ld.yaw;
+        scPitch = clamp(scPitch + ld.pitch, -0.3, 0.8);
         lastLookT = performance.now();   // pause follow-cam while the player looks
       }
       return;
@@ -1653,7 +1679,7 @@ export function createEngine({ canvas, ui, emit }) {
     // and animals, not flat house walls.
     CHAR.x = (SREC.coop[0] + SREC.pen[0]) / 2; CHAR.z = (SREC.coop[1] + SREC.pen[1]) / 2;
     CHAR.yaw = Math.atan2(SREC.barn[0] - CHAR.x, SREC.barn[1] - CHAR.z);
-    camYawS = CHAR.yaw;
+    camYawS = CHAR.yaw; scoopMoveYaw = camYawS; scoopMoveActive = false;
     scoopScene = 'yard'; entryArmed = true; exitArmed = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
     emit('avatar', { name: CHAR.avatar, actions: CHAR.getActions() });
     audio.ensure();
@@ -1672,7 +1698,7 @@ export function createEngine({ canvas, ui, emit }) {
     hideJoy();
     for (const s of labelSprites) s.visible = true;
     CHAR.group.visible = false;
-    inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
+    inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0; scoopMoveActive = false;
     ctl.gtx = clamp(CHAR.x, -310, 310); ctl.gtz = clamp(CHAR.z, -310, 310);
     ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3; ctl.gr = 60; ctl.gpo = 0.85;
     ctl.tx = ctl.gtx; ctl.tz = ctl.gtz;
@@ -1682,15 +1708,18 @@ export function createEngine({ canvas, ui, emit }) {
     const inside = scoopScene === 'interior' && interior;
     // Keyboard Left/Right TURN the keeper (tank-style) instead of strafing sideways; the touch
     // joystick still strafes camera-relative. (Walking sideways on arrow keys felt wrong.)
-    if (inp2.kx) { camYawS -= inp2.kx * 2.6 * dt; CHAR.yaw = camYawS; lastLookT = now; }
+    if (inp2.kx) { camYawS -= inp2.kx * 2.6 * dt; CHAR.yaw = camYawS; scoopMoveYaw = camYawS; lastLookT = now; }
     let jx = clamp(inp2.jx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
-    const mag = Math.min(1, Math.hypot(jx, jy));
+    const rawMag = Math.min(1, Math.hypot(jx, jy));
+    const mag = scaledDeadzoneMagnitude(jx, jy);
     if (shiftLock) CHAR.yaw = camYawS; // Roblox shift-lock: keeper faces the camera
-    if (mag > MOVE_DEADZONE) {
-      // camera sits at CHAR - f*dist looking along +f, so screen-right is
-      // (-cos, +sin); the old (+cos, -sin) strafe was mirrored left/right
-      const fX = Math.sin(camYawS), fZ = Math.cos(camYawS);
-      const rX = -Math.cos(camYawS), rZ = Math.sin(camYawS);
+    if (mag > 0) {
+      if (!scoopMoveActive) { scoopMoveYaw = camYawS; scoopMoveActive = true; }
+      // Capture the movement camera when the stick engages. Right-side look can
+      // orbit freely while a walk is held without re-aiming that active walk.
+      const basisYaw = shiftLock ? camYawS : scoopMoveYaw;
+      const fX = Math.sin(basisYaw), fZ = Math.cos(basisYaw);
+      const rX = -Math.cos(basisYaw), rZ = Math.sin(basisYaw);
       let mx = rX * jx - fX * jy, mz = rZ * jx - fZ * jy;
       const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
       if (!shiftLock) CHAR.yaw = Math.atan2(mx, mz); // else keep facing camera, strafe
@@ -1732,7 +1761,7 @@ export function createEngine({ canvas, ui, emit }) {
       }
       CHAR.x = nx; CHAR.z = nz;
       CHAR.bob += dt * 10 * mag;
-    } else CHAR.bob += dt * 1.5;
+    } else { scoopMoveActive = false; CHAR.bob += dt * 1.5; }
     // ground on the fixed interior floor, or the procedural yard terrain
     const cy = inside ? interior.floorY : terrainAt(CHAR.x, CHAR.z);
     // jump arc: integrate vertical velocity under gravity; land back on the ground
@@ -1743,7 +1772,7 @@ export function createEngine({ canvas, ui, emit }) {
     const bobY = (CHAR.airY > 0 || CHAR.drew) ? 0 : Math.abs(Math.sin(CHAR.bob)) * 0.05;
     CHAR.group.position.set(CHAR.x, cy + CHAR.airY + bobY, CHAR.z);
     CHAR.group.rotation.y = CHAR.yaw - Math.PI / 2;
-    if (CHAR.drew) { CHAR.drew.locomotion(mag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
+    if (CHAR.drew) { CHAR.drew.locomotion(rawMag > MOVE_DEADZONE ? 4.4 * mag : 0); CHAR.drew.tick(dt); }
     if (inside) { updateScoopInterior(dt, now); return; }
     // ===== YARD =====
     // door ENTRY: stand on the front-yard pad to walk inside the house
@@ -3540,6 +3569,7 @@ export function createEngine({ canvas, ui, emit }) {
   function resize() {
     const [w, h] = viewportSize();
     _rw = w; _rh = h;
+    renderer.setPixelRatio(renderPixelRatio());
     renderer.setSize(w, h, false);
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
     if (ui.box) { ui.box.style.width = w + 'px'; ui.box.style.height = h + 'px'; }
@@ -3625,7 +3655,7 @@ export function createEngine({ canvas, ui, emit }) {
   // minimap + FX) AND suspend audio (no engine drone / music) → a hidden tab draws ~no
   // power. iOS phone-lock / app-switch often fires pagehide/freeze WITHOUT a reliable
   // visibilitychange (and Low Power Mode can suppress it), so we listen to all of them.
-  function suspend() { if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }
+  function suspend() { clearLiveInput(); if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }
   function resume() { if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); if (audio.resumeAudio) audio.resumeAudio(); else audio.ensure(); raf = requestAnimationFrame(loop); } }
   function onVisibility() { if (document.hidden) suspend(); else resume(); }
   function onContextLost(e) { e.preventDefault(); ctxLost = true; cancelAnimationFrame(raf); }
@@ -3644,6 +3674,7 @@ export function createEngine({ canvas, ui, emit }) {
   document.addEventListener('visibilitychange', onVisibility);
   addEventListener('pagehide', suspend); addEventListener('freeze', suspend);     // iOS lock / app-switch
   addEventListener('pageshow', resume); addEventListener('resume', resume);
+  addEventListener('blur', clearLiveInput);
   addEventListener('keydown', onKeyDown);
   addEventListener('keyup', onKeyUp);
   addEventListener('resize', requestResize);
@@ -3683,6 +3714,7 @@ export function createEngine({ canvas, ui, emit }) {
     document.removeEventListener('visibilitychange', onVisibility);
     removeEventListener('pagehide', suspend); removeEventListener('freeze', suspend);
     removeEventListener('pageshow', resume); removeEventListener('resume', resume);
+    removeEventListener('blur', clearLiveInput);
     removeEventListener('keydown', onKeyDown);
     removeEventListener('keyup', onKeyUp);
     removeEventListener('resize', requestResize);
@@ -3769,8 +3801,9 @@ export function createEngine({ canvas, ui, emit }) {
     // LOOK stick (right thumb): orbit the drive camera. dx/dy are screen-pixel deltas,
     // same convention as a look-drag on the canvas, so it feeds the existing camOrbit.
     nudgeLook: (dx, dy) => {
-      camOrbit.yaw = clamp(camOrbit.yaw - dx * LOOK_SENS, -2.4, 2.4);
-      camOrbit.pitch = clamp(camOrbit.pitch + dy * PITCH_SENS, -0.45, 0.8);
+      const ld = lookDelta(dx, dy);
+      camOrbit.yaw = clamp(camOrbit.yaw - ld.yaw, -2.4, 2.4);
+      camOrbit.pitch = clamp(camOrbit.pitch + ld.pitch, -0.45, 0.8);
       camOrbit.t = performance.now();
       showT = 0;
     },
