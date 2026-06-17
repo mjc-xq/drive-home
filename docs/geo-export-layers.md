@@ -185,7 +185,44 @@ node scripts/export_region_glb.mjs                         # -> 1840-dahill-regi
   --python scripts/render_property.py -- exports/<file>.glb exports/preview
 ```
 
-## 7. Regional terrain model (`1840-dahill-region.glb`)
+## 6b. Deliverables (all share the curvature-correct frame; house at origin)
+
+| File | Contents | Role in a ground-level game |
+|---|---|---|
+| `1840-dahill-property.glb` | Terrain, House, Buildings (+LiDAR heights +gap-fills), Trees, Creek, Roads, LotLines, YourLots | **Structure & gameplay**: collision ground, building massing/zones, prop positions, property lines |
+| `1840-dahill-photoreal.glb` | Google Photorealistic mesh of the block (textured, unlit) | **Visual hero** — real building *sides*, yards, surfaces you walk past |
+| `1840-dahill-region.glb` | ±5-mile terrain + satellite | **Distant backdrop** under/around the playable area |
+
+## 7. Assembling a ground-level neighborhood base
+
+The hard truth that drove this design: **aerial-on-roofs is not enough for ground
+level** — at eye height you see building *sides*, fences, yards. So:
+
+- **Visuals = the photoreal layer.** It's the only source with real, textured
+  building facades and yard surfaces. It's "melty" up close (single-residence
+  photogrammetry) but it's the realistic walkable environment.
+- **Collision / clean ground = the property model's `Terrain`** (1 m bare-earth
+  LiDAR — crisp, no melted buildings/trees baked in).
+- **Building massing / gameplay zones = `Buildings`/`House`** — clean footprints at
+  **real LiDAR roof heights**, so they sit exactly inside the photoreal shells
+  (use as collision proxies, triggers, or a stylized alternative skin). Gap-fills
+  cover structures OSM/Overture missed (e.g. the across-the-street house).
+- **Props = `Trees`** — real LiDAR-canopy positions/heights as clean instanced
+  trees (sharper + cheaper than photoreal's melted canopy).
+- **Zones = `YourLots`/`LotLines`** (parcel boundaries — also where fences run),
+  `Creek_SanLorenzo`, `Roads`.
+- **Backdrop = the region model**.
+
+All layers are in one frame (house at origin, Y = NAVD88 metres), so they drop in
+together with no offset — verified by rendering the property + photoreal in one
+scene (`exports/both_view.png`): generated buildings coincide with the photoreal
+shells, lot lines wrap the right parcels, trees land on the real canopy.
+
+**Beyond this pipeline:** bespoke per-facade detail sharper than the photoreal needs
+**Street View** projection or hand-modelling in the engine — that's authoring work,
+not data extraction. The photoreal is the best automatic ground-level facade source.
+
+## 7b. Regional terrain model (`1840-dahill-region.glb`)
 ±5-mile USGS 3DEP terrain (downsampled, e.g. 1024²) with the Mapbox satellite
 draped — terrain only, same frame, so it sits under the property/photoreal models.
 Uses the curvature-correct ENU horizontal + **orthometric elevation as Y** (matching
