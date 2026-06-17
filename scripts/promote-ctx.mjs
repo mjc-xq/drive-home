@@ -24,6 +24,8 @@ const FILE = val('--file') || 'src/engine/engine.js';
 const WRITE = has('--write');
 const allowFns = has('--promote-fns');
 const refsOnly = has('--refs-only');
+const NS = val('--ns'); // when set, references rewrite to `ctx.<NS>.<name>` (subsystem namespace) instead of `ctx.<name>`
+const pfx = (name) => NS ? `ctx.${NS}.${name}` : `ctx.${name}`;
 const promoteArg = val('--promote') || val('--promote-fns') || val('--refs-only');
 const names = new Set((promoteArg || '').split(',').map(s => s.trim()).filter(Boolean));
 
@@ -213,9 +215,9 @@ walk(fn, {
         // pattern shorthand: declaration patterns shadow (skip); assignment-target patterns need expansion
         return; // promoted names are never re-declared via pattern (would shadow) -> safe to leave
       }
-      ms.appendLeft(node.end, `: ctx.${node.name}`); shorthandCount++; return; // { x } -> { x: ctx.x } in an object literal
+      ms.appendLeft(node.end, `: ${pfx(node.name)}`); shorthandCount++; return; // { x } -> { x: ctx.x } in an object literal
     }
-    ms.overwrite(node.start, node.end, `ctx.${node.name}`);
+    ms.overwrite(node.start, node.end, pfx(node.name));
     refCount++;
   },
   leave(node) { ancestors.pop(); if (node.__scope) { scopeStack.pop(); delete node.__scope; } },
