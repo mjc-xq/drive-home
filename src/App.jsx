@@ -460,6 +460,10 @@ export default function App() {
                       }}>{p.label}</button>
                     ))}
                   </div>
+                  <div className="navPresets">
+                    <button className="navChip" onClick={() => { setNavErr(''); Promise.resolve(eng().driveToMyLocation(false)).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't get your location — allow access?")); }}>📍 Drive to me</button>
+                    <button className="navChip" onClick={() => { setNavErr(''); Promise.resolve(eng().driveToMyLocation(true)).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't get your location — allow access?")); }}>📍 Follow me</button>
+                  </div>
                 </div>
 
                 <label className="navLbl jump"><span className="navDot jump" /> Jump to <i>teleport &amp; start over</i></label>

@@ -2213,6 +2213,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function exitDrive() {
     setMode('explore');
+    stopFollow();
     camera.up.set(0, 1, 0);
     hideJoy();
     navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
@@ -2584,6 +2585,29 @@ export function createEngine({ canvas, ui, emit }) {
   function driveToLatLon(lat, lon, label) {
     setDestination(lat, lon, label, false, true, { drive: true, celebrate: true });
     return Promise.resolve({ lat, lon, label: label || 'Destination' });
+  }
+  // Drive the car to the USER's real GPS location, and (optionally) keep chasing them as they move.
+  let _geoWatch = null, _followLast = null;
+  function stopFollow() { if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; } _followLast = null; }
+  function driveToMyLocation(follow) {
+    if (!navigator.geolocation) { toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
+    stopFollow();
+    if (mode !== 'drive') enterDrive();
+    return new Promise((resolve, reject) => {
+      let done = false;
+      navigator.geolocation.getCurrentPosition(
+        pos => { driveToLatLon(pos.coords.latitude, pos.coords.longitude, follow ? '📍 Following you' : '📍 Your location'); toast(follow ? '📍 Following your location' : '📍 Driving to you', 1500); if (!done) { done = true; resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }); } },
+        err => { toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 4000 });
+      if (follow) {
+        _geoWatch = navigator.geolocation.watchPosition(pos => {
+          const w = geoToWorld(pos.coords.latitude, pos.coords.longitude);
+          if (_followLast && Math.hypot(w[0] - _followLast[0], w[1] - _followLast[1]) < 30) return;   // re-route only on a real move, so we don't spam Directions
+          _followLast = w;
+          if (mode === 'drive') driveToLatLon(pos.coords.latitude, pos.coords.longitude, '📍 Following you');   // chase them — the rail re-acquires the new route
+        }, () => { }, { enableHighAccuracy: true, timeout: 14000, maximumAge: 3000 });
+      }
+    });
   }
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
   let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
@@ -3258,7 +3282,7 @@ export function createEngine({ canvas, ui, emit }) {
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
     if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky)) {
-      autoDrive = false; inp2.navActive = false; clearRouteRail(); emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
+      autoDrive = false; inp2.navActive = false; clearRouteRail(); stopFollow(); emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
     }
     // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
     // has travelled along the current segment), not just proximity — at high speed the car
@@ -4117,6 +4141,7 @@ export function createEngine({ canvas, ui, emit }) {
     removeEventListener('focusin', onFocusIn);
     removeEventListener('focusout', onFocusOut);
     removeEventListener('blur', _clearKbd);
+    stopFollow();
     if (window.visualViewport) {
       visualViewport.removeEventListener('resize', requestResize);
       visualViewport.removeEventListener('scroll', requestResize);
@@ -4178,7 +4203,7 @@ export function createEngine({ canvas, ui, emit }) {
     enterHouse: () => { if (mode === 'scoop' && interior && scoopScene === 'yard') enterHouse(performance.now()); },
     leaveHouse: () => { if (mode === 'scoop' && scoopScene === 'interior') leaveHouse(performance.now()); },
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
-    setDestination, clearDestination, toggleAutoDrive, driveHome,
+    setDestination, clearDestination, toggleAutoDrive, driveHome, driveToMyLocation, stopFollow,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
     placeSuggest, geocodeAddress, geocodePlaceId,
     jumpToAddress: (lat, lon, label) => jumpTo(lat, lon, label),
