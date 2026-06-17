@@ -1688,6 +1688,11 @@ export function createEngine({ canvas, ui, emit }) {
   const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
   // drag-to-drive ("trace") is available in the overhead-style views (Top-down AND Aerial)
   const driveTopDown = () => mode === 'drive' && DRIVE_CAMS[camMode] && DRIVE_CAMS[camMode].dragdrive;
+  // Overhead/Aerial zoom-out slider support: czoom is the altitude/orbit multiplier. Map it log-wise to
+  // a 0..1 slider and push the value to the UI whenever it changes (pinch, wheel, view switch, slider).
+  const driveZoomRange = () => (driveTopDown() ? [0.14, 7] : [0.4, 3.4]);
+  function emitDriveZoom() { const [lo, hi] = driveZoomRange(); emit('driveZoom', { norm: clamp(Math.log(clamp(czoom, lo, hi) / lo) / Math.log(hi / lo), 0, 1), overhead: driveTopDown() }); }
+  function setDriveZoom(norm) { const [lo, hi] = driveZoomRange(); czoom = lo * Math.pow(hi / lo, clamp(norm, 0, 1)); emitDriveZoom(); }
   function setNavFromPointer(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
     _navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
@@ -1800,7 +1805,7 @@ export function createEngine({ canvas, ui, emit }) {
         const nd = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         if (pinchD > 0 && nd > 0) {
           const f = pinchD / nd;
-          if (mode === 'drive') czoom = clamp(czoom * f, driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 3.2 : 3.4);   // overhead gets a much wider+finer range (read one intersection ↔ neighbourhood overview)
+          if (mode === 'drive') { czoom = clamp(czoom * f, driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }   // overhead gets a much wider+finer range (read one intersection ↔ neighbourhood overview)
           else szoom = clamp(szoom * f, 0.32, 2.6);                   // close over-the-shoulder → wide yard overview
         }
         pinchD = nd;
@@ -1859,7 +1864,7 @@ export function createEngine({ canvas, ui, emit }) {
   function onWheel(e) {
     e.preventDefault();
     if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
-    else if (mode === 'drive') czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 3.2 : 3.4);
+    else if (mode === 'drive') { czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }
     else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.32, 2.6);
   }
 
@@ -3134,7 +3139,7 @@ export function createEngine({ canvas, ui, emit }) {
     const dd = DRIVE_CAMS[camMode].dragdrive;
     if (!DRIVE_CAMS[camMode].topdown) camera.up.set(0, 1, 0);   // only top-down is heading-up
     if (!dd) { inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
-    emit('driveCam', DRIVE_CAMS[camMode].name);
+    emit('driveCam', DRIVE_CAMS[camMode].name); emitDriveZoom();
     toast('Camera: ' + DRIVE_CAMS[camMode].name + (dd ? ' · drag to drive 🪄' : ''), dd ? 1700 : 1100);
   }
   // Jump straight to the one-finger draw-to-drive (top-down) view — the most phone-native
@@ -4256,7 +4261,7 @@ export function createEngine({ canvas, ui, emit }) {
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
     driveToLatLon,
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
-    setSpeedMul, getSpeedMul: () => speedMul,
+    setSpeedMul, getSpeedMul: () => speedMul, setDriveZoom,
     setCrowdDensity, getCrowdDensity: () => CROWD_DENSITY,
     setTrafficDensity: (d) => {
       trafficDensity = clamp(+d || 0, 0, 2);

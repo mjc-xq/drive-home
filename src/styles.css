@@ -142,6 +142,10 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .searchBar:active{transform:translateX(-50%) scale(.99)}
 /* live "where you are" readout (reverse-geocoded street · city, state), under the search bar */
 .locNow{position:absolute;left:50%;top:calc(66px + var(--safe-t));transform:translateX(-50%);max-width:min(86vw,420px);padding:5px 12px;border-radius:12px;background:rgba(16,18,24,.6);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.85);font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:4}
+/* overhead/aerial zoom-out slider (right edge) */
+.zoomCtl{position:absolute;right:calc(12px + var(--safe-r));top:50%;transform:translateY(-50%);z-index:5;display:flex;flex-direction:column;align-items:center;gap:9px;padding:11px 9px;border-radius:18px;background:rgba(16,18,24,.62);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.13);pointer-events:auto;touch-action:none}
+.zoomCtl span{color:rgba(255,255,255,.85);font-size:17px;font-weight:700;line-height:1;width:18px;text-align:center}
+.zoomSlider{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:10px;height:42vh;max-height:300px;min-height:150px;accent-color:var(--nav);cursor:pointer}
 
 /* ── TOP-CENTER: nav card (route active) ── */
 .navCard{position:absolute;left:50%;top:calc(14px + var(--safe-t));transform:translateX(-50%);
