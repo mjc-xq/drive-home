@@ -32,13 +32,17 @@ console.log('floor top y:', +floorTop.toFixed(3), '  -> recenter lift so floor T
 
 let fail = 0;
 const ok = (cond, msg) => { if (!cond) { console.error('FAIL:', msg); fail++; } };
-ok(meshes.length === 142, `expected 142 meshes, got ${meshes.length}`);
+// Generic checks — the loader is name-driven, so a re-scan with more/fewer rooms must still pass.
+ok(meshes.length >= 50, `expected a substantial mesh count, got ${meshes.length}`);
 ok((json.animations || []).length === 0, 'expected 0 animations (plain interior scan)');
+ok(!(json.extensionsUsed || []).includes('KHR_draco_mesh_compression'), 'interior must be plain (no Draco) for the stock GLTFLoader path');
 ok(counts.floor >= 5, `expected >=5 floor_* nodes, got ${counts.floor}`);
 ok(counts.wall >= 10, `expected wall_*/joint_* nodes, got ${counts.wall}`);
 ok(counts.door >= 1, `expected door_* nodes, got ${counts.door}`);
-ok(Math.abs(lo[1] + 1.95) < 0.2, `expected floor min.y ~ -1.95, got ${lo[1].toFixed(2)}`);
+ok(counts.window >= 1, `expected window_* nodes, got ${counts.window}`);
+ok(meshNodes.some(n => /^sofa/.test(n.name || '')), 'expected a sofa_* node for the couch swap');
 ok(isFinite(floorTop), 'floor top y computed from floor_* nodes');
+ok(hi[1] - floorTop > 2 && hi[1] - floorTop < 6, `ceiling height should be ~2-6 m, got ${(hi[1] - floorTop).toFixed(2)}`);
 
 if (fail) { console.error(`\n${fail} check(s) FAILED`); process.exit(1); }
 console.log('\nOK: interior GLB structure + recenter math verified');

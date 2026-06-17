@@ -7,16 +7,17 @@ derive everything from geometry — nothing hard-codes a room).
 
 ## The GLB (`src/assets/house-interior.glb`)
 
-- **Plain GLB**: 142 meshes, ~30k tris, 86 materials, 5 JPEG textures (~470 KB), **no
-  Draco, no animations, no extensions** → the **stock `GLTFLoader`** loads it (NOT the
-  DracoShim path the cars/CeCe use — don't mix them up).
-- Bounds 8.36 × 3.47 (tall) × 13.07; overall `min.y ≈ −1.95`, floor **top** `≈ −1.85`.
-- **Names live on NODES, not meshes** (every `mesh.name` is `undefined`) — traverse the
-  loaded scene by `object.name`. Categories: 56 `wall_*` + 18 `joint_*` (structure),
-  12 `door_*` (6 doorways), 6 `window_*`, 10 `floor_*` (per-room: Living Room, Kitchen,
-  Dining Room, Laundry, "Other"), plus named furniture.
-- Regenerate the structure check: `node scripts/verify_interior_node.mjs` (three.js-free —
-  reads the GLB JSON + POSITION accessor min/max).
+- **Plain GLB** (the 6/16 scan, ~1.9 MB): ~304 meshes, ~61k tris, 10 small textures (~1 MB),
+  **no Draco, no animations, no extensions** → the **stock `GLTFLoader`** loads it (NOT the
+  DracoShim path the cars/CeCe use — don't mix them up). The scan is re-generated periodically,
+  so nothing hard-codes counts — the loader is name-driven and `floorTop`/bounds are computed.
+- Bounds ≈ 8.5 × 3.42 (tall) × 17.9; floor **top** ≈ −1.30 (recenter is computed, not constant).
+- **Names live on NODES** — traverse the loaded scene by `object.name`. Categories on the 6/16
+  scan: ~187 `wall_*`/`joint_*` (structure), 14 `door_*`, 20 `window_*`, 20 `floor_*` (rooms:
+  Living Room, Kitchen, Dining Room, Laundry, Bathroom, Bedrooms 1-6, "Other"), 4 `sofa_*`, plus
+  named furniture (cabinets, appliances, chairs, tables).
+- Re-run the structure check after a re-scan: `node scripts/verify_interior_node.mjs` (three.js-free;
+  generic asserts so more/fewer rooms still pass, and it fails loudly if a scan ships with Draco).
 
 ## Normalisation
 
