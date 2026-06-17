@@ -2,6 +2,26 @@
 
 Read README.md first for architecture. This file is the lessons.
 
+## Engine architecture: the `ctx` object (2026-06 monolith breakup)
+
+`src/engine/engine.js` (was a 4569-line `createEngine()` god-closure) is being split into
+small modules under `src/engine/{core,nav,drive,scoop,house,crowd,camera,controls,occlusion,
+follow}/`. The keystone: a single **flat plain-JS `ctx` object** holds 100% of cross-region
+engine state + the React bridge (`ctx.emit/ui/canvas`). The RAF loop mutates `ctx` ~60–120×/s,
+so it deliberately lives OUTSIDE React (context/jotai would re-render every frame). `ctx.car`/
+`ctx.CHAR`/`ctx.inp2` are the existing aggregate bags. Subsystems are `createX(ctx)` factories
+attached to `ctx` (`ctx.geo`, `ctx.roads`, `ctx.ground`, `ctx.tileClip`, `ctx.prefetch`, …);
+cross-module calls go `ctx.ns.fn()`. Leaf utils still import normally (`clamp`, `terrainAt`).
+The split was driven by a scope-aware codemod, `scripts/promote-ctx.mjs`; the full recipe +
+remaining roadmap is in `docs/engine-refactor-recipe.md`, the design in `plans/plan-engine-decomposition-*`.
+
+**GOTCHA — `ctx` name shadow.** Two functions take a canvas 2D context historically named
+`ctx` (`drawMinimap`, `makeLabelTex`). When promoting `let X` → `ctx.X`, a state ref inside
+such a function becomes `ctx.X` that wrongly binds the LOCAL canvas context (reads `undefined`).
+`drawMinimap` hit this (its canvas param is now renamed `g`); `makeLabelTex` was safe (no engine
+state). **Never name a local `ctx` in this engine** — and if you must, don't reference engine
+state in the same scope. The build won't catch it; only running the code does.
+
 ## Coordinate frames
 
 - **orig**: meters east/north of geocode (37.6835313, −122.0686199).
