@@ -22,7 +22,7 @@ export function loadDadController(onReady, onFail) {
     const model = g.scene;
     model.traverse(o => {
       if (!o.isMesh) return;
-      o.frustumCulled = false; o.castShadow = true;
+      o.frustumCulled = false; o.castShadow = false;   // interior is far outside the sun's shadow frustum — skip the wasted pass
       for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
         if (!m) continue;
         m.transparent = false; m.opacity = 1; m.alphaTest = 0; m.depthWrite = true; m.side = THREE.FrontSide;

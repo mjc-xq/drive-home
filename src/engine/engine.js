@@ -1098,10 +1098,16 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function updateCrowd(dt, now) {
     if (!crowdSpots.length) return;
-    if (!roadLifeOn) { hideCrowd(); return; }
     const inDrive = mode === 'drive', inScoop = mode === 'scoop';
+    const wantInt = inScoop && scoopScene === 'interior';
+    if (!roadLifeOn) {
+      // "People + traffic" OFF hides street/yard pedestrians — but the in-house companion is gameplay,
+      // not road life, so keep showing + ticking it.
+      for (const sp of crowdSpots) sp.rec.grp.visible = wantInt && sp.zone === 'interior' && sp.char !== CHAR.avatar;
+      if (wantInt) { if (ceceCrowd) ceceCrowd.tick(dt, now); if (drewCrowd) drewCrowd.tick(dt, now); }
+      return;
+    }
     if (inScoop) {
-      const wantInt = scoopScene === 'interior';
       for (const sp of crowdSpots) {
         // indoors: show only the companion you're NOT playing (one at a time); outdoors: the yard pair
         if (sp.zone === 'interior') sp.rec.grp.visible = wantInt && sp.char !== CHAR.avatar;
@@ -1280,7 +1286,7 @@ export function createEngine({ canvas, ui, emit }) {
     setInside(true);
     const sp = interior.spawn;
     CHAR.x = sp.x; CHAR.z = sp.z; CHAR.yaw = sp.yaw; camYawS = sp.yaw;
-    CHAR.airY = 0; CHAR.vy = 0; camInit = false; szoom = 1; camGroundRef = null;
+    CHAR.airY = 0; CHAR.vy = 0; camInit = false; szoom = 1; scPitch = 0.2; camGroundRef = null;   // reset tilt so indoor entry framing is consistent (not pinned to the ceiling)
     doorT = now + 1200; exitArmed = false;
     // Dad NPC: lazy-load on first entry (~7MB), then have him walk out of a back room on each visit.
     if (!dadLoadStarted) {
@@ -1288,15 +1294,17 @@ export function createEngine({ canvas, ui, emit }) {
       loadDadController(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; scene.add(g); dad = { ctrl, group: g, x: 0, z: 0, yaw: 0, to: null, arrived: true }; resetDad(); }, () => {});
     } else resetDad();
     if (audio.blip) audio.blip();
-    toast('🏠 Inside the house! Open the side menu 🎭 to play actions · stand on the 🚪 pad to head back out', 3400);
+    toast('🏠 Inside the house! Open the ☰ menu (top-right) for characters &amp; actions · tap "Leave house 🚪" to head back out', 3600);
   }
   // Dad emerges from the back room (farthest from the player spawn) and walks into the main room.
   function resetDad() {
     if (!dad || !interior || !interior.rooms || !interior.rooms.length) return;
+    if (dad.ctrl.reset) dad.ctrl.reset();   // clear any clamped mid-dance pose from last visit (else he slides in frozen)
     const main = interior.spawn; let back = interior.rooms[0], bd = -1;
     for (const r of interior.rooms) { const d = (r.x - main.x) ** 2 + (r.z - main.z) ** 2; if (d > bd) { bd = d; back = r; } }
-    dad.x = back.x; dad.z = back.z;
-    dad.to = [main.x - 1.6, main.z - 1.6];
+    const from = interior.clearAt(back.x, back.z), to = interior.clearAt(main.x - 1.6, main.z - 1.6);   // start/end on open floor, not inside furniture
+    dad.x = from.x; dad.z = from.z;
+    dad.to = [to.x, to.z];
     dad.yaw = Math.atan2(dad.to[0] - dad.x, dad.to[1] - dad.z);
     dad.arrived = false; dad.group.visible = true;
   }
@@ -1327,11 +1335,11 @@ export function createEngine({ canvas, ui, emit }) {
   function placeInteriorDancers() {
     if (!interior || !ceceCrowd || !drewCrowd) return;
     if (crowdSpots.some(s => s.zone === 'interior')) return;
-    const sp = interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)], ra = interior.roomAABB;
-    // Both stand at the same spot; updateCrowd shows only the ONE you're not currently playing.
+    const sp = interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)];
+    const c = interior.clearAt(sp.x + fwd[0] * 2.6, sp.z + fwd[1] * 2.6);   // open floor, not embedded in a sofa/table
+    // Both stand at the same (cleared) spot; updateCrowd shows only the ONE you're not currently playing.
     const add = (crowd, charName, h, clip) => {
-      const x = clamp(sp.x + fwd[0] * 2.6, ra[0] + 0.6, ra[1] - 0.6), z = clamp(sp.z + fwd[1] * 2.6, ra[2] + 0.6, ra[3] - 0.6);
-      crowdSpots.push({ rec: crowd.add(scene, { x, y: interior.floorY, z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
+      crowdSpots.push({ rec: crowd.add(scene, { x: c.x, y: interior.floorY, z: c.z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
     };
     add(drewCrowd, 'drew', DREW_HEIGHT_M, 'dance');
     add(ceceCrowd, 'cece', CECE_HEIGHT_M);
@@ -1729,7 +1737,7 @@ export function createEngine({ canvas, ui, emit }) {
       doorMarker.position.set(entryPt[0], terrainAt(entryPt[0], entryPt[1]) + 2.6 + Math.abs(Math.sin(now * 0.005)) * 0.3, entryPt[1]);
       const din = Math.hypot(CHAR.x - entryPt[0], CHAR.z - entryPt[1]);
       if (din > 4.0) entryArmed = true;
-      if (entryArmed && din < 2.6 && now > doorT) { enterHouse(now); return; }   // generous radius so it actually triggers
+      if (entryArmed && din < 2.6 && now > doorT) { enterHouse(now); updateScoopInterior(dt, now); return; }   // run the interior frame now — no 1-frame yard flash
     } else doorMarker.visible = false;
     // always-on-top marker so Drew is never lost behind a real tree
     marker.visible = true;
@@ -1801,17 +1809,19 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Indoor follow cam + the exit pad (movement/grounding/collision already ran in updateScoop).
   const _wallRay = new THREE.Raycaster();
+  let _wallCutT = 0;
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
     exitMarker.visible = false; exitRing.visible = false;   // no blue indicators inside — exit via the "Leave house" button
     updateDad(dt);
-    // small indoor follow cam: pull IN before it pokes through a wall, clamp under the ceiling
+    // small indoor follow cam: pull IN before it pokes a wall (but never collapse onto the avatar),
+    // and rise toward overhead when forced close; clamp under the ceiling.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB;
+    const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB, MIND = 1.6;
     let dist = (4.0 + Math.max(0, scPitch) * 1.2) * szi;
     let camX = CHAR.x - fx * dist, camZ = CHAR.z - fz * dist;
-    for (let k = 0; k < 6 && (camX < ra[0] + 0.3 || camX > ra[1] - 0.3 || camZ < ra[2] + 0.3 || camZ > ra[3] - 0.3); k++) {
-      dist *= 0.78; camX = CHAR.x - fx * dist; camZ = CHAR.z - fz * dist;
+    for (let k = 0; k < 6 && dist > MIND && (camX < ra[0] + 0.3 || camX > ra[1] - 0.3 || camZ < ra[2] + 0.3 || camZ > ra[3] - 0.3); k++) {
+      dist = Math.max(MIND, dist * 0.78); camX = CHAR.x - fx * dist; camZ = CHAR.z - fz * dist;
     }
     const camY = interior.floorY + 2.1 + scPitch * 3.4 * Math.max(0.75, szi);
     const cc = interior.clampCam(camX, camY, camZ, 0.3);
@@ -1820,18 +1830,24 @@ export function createEngine({ canvas, ui, emit }) {
     camV.lerp(camT, Math.min(1, dt * 6));
     const cl = interior.clampCam(camV.x, camV.y, camV.z, 0.28);
     camV.set(cl.x, Math.max(cl.y, interior.floorY + 0.7), cl.z);
+    // if an outer-wall corner clamped the camera in close, rise toward overhead so we look DOWN at the
+    // kid instead of zooming into their head.
+    const pd = Math.hypot(camV.x - CHAR.x, camV.z - CHAR.z);
+    if (pd < MIND) camV.y = Math.min(interior.ceilingY - 0.3, Math.max(camV.y, interior.floorY + 1.1 + (MIND - pd) * 2.0 + 1.2));
     camera.position.copy(camV);
     camera.lookAt(CHAR.x, interior.floorY + 1.1, CHAR.z);
-    // SEE-THROUGH WALLS: hide any wall mesh between the camera and the avatar so you never lose them
-    // behind a partition. Collision uses precomputed AABBs, so hidden walls still block movement.
+    // SEE-THROUGH: hide any non-floor mesh between camera and avatar (walls, cabinets, couch). Collision
+    // uses precomputed AABBs so hidden meshes still block. Throttled (~22 Hz — indoor motion is slow) and
+    // skips the permanently-hidden swapped-out sofa so it never reappears.
     const occ = interior.occluders;
-    if (occ) {
-      for (const w of occ) w.visible = true;
+    if (occ && now - _wallCutT > 45) {
+      _wallCutT = now;
+      for (const w of occ) if (!w.userData.permaHidden) w.visible = true;
       const cp = camera.position, dx = CHAR.x - cp.x, dy = (interior.floorY + 1.1) - cp.y, dz = CHAR.z - cp.z;
       const len = Math.hypot(dx, dy, dz) || 1;
       _wallRay.set(cp, _camT.set(dx / len, dy / len, dz / len));
       _wallRay.far = Math.max(0.1, len - 0.5);
-      const hits = _wallRay.intersectObjects(occ, true);
+      const hits = _wallRay.intersectObjects(occ, false);
       for (const h of hits) h.object.visible = false;
     }
   }
@@ -3598,6 +3614,7 @@ export function createEngine({ canvas, ui, emit }) {
     disposeMiniMap();
     if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
     if (drewCrowd) drewCrowd.dispose();
+    if (dad) { if (dad.ctrl.reset) dad.ctrl.reset(); if (dad.group.parent) dad.group.parent.remove(dad.group); }   // tear down the dad NPC
     setScout(false);                             // unregister the prefetch scout camera
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
@@ -3631,8 +3648,10 @@ export function createEngine({ canvas, ui, emit }) {
     // Drew <-> CeCe avatar swap (avatar only — the side-menu switch). Emits 'avatar' optimistically
     // (the toggle flips at once) and again once the new rig + its action list are ready.
     setAvatar: (name) => {
-      CHAR.swapAvatar(name, n => emit('avatar', { name: n, actions: CHAR.getActions() }));
-      emit('avatar', { name, actions: CHAR.getActions() });
+      CHAR.swapAvatar(name, n => emit('avatar', { name: n, actions: CHAR.getActions() }));   // real actions once the rig is mounted
+      // optimistic: flip the toggle now, but only carry actions if that avatar is ALREADY mounted —
+      // otherwise the grid would show the previous kid's emotes during CeCe's async load.
+      emit('avatar', { name, actions: CHAR.avatar === name ? CHAR.getActions() : [] });
     },
     getAvatar: () => CHAR.avatar,
     getScoopActions: () => CHAR.getActions(),

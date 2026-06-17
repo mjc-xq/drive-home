@@ -99,32 +99,39 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     for (const w of wallColliders) { roomAABB[0] = Math.min(roomAABB[0], w[0]); roomAABB[1] = Math.max(roomAABB[1], w[1]); roomAABB[2] = Math.min(roomAABB[2], w[2]); roomAABB[3] = Math.max(roomAABB[3], w[3]); }
     if (!isFinite(roomAABB[0])) { roomAABB[0] = cx - 4.5; roomAABB[1] = cx + 4.5; roomAABB[2] = cz - 7; roomAABB[3] = cz + 7; }
 
-    // Per-room centroids (world) — spawn in the largest room's open centre (collision-safe),
-    // facing the footprint centre so you look into the house on arrival.
-    const rooms = floors.map(f => { tmp.setFromObject(f); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2, area: (tmp.max.x - tmp.min.x) * (tmp.max.z - tmp.min.z) }; });
-    rooms.sort((a, b) => b.area - a.area);
-    const sp = rooms[0] || { x: cx, z: cz };
-    // Spawn must be clear of furniture/walls (you were starting INSIDE a table). Spiral out from the
-    // room centre to the nearest open floor.
-    const occupied = (x, z) => { for (const f of furnitureColliders) if (x > f[0] && x < f[1] && z > f[2] && z < f[3]) return true; for (const w of wallColliders) if (x > w[0] && x < w[1] && z > w[2] && z < w[3]) return true; return false; };
-    let sx = sp.x, sz = sp.z;
-    if (occupied(sx, sz)) { outer: for (let r = 0.5; r <= 5; r += 0.5) for (let a = 0; a < 16; a++) { const x = sp.x + Math.cos(a / 16 * 6.283) * r, z = sp.z + Math.sin(a / 16 * 6.283) * r; if (!occupied(x, z) && x > roomAABB[0] && x < roomAABB[1] && z > roomAABB[2] && z < roomAABB[3]) { sx = x; sz = z; break outer; } } }
-    const spawn = { x: sx, z: sz, yaw: Math.atan2(cx - sx, cz - sz) };
-    const ceilingY = floorY + ceilingH * S;
-
+    // Collision predicate — defined BEFORE spawn so spawn-clearance uses the SAME inflated test.
+    const RAD = 0.34;   // player indoor collision half-width (must match engine's interior.collide(...) call)
     const inPortal = (x, z, rad) => { for (const d of doorPortals) if (x > d[0] - rad && x < d[1] + rad && z > d[2] - rad && z < d[3] + rad) return true; return false; };
     const blocked = (x, z, rad) => {
       if (inPortal(x, z, rad)) return false;                 // doorways pass straight through
       for (const w of wallColliders) if (x > w[0] - rad && x < w[1] + rad && z > w[2] - rad && z < w[3] + rad) return true;
-      for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;   // cabinets/furniture block (spawn is cleared, so no trap)
+      for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;
       return false;
     };
+
+    // Per-room centroids (world) — spawn in the largest room's open centre.
+    const rooms = floors.map(f => { tmp.setFromObject(f); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2, area: (tmp.max.x - tmp.min.x) * (tmp.max.z - tmp.min.z) }; });
+    rooms.sort((a, b) => b.area - a.area);
+    const sp = rooms[0] || { x: cx, z: cz };
+    // Spawn must clear furniture/walls AT THE COLLISION RADIUS — a bare-AABB test dropped the player
+    // ~1cm inside the padded table collider and soft-locked them. Spiral out to the nearest open floor.
+    let sx = sp.x, sz = sp.z;
+    if (blocked(sx, sz, RAD)) {
+      outer: for (let r = 0.6; r <= 6; r += 0.4) for (let a = 0; a < 16; a++) {
+        const x = sp.x + Math.cos(a / 16 * 6.283) * r, z = sp.z + Math.sin(a / 16 * 6.283) * r;
+        if (!blocked(x, z, RAD) && x > roomAABB[0] + RAD && x < roomAABB[1] - RAD && z > roomAABB[2] + RAD && z < roomAABB[3] - RAD) { sx = x; sz = z; break outer; }
+      }
+    }
+    const spawn = { x: sx, z: sz, yaw: Math.atan2(cx - sx, cz - sz) };
+    const ceilingY = floorY + ceilingH * S;
 
     onReady({
       group, floorY, ceilingY, roomAABB, spawn, walls, occluders, rooms,
       // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
       // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
       collide(px, pz, nx, nz, rad) {
+        // Depenetration: if we're somehow already embedded, never freeze — let the move out through.
+        if (blocked(px, pz, rad)) return { x: clamp(nx, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(nz, roomAABB[2] + rad, roomAABB[3] - rad) };
         let x = nx, z = nz;
         if (blocked(x, z, rad)) {
           if (!blocked(x, pz, rad)) z = pz;
@@ -138,6 +145,16 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       // Keep the follow-camera inside the walls and under the (virtual) ceiling.
       clampCam(x, y, z, m) {
         return { x: clamp(x, roomAABB[0] + m, roomAABB[1] - m), y: Math.min(y, ceilingY - 0.25), z: clamp(z, roomAABB[2] + m, roomAABB[3] - m) };
+      },
+      // Nearest open floor to (x,z) — used to keep NPCs/companions out of furniture & walls.
+      clearAt(x, z, rad = 0.34) {
+        const inside = (px, pz) => px > roomAABB[0] + rad && px < roomAABB[1] - rad && pz > roomAABB[2] + rad && pz < roomAABB[3] - rad;
+        if (!blocked(x, z, rad) && inside(x, z)) return { x, z };
+        for (let r = 0.5; r <= 4; r += 0.5) for (let a = 0; a < 12; a++) {
+          const nx = x + Math.cos(a / 12 * 6.283) * r, nz = z + Math.sin(a / 12 * 6.283) * r;
+          if (!blocked(nx, nz, rad) && inside(nx, nz)) return { x: nx, z: nz };
+        }
+        return { x: clamp(x, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(z, roomAABB[2] + rad, roomAABB[3] - rad) };
       },
     });
 
@@ -155,7 +172,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       }
       if (target) new USDLoader().load(couchyUrl, dog => {
         if (cancelled || !dog) return;
-        dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
+        dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });   // keep default frustumCulled so the far-away couch isn't drawn in the yard
         const dgrp = new THREE.Group(); dgrp.add(dog);
         scene.add(dgrp);                                  // parent to the SCENE, not the 1.4x interior group, so the
         dgrp.updateMatrixWorld(true);                     // house scale doesn't double-apply and overshoot the placement
@@ -167,7 +184,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         const gb = new THREE.Box3().setFromObject(dgrp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
         dgrp.position.set(tc.x - gc.x, tBox.min.y - gb.min.y, tc.z - gc.z);   // drop exactly on the sofa's spot (scene == world space)
         dgrp.traverse(o => { if (o.isMesh) occluders.push(o); });   // the couch is a see-through occluder too
-        target.visible = false;   // hide the original couch (its furniture collider remains, so the couch still blocks)
+        target.userData.permaHidden = true; target.visible = false;   // hide the original couch for good (collider stays); the see-through reset must skip permaHidden meshes
       }, undefined, e => console.warn('[interior] couch (usdz) failed, keeping the original sofa', e));
     }
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
