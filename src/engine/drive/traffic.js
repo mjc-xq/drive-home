@@ -1,4 +1,5 @@
 import { clamp } from '../coords.js';
+// Ambient traffic: simple cars roaming the procedural streets; feeds the near-miss/combo economy.
 export function createTraffic(ctx) {
   const trafficActiveCount = () => Math.round(clamp(ctx.trafficDensity, 0, 2) / 2 * ctx.TRAFFIC_MAX);     function nextTrafficSeg(c) {
     const segs = ctx.traffic._segs, cand = [];

@@ -1,6 +1,8 @@
 import { DRIVE_CAMS } from '../camera/presets.js';
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
+// Input + explore camera: pointer/wheel/keyboard handlers, the dynamic thumbstick + look-drag,
+// draw-to-drive, and the explore-orbit camera (applyCam).
 export function createControls(ctx) {
   function applyCam() {
     ctx.camera.position.set(

@@ -2,6 +2,8 @@ import { POOP_ACTIVE_CAP } from '../animals.js';
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
 import { CECE_HEIGHT_M, DREW_HEIGHT_M } from '../drew.js';
+// Pedestrian crowd: placement + density of the CeCe/Drew/Dad/Mom dancers on sidewalks and
+// at POIs, the nearest-N visibility cap, and the car hit-launch.
 export function createCrowd(ctx) {
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - ctx.POOPS.length / POOP_ACTIVE_CAP)));
   // Pick a street/scatter pedestrian: mostly the CeCe/Drew kids, with the occasional grown-up Dad/Mom

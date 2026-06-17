@@ -1,4 +1,6 @@
 import { DRIVE_CAMS, SCOOP_CAMS } from '../camera/presets.js';
+// Cameras: the drive + scoop camera cycles and the per-frame drive camera resolve
+// (chase / cruise / overhead / aerial + the cinematic race-day sweep).
 export function createCam(ctx) {
   // Drive cameras. Default "Cruise" is the high chase the user likes: well above
   // the melty ground-level photogrammetry, a little behind the car, looking DOWN
