@@ -1800,16 +1800,8 @@ export function createEngine({ canvas, ui, emit }) {
   const _wallRay = new THREE.Raycaster();
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
+    exitMarker.visible = false; exitRing.visible = false;   // no blue indicators inside — exit via the "Leave house" button
     updateDad(dt);
-    // EXIT pad: stand where you came in to head back out (hysteresis so arrival doesn't re-trigger)
-    const sp = interior.spawn;
-    exitMarker.visible = true;
-    exitMarker.position.set(sp.x, interior.floorY + 2.4 + Math.abs(Math.sin(now * 0.005)) * 0.25, sp.z);
-    exitRing.visible = true;
-    exitRing.position.set(sp.x, interior.floorY + 0.05, sp.z);
-    const dex = Math.hypot(CHAR.x - sp.x, CHAR.z - sp.z);
-    if (dex > 3.2) exitArmed = true;
-    if (exitArmed && dex < 2.2 && now > doorT) { leaveHouse(now); return; }
     // small indoor follow cam: pull IN before it pokes through a wall, clamp under the ceiling
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
     const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB;

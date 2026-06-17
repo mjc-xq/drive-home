@@ -19,7 +19,7 @@ const WALL_RE = /^(wall_|joint_)/;
 const DOOR_RE = /^door_/;
 // Only the big floor-standing pieces a walking kid can bump into get colliders. Chairs and the
 // wall-hugging mid/low cabinets are skipped — they're already covered by the wall colliders.
-const FURN_RE = /^(sofa|table_|refrigerator|oven|stove|dishwasher|sink|washer_dryer|storage_shelf|storage_cabinet_tall)/;
+const FURN_RE = /^(sofa|table_|refrigerator|oven|stove|dishwasher|sink|washer_dryer|storage_)/;   // includes ALL cabinets/shelves so they block
 
 const nameOf = o => o.name || (o.parent && o.parent.name) || '';
 const boxXZ = (b, pad = 0) => [b.min.x - pad, b.max.x + pad, b.min.z - pad, b.max.z + pad];
@@ -116,7 +116,8 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const blocked = (x, z, rad) => {
       if (inPortal(x, z, rad)) return false;                 // doorways pass straight through
       for (const w of wallColliders) if (x > w[0] - rad && x < w[1] + rad && z > w[2] - rad && z < w[3] + rad) return true;
-      return false;   // furniture is walk-through: small, furniture-dense rooms would otherwise box you in
+      for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;   // cabinets/furniture block (spawn is cleared, so no trap)
+      return false;
     };
 
     onReady({
