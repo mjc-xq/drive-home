@@ -28,6 +28,13 @@ const DOOR_RE = /^door_/;
 
 const nameOf = o => o.name || (o.parent && o.parent.name) || '';
 const boxXZ = (b, pad = 0) => [b.min.x - pad, b.max.x + pad, b.min.z - pad, b.max.z + pad];
+function disposeLoadedObject(root) {
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) if (m && m.dispose) m.dispose();
+  });
+}
 
 // createInterior(scene, {cx,cz,floorY}, onReady, onFail) -> cancel()
 // Loads + normalises the interior, builds collision data in WORLD space, and hands back a small
@@ -35,7 +42,7 @@ const boxXZ = (b, pad = 0) => [b.min.x - pad, b.max.x + pad, b.min.z - pad, b.ma
 export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, onFail) {
   let cancelled = false;
   new GLTFLoader().load(interiorUrl, g => {
-    if (cancelled) return;
+    if (cancelled) { if (g.scene) disposeLoadedObject(g.scene); return; }
     const model = g.scene;
     model.updateMatrixWorld(true);
     const floors = [], walls = [], doors = [], furniture = [], sofas = [], windows = [], cabinets = [], shelves = [];
@@ -61,7 +68,24 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3);
         if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.9);   // less shiny -> less blown out
         if (m.color) m.color.multiplyScalar(0.7);                                  // tame the bright scan albedo (was washed out)
+        if (m.envMapIntensity !== undefined) m.envMapIntensity = 0;                // the matte scan must NOT pick up the car IBL (scene.environment) — that re-washed the house
       }
+    });
+
+    // Mahogany the furniture wood: ALL tables + bookshelves, EXCEPT bookshelves in the bedrooms.
+    // Clone each material first so we never recolour a shared floor/wall material, and tint over the
+    // scan map so the wood grain survives. Bedroom floor boxes (model space) say which shelves to skip.
+    const MAHOGANY = 0x5a2a17;
+    const bedBoxes = floors.filter(f => /bedroom/i.test(nameOf(f))).map(f => { const b = new THREE.Box3().setFromObject(f); return [b.min.x, b.max.x, b.min.z, b.max.z]; });
+    const inBedroom = o => { const b = new THREE.Box3().setFromObject(o), x = (b.min.x + b.max.x) / 2, z = (b.min.z + b.max.z) / 2; return bedBoxes.some(bb => x >= bb[0] && x <= bb[1] && z >= bb[2] && z <= bb[3]); };
+    const mahog = m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.setHex(MAHOGANY); if (c.roughness !== undefined) c.roughness = 0.5; if (c.metalness !== undefined) c.metalness = 0.1; if (c.envMapIntensity !== undefined) c.envMapIntensity = 0; c.needsUpdate = true; return c; };
+    model.traverse(o => {
+      if (!o.isMesh || !o.material) return;
+      const n = nameOf(o);
+      const isShelf = /^storage_shelf/.test(n);
+      if (!/^table/.test(n) && !isShelf) return;
+      if (isShelf && inBedroom(o)) return;                                         // leave the bedroom bookshelves alone
+      o.material = Array.isArray(o.material) ? o.material.map(mahog) : mahog(o.material);
     });
 
     // Recenter: floor TOP (not min.y — that would sink the character ~10cm) to world floorY,
@@ -181,7 +205,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         for (const w of wCtr) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; target = s; tBox = b; } }
       }
       if (target) new USDLoader().load(couchyUrl, dog => {
-        if (cancelled || !dog) return;
+        if (cancelled || !dog) { if (dog) disposeLoadedObject(dog); return; }
         dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });   // keep default frustumCulled so the far-away couch isn't drawn in the yard
         const dgrp = new THREE.Group(); dgrp.add(dog);
         scene.add(dgrp);                                  // parent to the SCENE, not the 1.4x interior group, so the
@@ -202,14 +226,14 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     // geometry — see docs/house-interior.md). The cage is scene-parented, scaled UNIFORMLY to the
     // cabinet's footprint (keeps the model's own aspect ratio), dropped on its spot, and the cabinet
     // is hidden but its collider stays so the cage blocks. Non-blocking + fail-soft per cage.
-    const placeOnCabinet = (cabName, url) => {
+    const placeOnCabinet = (cabName, url, yaw = 0) => {
       const target = cabinets.find(c => nameOf(c) === cabName);
       if (!target) { console.warn('[interior] cage target cabinet not found:', cabName); return; }
       const tBox = new THREE.Box3().setFromObject(target);
       new GLTFLoader().load(url, gg => {
-        if (cancelled || !gg.scene) return;
-        gg.scene.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
-        const grp = new THREE.Group(); grp.add(gg.scene); scene.add(grp); grp.updateMatrixWorld(true);
+        if (cancelled || !gg.scene) { if (gg.scene) disposeLoadedObject(gg.scene); return; }
+        gg.scene.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) { if (!m) continue; if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); if (m.envMapIntensity !== undefined) m.envMapIntensity = 0; } } });
+        const grp = new THREE.Group(); grp.add(gg.scene); grp.rotation.y = yaw; scene.add(grp); grp.updateMatrixWorld(true);   // yaw set before measuring so the footprint fit accounts for the rotation
         const ds = new THREE.Box3().setFromObject(grp).getSize(new THREE.Vector3());
         const ts = tBox.getSize(new THREE.Vector3());
         grp.scale.setScalar(Math.max(ts.x, ts.z) / (Math.max(ds.x, ds.z) || 1));   // match footprint, keep aspect ratio
@@ -220,9 +244,10 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         target.userData.permaHidden = true; target.visible = false;   // hide the cabinet (collider stays, so the cage blocks)
       }, undefined, e => console.warn('[interior] cage swap failed for ' + cabName + ', keeping the cabinet', e));
     };
-    placeOnCabinet('storage_cabinet_mid27', cageUrl);     // bearded-dragon — couchy couch's room, across the table the couch faces
-    placeOnCabinet('storage_cabinet_mid25', guineasUrl);  // guinea-pig — TV wall, behind the overstuffed chair, by the dining table
-    placeOnCabinet('storage_cabinet_tall20', phebUrl);    // chinchilla — the tall cabinet across from the guinea one, by the dining table
+    const CAGE_YAW = Math.PI / 2;                          // all three Meshy cages export 90° off — face them into the room
+    placeOnCabinet('storage_cabinet_mid27', cageUrl, CAGE_YAW);     // bearded-dragon — couchy couch's room, across the table the couch faces
+    placeOnCabinet('storage_cabinet_mid25', guineasUrl, CAGE_YAW);  // guinea-pig — TV wall, behind the overstuffed chair, by the dining table
+    placeOnCabinet('storage_cabinet_tall20', phebUrl, CAGE_YAW);    // chinchilla — the tall cabinet across from the guinea one, by the dining table
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
   return () => { cancelled = true; };
 }
