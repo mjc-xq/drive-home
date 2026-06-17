@@ -1413,7 +1413,7 @@ export function createEngine({ canvas, ui, emit }) {
     // House NPCs (dad, mom): lazy-load on first entry, then have each walk out of a room and dance.
     if (!npcsLoadStarted) {
       npcsLoadStarted = true;
-      for (const load of NPC_LOADERS) load(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; scene.add(g); npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, to: null, arrived: true }); resetNpcs(); }, () => {});
+      for (const load of NPC_LOADERS) load(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; scene.add(g); npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, state: 'act', act: 'idle', actUntil: 0 }); resetNpcs(); }, () => {});
     } else resetNpcs();
     if (audio.blip) audio.blip();
     toast('🏠 Inside the house! Open the ☰ menu (top-right) for characters &amp; actions · tap "Leave house 🚪" to head back out', 3600);
@@ -1426,6 +1426,7 @@ export function createEngine({ canvas, ui, emit }) {
   const NPC_RAD = 0.34, NPC_SPD = 1.35;
   function playerRoomIndex() {
     const rs = interior.rooms;
+    if (!rs || !rs.length) return 0;
     for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (CHAR.x >= r.minX && CHAR.x <= r.maxX && CHAR.z >= r.minZ && CHAR.z <= r.maxZ) return i; }
     let best = 0, bd = Infinity; rs.forEach((r, i) => { const d = (r.x - CHAR.x) ** 2 + (r.z - CHAR.z) ** 2; if (d < bd) { bd = d; best = i; } }); return best;
   }
@@ -1445,7 +1446,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function startTravel(npc, tx, tz) {
     npc.state = 'travel'; npc.target = [tx, tz]; npc.waypoint = nearestDoorBetween(npc.x, npc.z, tx, tz);
-    npc.stuckT = 0; npc.lastD = Math.hypot(tx - npc.x, tz - npc.z);
+    npc.stuckT = 0;
   }
   function triggerMove(npc, now) {
     const pool = npc.act === 'emote' && npc.ctrl.emotes.length ? npc.ctrl.emotes : npc.ctrl.dances;
@@ -1470,6 +1471,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (npc.ctrl.reset) npc.ctrl.reset();   // stand up from a sit / end any dance cleanly before walking
     npc.seat = null; npc.baseY = interior.floorY;
     const rs = interior.rooms;
+    if (!rs || !rs.length) { npc.state = 'act'; npc.act = 'idle'; npc.actUntil = now + 4000; return; }   // no rooms (GLB w/o floors) — just idle
     const room = (Math.random() < 0.55 ? rs[playerRoomIndex()] : rs[(Math.random() * rs.length) | 0]) || rs[0];
     let wantSeat = null;   // sometimes go sit on a free couch
     if (npc.ctrl.sitClip && interior.seats && interior.seats.length && Math.random() < 0.4) {
@@ -1505,11 +1507,13 @@ export function createEngine({ canvas, ui, emit }) {
         const finalD = Math.hypot(npc.target[0] - npc.x, npc.target[1] - npc.z);
         if (finalD < 0.5) enterActivity(npc, now);
         else {
-          const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d;
-          const r = interior.collide(npc.x, npc.z, npc.x + ux * NPC_SPD * dt, npc.z + uz * NPC_SPD * dt, NPC_RAD);
+          const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = NPC_SPD * dt;
+          const r = interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD);
           const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
           npc.x = r.x; npc.z = r.z; npc.yaw = Math.atan2(ux, uz); speed = moved / Math.max(dt, 1e-3);
-          if (finalD < npc.lastD - 0.02) { npc.lastD = finalD; npc.stuckT = 0; } else { npc.stuckT += dt; if (npc.stuckT > 1.5) enterActivity(npc, now); }   // jammed on a wall -> settle + repick
+          // "stuck" = collision is eating the step (a wall-jam) — judged by ACTUAL displacement, NOT
+          // progress toward the final target, so routing to a side doorway waypoint can't false-trigger.
+          if (moved < want * 0.35) { npc.stuckT += dt; if (npc.stuckT > 1.5) enterActivity(npc, now); } else npc.stuckT = 0;
         }
         npc.baseY = interior.floorY; npc.ctrl.locomotion(speed);
       } else {   // 'act' — staying put; sit holds, dance/emote cycle, idle just loops

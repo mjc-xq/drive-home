@@ -180,7 +180,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     for (const s of sofas) {
       if (s === couchSofa) continue;                            // the dog couch is taken
       const b = new THREE.Box3().setFromObject(s), c = b.getCenter(new THREE.Vector3());
-      let rm = rooms[0], bdr = Infinity; for (const r of rooms) { const d = (r.x - c.x) ** 2 + (r.z - c.z) ** 2; if (d < bdr) { bdr = d; rm = r; } }
+      let rm = rooms[0] || { x: c.x, z: c.z }, bdr = Infinity; for (const r of rooms) { const d = (r.x - c.x) ** 2 + (r.z - c.z) ** 2; if (d < bdr) { bdr = d; rm = r; } }
       seats.push({ x: c.x, z: c.z, y: b.min.y + 0.42 * (b.max.y - b.min.y), yaw: Math.atan2(rm.x - c.x, rm.z - c.z) });   // face into the room
     }
     const doorways = doors.map(d => { tmp.setFromObject(d); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2 }; });
@@ -210,11 +210,14 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       clearAt(x, z, rad = 0.34) {
         const inside = (px, pz) => px > roomAABB[0] + rad && px < roomAABB[1] - rad && pz > roomAABB[2] + rad && pz < roomAABB[3] - rad;
         if (!blocked(x, z, rad) && inside(x, z)) return { x, z };
-        for (let r = 0.5; r <= 4; r += 0.5) for (let a = 0; a < 12; a++) {
+        for (let r = 0.5; r <= 6; r += 0.5) for (let a = 0; a < 12; a++) {
           const nx = x + Math.cos(a / 12 * 6.283) * r, nz = z + Math.sin(a / 12 * 6.283) * r;
           if (!blocked(nx, nz, rad) && inside(nx, nz)) return { x: nx, z: nz };
         }
-        return { x: clamp(x, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(z, roomAABB[2] + rad, roomAABB[3] - rad) };
+        // Last resort: the clamped point may still sit in furniture — fall back to the spawn, which is
+        // guaranteed open, so a caller never gets handed a blocked spot.
+        const cl = { x: clamp(x, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(z, roomAABB[2] + rad, roomAABB[3] - rad) };
+        return blocked(cl.x, cl.z, rad) ? { x: sx, z: sz } : cl;
       },
     });
 
