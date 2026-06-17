@@ -1656,7 +1656,7 @@ export function createEngine({ canvas, ui, emit }) {
     const inside = scoopScene === 'interior' && interior;
     // Keyboard Left/Right TURN the keeper (tank-style) instead of strafing sideways; the touch
     // joystick still strafes camera-relative. (Walking sideways on arrow keys felt wrong.)
-    if (inp2.kx) { camYawS += inp2.kx * 2.6 * dt; CHAR.yaw = camYawS; lastLookT = now; }
+    if (inp2.kx) { camYawS -= inp2.kx * 2.6 * dt; CHAR.yaw = camYawS; lastLookT = now; }
     let jx = clamp(inp2.jx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
     const mag = Math.min(1, Math.hypot(jx, jy));
     if (shiftLock) CHAR.yaw = camYawS; // Roblox shift-lock: keeper faces the camera
