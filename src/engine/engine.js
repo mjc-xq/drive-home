@@ -13,6 +13,7 @@ import { DREW_HEIGHT_M, CECE_HEIGHT_M } from './drew.js';
 import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES, setCarAniso } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
+import { createGround } from './occlusion/ground-height.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
 import rav4Url from '../assets/rav4.glb';
@@ -519,7 +520,7 @@ export function createEngine({ canvas, ui, emit }) {
       // bumpy photogrammetry mesh near home while the player rides the smooth
       // terrain road, which made traffic visibly float/sink on a different surface.
       // Keep the staggered refresh so only a few traffic cars sample tiles per frame.
-      if (c.gy === undefined || (ctx.trafficTick + c.ti) % 4 === 0) c.gyT = actorGroundY(x, z, c.gy) + 0.05;
+      if (c.gy === undefined || (ctx.trafficTick + c.ti) % 4 === 0) c.gyT = ctx.ground.actorGroundY(x, z, c.gy) + 0.05;
       c.gy = c.gy === undefined ? c.gyT : c.gy + (c.gyT - c.gy) * Math.min(1, dt * 6);
       c.group.position.set(x, c.gy, z);
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);
@@ -813,64 +814,10 @@ export function createEngine({ canvas, ui, emit }) {
     h.rotation.y = P3DT.spin * DEG;
     h.position.set(P3DT.xOffset, P3DT.yOffset, P3DT.zOffset);
   };
-  // ---- ground height authority ----
-  // groundAt(x,z) = the photoreal tile surface height under (x,z), via a cheap
-  // firstHitOnly down-ray; falls back to the procedural terrain until tiles load.
-  // This REPLACES terrainAt for ACTOR + CAMERA height only — collision stays on
-  // the data (bldPolys/treePts), so the invariant is untouched.
-  const _downRay = new THREE.Raycaster(); _downRay.firstHitOnly = true;
-  const _gO = new THREE.Vector3(), _gD = new THREE.Vector3(0, -1, 0), _gHits = [];
-  function rawTileY(x, z, fromY) {
-    if (!ctx.p3dtiles || !ctx.p3dtiles.holder.visible) return null;
-    // Cast from `fromY` (default high). Casting from just above an actor skips
-    // tree canopies / eaves overhead, so we read the ROAD under them, not the
-    // canopy — that's what keeps the car from climbing trees.
-    const oy = fromY != null ? fromY : 600;
-    _downRay.set(_gO.set(x, oy, z), _gD); _downRay.far = oy + 700; _gHits.length = 0;
-    ctx.p3dtiles.raycast(_downRay, _gHits);
-    return _gHits.length ? _gHits[0].point.y : null;
-  }
-  function groundAt(x, z, fallback, fromY) {
-    const y = rawTileY(x, z, fromY);
-    if (y != null) return y;
-    return fallback != null ? fallback : terrainAt(x, z);
-  }
-  // Height the actor (car/keeper) AND its clean patch ride: the REAL photoreal
-  // ROAD surface, sampled by casting down from just above the actor so it skips
-  // tree canopies, and clamped to within ~2 m of the procedural terrain so a
-  // photogrammetry blob can never lift the actor off the ground topology. This
-  // keeps the flat patch co-planar with the 3D road (so the patch reads as the
-  // road surface, not a layer the 3D rises over) while never climbing trees.
-  function actorGroundY(x, z, prevY) {
-    const tA = terrainAt(x, z);
-    if (!ctx.p3dtiles || !ctx.p3dtiles.holder.visible) return tA;
-    // Inside the procedural neighborhood (±330 m) the FLAT heightfield is ground
-    // truth — ride it DIRECTLY. That's the whole point of the game: keep the
-    // photoreal tiles fully VISIBLE for the high-res look, but drive on smooth,
-    // aligned terrain with no photogrammetry bumps — no lumps under parked cars,
-    // no climbing trees/curbs/roofs. (Bonus: skips the per-sample tile raycasts in
-    // the common near-home case, so it's cheaper too.)
-    if (x * x + z * z <= 330 * 330) return tA;
-    // Far out, beyond the heightfield, there's no procedural topology to ride, so
-    // follow the real photoreal ROAD. Cast DOWN from just above the actor's roof:
-    // a tree canopy / eave ABOVE the car is skipped (the ray starts beneath it), so
-    // we read the road under the foliage, not the leaves. Retry from progressively
-    // higher only when that misses — i.e. the road climbed above the car (steep
-    // hill / onto a bridge), the one case we DO want to follow upward.
-    const base = prevY != null ? prevY : tA;
-    let y = rawTileY(x, z, base + 2.2);
-    if (y == null) y = rawTileY(x, z, base + 10);
-    if (y == null && prevY != null) y = rawTileY(x, z, base + 26);
-    if (y == null && prevY == null) y = rawTileY(x, z);
-    if (y == null) return prevY != null ? prevY : tA;             // tile not streamed yet: hold height
-    // Out here terrainAt is just a clamped edge value — useless as a reference — so
-    // bound by CONTINUITY instead: a real road never steps UP more than ~1.5 m
-    // between samples, but a photogrammetry tree/roof blob does, so reject the
-    // sudden climb (ride the surface beneath it) while letting the car settle
-    // downhill freely. This is what keeps the car off the treetops out on the open
-    // road, where there's no procedural topology to clamp against.
-    return prevY != null ? clamp(y, prevY - 6, prevY + 1.5) : y;
-  }
+  // ---- ground height authority ---- (see occlusion/ground-height.js)
+  // ctx.ground.{rawTileY,groundAt,actorGroundY}: photoreal-tile surface height under (x,z) for
+  // ACTOR + CAMERA height only; collision stays on the data (bldPolys/treePts).
+  ctx.ground = createGround(ctx);
   // One-shot vertical align: sample a ring of down-rays in the open yard/street
   // (radius 14 m, away from the house roof), take the median tile height, and
   // set yOffset so it meets terrainAt(0,0). Clamped + single-shot so it can't
@@ -881,7 +828,7 @@ export function createEngine({ canvas, ui, emit }) {
     const ys = [];
     for (let i = 0; i < 12; i++) {
       const a = i / 12 * Math.PI * 2;
-      const y = rawTileY(Math.cos(a) * 14, Math.sin(a) * 14);
+      const y = ctx.ground.rawTileY(Math.cos(a) * 14, Math.sin(a) * 14);
       if (y != null) ys.push(y);
     }
     if (ys.length < 8) return false;          // wait until enough clean samples
@@ -1056,7 +1003,7 @@ export function createEngine({ canvas, ui, emit }) {
       // so actorGroundY() there returns NaN. A NaN baseY is sticky (settle's lerp keeps it NaN forever),
       // so those dancers never appeared. Fall back to a finite height now; settleCrowdSpot snaps them to
       // the real ground the moment you arrive and the tiles are loaded.
-      const gy = onRoadHt ? actorGroundY(x, z) : terrainAt(x, z);
+      const gy = onRoadHt ? ctx.ground.actorGroundY(x, z) : terrainAt(x, z);
       const y = (Number.isFinite(gy) ? gy : (ctx.car.groundY ?? 0)) + 0.02;
       const yaw = opts.yaw != null ? opts.yaw : Math.random() * Math.PI * 2;
       crowdSpots.push({ rec: crowd.add(ctx.scene, { x, y, z, yaw, clip: opts.clip }), zone, onRoadHt: !!onRoadHt, settleT: 0 });
@@ -1202,7 +1149,7 @@ export function createEngine({ canvas, ui, emit }) {
     sp.settleT = (sp.settleT || 0) + dt;
     if (sp.settleT < 0.25) return;   // pedestrians barely move; re-raycast ground height ~4 Hz, not ~12 Hz — cuts the per-frame tile-raycast cost on mobile (the big snap on relocate/arrival is instant regardless)
     sp.settleT = 0;
-    const y = actorGroundY(sp.rec.x, sp.rec.z, sp.rec.baseY) + 0.02;
+    const y = ctx.ground.actorGroundY(sp.rec.x, sp.rec.z, sp.rec.baseY) + 0.02;
     if (!Number.isFinite(y)) return;
     // SNAP on the first valid ground (baseY was a NaN/placeholder) or a big jump (just relocated /
     // arrived at a far cluster); otherwise ease, to smooth small bumps. Without the snap a placeholder
@@ -3149,9 +3096,9 @@ export function createEngine({ canvas, ui, emit }) {
     let rec = _routeY[i];
     if (!rec || (!rec.confirmed && nowMs >= (rec.retryAt || 0))) {
       const base = rec ? rec.y : tA;
-      let y = rawTileY(p.x, p.z, base + 8);
-      if (y == null && rec) y = rawTileY(p.x, p.z, base + 24);
-      if (y == null && !rec) y = rawTileY(p.x, p.z);
+      let y = ctx.ground.rawTileY(p.x, p.z, base + 8);
+      if (y == null && rec) y = ctx.ground.rawTileY(p.x, p.z, base + 24);
+      if (y == null && !rec) y = ctx.ground.rawTileY(p.x, p.z);
       if (y != null) {
         const inHood = p.x * p.x + p.z * p.z <= 330 * 330;
         rec = { y: inHood ? clamp(y, tA - 2, tA + 2) : y, confirmed: true, retryAt: 0 };
@@ -3905,7 +3852,7 @@ export function createEngine({ canvas, ui, emit }) {
     // can track (uphill/onto a bridge at speed) — and once the car was under the surface,
     // the canopy-skipping down-ray (cast from just above the car) could no longer see the
     // road ABOVE it, so it stayed buried. The hard floor keeps that from ever happening.
-    const yr = actorGroundY(ctx.car.x, ctx.car.z, ctx.car.groundY);
+    const yr = ctx.ground.actorGroundY(ctx.car.x, ctx.car.z, ctx.car.groundY);
     if (ctx.car.groundY == null) ctx.car.groundY = yr;
     else { const rate = yr > ctx.car.groundY ? dt * 18 : dt * 9; ctx.car.groundY += (yr - ctx.car.groundY) * Math.min(1, rate); }
     if (yr != null && ctx.car.groundY < yr - 0.8) ctx.car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up
@@ -3915,8 +3862,8 @@ export function createEngine({ canvas, ui, emit }) {
     // refresh these tile raycasts ~every 3rd frame and reuse the result between. (These were
     // the single biggest per-frame CPU cost on mobile — 4 brute-force tile casts every frame.)
     if ((ctx.car._tiltTick = (ctx.car._tiltTick | 0) + 1) % 3 === 0 || ctx.car._pitchS == null) {
-      const tF = actorGroundY(ctx.car.x + fx * 1.4, ctx.car.z + fz * 1.4, ctx.car.groundY), tB = actorGroundY(ctx.car.x - fx * 1.4, ctx.car.z - fz * 1.4, ctx.car.groundY);
-      const tR = actorGroundY(ctx.car.x + rxv * 0.9, ctx.car.z + rzv * 0.9, ctx.car.groundY), tL = actorGroundY(ctx.car.x - rxv * 0.9, ctx.car.z - rzv * 0.9, ctx.car.groundY);
+      const tF = ctx.ground.actorGroundY(ctx.car.x + fx * 1.4, ctx.car.z + fz * 1.4, ctx.car.groundY), tB = ctx.ground.actorGroundY(ctx.car.x - fx * 1.4, ctx.car.z - fz * 1.4, ctx.car.groundY);
+      const tR = ctx.ground.actorGroundY(ctx.car.x + rxv * 0.9, ctx.car.z + rzv * 0.9, ctx.car.groundY), tL = ctx.ground.actorGroundY(ctx.car.x - rxv * 0.9, ctx.car.z - rzv * 0.9, ctx.car.groundY);
       ctx.car._pitchS = Math.atan2(tB - tF, 2.8); ctx.car._rollS = Math.atan2(tR - tL, 1.8);
     }
     const pitch = ctx.car._pitchS, roll = ctx.car._rollS;
@@ -3953,7 +3900,7 @@ export function createEngine({ canvas, ui, emit }) {
       c.mesh.visible = !c.got;
       if (c.got) continue;
       c.mesh.rotation.y += dt * 3.2;
-      if (c.groundY == null || i === ctx.coinGroundCursor) c.groundY = actorGroundY(c.x, c.z, c.groundY);
+      if (c.groundY == null || i === ctx.coinGroundCursor) c.groundY = ctx.ground.actorGroundY(c.x, c.z, c.groundY);
       const coinY = c.groundY != null ? c.groundY : terrainAt(c.x, c.z);
       c.mesh.position.y = coinY + 1.15 + Math.abs(Math.sin(now * 0.004 + c.x)) * 0.35;
       if (Math.hypot(ctx.car.x - c.x, ctx.car.z - c.z) < 3.4) {
@@ -4019,7 +3966,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (navMarker) {
       navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
       if (navMarker.visible) {
-        navMarker.userData.groundY = actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, navMarker.userData.groundY);
+        navMarker.userData.groundY = ctx.ground.actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, navMarker.userData.groundY);
         navMarker.position.set(ctx.inp2.navX, navMarker.userData.groundY + 0.16, ctx.inp2.navZ);
       } else navMarker.userData.groundY = null;
     }
@@ -4030,7 +3977,7 @@ export function createEngine({ canvas, ui, emit }) {
       const ddDest = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
       destPin.visible = ddDest < 700;
       if (destPin.visible) {
-        destPin.userData.groundY = actorGroundY(ctx.DEST.x, ctx.DEST.z, destPin.userData.groundY);
+        destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, destPin.userData.groundY);
         destPin.position.set(ctx.DEST.x, destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, ctx.DEST.z);
       }
     } else { guideLine.visible = false; destPin.visible = false; }
@@ -4060,7 +4007,7 @@ export function createEngine({ canvas, ui, emit }) {
       // showcase orbit on entry; any input skips it
       ctx.showT -= dt;
       const a = ctx.car.yaw + 2.4 + (2.8 - ctx.showT) * 1.35;
-      let cx2 = ctx.car.x + Math.sin(a) * 6.6, cy2 = Math.max(yC + 1.7, groundAt(cx2, ctx.car.z) + 1.2), cz2 = ctx.car.z + Math.cos(a) * 6.6;
+      let cx2 = ctx.car.x + Math.sin(a) * 6.6, cy2 = Math.max(yC + 1.7, ctx.ground.groundAt(cx2, ctx.car.z) + 1.2), cz2 = ctx.car.z + Math.cos(a) * 6.6;
       const g = resolveCam(ctx.car.x, yC + 1.0, ctx.car.z, cx2, cy2, cz2); // don't orbit into real tiles
       cx2 = ctx.car.x + (cx2 - ctx.car.x) * g; cy2 = yC + 1.0 + (cy2 - yC - 1.0) * g; cz2 = ctx.car.z + (cz2 - ctx.car.z) * g;
       ctx.camera.position.set(cx2, cy2, cz2);
@@ -4556,8 +4503,8 @@ export function createEngine({ canvas, ui, emit }) {
       for (let s = 0; s < 360; s += 5) {
         const a = -s * DEG, ca = Math.cos(a), sa = Math.sin(a);
         let rs = 0, rn = 0, bs = 0, bn = 0;
-        for (const [x, z] of road) { const y = rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { rs += y; rn++; } }
-        for (const [x, z] of bld) { const y = rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { bs += y; bn++; } }
+        for (const [x, z] of road) { const y = ctx.ground.rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { rs += y; rn++; } }
+        for (const [x, z] of bld) { const y = ctx.ground.rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { bs += y; bn++; } }
         out[s] = (rn && bn) ? +(bs / bn - rs / rn).toFixed(2) : null;
       }
       let best = 0, bestv = -1e9;
