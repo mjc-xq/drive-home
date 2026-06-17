@@ -2407,6 +2407,7 @@ export function createEngine({ canvas, ui, emit }) {
   // fromSearch = the player explicitly chose this place from the GO address search;
   // only THOSE arrivals earn the "Arrived" banner (a casual map tap does not).
   function setDestination(lat, lon, label, isChain, fromSearch, opts = {}) {
+    stopFollow();   // picking a new destination ends an active "follow me"
     const w = geoToWorld(lat, lon);
     let seedRoute = null;
     if (opts.drive) {
@@ -2485,8 +2486,9 @@ export function createEngine({ canvas, ui, emit }) {
     { featureType: 'poi', stylers: [{ visibility: 'off' }] },
     { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#222831' }] },
   ];
-  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapClick = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0;
+  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapClick = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0, _gmapHeading = 0;
   function disposeMiniMap() {
+    if (_gmapDiv) _gmapDiv.style.transform = '';   // drop any heading-up rotation so a re-mount starts clean
     if (_gmapClick) { _gmapClick.remove(); _gmapClick = null; }
     if (_gmapCar) { _gmapCar.setMap(null); _gmapCar = null; }
     if (_gmapRoute) { _gmapRoute.setMap(null); _gmapRoute = null; }
@@ -2497,6 +2499,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (!div || _gmapDiv === div) return;
     disposeMiniMap();
     _gmapDiv = div;
+    div.style.transformOrigin = '50% 50%'; div.style.willChange = 'transform';   // spin the heading-up map about its centre (the car)
     loadMapsSDK().then(maps => {
       if (disposed || _gmapDiv !== div) return;
       _gmaps = maps;
@@ -2516,12 +2519,18 @@ export function createEngine({ canvas, ui, emit }) {
     if (!_gmap || now - _gmapT < 200) return;   // ~5 Hz pan
     _gmapT = now;
     const o = worldToGeo(car.x, car.z);
+    // HEADING-UP: spin the whole map so the car's heading points UP — oriented like the driver/user,
+    // the way a phone GPS does. World is x=east, z=-north and car.yaw=atan2(east,-north), so the
+    // compass bearing (cw from north) = 180°−yaw. We counter-rotate the map div by that bearing (and
+    // scale up to fill the corners the rotation exposes), then point the car marker the same way so it
+    // sits pointing straight up. During a route OVERVIEW the map isn't car-centred, so stay north-up.
+    const bearing = 180 - car.yaw * 180 / Math.PI;
+    const overview = now < _gmapOverviewUntil;
+    if (!overview) { const d = ((bearing - _gmapHeading + 180) % 360 + 360) % 360 - 180; _gmapHeading += d * 0.35; }   // smoothed, unwrapped → no shimmer / no 360° spin
+    if (_gmapDiv) _gmapDiv.style.transform = overview ? 'none' : `rotate(${(-_gmapHeading).toFixed(2)}deg) scale(1.62)`;
     if (_gmapCar) {
       _gmapCar.setPosition({ lat: o.lat, lng: o.lon });
-      // North-up map: rotate the arrow to the car's COMPASS BEARING (cw from north). World is
-      // x=east, z=-north and car.yaw=atan2(east,-north), so bearing = atan2(east,north) =
-      // 180°-yaw. (Using yaw directly pointed the arrow due south when driving north.)
-      const ic = _gmapCar.getIcon(); ic.rotation = 180 - car.yaw * 180 / Math.PI; _gmapCar.setIcon(ic);
+      const ic = _gmapCar.getIcon(); ic.rotation = overview ? bearing : _gmapHeading; _gmapCar.setIcon(ic);   // north-up: along bearing; heading-up: same as the div's counter-rotation → points UP
     }
     if (_gmapRoute) {
       if (ROUTE && ROUTE.length && _gmapRouteFor !== ROUTE) {
@@ -2630,42 +2639,76 @@ export function createEngine({ canvas, ui, emit }) {
     setDestination(homeGeo.lat, homeGeo.lon, 'Home', false, true, { drive: true, celebrate: true });
     return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
   }
+  function jumpHome() {   // TELEPORT home (the "Jump there" button) — driveHome() chauffeur-drives, which is wrong for Jump
+    jumpTo(homeGeo.lat, homeGeo.lon, 'Home');
+    return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
+  }
   function driveToLatLon(lat, lon, label, quiet) {
     setDestination(lat, lon, label, false, true, { drive: true, celebrate: true, quiet });
     return Promise.resolve({ lat, lon, label: label || 'Destination' });
   }
-  // Drive the car to the USER's real GPS location, and (optionally) keep chasing them as they move.
-  let _geoWatch = null, _followLast = null, _followT = 0;
-  function stopFollow() { const was = _geoWatch != null; if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; } _followLast = null; _followT = 0; if (was) emit('follow', false); }
+  // FOLLOW = track the user's real GPS position EXACTLY: glide straight to the live point (NO Google
+  // routing — that snapped to the "wrong street" and overshot short hops) and orient the car to the
+  // phone's compass heading. "Drive to me" (non-follow) still routes there once for the scenic drive.
+  let _geoWatch = null, followMode = false, _followGeo = null, _followHeading = null;
+  let _headingOn = false, _headingOff = null;
+  function startHeading() {
+    if (_headingOn) return;
+    const onOrient = (e) => {
+      let h = null;
+      if (typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading;   // iOS: degrees clockwise from true north
+      else if (e.absolute && typeof e.alpha === 'number') h = (360 - e.alpha) % 360;                                          // others: alpha rises counter-clockwise from north
+      if (h != null) _followHeading = Math.PI - h * Math.PI / 180;   // → world yaw (x=E, z=-N, forward=(sin,cos)): yaw = π − heading
+    };
+    const attach = () => {
+      _headingOn = true;
+      window.addEventListener('deviceorientationabsolute', onOrient, true);
+      window.addEventListener('deviceorientation', onOrient, true);
+      _headingOff = () => { window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true); };
+    };
+    const DOE = window.DeviceOrientationEvent;
+    if (DOE && typeof DOE.requestPermission === 'function') DOE.requestPermission().then(s => { if (s === 'granted') attach(); }).catch(() => { });   // iOS 13+: gesture-gated permission
+    else attach();
+  }
+  function stopHeading() { if (_headingOff) { try { _headingOff(); } catch (e) { } } _headingOff = null; _headingOn = false; _followHeading = null; }
+  function stopFollow() {
+    const was = followMode || _geoWatch != null;
+    if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; }
+    followMode = false; _followGeo = null; stopHeading();
+    if (was) emit('follow', false);
+  }
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
     stopFollow();
     if (mode !== 'drive') enterDrive();
+    if (follow) {
+      startHeading();                                                  // request the compass NOW, inside the button-tap gesture (iOS requires that)
+      followMode = true; autoDrive = false; clearRouteRail(); clearDestination();   // exact-follow OWNS the car — kill any rail/route
+      emit('autodrive', false); emit('follow', true);
+      toast('📍 Following you — the car tracks your location', 1700);
+    }
     return new Promise((resolve, reject) => {
       let done = false;
       navigator.geolocation.getCurrentPosition(
         pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
           if (Number.isFinite(lat) && Number.isFinite(lon) && mode === 'drive') {
-            _followLast = geoToWorld(lat, lon); _followT = performance.now();   // seed so the first watcher tick doesn't instantly re-route
-            driveToLatLon(lat, lon, follow ? '📍 Following you' : '📍 Your location');
-            toast(follow ? '📍 Following your location' : '📍 Driving to you', 1500);
+            const w = geoToWorld(lat, lon);
+            if (follow) _followGeo = { x: w[0], z: w[1] };               // updateDrive glides the car here, overshoot-free
+            else { driveToLatLon(lat, lon, '📍 Your location'); toast('📍 Driving to you', 1500); }
           }
           if (!done) { done = true; resolve({ lat, lon }); }
         },
         err => { stopFollow(); toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 4000 });
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 });
       if (follow) {
-        emit('follow', true);
         _geoWatch = navigator.geolocation.watchPosition(pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
-          if (!Number.isFinite(lat) || !Number.isFinite(lon) || mode !== 'drive') return;
-          const tnow = performance.now(), w = geoToWorld(lat, lon);
-          if (_followLast && Math.hypot(w[0] - _followLast[0], w[1] - _followLast[1]) < 30) return;   // re-route only on a real move…
-          if (tnow - _followT < 8000) return;                                                          // …and at most once per 8 s (no Directions spam / rail thrash)
-          _followLast = w; _followT = tnow;
-          driveToLatLon(lat, lon, '📍 Following you', true);   // QUIET re-route — no toasts/celebrate; the rail re-acquires the new route
-        }, () => { }, { enableHighAccuracy: true, timeout: 14000, maximumAge: 3000 });
+          if (!followMode || mode !== 'drive' || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          if (pos.coords.accuracy != null && pos.coords.accuracy > 60) return;   // drop junk fixes — those caused the "wrong street" jumps
+          const w = geoToWorld(lat, lon);
+          _followGeo = { x: w[0], z: w[1] };                            // just move the target; the glide in updateDrive smooths jitter + can't overshoot
+        }, () => { }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 });
       }
     });
   }
@@ -3047,11 +3090,16 @@ export function createEngine({ canvas, ui, emit }) {
     guideGeo.setDrawRange(0, (Math.min(pts.length, GUIDE_N) - 1) * 6);   // only the built segments
     guideLine.visible = true;
   }
-  // 2D minimap (north-up, centred on the car): roads, house, destination + line, car.
+  // 2D minimap (HEADING-UP, centred on the car): roads, house, destination + line, car. The map
+  // rotates so the car's forward is always "up" — oriented like the driver / user, the way a phone
+  // GPS does. A small N tick shows where north is; tapMinimap inverts the SAME rotation so taps land.
   function drawMinimap(ctx, w, h) {
     ctx.clearRect(0, 0, w, h);
     const cx = w / 2, cy = h / 2, range = 620, scale = (w / 2) / range;   // wider view to match the live map zoom-out
-    const toPx = (wx, wz) => [cx + (wx - car.x) * scale, cy + (wz - car.z) * scale];
+    let _d = car.yaw - _miniYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI;
+    _miniYaw += _d * 0.2;                                                  // ease the map's rotation so steering jitter doesn't shimmer the whole map
+    const ca = Math.cos(_miniYaw), sa = Math.sin(_miniYaw);
+    const toPx = (wx, wz) => { const dx = wx - car.x, dz = wz - car.z; return [cx + (-dx * ca + dz * sa) * scale, cy + (-dx * sa - dz * ca) * scale]; };   // heading-up rotation: forward → screen-up
     ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath();
     for (const s of roadSegs) {
       const a = toPx(s[0][0], s[0][1]), b = toPx(s[1][0], s[1][1]);
@@ -3084,12 +3132,15 @@ export function createEngine({ canvas, ui, emit }) {
       const dp = toPx(DEST.x, DEST.z);
       ctx.fillStyle = '#ffc21e'; ctx.beginPath(); ctx.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); ctx.fill();
     }
-    const hx = Math.sin(car.yaw), hz = Math.cos(car.yaw), pxv = Math.cos(car.yaw), pzv = -Math.sin(car.yaw);
+    // CAR: on a heading-up map the car always points straight UP (forward).
     ctx.fillStyle = '#d94f1e'; ctx.beginPath();
-    ctx.moveTo(cx + hx * 7, cy + hz * 7);
-    ctx.lineTo(cx - hx * 5 + pxv * 4, cy - hz * 5 + pzv * 4);
-    ctx.lineTo(cx - hx * 5 - pxv * 4, cy - hz * 5 - pzv * 4);
+    ctx.moveTo(cx, cy - 7); ctx.lineTo(cx + 4, cy + 5); ctx.lineTo(cx - 4, cy + 5);
     ctx.closePath(); ctx.fill();
+    // NORTH tick: world north (-z) maps to screen dir (-sin, cos) of the map heading — so the user can
+    // still orient even as the whole map spins under them.
+    const nlen = Math.min(cx, cy) - 8, nNx = cx - sa * nlen, nNy = cy + ca * nlen;
+    ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.font = 'bold 9px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('N', nNx, nNy);
   }
 
   // collision feedback: a thunk, a kick of camera shake, and a haptic buzz, scaled
@@ -3165,12 +3216,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (camMode === i) {
       camMode = 0; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0;
       inp2.navActive = false; navPtr = null; camera.up.set(0, 1, 0);
-      emit('driveCam', DRIVE_CAMS[camMode].name);
+      emit('driveCam', DRIVE_CAMS[camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
       toast('Camera: ' + DRIVE_CAMS[camMode].name, 1100);
       return;
     }
     camMode = i; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0;
-    emit('driveCam', DRIVE_CAMS[i].name);
+    emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
     toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
   // Scoop camera presets [dist, height] — cycled with the 🎥 button.
@@ -3343,9 +3394,12 @@ export function createEngine({ canvas, ui, emit }) {
     let throttle = car.throttle;
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
-    if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky)) {
+    const _userInput = Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky;
+    if (autoDrive && _userInput) {
       autoDrive = false; inp2.navActive = false; clearRouteRail(); stopFollow(); emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
     }
+    // FOLLOW runs with autoDrive OFF, so the grab-wheel check above won't catch it — let real input end it too.
+    if (followMode && _userInput) { stopFollow(); toast('🕹️ You took the wheel!', 900); }
     // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
     // has travelled along the current segment), not just proximity — at high speed the car
     // overshoots a 16 m radius without ever entering it, so routeIdx would stick and the car
@@ -3662,12 +3716,29 @@ export function createEngine({ canvas, ui, emit }) {
     // sanity ring at the metro scale where the flat-earth frame stays accurate.
     const lim = 30000;   // 30 km: reach the East Bay address presets (Oakland ≈ 22 km) across the streamed tiles
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
-    car.x = nx; car.z = nz;
+    if (!followMode) { car.x = nx; car.z = nz; }   // in follow the glide below OWNS position — don't let the physics step creep the car forward each frame (it caused a ~1.5 m steady-state drift past the target)
     // AUTO-DRIVE RAIL: when the chauffeur has a route, ignore the physics result and glide the car
     // ALONG the route by arc-length at a fast cruise — so it follows the road EXACTLY (no overshoot,
     // no ping-pong) and a cross-town trip takes ~30-90 s. Position is overridden here (after the
     // collision step), so it phases through obstacles on the route — that's the point.
-    if (autoDrive && ROUTE && ROUTE.length > 1) {
+    if (followMode && _followGeo) {
+      // EXACT FOLLOW: glide straight to the live GPS point. The exponential approach CAN'T overshoot;
+      // a per-frame cap turns a big initial gap into a quick straight glide instead of a teleport. No
+      // routing/rail here — those snapped to the "wrong street" and ran short hops in too hot.
+      const dx = _followGeo.x - car.x, dz = _followGeo.z - car.z;
+      const k = 1 - Math.exp(-dt * 3);
+      let mx = dx * k, mz = dz * k;
+      const step = Math.hypot(mx, mz), MAXSTEP = 520 * speedMul * dt;
+      if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; }
+      car.x += mx; car.z += mz; car.groundY = null; car.vlat = 0; car.steer = 0;
+      car.speed = Math.hypot(mx, mz) / Math.max(dt, 1e-3);   // for cam framing / wheel spin
+      car.railS = null; car.railSpeed = null;
+      // ORIENT to the phone compass when we have a heading; otherwise face the way we're gliding.
+      let tgtYaw = _followHeading;
+      if (tgtYaw == null) tgtYaw = Math.hypot(dx, dz) > 0.5 ? Math.atan2(dx, dz) : car.yaw;
+      let _fd = tgtYaw - car.yaw; while (_fd > Math.PI) _fd -= 2 * Math.PI; while (_fd < -Math.PI) _fd += 2 * Math.PI;
+      car.yaw += _fd * (1 - Math.exp(-dt * (_followHeading != null ? 8 : 5)));
+    } else if (autoDrive && ROUTE && ROUTE.length > 1) {
       if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; car.railSpeed = Math.abs(car.speed); }
       const total = routeTotalLen(), remain = total - car.railS;
       // MUCH FASTER on the way: scale hard with the open road ahead (up to ~520 m/s), easing only for
@@ -4058,7 +4129,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- loop ----------
   const dirV = new THREE.Vector3();
   let prev = performance.now();
-  let raf = 0, paused = false, ctxLost = false, _miniT = 0, _miniCtx = null, _miniEl = null, _shadowT = 0;
+  let raf = 0, paused = false, ctxLost = false, _miniT = 0, _miniCtx = null, _miniEl = null, _shadowT = 0, _miniYaw = 0;
   // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
   // in view whenever the photoreal world is shown. Throttled; emits only on change.
   const _attrTarget = []; let _attrStr = '', _attrT = 0;
@@ -4267,7 +4338,7 @@ export function createEngine({ canvas, ui, emit }) {
     enterHouse: () => { if (mode === 'scoop' && interior && scoopScene === 'yard') enterHouse(performance.now()); },
     leaveHouse: () => { if (mode === 'scoop' && scoopScene === 'interior') leaveHouse(performance.now()); },
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
-    setDestination, clearDestination, toggleAutoDrive, driveHome, driveToMyLocation, stopFollow,
+    setDestination, clearDestination, toggleAutoDrive, driveHome, jumpHome, driveToMyLocation, stopFollow,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
     placeSuggest, geocodeAddress, geocodePlaceId,
     jumpToAddress: (lat, lon, label) => jumpTo(lat, lon, label),
@@ -4314,9 +4385,14 @@ export function createEngine({ canvas, ui, emit }) {
       toast(roadLifeOn ? 'People + traffic ON' : 'People + traffic off', 1300);
       return roadLifeOn;
     },
-    // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
-    // and let the robot drive there. range/scale mirror drawMinimap exactly.
-    tapMinimap: (px, py, w, h) => { const range = 620, scale = (w / 2) / range; setDriveTarget(car.x + (px - w / 2) / scale, car.z + (py - h / 2) / scale); },
+    // tap-to-drive: convert a minimap pixel (HEADING-UP, car-centred) to a world point and let the
+    // robot drive there. Inverts the SAME rotation drawMinimap drew with (via _miniYaw) so a tap lands
+    // where the user pointed. range/scale mirror drawMinimap exactly.
+    tapMinimap: (px, py, w, h) => {
+      const range = 620, scale = (w / 2) / range, ca = Math.cos(_miniYaw), sa = Math.sin(_miniYaw);
+      const ox = px - w / 2, oy = py - h / 2;
+      setDriveTarget(car.x + (-ca * ox - sa * oy) / scale, car.z + (sa * ox - ca * oy) / scale);
+    },
     dispose,
     get mode() { return mode; }
   };
@@ -4359,7 +4435,7 @@ export function createEngine({ canvas, ui, emit }) {
     },
     state: () => ({
       mode, buildings: S.buildings.length, photoreal: !!p3dtiles && !staticGroup.visible,
-      poops: POOPS.length, car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), speed: +car.speed.toFixed(1), glb: !!car.glb },
+      poops: POOPS.length, car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), speed: +car.speed.toFixed(1), yaw: +car.yaw.toFixed(2), glb: !!car.glb },
       char: { x: +CHAR.x.toFixed(1), z: +CHAR.z.toFixed(1), bag: CHAR.bag, total: CHAR.total, lvl: CHAR.lvl }
     })
   };

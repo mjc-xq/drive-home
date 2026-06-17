@@ -489,7 +489,7 @@ export default function App() {
                       }}>🚗 Drive there</button>
                       <button className="navGoBtn jump" onClick={() => {
                         setNavErr('');
-                        const run = selDest.home ? eng().driveHome()
+                        const run = selDest.home ? eng().jumpHome()
                           : selDest.placeId ? eng().jumpToPlace(selDest.placeId, selDest.label)
                             : eng().jumpToText(selDest.q).catch(() => selDest.ll ? eng().jumpToAddress(selDest.ll[0], selDest.ll[1], selDest.label) : Promise.reject());
                         Promise.resolve(run).then(() => { setSelDest(null); setNavOpen(false); }).catch(() => setNavErr("Couldn't find that destination"));
