@@ -1212,6 +1212,11 @@ export function createEngine({ canvas, ui, emit }) {
 
   let disposed = false;
   const car = createCar(scene);
+  function clearRouteRail() {
+    car.railS = null;
+    car.railSpeed = null;
+    _railRoute = null;
+  }
   car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
   let cancelCarLoad = null;
   // LAZY vehicle roster: each slot's GLB is only fetched when that car is actually driven (the
@@ -1967,9 +1972,8 @@ export function createEngine({ canvas, ui, emit }) {
   function enterDrive() {
     setMode('drive'); camInit = false;
     setInside(false);
-    DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false;
-    guideLine.visible = false; destPin.visible = false; if (navMarker) navMarker.visible = false;
-    emit('dest', null); emit('autodrive', false);
+    clearDestination();
+    if (navMarker) navMarker.visible = false;
     // Default to the Roblox-style CHASE cam ('Close') so driving leads with the
     // dynamic thumbstick + swipe-to-look controls — that IS the Roblox feel the
     // player expects. The overhead drag-to-drive map stays one tap away on the VIEW
@@ -2065,6 +2069,7 @@ export function createEngine({ canvas, ui, emit }) {
       bx = p.x; bz = p.z; found = true;
     }
     car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
+    clearRouteRail();   // if auto-drive is still on, reacquire rail arc from the snapped road point
     camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 1.8;   // re-seat the chase/orbit cam at the new spot; grace so auto-recover can't immediately re-fire
     audio.blip && audio.blip();
     toast('Back on the road 🛣️', 1000);
@@ -2172,7 +2177,7 @@ export function createEngine({ canvas, ui, emit }) {
       faceRouteStart();
     }
   }
-  function clearDestination() { routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null; emit('dest', null); emit('autodrive', false); }
+  function clearDestination() { routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; clearRouteRail(); guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null; emit('dest', null); emit('autodrive', false); }
   // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
   // Geocoding/Directions endpoints are CORS-blocked, which is why the old fetch box failed) ----
   function geocodeAddress(text) {
@@ -2459,7 +2464,14 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- auto-drive RAIL: a chauffeur is not a physics sim. Glue the car to the route polyline and
   // advance it by arc-length at a fast cruise, so a cross-town trip takes ~30-90 s and it can never
   // overshoot a bend or ping-pong off the route, no matter the speed. (Supernatural traction by design.)
-  function routeTotalLen() { let L = 0; for (let i = 0; i < ROUTE.length - 1; i++) L += Math.hypot(ROUTE[i + 1].x - ROUTE[i].x, ROUTE[i + 1].z - ROUTE[i].z); return L; }
+  let _routeLenFor = null, _routeLen = 0;
+  function routeTotalLen() {
+    if (!ROUTE) return 0;
+    if (_routeLenFor === ROUTE) return _routeLen;
+    _routeLenFor = ROUTE; _routeLen = 0;
+    for (let i = 0; i < ROUTE.length - 1; i++) _routeLen += Math.hypot(ROUTE[i + 1].x - ROUTE[i].x, ROUTE[i + 1].z - ROUTE[i].z);
+    return _routeLen;
+  }
   function railArcAt(x, z) {   // arc-length (m from ROUTE[0]) of the nearest point on the route to (x,z)
     let bestS = 0, bd = 1e18, acc = 0;
     for (let i = 0; i < ROUTE.length - 1; i++) {
@@ -2498,7 +2510,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoMaxMph) s = Math.min(s, autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
     return s;
   }
-  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; car.railS = null; if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
+  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; clearRouteRail(); if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
   // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
   // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
@@ -2996,7 +3008,7 @@ export function createEngine({ canvas, ui, emit }) {
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
     if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky)) {
-      autoDrive = false; inp2.navActive = false; car.railS = null; emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
+      autoDrive = false; inp2.navActive = false; clearRouteRail(); emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
     }
     // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
     // has travelled along the current segment), not just proximity — at high speed the car
@@ -3882,6 +3894,7 @@ export function createEngine({ canvas, ui, emit }) {
     jumpToPlace: (placeId, label) => geocodePlaceId(placeId, label).then(g => { jumpTo(g.lat, g.lon, g.label); return g; }),
     driveToText: (text) => setDestinationByText(text, true),
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
+    driveToLatLon,
     setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
     setSpeedMul, getSpeedMul: () => speedMul,
     setCrowdDensity, getCrowdDensity: () => CROWD_DENSITY,
