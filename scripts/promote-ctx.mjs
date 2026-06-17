@@ -208,7 +208,7 @@ walk(fn, {
     if (!refsOnly && owner !== rootScope) return; // shadowed by a nested binding (or unresolved) -> leave alone
     if (refsOnly && owner && owner !== rootScope) return; // refs-only: skip genuine nested bindings
     if (shorthandValue) {
-      const grandparent = ancestors[ancestors.length - 2];
+      const grandparent = ancestors[ancestors.length - 3]; // [-1]=identifier, [-2]=Property, [-3]=Object{Expression,Pattern}
       if (grandparent && grandparent.type === 'ObjectPattern') {
         // pattern shorthand: declaration patterns shadow (skip); assignment-target patterns need expansion
         return; // promoted names are never re-declared via pattern (would shadow) -> safe to leave
