@@ -1459,11 +1459,22 @@ export function createEngine({ canvas, ui, emit }) {
     if (interior._navGraph) return interior._navGraph;
     const rooms = interior.rooms || [], dws = interior.doorways || [];
     const adj = rooms.map(() => []);
-    for (const d of dws) {
-      const near = [];
-      for (let i = 0; i < rooms.length; i++) { const r = rooms[i]; if (d.x >= r.minX - 0.7 && d.x <= r.maxX + 0.7 && d.z >= r.minZ - 0.7 && d.z <= r.maxZ + 0.7) near.push({ i, d2: (r.x - d.x) ** 2 + (r.z - d.z) ** 2 }); }
-      near.sort((a, b) => a.d2 - b.d2);
-      if (near.length >= 2 && near[0].i !== near[1].i) { const a = near[0].i, b = near[1].i; adj[a].push({ to: b, door: d }); adj[b].push({ to: a, door: d }); }
+    // Connect rooms whose floor AABBs ABUT (share a wall) — NOT by door-mesh containment, which left
+    // most rooms isolated (the scan's door_* meshes are sparse + several openings have no door mesh).
+    // The waypoint is the shared-border midpoint, snapped to a real doorway if one lines up within 1.5 m.
+    const PAD = 0.6;   // ~wall thickness
+    for (let i = 0; i < rooms.length; i++) for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i], b = rooms[j];
+      const ox = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);   // overlap on X
+      const oz = Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ);   // overlap on Z
+      const gapX = Math.max(a.minX - b.maxX, b.minX - a.maxX);          // >0 = separated on X
+      const gapZ = Math.max(a.minZ - b.maxZ, b.minZ - a.maxZ);
+      if (!((oz > 0.5 && gapX <= PAD) || (ox > 0.5 && gapZ <= PAD))) continue;   // not adjacent
+      const bx = (Math.max(a.minX, b.minX) + Math.min(a.maxX, b.maxX)) / 2;
+      const bz = (Math.max(a.minZ, b.minZ) + Math.min(a.maxZ, b.maxZ)) / 2;
+      let door = { x: bx, z: bz }, bd = 1.5 * 1.5;                      // prefer a real door within 1.5 m of the shared border
+      for (const d of dws) { const dd = (d.x - bx) ** 2 + (d.z - bz) ** 2; if (dd < bd) { bd = dd; door = d; } }
+      adj[i].push({ to: j, door }); adj[j].push({ to: i, door });
     }
     return (interior._navGraph = adj);
   }
@@ -1581,7 +1592,11 @@ export function createEngine({ canvas, ui, emit }) {
           // the next. Far from the door → aim at it; close → aim at the goal so we step THROUGH it.
           let tx = gx, tz = gz;
           const cur = roomIndexAt(npc.x, npc.z), goalRoom = roomIndexAt(gx, gz);
-          if (cur !== goalRoom) { const door = routeDoor(cur, goalRoom); if (door && Math.hypot(door.x - npc.x, door.z - npc.z) > 0.55) { tx = door.x; tz = door.z; } }
+          if (cur !== goalRoom) {
+            let door = routeDoor(cur, goalRoom);
+            if (!door) { let bd = Infinity; for (const dw of (interior.doorways || [])) { const dd = (dw.x - npc.x) ** 2 + (dw.z - npc.z) ** 2; if (dd < bd) { bd = dd; door = dw; } } }   // graph said nothing → at least aim at the NEAREST opening, never a wall
+            if (door && Math.hypot(door.x - npc.x, door.z - npc.z) > 0.3) { const px = gx - door.x, pz = gz - door.z, pl = Math.hypot(px, pz) || 1; tx = door.x + px / pl * 0.4; tz = door.z + pz / pl * 0.4; }   // aim ~0.4 m PAST the door toward the goal so the heading carries straight THROUGH the opening, not into the jamb
+          }
           const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = NPC_SPD * dt;
           const r = interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD, true);
           const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
@@ -2295,7 +2310,7 @@ export function createEngine({ canvas, ui, emit }) {
   // browser — the Directions web service is CORS-blocked). Falls back to a straight
   // line if the SDK/Directions API isn't enabled on the key.
   let _mapsSDK = null;
-  let routeReqId = 0;
+  let routeReqId = 0, _quietRoute = false;
   function loadMapsSDK() {
     if (window.google && window.google.maps && window.google.maps.DirectionsService) return Promise.resolve(window.google.maps);
     if (_mapsSDK) return _mapsSDK;
@@ -2347,7 +2362,7 @@ export function createEngine({ canvas, ui, emit }) {
               ROUTE = laneOffsetRoute(pts, LANE_OFFSET); routeIdx = 0;   // ride the correct lane, not the divider
               snapDestinationToRouteEnd(ROUTE);
               if (autoDrive && Math.abs(car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
-              toast('🗺️ Route ready — follow the line', 1500);
+              if (!_quietRoute) toast('🗺️ Route ready — follow the line', 1500);
             }
           } else console.warn('[directions] no route:', status);
         }
@@ -2380,12 +2395,13 @@ export function createEngine({ canvas, ui, emit }) {
         if (np && np.d < 90) seedRoute = localRoadRoute(car.x, car.z, np.x, np.z);
       }
     }
-    DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: !!fromSearch || !!opts.celebrate };   // geo kept so a failed route can self-retry
+    DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: (!!fromSearch || !!opts.celebrate) && !opts.quiet };   // geo kept so a failed route can self-retry
     ROUTE = seedRoute || null; routeIdx = 0;
     if (ROUTE) snapDestinationToRouteEnd(ROUTE);
     destPin.userData.groundY = null;
     emit('dest', { label: DEST.label });
-    if (!isChain) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + esc(DEST.label) + ' · ' + km + ' km — routing…', 2200); }
+    _quietRoute = !!opts.quiet;   // suppress the follow-up "Route ready" toast on quiet (follow-mode) re-routes
+    if (!isChain && !opts.quiet) { const km = (Math.hypot(DEST.x - car.x, DEST.z - car.z) / 1000).toFixed(1); toast('📍 ' + esc(DEST.label) + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
     if (opts.drive) {
       autoDrive = true; inp2.navActive = false;
@@ -2593,13 +2609,13 @@ export function createEngine({ canvas, ui, emit }) {
     setDestination(homeGeo.lat, homeGeo.lon, 'Home', false, true, { drive: true, celebrate: true });
     return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
   }
-  function driveToLatLon(lat, lon, label) {
-    setDestination(lat, lon, label, false, true, { drive: true, celebrate: true });
+  function driveToLatLon(lat, lon, label, quiet) {
+    setDestination(lat, lon, label, false, true, { drive: true, celebrate: true, quiet });
     return Promise.resolve({ lat, lon, label: label || 'Destination' });
   }
   // Drive the car to the USER's real GPS location, and (optionally) keep chasing them as they move.
-  let _geoWatch = null, _followLast = null;
-  function stopFollow() { if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; } _followLast = null; }
+  let _geoWatch = null, _followLast = null, _followT = 0;
+  function stopFollow() { if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; } _followLast = null; _followT = 0; }
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
     stopFollow();
@@ -2607,15 +2623,26 @@ export function createEngine({ canvas, ui, emit }) {
     return new Promise((resolve, reject) => {
       let done = false;
       navigator.geolocation.getCurrentPosition(
-        pos => { driveToLatLon(pos.coords.latitude, pos.coords.longitude, follow ? '📍 Following you' : '📍 Your location'); toast(follow ? '📍 Following your location' : '📍 Driving to you', 1500); if (!done) { done = true; resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }); } },
-        err => { toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
+        pos => {
+          const lat = pos.coords.latitude, lon = pos.coords.longitude;
+          if (Number.isFinite(lat) && Number.isFinite(lon) && mode === 'drive') {
+            _followLast = geoToWorld(lat, lon); _followT = performance.now();   // seed so the first watcher tick doesn't instantly re-route
+            driveToLatLon(lat, lon, follow ? '📍 Following you' : '📍 Your location');
+            toast(follow ? '📍 Following your location' : '📍 Driving to you', 1500);
+          }
+          if (!done) { done = true; resolve({ lat, lon }); }
+        },
+        err => { stopFollow(); toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 4000 });
       if (follow) {
         _geoWatch = navigator.geolocation.watchPosition(pos => {
-          const w = geoToWorld(pos.coords.latitude, pos.coords.longitude);
-          if (_followLast && Math.hypot(w[0] - _followLast[0], w[1] - _followLast[1]) < 30) return;   // re-route only on a real move, so we don't spam Directions
-          _followLast = w;
-          if (mode === 'drive') driveToLatLon(pos.coords.latitude, pos.coords.longitude, '📍 Following you');   // chase them — the rail re-acquires the new route
+          const lat = pos.coords.latitude, lon = pos.coords.longitude;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon) || mode !== 'drive') return;
+          const tnow = performance.now(), w = geoToWorld(lat, lon);
+          if (_followLast && Math.hypot(w[0] - _followLast[0], w[1] - _followLast[1]) < 30) return;   // re-route only on a real move…
+          if (tnow - _followT < 8000) return;                                                          // …and at most once per 8 s (no Directions spam / rail thrash)
+          _followLast = w; _followT = tnow;
+          driveToLatLon(lat, lon, '📍 Following you', true);   // QUIET re-route — no toasts/celebrate; the rail re-acquires the new route
         }, () => { }, { enableHighAccuracy: true, timeout: 14000, maximumAge: 3000 });
       }
     });
@@ -2811,6 +2838,7 @@ export function createEngine({ canvas, ui, emit }) {
   // geocoder quota; falls back silently on any error.
   let _geoT = 0, _geoBusy = false, _geoLabel = '', _geoLast = null;
   function updateLocationLabel(now) {
+    if (_geoBusy && now - _geoT > 12000) _geoBusy = false;   // watchdog: a Geocoder callback that never fires must not wedge the readout dead for the session
     if (mode !== 'drive' || _geoBusy || now - _geoT < 4000) return;
     if (_geoLast && Math.hypot(car.x - _geoLast.x, car.z - _geoLast.z) < 140) return;
     _geoT = now; _geoLast = { x: car.x, z: car.z };
