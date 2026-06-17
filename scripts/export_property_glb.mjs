@@ -16,7 +16,7 @@
 // Blender's glTF importer converts Y-up -> Z-up on import.
 //
 // Run:  node scripts/export_property_glb.mjs
-import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -120,31 +120,36 @@ function gableTris(rect, base, wallH) {
   for (const [x, y, z] of seq) out.push(x * ca + z * sa + tx, y + base, -x * sa + z * ca + tz);
   return out;
 }
-// returns non-indexed positions; wallVerts marks where roof verts begin (for colouring)
-function buildingTris(b, base, wallH) {
+// Emit a building into WALL triangles (facade UV: u = perimeter dist / TILE,
+// v = height / TILE -> tiled stucco+window texture) and ROOF triangles (cap +
+// gables, UV = nadir aerial projection -> real satellite roof imagery).
+const TILE = 3.0;
+const aerialUV = (X, Z) => [(X + C[0] - A.E0) / (A.E1 - A.E0), (C[1] - Z - A.Nb) / (A.Nt - A.Nb)];
+// push a roof triangle with upward-facing winding (so the sun lights it) + aerial UVs
+function pushUpTri(rPos, rUV, a, b, c) {
+  const ux = b[0] - a[0], uz = b[2] - a[2], vx = c[0] - a[0], vz = c[2] - a[2];
+  const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
+  for (const v of tri) { rPos.push(v[0], v[1], v[2]); const uv = aerialUV(v[0], v[2]); rUV.push(uv[0], uv[1]); }
+}
+function emitBuilding(b, base, wallH, wPos, wUV, rPos, rUV) {
   const ring = b.p.map(([e, n]) => [wx(e), wz(n)]);
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
-  const pos = [], yb = base, yt = base + wallH;
+  const yb = base, yt = base + wallH, vt = wallH / TILE;
+  let dist = 0;
   for (let i = 0; i < ring.length; i++) {           // walls
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
-    pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
+    const seg = Math.hypot(xj - xi, zj - zi), u0 = dist / TILE, u1 = (dist + seg) / TILE; dist += seg;
+    wPos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
+    wUV.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
   }
-  const wallVerts = pos.length / 3;
   const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));   // flat eave cap
   for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, [])) {
-    const A = ring[a], C = ring[c], D = ring[d]; pos.push(A[0], yt, A[1], C[0], yt, C[1], D[0], yt, D[1]);
+    pushUpTri(rPos, rUV, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
   }
-  if (b.r) for (const r of b.r) pos.push(...gableTris(r, base, wallH));   // gables
-  return { pos, wallVerts, ring };
-}
-const WALLP = [0xe8dcc8, 0xdcc9ad, 0xcdbfae, 0xc9b79c, 0xd9cbb6, 0xbfae9a].map(c => new THREE.Color(c));
-const ROOFP = [0x8a5a3c, 0x6f5a48, 0x9a6b4a, 0x7d6b5a, 0x5e5048, 0xa05f3a, 0x736253].map(c => new THREE.Color(c));
-const pick = (arr, i) => arr[(Math.imul(i + 1, 2654435761) >>> 0) % arr.length];
-function emitBuilding(b, base, wallH, wallC, roofC, posArr, colArr) {
-  const { pos, wallVerts, ring } = buildingTris(b, base, wallH);
-  for (let k = 0; k < pos.length; k += 3) {
-    posArr.push(pos[k], pos[k + 1], pos[k + 2]);
-    const c = (k / 3) < wallVerts ? wallC : roofC; colArr.push(c.r, c.g, c.b);
+  if (b.r) for (const r of b.r) {                    // gables
+    const g = gableTris(r, base, wallH);
+    for (let k = 0; k < g.length; k += 9)
+      pushUpTri(rPos, rUV, [g[k], g[k + 1], g[k + 2]], [g[k + 3], g[k + 4], g[k + 5]], [g[k + 6], g[k + 7], g[k + 8]]);
   }
   return ring;
 }
@@ -156,22 +161,26 @@ scene.add(terrainMesh);
 const wallHeight = b => ((b.r && b.r.length) ? Math.max(2.4, (b.h || 4.5) * 0.8) : (b.h || 4.5)) + 0.5;
 const houseB = S.buildings.find(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
+const hwPos = [], hwUV = [], hrPos = [], hrUV = [];
 if (houseB) {
   const hc = centroidEN(houseB.p), base = terrainAt(wx(hc[0]), wz(hc[1])) - 0.5;
-  const hPos = [], hCol = [];
-  buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB), new THREE.Color(0xf3ead6), new THREE.Color(0xc0532a), hPos, hCol));
-  scene.add(mkMesh(hPos, null, 0xf3ead6, 'House', { colors: hCol, flat: true }));
+  buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB), hwPos, hwUV, hrPos, hrUV));
+  scene.add(mkMesh(hwPos, null, 0xffffff, 'House_walls', { uvs: hwUV }));
+  scene.add(mkMesh(hrPos, null, 0xffffff, 'House_roof', { uvs: hrUV }));
 }
-const bPos = [], bCol = [];
+const bwPos = [], bwUV = [], brPos = [], brUV = [];
 let nBld = 0;
 for (const b of S.buildings) {
   if (b.house) continue;
   const cen = centroidEN(b.p); if (!inPatch(wx(cen[0]), wz(cen[1]))) continue;
   const base = terrainAt(wx(cen[0]), wz(cen[1])) - 0.5;
-  buildingPolys.push(emitBuilding(b, base, wallHeight(b), pick(WALLP, nBld), pick(ROOFP, nBld), bPos, bCol));
+  buildingPolys.push(emitBuilding(b, base, wallHeight(b), bwPos, bwUV, brPos, brUV));
   nBld++;
 }
-if (nBld) scene.add(mkMesh(bPos, null, 0xb8b0a4, 'Buildings', { colors: bCol, flat: true }));
+if (nBld) {
+  scene.add(mkMesh(bwPos, null, 0xffffff, 'Buildings_walls', { uvs: bwUV }));
+  scene.add(mkMesh(brPos, null, 0xffffff, 'Buildings_roofs', { uvs: brUV }));
+}
 
 // roads (context) + collect world polylines for tree spacing
 const roadLines = [];
@@ -304,15 +313,37 @@ if (existsSync(PARCELSJSON)) {
   if (yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
 }
 
-// ---- export GLB ----------------------------------------------------------
+// ---- export GLB, then embed photo textures via gltf-transform -------------
+// (GLTFExporter can't encode images in Node — gltf-transform attaches the JPEG/
+//  PNG bytes directly.) aerial -> Terrain + all roofs; facade -> all walls.
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
 mkdirSync(path.join(ROOT, 'exports'), { recursive: true });
 const out = path.join(ROOT, 'exports', '1840-dahill-property.glb');
-writeFileSync(out, Buffer.from(glb));
+
+const { NodeIO } = await import('@gltf-transform/core');
+const io = new NodeIO();
+const doc = await io.readBinary(new Uint8Array(glb));
+const aerialP = path.join(ROOT, 'src/assets/aerial_opt.jpg'), facadeP = path.join(ROOT, 'exports/facade.png');
+const aerialTex = existsSync(aerialP) ? doc.createTexture('aerial').setImage(new Uint8Array(readFileSync(aerialP))).setMimeType('image/jpeg') : null;
+const facadeTex = existsSync(facadeP) ? doc.createTexture('facade').setImage(new Uint8Array(readFileSync(facadeP))).setMimeType('image/png') : null;
+const REPEAT = 10497, CLAMP = 33071;
+let textured = 0;
+for (const m of doc.getRoot().listMaterials()) {
+  const n = m.getName() || '';
+  if (aerialTex && /(terrain|roof)/i.test(n)) {
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
+  } else if (facadeTex && /walls/i.test(n)) {
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(facadeTex);
+    m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
+  }
+}
+writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 
 const objs = [];
 scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
 console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld}   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
-console.log(`wrote ${out} (${(Buffer.from(glb).length / 1024).toFixed(0)} KB)`);
+console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
+console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);
