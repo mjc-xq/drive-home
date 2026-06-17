@@ -72,20 +72,29 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       }
     });
 
-    // Mahogany the furniture wood: ALL tables + bookshelves, EXCEPT bookshelves in the bedrooms.
-    // Clone each material first so we never recolour a shared floor/wall material, and tint over the
-    // scan map so the wood grain survives. Bedroom floor boxes (model space) say which shelves to skip.
-    const MAHOGANY = 0x35180b;   // deep dark mahogany
+    // Recolour furniture by type. Clone each material first (never touch a shared floor/wall material)
+    // and tint over the scan map so detail survives. The dog couch (couchSofa = sofa nearest a window,
+    // computed here so the OTHER main-room sofas can go army green) is hidden + replaced by couchy.usdz.
+    let couchSofa = null;
+    if (sofas.length && windows.length) {
+      const wc = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
+      let bd = Infinity;
+      for (const s of sofas) { const c = new THREE.Box3().setFromObject(s).getCenter(new THREE.Vector3()); for (const w of wc) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; couchSofa = s; } } }
+    }
+    const couchName = couchSofa ? nameOf(couchSofa) : null;
+    const MAHOGANY = 0x35180b, CHAIR_BLACK = 0x141414, ARMY_GREEN = 0x4b5320;
     const bedBoxes = floors.filter(f => /bedroom/i.test(nameOf(f))).map(f => { const b = new THREE.Box3().setFromObject(f); return [b.min.x, b.max.x, b.min.z, b.max.z]; });
     const inBedroom = o => { const b = new THREE.Box3().setFromObject(o), x = (b.min.x + b.max.x) / 2, z = (b.min.z + b.max.z) / 2; return bedBoxes.some(bb => x >= bb[0] && x <= bb[1] && z >= bb[2] && z <= bb[3]); };
-    const mahog = m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.setHex(MAHOGANY); if (c.roughness !== undefined) c.roughness = 0.5; if (c.metalness !== undefined) c.metalness = 0.1; if (c.envMapIntensity !== undefined) c.envMapIntensity = 0; c.needsUpdate = true; return c; };
+    const tint = (hex, rough) => m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.setHex(hex); if (c.roughness !== undefined) c.roughness = rough; if (c.metalness !== undefined) c.metalness = 0.1; if (c.envMapIntensity !== undefined) c.envMapIntensity = 0; c.needsUpdate = true; return c; };
+    const paint = (o, hex, rough = 0.6) => { const f = tint(hex, rough); o.material = Array.isArray(o.material) ? o.material.map(f) : f(o.material); };
     model.traverse(o => {
       if (!o.isMesh || !o.material) return;
       const n = nameOf(o);
-      const isShelf = /^storage_shelf/.test(n);
-      if (!/^table/.test(n) && !isShelf) return;
-      if (isShelf && inBedroom(o)) return;                                         // leave the bedroom bookshelves alone
-      o.material = Array.isArray(o.material) ? o.material.map(mahog) : mahog(o.material);
+      if (/^table/.test(n)) paint(o, MAHOGANY, 0.5);                                  // tables -> mahogany
+      else if (/^storage_shelf/.test(n)) { if (!inBedroom(o)) paint(o, MAHOGANY, 0.5); }   // bookshelves -> mahogany (not in bedrooms)
+      else if (/^chair_swivel/.test(n)) paint(o, CHAIR_BLACK, 0.45);                  // office / swivel-base chair -> black
+      else if (/^chair_dining/.test(n)) paint(o, MAHOGANY, 0.5);                      // kitchen / dining chairs -> mahogany like the table
+      else if (/^sofa/.test(n) && n !== couchName) paint(o, ARMY_GREEN, 0.8);         // main-room couches (NOT the dog couch) -> army green
     });
 
     // Recenter: floor TOP (not min.y — that would sink the character ~10cm) to world floorY,
@@ -168,14 +177,8 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const spawn = { x: sx, z: sz, yaw: Math.atan2(cx - sx, cz - sz) };
     const ceilingY = floorY + ceilingH * S;
 
-    // The couchy dog-couch lands on the sofa nearest a window (computed once, reused by the swap below);
-    // NPCs may SIT on the OTHER sofas. Each seat = its top surface + a facing yaw toward the room centre.
-    let couchSofa = null;
-    if (sofas.length && windows.length) {
-      const wc = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
-      let bd = Infinity;
-      for (const s of sofas) { const c = new THREE.Box3().setFromObject(s).getCenter(new THREE.Vector3()); for (const w of wc) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; couchSofa = s; } } }
-    }
+    // NPCs may SIT on the sofas EXCEPT the dog couch (couchSofa, found above). Each seat = its top
+    // surface + a facing yaw toward the nearest room centre.
     const seats = [];
     for (const s of sofas) {
       if (s === couchSofa) continue;                            // the dog couch is taken
