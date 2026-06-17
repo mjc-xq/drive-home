@@ -119,6 +119,7 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
   // stays on failure). Each pig keeps its own scale; the inner mesh carries the
   // model-facing correction so the group can still steer by yaw.
   loadPigPrototype(pigUrl, PIG_YAW, proto => {
+    let swapped = 0;
     for (const a of ANIMALS) {
       if (a.kind !== 'pig') continue;
       scene.remove(a.mesh);
@@ -127,7 +128,9 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
       grp.scale.setScalar(a.scale);
       scene.add(grp);
       a.mesh = grp;
+      swapped++;
     }
+    if (swapped) pigGeo.dispose();
   });
 
   // --- poop: two instanced pools because r128 per-instance color is unreliable ---
@@ -141,7 +144,12 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
   // Swap both pools to the emoji-poop GLB once it loads (existing per-instance
   // transforms are preserved). The merged geometry carries its own face colors.
   loadPoopGeometry(poopUrl, (geo, mat) => {
-    for (const m of [poopBrown, poopPale]) { m.geometry = geo; m.material = mat; }
+    for (const m of [poopBrown, poopPale]) {
+      const oldGeo = m.geometry, oldMat = m.material;
+      m.geometry = geo; m.material = mat;
+      if (oldGeo && oldGeo !== geo) oldGeo.dispose();
+      if (oldMat && oldMat !== mat) oldMat.dispose();
+    }
   });
   const POOPS = [];
   const VANISH = [];        // poops mid scoop-pop animation (idx still reserved)

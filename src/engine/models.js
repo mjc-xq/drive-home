@@ -15,6 +15,13 @@ function bakedGeom(mesh) {
   if (!ng.attributes.normal) ng.computeVertexNormals();
   return ng;
 }
+function disposeSource(root) {
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) if (m && m.dispose) m.dispose();
+  });
+}
 
 // Pig: a Sketchfab export carrying ground/backdrop planes too. Drop the planes,
 // keep the body + eye meshes, paint the body (densest mesh) near-black while
@@ -47,6 +54,7 @@ export function loadPigPrototype(url, yaw, onReady) {
     proto.add(inner);
     proto.rotation.y = yaw;                          // model-facing correction
     onReady(proto);
+    disposeSource(root);
   }, undefined, err => console.warn('pig model failed, keeping fallback', err));
 }
 
@@ -73,6 +81,7 @@ export function loadPoopGeometry(url, onReady) {
     geo.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82 });
     onReady(geo, mat);
+    disposeSource(gltf.scene);
   }, undefined, err => console.warn('poop model failed, keeping fallback', err));
 }
 
@@ -96,7 +105,7 @@ export function loadVegetation(url, onReady) {
       if (mat.map) mat.map.colorSpace = THREE.NoColorSpace;
       variants.push({ name: o.name, geom: geo, mat, height: size.y || 1, bush: /bush/i.test(o.name) });
     });
-    if (variants.length) onReady(variants);
+    if (variants.length) { onReady(variants); disposeSource(gltf.scene); }
     else console.warn('veg GLB had no variant meshes, keeping fallback', url);
   }, undefined, err => console.warn('veg model failed, keeping fallback', err));
 }

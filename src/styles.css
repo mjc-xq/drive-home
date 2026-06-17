@@ -498,6 +498,9 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
   background:linear-gradient(180deg,#0a1024 0%,#26315c 55%,#6e4f76 78%,#d77f4f 100%)}
 #loading::after{content:'';position:absolute;left:0;right:0;bottom:0;height:34%;background:#0a0c12}
 #loading.done{opacity:0;pointer-events:none}
+#loading.error{background:#11151b}
+#loading.error::before{opacity:.18}
+#loading.error .loadSub{max-width:min(78vw,360px);line-height:1.45;color:rgba(255,255,255,.82)}
 .loadInner{position:relative;text-align:center}
 .loadKick{font-weight:600;font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--nav);margin-bottom:14px}
 .loadTitle{font-family:'AGC';font-weight:900;font-size:clamp(40px,11vw,58px);line-height:.84;letter-spacing:0;text-transform:uppercase}

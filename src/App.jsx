@@ -52,6 +52,7 @@ export default function App() {
   const scoopMenuRef = useRef(null);    // the Scoop ☰ side menu: outside-tap dismiss tests against this
 
   const [ready, setReady] = useState(false);
+  const [engineError, setEngineError] = useState('');
   const [photoreal, setPhotoreal] = useState(false);   // real Google tiles are up (vs the procedural placeholder)
   const [revealTimedOut, setRevealTimedOut] = useState(false);   // fallback so the loader never hangs if tiles fail
   const [picking, setPicking] = useState(true);   // start menu: pick a mode before playing
@@ -131,8 +132,15 @@ export default function App() {
         default: break;
       }
     };
-    const engine = createEngine({ canvas: canvasRef.current, ui: uiRefs.current, emit });
-    engineRef.current = engine;
+    let engine = null;
+    try {
+      engine = createEngine({ canvas: canvasRef.current, ui: uiRefs.current, emit });
+      engineRef.current = engine;
+    } catch (e) {
+      console.error('[engine] failed to start', e);
+      setEngineError('Could not start WebGL. Try closing other tabs or using a newer browser.');
+      return;
+    }
     return () => {
       engine.dispose();
       engineRef.current = null;
@@ -200,12 +208,12 @@ export default function App() {
 
   return (
     <div id="appShell">
-      <div id="loading" className={(ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
+      <div id="loading" className={engineError ? 'error' : (ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
         <div className="loadInner">
           <div className="loadKick">1840 Dahill Lane</div>
           <div className="loadTitle">Neighborhood<br />Drive</div>
-          <div className="loadBar"><i /></div>
-          <div className="loadSub">Building the neighborhood…</div>
+          {!engineError && <div className="loadBar"><i /></div>}
+          <div className="loadSub">{engineError || 'Building the neighborhood…'}</div>
         </div>
       </div>
       <canvas
