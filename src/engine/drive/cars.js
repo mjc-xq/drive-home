@@ -1,6 +1,7 @@
 import { VEHICLES, cycleVehicle, loadDrivableCar, loadRealCar, setVehicle, vehicleList } from '../car.js';
 import { installDracoDecoder } from '../draco-install.js';
 import carGlbUrl from '../../assets/ferrari.glb';
+// Vehicle roster / garage: lazy per-slot GLB loading, the car-select menu, Ferrari unlock, parked cars.
 export function createCars(ctx) {
   function ensureVehicle(slot) {
     if (ctx.flags.has('nocar') || ctx.disposed) return;

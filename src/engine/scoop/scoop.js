@@ -2,6 +2,8 @@ import { TOOLS, toolAfterScoop } from '../animals.js';
 import { SCOOP_CAMS } from '../camera/presets.js';
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
+// Scoop game: the keeper HUD/tools, the yard scoop loop (updateScoop), and the indoor
+// follow-cam + see-through occluder hiding (updateScoopInterior).
 export function createScoop(ctx) {
   // ---------- scoop mode ----------
   function pushScoopHud() {

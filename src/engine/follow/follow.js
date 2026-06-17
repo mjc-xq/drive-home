@@ -1,4 +1,6 @@
 import { clamp } from '../coords.js';
+// Follow-the-car: live-GPS follow (critically-damped spring glide), device-compass heading,
+// drive-to-my-location, and the speed / auto-max settings.
 export function createFollow(ctx) {
   function startHeading() {
     if (ctx._headingOn) return;

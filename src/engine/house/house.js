@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+// House interior: enter/leave the house, and the non-playable NPC behaviour FSM with
+// room-graph (BFS-through-doorways) navigation and dancing.
 export function createHouse(ctx) {
   // Show/hide the interior. The yard is NOT hidden object-by-object — it's 2 km away and fogged
   // out — so this only flips the scene flag, the interior group, and yard-only pins.

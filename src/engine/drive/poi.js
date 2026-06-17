@@ -1,4 +1,6 @@
 import { clamp } from '../coords.js';
+// Neighbourhood POIs: the 5 real landmarks — light-pillar beacons + labels, proximity
+// found-checks, the arrival celebration, and the visit-them-all chain.
 export function createPoi(ctx) {
   function emitPOIs() { ctx.emit('poiProgress', { found: ctx.poiFound.size, total: ctx.POIS.length }); }
   // Route the player to the nearest place they HAVEN'T found yet — turns 5 one-shot

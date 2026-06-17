@@ -1,5 +1,7 @@
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
+// Map management: Google Maps SDK, routing + auto-drive rail, geocoding/search, live + procedural
+// minimap, the OSM road graph, teleport/jump, the route guide ribbon, and the location label.
 export function createNav(ctx) {
   function clearRouteRail() {
     ctx.car.railS = null;

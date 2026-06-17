@@ -1,6 +1,8 @@
 import { DRIVE_CAMS } from '../camera/presets.js';
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
+// Driving physics: the per-frame updateDrive integrator (throttle/brake/steer/drift/boost/
+// soft-wall/auto-drive rail) and collision feedback (carHit).
 export function createDrive(ctx) {
   // Returns true only when a FRESH hit registers (past the 200ms cooldown). The
   // caller gates its speed-scrub on that so a car overlapping geometry for several

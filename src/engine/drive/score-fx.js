@@ -1,4 +1,6 @@
 import { clamp } from '../coords.js';
+// Drive scoring + FX: pooled skid/smoke/coin particles, the coin-rally run clock, combo,
+// trip score, nitro/boost economy, and near-miss detection.
 export function createScore(ctx) {
   function spawnSkid(x, z, y, yaw, now) {
     const s = ctx.FX.skids[ctx.FX.si++ % ctx.FX.skids.length];
