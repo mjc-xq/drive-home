@@ -32,20 +32,28 @@ export const VEHICLES = [
   { slot: 14, name: 'Rat Rod', spec: 'BARE-METAL · BLOWN V8', credit: 'model: Sketchfab', profile: { accel: 1.25, top: 0.88, grip: 0.8, slip: 1.25 } }
 ];
 
+// Anisotropic filtering for car textures (the renderer's max, set by the engine). The cars
+// default to anisotropy=1, so their base/normal/roughness maps SHIMMER at the grazing angles the
+// chase cam looks down the body at — the main reason the models read "grainy". Same fix the
+// photoreal tiles already get.
+let CAR_ANISO = 8;
+export function setCarAniso(n) { CAR_ANISO = Math.max(1, n | 0); }
+const TEX_KEYS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap'];
 function liftVehicleMaterials(scene, lift = 0.22) {
   scene.traverse(o => {
     if (!o.isMesh || !o.material) return;
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) {
       if (!m) continue;
+      for (const k of TEX_KEYS) { const t = m[k]; if (t && t.isTexture && t.anisotropy < CAR_ANISO) { t.anisotropy = CAR_ANISO; t.needsUpdate = true; } }   // kill grazing-angle texture shimmer (grain)
       const nm = ((m.name || '') + (o.name || '')).toLowerCase();
       if (/glass|window|light|tail|head|lamp|mirror|chrome|plate|signal|amber/.test(nm)) continue;
       if (m.emissive && m.color) {
         m.emissive.copy(m.color).multiplyScalar(lift);
         m.emissiveIntensity = Math.max(m.emissiveIntensity || 0, 0.24);
       }
-      if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.42);
-      if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.36);
+      if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.4);
+      if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.42);   // softer specular = less metallic SPARKLE aliasing on detailed bodies (no MSAA on mobile)
     }
   });
 }
