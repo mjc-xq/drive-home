@@ -1131,10 +1131,10 @@ export function createEngine({ canvas, ui, emit }) {
     _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
     return CROWD_DENSITY;
   }
-  let _crowdN = 0; const _onCrowd = () => { if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
+  let _crowdN = 0; const _onCrowd = () => { if (disposed) return; if (++_crowdN === 2) { placeCrowd(); geocodePOIs(); } };
   if (!flags.has('nochar')) {
-    loadCeceCrowd(c => { ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
-    loadDrewCrowd(c => { drewCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadCeceCrowd(c => { if (disposed) return; ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadDrewCrowd(c => { if (disposed) return; drewCrowd = c; _onCrowd(); }, () => _onCrowd());
   } else geocodePOIs();
   let _crowdHitT = 0;
   function hideCrowd() {
@@ -1218,7 +1218,7 @@ export function createEngine({ canvas, ui, emit }) {
     10: { url: caspitaUrl, length: 4.6 },
     11: { url: mustang65Url, length: 4.8 },                          // nose -Z like the rest → default flip
     12: { url: mini65Url, length: 3.4 },
-    13: { url: hotrodUrl, length: 4.5, flip: false, extraYaw: -Math.PI / 2 },   // this GLB's length runs on X, not Z → a quarter-turn (not a flip) aligns it (verified vs a known-good car in a chase-cam render)
+    13: { url: hotrodUrl, length: 4.5, flip: false, extraYaw: Math.PI / 2 },   // this GLB's length runs on X → a +quarter-turn aligns the nose to travel (−π/2 pointed it backwards; +π/2 is forward)
     14: { url: ratrodUrl, length: 4.6 },
   };
   const vehLoading = new Set();
@@ -2877,64 +2877,77 @@ export function createEngine({ canvas, ui, emit }) {
     return g;
   }
 
-  // R8 — un-hide the car from trees/eaves/power-lines WITHOUT gouging the road. A tile fragment
-  // is removed ONLY when it is BOTH (a) above street level AND (b) between the camera and the car
-  // — i.e. exactly an overhead occluder sitting on the sightline. Everything at/below street level
-  // (the road, ground, low walls) and everything at/beyond the car (the forward scene, distant
-  // buildings) is KEPT. Done with TWO planes + clipIntersection=true on the tile materials, so a
-  // fragment survives if it's on the kept side of EITHER plane (union of kept = the AND-clip above).
-  // Applied only to the photoreal tile materials; the car/HUD/guide ribbon carry no planes.
-  // R8 height gate is a SIGHTLINE plane: instead of a flat cap at the car's road height (which
-  // slices off hillsides that rise above the road but sit BELOW the line of sight — the "weird
-  // white middle"), tilt the plane so it contains the camera→car ray (lifted by `clearance`) and
-  // its normal points UP. Then "above the plane" = poking above the actual line of sight (a real
-  // tree/eave/wire occluder) and "below the plane" = the ground and every hill lower than the
-  // sightline → KEPT. Proof we never cut terrain: the ground under the ray is, by construction,
-  // below the ray, hence below the plane (kept); only geometry that rises ABOVE the eye→car line
-  // by > clearance is removed, which is exactly a true occluder (or a hill that genuinely blocks
-  // the car — acceptable, and minimized by the depth gate to just the near segment).
+  // R8 — un-hide the car from trees/eaves/wires WITHOUT gouging the road AND without truncating
+  // anything away from the car. The cut is a LOCAL CORRIDOR from the camera to the car, not a global
+  // half-space: a fragment is removed only when it is (a) above the line of sight (so the road + every
+  // hill below the sightline stay), (b) camera-side of the car (so the forward scene + the car stay),
+  // AND (c) inside a thin cone whose apex is the CAMERA and which is only ~±W wide AT the car — so the
+  // strip that actually occludes the car is carved clean (whole trees, not just their tops), while a
+  // tree even a few metres off the line of sight is left fully intact. Built from clip planes +
+  // clipIntersection=true on the tile materials (removed = BEHIND every plane); the car/HUD carry none.
+  //   Height gate is a tilted SIGHTLINE plane (contains the camera→car ray, lifted by a small
+  // clearance, normal up): "above" = a real occluder poking over the line of sight; "below" = ground
+  // and any lower hill → KEPT (this is what fixed the "white middle" — we never cut below terrain).
+  //   Cone gate (the locality fix): two planes through the camera bounding a wedge that is a POINT at
+  // the camera and ±W at the car, so the removed region is the car's screen silhouette swept back to
+  // the lens — nothing off to the side is touched.
+  //   Overhead/near-vertical views can't form that cone (the sightline is ~vertical), so they use a
+  // vertical COLUMN instead: a flat canopy cap boxed to ±W around the car in x/z. Same outcome — the
+  // canopy right over the car/road is cut, trees away from the road are untouched.
   const _clipHoriz = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);   // kept side: BELOW the (tilted) sightline + clearance
   const _clipDepth = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);    // kept side: AT/BEYOND the car along the camera→car axis
+  const _clipConeA = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);    // cone wall (+lateral): kept side = outside the wedge
+  const _clipConeB = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);   // cone wall (−lateral)
+  const _clipBox = [new THREE.Plane(), new THREE.Plane(), new THREE.Plane(), new THREE.Plane()];   // overhead column walls (±x, ±z)
   const _clipN = new THREE.Vector3(), _clipP = new THREE.Vector3();
   function updateTileClip(carX, carY, carZ, view) {
     const planes = p3dtiles && p3dtiles.clipPlanes;
     if (!planes) return;
     // eye→car vector d; dist = |d|, dh = its horizontal extent (how horizontal the view is).
-    const dx = carX - camera.position.x, dy = carY - camera.position.y, dz = carZ - camera.position.z;
+    const ex = camera.position.x, ey = camera.position.y, ez = camera.position.z;
+    const dx = carX - ex, dy = carY - ey, dz = carZ - ez;
     const dist = Math.hypot(dx, dy, dz);
     if (dist < 1e-3) { planes.length = 0; return; }
-    const overhead = view.topdown || view.aerial;
-    // (No raycast "gate": it only fired when the dead-centre eye→car ray hit something, so trees that
-    // covered the car's BODY but not that one point slipped through — Cruise stopped hiding occluders.
-    // The tilted sightline plane below ALWAYS cuts above the line of sight, which reliably hides the
-    // occluders while still keeping every hill BELOW the sightline — the actual fix for the white middle.)
     const dh = Math.hypot(dx, dz);
-    const clearance = overhead ? 6 : 4.5;
-    // Overhead/near-vertical views: the tilted plane degenerates (h = d×up → 0), so fall back to a
-    // flat cap at car height + clearance. Looking straight down, there's no between-cam-and-car
-    // occlusion to chase anyway, so a horizontal cut is both correct and stable. Threshold: the
-    // sightline must be at least ~14° off vertical (dh/dist > 0.25) before we trust the tilt.
-    if (dh < dist * 0.25) {
-      _clipHoriz.normal.set(0, -1, 0);
-      _clipHoriz.constant = carY + clearance;
-    } else {
-      // nDown = down-pointing plane normal = -normalize(cross(d, h)), h = cross(d, up) = (dz,0,-dx).
-      // Worked out: cross(d,h) = (-dx·dy, dh², -dy·dz) (points UP), so nDown = (dx·dy, -dh², dy·dz).
-      let nx = dx * dy, ny = -dh * dh, nz = dy * dz;
-      const nl = Math.hypot(nx, ny, nz);
-      nx /= nl; ny /= nl; nz /= nl;                                   // ny < 0 → normal points DOWN, kept side = below the sightline
-      // Plane through (car lifted by `clearance` along the UP normal): planePoint = car - nDown*clearance.
-      const px = carX - nx * clearance, py = carY - ny * clearance, pz = carZ - nz * clearance;
-      _clipHoriz.normal.set(nx, ny, nz);
-      _clipHoriz.constant = -(nx * px + ny * py + nz * pz);          // kept where nDown·p + c >= 0 (below the tilted sightline)
+    if (view.topdown || dh < dist * 0.25) {
+      // OVERHEAD COLUMN: cap the canopy just above the car and box it to ±W around the car so the
+      // cut is a tight column over the road, never spreading to trees off to the sides.
+      const W = 7, clearance = 3.0;                          // clearance ≥ tallest car roof so the car itself never clips
+      _clipHoriz.normal.set(0, -1, 0); _clipHoriz.constant = carY + clearance;   // kept BELOW carY+clearance
+      _clipBox[0].normal.set(1, 0, 0);  _clipBox[0].constant = -(carX - W);   // behind ⇔ x > carX−W
+      _clipBox[1].normal.set(-1, 0, 0); _clipBox[1].constant = (carX + W);    // behind ⇔ x < carX+W
+      _clipBox[2].normal.set(0, 0, 1);  _clipBox[2].constant = -(carZ - W);   // behind ⇔ z > carZ−W
+      _clipBox[3].normal.set(0, 0, -1); _clipBox[3].constant = (carZ + W);    // behind ⇔ z < carZ+W
+      planes.length = 0; planes.push(_clipHoriz, _clipBox[0], _clipBox[1], _clipBox[2], _clipBox[3]);
+      return;
     }
-    // Depth gate: keep everything at/beyond the car along the eye→car axis (never clip the car or
-    // the road ahead). Camera side (nearer than ~2.6 m short of the car) is the only clipped side.
-    _clipN.set(dx, dy, dz).multiplyScalar(1 / dist);
+    // OBLIQUE (chase / cruise / aerial): cone from the camera to the car.
+    const W = 5, clearance = 1.2;                            // ±W at the car; low clearance so a tree's SIDES go, not just its top
+    // (1) tilted sightline height plane (down-normal; kept side = below). h = cross(d,up) = (dz,0,−dx),
+    // cross(d,h) = (−dx·dy, dh², −dy·dz) points UP, so the down normal nDown = (dx·dy, −dh², dy·dz).
+    let nx = dx * dy, ny = -dh * dh, nz = dy * dz;
+    const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl;
+    const hpx = carX - nx * clearance, hpy = carY - ny * clearance, hpz = carZ - nz * clearance;
+    _clipHoriz.normal.set(nx, ny, nz);
+    _clipHoriz.constant = -(nx * hpx + ny * hpy + nz * hpz);
+    // (2) depth gate: keep everything at/beyond (car − 2.6 m) along the eye→car axis.
+    const fx = dx / dist, fy = dy / dist, fz = dz / dist;
+    _clipN.set(fx, fy, fz);
     _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);
     _clipDepth.normal.copy(_clipN);
     _clipDepth.constant = -_clipN.dot(_clipP);
-    planes.length = 0; planes.push(_clipHoriz, _clipDepth);   // contents-mutate the SHARED array (clipIntersection makes it an AND-clip)
+    // (3) cone walls: horizontal lateral axis u = normalize(up × f) = normalize(f.z,0,−f.x); the two
+    // planes nA=u−tanθ·f, nB=−u−tanθ·f through the camera bound a wedge that is a point at the lens
+    // and ±W at the car (tanθ = W/dist). Removed (behind both) = inside that wedge.
+    const ul = Math.hypot(fz, fx) || 1, ux = fz / ul, uz = -fx / ul;   // unit horizontal ⊥ f
+    const tt = W / dist;
+    let ax = ux - tt * fx, ay = -tt * fy, az = uz - tt * fz;
+    let al = Math.hypot(ax, ay, az); ax /= al; ay /= al; az /= al;
+    _clipConeA.normal.set(ax, ay, az); _clipConeA.constant = -(ax * ex + ay * ey + az * ez);
+    let bx = -ux - tt * fx, by = -tt * fy, bz = -uz - tt * fz;
+    let bl = Math.hypot(bx, by, bz); bx /= bl; by /= bl; bz /= bl;
+    _clipConeB.normal.set(bx, by, bz); _clipConeB.constant = -(bx * ex + by * ey + bz * ez);
+    planes.length = 0; planes.push(_clipHoriz, _clipDepth, _clipConeA, _clipConeB);
   }
 
   function updateDrive(dt, now) {

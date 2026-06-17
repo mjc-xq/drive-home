@@ -169,7 +169,7 @@ export function loadRealCar(car, url, onFallback) {
     const gl = new GLTFLoader();
     gl.setDRACOLoader(DracoShim);
     gl.load(url, g => {
-      if (settled) return;
+      if (settled) { if (g.scene) disposeLoadedObject(g.scene); return; }
       try {
         const m = g.scene;
         if (!m) throw new Error('car GLB resolved with no scene');
@@ -214,10 +214,17 @@ export function loadRealCar(car, url, onFallback) {
 // floor/ceiling/curtain/backdrop/wall/shadow/ground/studio/showroom or the "ARC…" signature, so
 // clean car models pass through untouched.
 const STUDIO_JUNK = /floor|ceiling|curtain|backdrop|background|\bwall\b|studio|showroom|shadow|ground|\barc(black|metall|logo|matte)/i;
+function disposeLoadedObject(root) {
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) if (m && m.dispose) m.dispose();
+  });
+}
 function stripStudio(scene) {
   const junk = [];
   scene.traverse(o => { if (o.isMesh && STUDIO_JUNK.test((o.name || '') + ' ' + ((o.material && o.material.name) || ''))) junk.push(o); });
-  for (const o of junk) { if (o.parent) o.parent.remove(o); }
+  for (const o of junk) { if (o.parent) o.parent.remove(o); disposeLoadedObject(o); }
 }
 function normalizeCarGLB(scene, length, black) {
   stripStudio(scene);
@@ -251,7 +258,7 @@ export function loadParkedCar(parent, url, opts = {}, onReady) {
   const { x = 0, y = 0, z = 0, yaw = 0, length = 4.6, black = true, flip = false } = opts;
   let cancelled = false;
   new GLTFLoader().load(url, g => {
-    if (cancelled) return;
+    if (cancelled) { if (g.scene) disposeLoadedObject(g.scene); return; }
     const grp = new THREE.Group();
     grp.add(normalizeCarGLB(g.scene, length, black));
     grp.position.set(x, y, z);
@@ -343,7 +350,7 @@ export function loadCarProto(url, length, flip, onReady) {
   let cancelled = false;
   const gl = new GLTFLoader(); gl.setDRACOLoader(DracoShim);
   gl.load(url, g => {
-    if (cancelled) return;
+    if (cancelled) { if (g.scene) disposeLoadedObject(g.scene); return; }
     const inner = new THREE.Group();
     inner.rotation.y = flip ? Math.PI : 0;          // face nose +Z (traffic groups rotate by atan2(dx,dz))
     inner.add(normalizeCarGLB(g.scene, length, false));
@@ -359,7 +366,7 @@ export function loadDrivableCar(car, url, slot, opts = {}) {
   const gl = new GLTFLoader();
   gl.setDRACOLoader(DracoShim);                   // decode Draco-compressed GLBs (e.g. the Granvia)
   gl.load(url, g => {
-    if (cancelled) return;
+    if (cancelled) { if (g.scene) disposeLoadedObject(g.scene); return; }
     const inner = new THREE.Group();
     inner.rotation.y = spin;
     const model = normalizeCarGLB(g.scene, length, black);
