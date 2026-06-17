@@ -1028,7 +1028,12 @@ export function createEngine({ canvas, ui, emit }) {
   function placeCrowd() {
     const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
       if (!crowd) return;
-      const y = (onRoadHt ? actorGroundY(x, z) : terrainAt(x, z)) + 0.02;
+      // FINITE Y always: far POI clusters (schools) are placed before their photoreal tiles stream in,
+      // so actorGroundY() there returns NaN. A NaN baseY is sticky (settle's lerp keeps it NaN forever),
+      // so those dancers never appeared. Fall back to a finite height now; settleCrowdSpot snaps them to
+      // the real ground the moment you arrive and the tiles are loaded.
+      const gy = onRoadHt ? actorGroundY(x, z) : terrainAt(x, z);
+      const y = (Number.isFinite(gy) ? gy : (car.groundY ?? 0)) + 0.02;
       const yaw = opts.yaw != null ? opts.yaw : Math.random() * Math.PI * 2;
       crowdSpots.push({ rec: crowd.add(scene, { x, y, z, yaw, clip: opts.clip }), zone, onRoadHt: !!onRoadHt, settleT: 0 });
     };
@@ -1160,8 +1165,41 @@ export function createEngine({ canvas, ui, emit }) {
     sp.settleT = 0;
     const y = actorGroundY(sp.rec.x, sp.rec.z, sp.rec.baseY) + 0.02;
     if (!Number.isFinite(y)) return;
-    sp.rec.baseY += (y - sp.rec.baseY) * Math.min(1, dt * 5);
+    // SNAP on the first valid ground (baseY was a NaN/placeholder) or a big jump (just relocated /
+    // arrived at a far cluster); otherwise ease, to smooth small bumps. Without the snap a placeholder
+    // baseY never converged (NaN) and the dancers stayed invisible underground.
+    if (!Number.isFinite(sp.rec.baseY) || Math.abs(y - sp.rec.baseY) > 5) sp.rec.baseY = y;
+    else sp.rec.baseY += (y - sp.rec.baseY) * Math.min(1, dt * 5);
     if (!sp.rec.vel) sp.rec.grp.position.y = sp.rec.baseY;
+  }
+  // Re-home a culled STREET pedestrian onto a local road near the car, so the street pool FOLLOWS the
+  // car and pedestrians populate every street as the map streams in (instead of all sitting back at
+  // home, culled). Uses the OSM road graph far from home, the procedural roads near it; scatters on open
+  // ground if no road is handy. No raycast here — settleCrowdSpot snaps the height when it turns visible.
+  function relocateStreetSpot(sp) {
+    const fromHome = Math.hypot(car.x, car.z);
+    const segs = (fromHome < 340 && roadSegs.length) ? roadSegs : (osmRoadSegs.length ? osmRoadSegs : roadSegs);
+    let nx = null, nz = null;
+    if (segs && segs.length) {
+      for (let tr = 0; tr < 8; tr++) {
+        const s = segs[(Math.random() * segs.length) | 0];
+        const ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
+        const sdx = bx - ax, sdz = bz - az, L = Math.hypot(sdx, sdz); if (L < 6) continue;
+        const t = Math.random(), cx = ax + sdx * t, cz = az + sdz * t;
+        const d = Math.hypot(cx - car.x, cz - car.z);
+        if (d < 45 || d > 230) continue;                                   // not on top of you, within the cull radius
+        const ux = sdx / L, uz = sdz / L, side = Math.random() < 0.5 ? 1 : -1;
+        const off = SIDEWALK_OFF + Math.random() * 1.4;
+        nx = cx + (-uz) * side * off; nz = cz + ux * side * off; break;     // out to the sidewalk
+      }
+    }
+    if (nx == null) { const a = Math.random() * Math.PI * 2, r = 70 + Math.random() * 150; nx = car.x + Math.cos(a) * r; nz = car.z + Math.sin(a) * r; }
+    const rec = sp.rec;
+    rec.x = nx; rec.z = nz; rec.baseX = nx; rec.baseZ = nz;
+    rec.grp.position.x = nx; rec.grp.position.z = nz;
+    rec.baseY = (car.groundY ?? 0) + 0.02;                                  // rough; settle snaps to the real tile ground when visible
+    rec.grp.position.y = rec.baseY;
+    rec.vel = null; rec.respawnAt = 0; sp.onRoadHt = true; sp.settleT = 0;
   }
   function updateCrowd(dt, now) {
     if (!crowdSpots.length) return;
@@ -1188,10 +1226,13 @@ export function createEngine({ canvas, ui, emit }) {
         _crowdVisT = now;
         const CULL2 = 240 * 240;
         const cand = [];
+        let _reloc = 0;
         for (const sp of crowdSpots) {
           if (sp.zone === 'yard' || sp.zone === 'interior') { sp.rec.grp.visible = false; continue; }
           const d2 = (sp.rec.x - car.x) ** 2 + (sp.rec.z - car.z) ** 2;
-          if (d2 < CULL2) cand.push({ sp, d2 }); else sp.rec.grp.visible = false;
+          if (d2 < CULL2) { cand.push({ sp, d2 }); continue; }
+          sp.rec.grp.visible = false;
+          if (sp.zone === 'street' && _reloc < 8) { relocateStreetSpot(sp); _reloc++; }   // budgeted: a few culled street peds follow you onto local roads each scan
         }
         cand.sort((a, b) => a.d2 - b.d2);
         for (let i = 0; i < cand.length; i++) cand[i].sp.rec.grp.visible = i < CROWD_VIS_CAP;
