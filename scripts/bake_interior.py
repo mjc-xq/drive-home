@@ -11,8 +11,9 @@ What it does to the raw furniture-segmented room scan, in order:
   3. SOLIDIFY the thin/zero-thickness wall slabs (real back-faces -> no DoubleSide hack;
      colliders get true thickness)
   4. DECIMATE the furniture (97% of the tris) to claw back phone perf
-  5. (ao) BAKE ambient occlusion into a per-vertex COLOR_0 attribute (softened) so the
-     flat-lit / solid-tinted rooms gain contact-shadow depth with no runtime cost
+  5. (ao) BAKE ambient occlusion to a shared TEXTURE atlas and wire it through glTF's
+     standard occlusionTexture (the `glTF Material Output` node group) -> three's aoMap.
+     Survives the loader's runtime furniture tinting (AO is its own map, not base colour).
 
 Node names are PRESERVED (interior.js categorises by name), and Draco stays OFF
 (verify_interior_node.mjs fails loudly otherwise). Re-run after any re-scan.
@@ -20,51 +21,38 @@ Node names are PRESERVED (interior.js categorises by name), and Draco stays OFF
 import bpy, sys, math, json
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-SRC = argv[0]
-DST = argv[1]
+SRC, DST = argv[0], argv[1]
 DO_AO = (len(argv) < 3) or (argv[2].lower() != "noao")
+AO_RES = 2048      # AO atlas resolution
+AO_STRENGTH = 0.75 # 0 = no AO, 1 = full (softened toward white in-shader)
 
 WALL_PREFIXES = ("wall_", "joint_")
-STRUCT_PREFIXES = ("wall_", "joint_", "floor_")
 NONFURN_PREFIXES = ("wall_", "joint_", "door_", "window_", "floor_")
-
-def is_furniture(name):
-    return not name.startswith(NONFURN_PREFIXES)
-
-def log(msg):
-    print("[bake] " + msg, flush=True)
+def is_furniture(n): return not n.startswith(NONFURN_PREFIXES)
+def log(m): print("[bake] " + m, flush=True)
+def tris(o): return sum(len(p.vertices) - 2 for p in o.data.polygons)
+def principled(m):
+    return next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None) if (m and m.use_nodes) else None
 
 # ---- clean scene + import -------------------------------------------------
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=SRC, merge_vertices=False)
 meshes = [o for o in bpy.data.objects if o.type == "MESH"]
-def tris(o):
-    return sum(len(p.vertices) - 2 for p in o.data.polygons)
 tris_before = sum(tris(o) for o in meshes)
 mats_before = len({ms.material.name for o in meshes for ms in o.material_slots if ms.material})
 log(f"imported {len(meshes)} meshes, {tris_before} tris, {mats_before} materials")
 
 # ---- 1. merge duplicate materials ----------------------------------------
-def principled(m):
-    if not m or not m.use_nodes:
-        return None
-    return next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
-
 def mat_sig(m):
-    if not m:
-        return None
     b = principled(m)
     if not b:
-        return ("flat", tuple(round(c, 3) for c in m.diffuse_color))
+        return ("flat", tuple(round(c, 3) for c in m.diffuse_color)) if m else None
     bc = b.inputs["Base Color"]
     if bc.is_linked:
         src = bc.links[0].from_node
-        img = getattr(src, "image", None)
-        return ("tex", img.name if img else src.name)
-    col = tuple(round(c, 3) for c in bc.default_value)
-    return ("rgb", col,
-            round(b.inputs["Metallic"].default_value, 2),
-            round(b.inputs["Roughness"].default_value, 2))
+        return ("tex", getattr(getattr(src, "image", None), "name", src.name))
+    return ("rgb", tuple(round(c, 3) for c in bc.default_value),
+            round(b.inputs["Metallic"].default_value, 2), round(b.inputs["Roughness"].default_value, 2))
 
 canon = {}
 for m in bpy.data.materials:
@@ -84,102 +72,126 @@ for m in bpy.data.materials:
     if not b:
         continue
     bc = b.inputs["Base Color"]
-    if not bc.is_linked:  # textured mats keep their map; only tint flat colours
+    if not bc.is_linked:
         c = bc.default_value
         c[0], c[1], c[2] = c[0] * 0.7, c[1] * 0.7, c[2] * 0.7
     b.inputs["Roughness"].default_value = max(b.inputs["Roughness"].default_value, 0.9)
     b.inputs["Metallic"].default_value = min(b.inputs["Metallic"].default_value, 0.3)
 
-# ---- helper: bake all modifiers into mesh data (no ops/context needed) ----
+# ---- 3/4. solidify thin walls; decimate furniture -------------------------
 def apply_mods(o):
     dg = bpy.context.evaluated_depsgraph_get()
     o.data = bpy.data.meshes.new_from_object(o.evaluated_get(dg))
     o.modifiers.clear()
 
-# ---- 3. solidify thin walls; 4. decimate furniture; subdivide for AO ------
 solidified = decimated = 0
 for o in meshes:
-    n = o.name
-    changed = False
-    if DO_AO and n.startswith(STRUCT_PREFIXES):
-        sub = o.modifiers.new("sub", "SUBSURF")
-        sub.subdivision_type = "SIMPLE"      # linear: keeps flat shape, just adds verts for AO
-        sub.levels = sub.render_levels = 2
-        changed = True
+    n, changed = o.name, False
     if n.startswith(WALL_PREFIXES) and min(o.dimensions) < 0.05:
-        sol = o.modifiers.new("sol", "SOLIDIFY")
-        sol.thickness = 0.06
-        sol.offset = 0.0
-        solidified += 1
-        changed = True
+        s = o.modifiers.new("sol", "SOLIDIFY"); s.thickness = 0.06; s.offset = 0.0
+        solidified += 1; changed = True
     if is_furniture(n) and tris(o) > 500:
-        dec = o.modifiers.new("dec", "DECIMATE")
-        dec.ratio = 0.55
-        decimated += 1
-        changed = True
+        o.modifiers.new("dec", "DECIMATE").ratio = 0.55
+        decimated += 1; changed = True
     if changed:
         apply_mods(o)
 log(f"solidified {solidified} walls, decimated {decimated} furniture pieces")
 
-# ---- 5. AO bake -> per-vertex COLOR_0 -------------------------------------
+# ---- 5. AO -> shared texture atlas -> glTF occlusionTexture ----------------
 if DO_AO:
     sc = bpy.context.scene
-    sc.render.engine = "CYCLES"
-    sc.cycles.samples = 16
-    sc.cycles.device = "CPU"
-    sc.render.bake.target = "VERTEX_COLORS"
-    sc.render.bake.use_clear = True
+    sc.render.engine = "CYCLES"; sc.cycles.samples = 32; sc.cycles.device = "CPU"
+    meshes = [o for o in bpy.data.objects if o.type == "MESH"]
 
-    ao_mat = bpy.data.materials.new("AO_BAKE")
-    ao_mat.use_nodes = True
-    nt = ao_mat.node_tree
-    nt.nodes.clear()
-    ao = nt.nodes.new("ShaderNodeAmbientOcclusion")
-    ao.inputs["Distance"].default_value = 0.6
-    ao.samples = 16
-    emit = nt.nodes.new("ShaderNodeEmission")
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    nt.links.new(ao.outputs["Color"], emit.inputs["Color"])
-    nt.links.new(emit.outputs["Emission"], out.inputs["Surface"])
+    def textured(o):
+        return any(ms.material and (lambda b: b and b.inputs["Base Color"].is_linked)(principled(ms.material))
+                   for ms in o.material_slots)
 
-    STRENGTH = 0.7  # soften so AO never fully blacks out (multiplied in three.js)
+    # 5a. per-object unwrap into a clean 'lightmap' layer (strip strays on flat meshes so a
+    #     shared material never ends up with two different occlusion texCoords)
+    for o in meshes:
+        uvs = o.data.uv_layers
+        if not textured(o):
+            for l in list(uvs):
+                uvs.remove(l)
+        lm = uvs.get("lightmap") or uvs.new(name="lightmap")
+        uvs.active = lm
+        for x in bpy.data.objects:
+            x.select_set(False)
+        o.select_set(True); bpy.context.view_layer.objects.active = o
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.smart_project(island_margin=0.03, angle_limit=1.15)
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    # 5b. pack each object's 0-1 island block into its own grid cell of the shared atlas
+    cols = math.ceil(math.sqrt(len(meshes))); s = 1.0 / cols; inset = 0.06
     for i, o in enumerate(meshes):
-        me = o.data
-        if "AO" not in me.color_attributes:
-            me.color_attributes.new(name="AO", type="FLOAT_COLOR", domain="POINT")
-        me.color_attributes.active_color_name = "AO"
-        me.color_attributes.render_color_index = me.color_attributes.find("AO")
-        saved = [ms.material for ms in o.material_slots]
-        if not saved:
-            o.data.materials.append(ao_mat)
+        cx, cy = i % cols, i // cols
+        for d in o.data.uv_layers["lightmap"].data:
+            u, v = d.uv
+            d.uv = ((cx + inset + u * (1 - 2 * inset)) * s, (cy + inset + v * (1 - 2 * inset)) * s)
+    log(f"lightmap atlas: {len(meshes)} objects in {cols}x{cols} grid")
+
+    # 5c. bake AO (finite-distance contact, softened toward white in-shader) into the atlas
+    img = bpy.data.images.new("AO_atlas", AO_RES, AO_RES, alpha=False)
+    img.colorspace_settings.name = "Non-Color"
+    bm = bpy.data.materials.new("AO_BAKE"); bm.use_nodes = True
+    nt = bm.node_tree; nt.nodes.clear()
+    ao = nt.nodes.new("ShaderNodeAmbientOcclusion"); ao.inputs["Distance"].default_value = 0.5; ao.samples = 24
+    mix = nt.nodes.new("ShaderNodeMixRGB"); mix.inputs["Fac"].default_value = AO_STRENGTH
+    mix.inputs["Color1"].default_value = (1, 1, 1, 1)
+    em = nt.nodes.new("ShaderNodeEmission")
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    timg = nt.nodes.new("ShaderNodeTexImage"); timg.image = img
+    nt.links.new(ao.outputs["Color"], mix.inputs["Color2"])
+    nt.links.new(mix.outputs["Color"], em.inputs["Color"])
+    nt.links.new(em.outputs["Emission"], out.inputs["Surface"])
+    nt.nodes.active = timg  # bake target image node
+
+    saved = {}
+    for o in meshes:
+        saved[o.name] = [ms.material for ms in o.material_slots]
+        if not o.material_slots:
+            o.data.materials.append(bm)
         else:
             for ms in o.material_slots:
-                ms.material = ao_mat
-        for ob in bpy.data.objects:
-            ob.select_set(False)
-        o.select_set(True)
-        bpy.context.view_layer.objects.active = o
-        try:
-            bpy.ops.object.bake(type="EMIT")
-        except RuntimeError as e:
-            log(f"  bake skipped for {o.name}: {e}")
-        if saved:
-            for ms, mat in zip(o.material_slots, saved):
-                ms.material = mat
-        else:
+                ms.material = bm
+        o.data.uv_layers.active = o.data.uv_layers["lightmap"]
+    sc.render.bake.target = "IMAGE_TEXTURES"; sc.render.bake.use_clear = True; sc.render.bake.margin = 6
+    for x in bpy.data.objects:
+        x.select_set(x.type == "MESH")
+    bpy.context.view_layer.objects.active = meshes[0]
+    bpy.ops.object.bake(type="EMIT")
+    for o in meshes:
+        sv = saved[o.name]
+        if not sv:
             o.data.materials.clear()
-        # soften toward white
-        at = me.color_attributes["AO"]
-        for d in at.data:
-            c = d.color
-            c[0] = 1.0 - (1.0 - c[0]) * STRENGTH
-            c[1] = 1.0 - (1.0 - c[1]) * STRENGTH
-            c[2] = 1.0 - (1.0 - c[2]) * STRENGTH
-        if (i + 1) % 50 == 0:
-            log(f"  AO baked {i + 1}/{len(meshes)}")
-    if ao_mat.users == 0:
-        bpy.data.materials.remove(ao_mat)
-    log("AO bake complete")
+        else:
+            for ms, mat in zip(o.material_slots, sv):
+                ms.material = mat
+
+    # 5d. wire the atlas into the real materials via the `glTF Material Output` group
+    ng = bpy.data.node_groups.get("glTF Material Output") or bpy.data.node_groups.new("glTF Material Output", "ShaderNodeTree")
+    if not any(getattr(it, "in_out", "") == "INPUT" and it.name == "Occlusion" for it in ng.interface.items_tree):
+        ng.interface.new_socket(name="Occlusion", in_out="INPUT", socket_type="NodeSocketFloat")
+    for m in bpy.data.materials:
+        if m is bm or not m.use_nodes:
+            continue
+        nt = m.node_tree
+        uvn = nt.nodes.new("ShaderNodeUVMap"); uvn.uv_map = "lightmap"
+        tx = nt.nodes.new("ShaderNodeTexImage"); tx.image = img; tx.interpolation = "Linear"
+        nt.links.new(uvn.outputs["UV"], tx.inputs["Vector"])
+        grp = nt.nodes.new("ShaderNodeGroup"); grp.node_tree = ng
+        nt.links.new(tx.outputs["Color"], grp.inputs["Occlusion"])
+    bpy.data.materials.remove(bm)
+    # base UV back to active on textured meshes so base colour exports as TEXCOORD_0
+    for o in meshes:
+        for l in o.data.uv_layers:
+            if l.name != "lightmap":
+                o.data.uv_layers.active = l
+                break
+    log("AO atlas baked + wired to occlusionTexture")
 
 # ---- export ---------------------------------------------------------------
 meshes = [o for o in bpy.data.objects if o.type == "MESH"]
@@ -192,9 +204,9 @@ bpy.ops.export_scene.gltf(
     export_yup=True,
     export_apply=False,                           # modifiers already baked into mesh data
     export_materials="EXPORT",
-    export_vertex_color="ACTIVE",
-    export_vertex_color_name="AO",
-    export_all_vertex_colors=DO_AO,
+    export_vertex_color="NONE",
+    export_image_format="JPEG" if DO_AO else "AUTO",   # AO atlas as JPEG, not a 1.5 MB PNG
+    export_jpeg_quality=85,
     use_visible=False,
 )
 log(json.dumps({
