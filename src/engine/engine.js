@@ -3352,21 +3352,21 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoDrive && ROUTE && ROUTE.length > 1) {
       if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; car.railSpeed = Math.abs(car.speed); }
       const total = routeTotalLen(), remain = total - car.railS;
-      // BRAKE TO A STOP AT THE DESTINATION: cap the speed by the fastest we could still stop from in
-      // the distance that's left (v = √(2·a·d)). As `remain`→0 this cap →0, so the car decelerates
-      // smoothly and actually arrives at rest instead of clearing the route at full tilt.
-      const BRAKE_A = 200;                                                        // m/s² (supernatural, by design) → a short, punchy braking zone even from top speed
-      const stopCap = Math.sqrt(Math.max(0, 2 * BRAKE_A * remain));
       // MUCH FASTER on the way: scale hard with the open road ahead (up to ~520 m/s), easing only for
-      // real bends. distToNextTurn looks ~500 m ahead, so long straights peg the cap.
+      // real bends. distToNextTurn looks ~500 m ahead, so long straights peg the cap. The rail OWNS the
+      // speed via its own railSpeed (and overwrites car.speed) so the physics autodrive governor (autoCap,
+      // pulled hard at dt*7 above) can't clamp it down — safe because the rail glues the car to the
+      // polyline by arc-length, so it can't leave the route at ANY speed.
       const _cruise = clamp(150 + distToNextTurn() * 3.4, 150, 520 * speedMul);
-      const target = Math.min(_cruise, stopCap);
-      // The rail OWNS the speed on a routed trip via its own railSpeed state and overwrites car.speed:
-      // the physics autodrive governor (autoCap, pulled hard at dt*7 above) would otherwise clamp this
-      // cruise/brake back down. Safe because the rail glues the car to the polyline by arc-length, so
-      // it can't leave the route at ANY speed.
-      const rate = target < car.railSpeed ? dt * 4.5 : dt * 3;                    // brake a touch more eagerly than it accelerates
-      car.railSpeed += (target - car.railSpeed) * Math.min(1, rate);
+      car.railSpeed += (_cruise - car.railSpeed) * Math.min(1, dt * 3);           // smooth ACCEL toward the cruise
+      // GUARANTEED STOP AT THE DESTINATION: HARD-cap the speed to the fastest you could still brake to 0
+      // within the distance left (v = √(2·a·d)) — a hard clamp, NOT a lagged ease. With the old ease the
+      // speed stayed ABOVE this cap and the car ran in too hot and overshot; clamped, the car can always
+      // stop in `remain` and decelerates at exactly BRAKE_A to rest at the end. Super-braking decel (~26 g,
+      // it's on rails) so it never needs to start slowing early to make the stop.
+      const BRAKE_A = 260;
+      const stopCap = Math.sqrt(Math.max(0, 2 * BRAKE_A * remain));
+      if (car.railSpeed > stopCap) car.railSpeed = stopCap;                       // hard clamp → always able to stop by the destination
       if (car.railSpeed < 0) car.railSpeed = 0;
       car.speed = car.railSpeed;
       car.railS = Math.min(total, car.railS + car.speed * dt);                    // never roll past the destination
