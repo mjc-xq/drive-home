@@ -3,6 +3,8 @@ import * as THREE from 'three';
 // Deterministic LCG so the neighborhood looks the same on every load.
 export const makeRand = seed => () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
 
+export const asNonIndexed = g => g.index ? g.toNonIndexed() : g;
+
 // Non-indexed pos/normal/color(/uv) merge — three r128 ships no
 // BufferGeometryUtils, and per-vertex color lets the whole neighborhood share
 // a couple of materials. Pass uvAt to also bake aerial-photo UVs.
@@ -76,7 +78,7 @@ export function splitTops(g) {
 export function critterBuilder() {
   const L = [];
   const add = (g, x, y, z, color, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) => {
-    g = g.toNonIndexed();
+    g = asNonIndexed(g);
     const m = new THREE.Matrix4();
     m.compose(
       new THREE.Vector3(x, y, z),

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp, makeGeoENU } from './coords.js';
-import { merge } from './geom.js';
+import { asNonIndexed, merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
 import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
@@ -740,11 +740,11 @@ export function createEngine({ canvas, ui, emit }) {
       const x0 = sancCx + Math.cos(a0) * Rf, z0 = sancCz + Math.sin(a0) * Rf;
       const x1 = sancCx + Math.cos(a1) * Rf, z1 = sancCz + Math.sin(a1) * Rf;
       const py = terrainAt(x0, z0);
-      const post = new THREE.BoxGeometry(0.13, 1.15, 0.13).toNonIndexed(); post.translate(x0, py + 0.57, z0);
+      const post = asNonIndexed(new THREE.BoxGeometry(0.13, 1.15, 0.13)); post.translate(x0, py + 0.57, z0);
       parts.push({ g: post, color: woodC });
       const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, len = Math.hypot(x1 - x0, z1 - z0), yaw = Math.atan2(x1 - x0, z1 - z0), my = terrainAt(mx, mz);
       for (const ry of [0.42, 0.9]) {
-        const rail = new THREE.BoxGeometry(0.05, 0.09, len * 1.04).toNonIndexed();
+        const rail = asNonIndexed(new THREE.BoxGeometry(0.05, 0.09, len * 1.04));
         rail.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw)); rail.translate(mx, my + ry, mz);
         parts.push({ g: rail, color: railC });
       }
@@ -2967,14 +2967,15 @@ export function createEngine({ canvas, ui, emit }) {
       return;
     }
     // OBLIQUE (chase / cruise / aerial): a constant-width CORRIDOR from the camera to the car.
-    const W = 6, clearance = 0.4;                            // ±W slab around the look axis; clearance ≈0 cuts trees down to the line of sight (their SIDES, not just tops)
-    // (1) tilted sightline height plane (down-normal; kept side = below). h = cross(d,up) = (dz,0,−dx),
-    // cross(d,h) = (−dx·dy, dh², −dy·dz) points UP, so the down normal nDown = (dx·dy, −dh², dy·dz).
-    let nx = dx * dy, ny = -dh * dh, nz = dy * dz;
-    const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl;
-    const hpx = carX - nx * clearance, hpy = carY - ny * clearance, hpz = carZ - nz * clearance;
-    _clipHoriz.normal.set(nx, ny, nz);
-    _clipHoriz.constant = -(nx * hpx + ny * hpy + nz * hpz);
+    const W = 6, clearance = 2.5;                            // ±W slab around the look axis; flat-cap height above the car
+    // (1) FLAT height cap at carY + clearance. The earlier TILTED sightline rose to CAMERA height near
+    // the lens, so near-camera foreground sat below it and was never cut — it "reappeared right before
+    // your eyes" as you drove forward. A flat cap stays low ALL the way back to the camera, so the whole
+    // corridor (lens → car) is cleared. It can't gouge distant hills (the old "white middle") because the
+    // ±W slab below bounds the cut to the road strip, which is ~flat; the car itself is kept by the depth
+    // gate, not this cap, so the clearance only needs to tolerate the road's grade over the corridor.
+    _clipHoriz.normal.set(0, -1, 0);
+    _clipHoriz.constant = carY + clearance;                 // kept BELOW carY + clearance
     // (2) depth gate: keep everything at/beyond (car − 2.6 m) along the eye→car axis. 2.6 m (not less)
     // because the car's own tail sits ~2.25 m behind its centre along this axis in chase/cruise; a
     // tighter band would clip the car's rear.
