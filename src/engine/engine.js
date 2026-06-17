@@ -2319,7 +2319,7 @@ export function createEngine({ canvas, ui, emit }) {
     // SPEED-SCALED look-ahead: tight at low speed so the car HUGS the route (sticks to
     // the road through turns), longer at speed for a smooth line. A fixed 32 m look-ahead
     // cut every corner.
-    const look = clamp(Math.abs(car.speed) * 0.42, 11, 28);   // tighter look-ahead → HUGS the route (less corner-cutting off the road)
+    const look = clamp(Math.abs(car.speed) * 0.42, 11, 42);   // tight at low speed (HUGS corners), longer at speed so the chauffeur can anticipate the next bend far from home
     let acc = 0, px = car.x, pz = car.z;
     for (let i = routeIdx; i < ROUTE.length; i++) {
       acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
@@ -2781,21 +2781,60 @@ export function createEngine({ canvas, ui, emit }) {
   // buildings) is KEPT. Done with TWO planes + clipIntersection=true on the tile materials, so a
   // fragment survives if it's on the kept side of EITHER plane (union of kept = the AND-clip above).
   // Applied only to the photoreal tile materials; the car/HUD/guide ribbon carry no planes.
-  const _clipHoriz = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);   // kept side: BELOW street + clearance
+  // R8 height gate is a SIGHTLINE plane: instead of a flat cap at the car's road height (which
+  // slices off hillsides that rise above the road but sit BELOW the line of sight — the "weird
+  // white middle"), tilt the plane so it contains the camera→car ray (lifted by `clearance`) and
+  // its normal points UP. Then "above the plane" = poking above the actual line of sight (a real
+  // tree/eave/wire occluder) and "below the plane" = the ground and every hill lower than the
+  // sightline → KEPT. Proof we never cut terrain: the ground under the ray is, by construction,
+  // below the ray, hence below the plane (kept); only geometry that rises ABOVE the eye→car line
+  // by > clearance is removed, which is exactly a true occluder (or a hill that genuinely blocks
+  // the car — acceptable, and minimized by the depth gate to just the near segment).
+  const _clipHoriz = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);   // kept side: BELOW the (tilted) sightline + clearance
   const _clipDepth = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);    // kept side: AT/BEYOND the car along the camera→car axis
   const _clipN = new THREE.Vector3(), _clipP = new THREE.Vector3();
   function updateTileClip(carX, carY, carZ, view) {
     const planes = p3dtiles && p3dtiles.clipPlanes;
     if (!planes) return;
-    // Height gate: keep everything at/below street level + a small clearance (never clip the road).
-    _clipHoriz.normal.set(0, -1, 0);
-    _clipHoriz.constant = carY + (view.topdown || view.aerial ? 6 : 4.5);
+    // eye→car vector d; dist = |d|, dh = its horizontal extent (how horizontal the view is).
+    const dx = carX - camera.position.x, dy = carY - camera.position.y, dz = carZ - camera.position.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 1e-3) { planes.length = 0; return; }
+    const overhead = view.topdown || view.aerial;
+    // GATE (chase views only): only cut when something ACTUALLY blocks the car. Cast the eye→car ray
+    // and bail (clip NOTHING) when it reaches the car unobstructed. This is what stops an off-axis hill
+    // that's above the sightline but not in the way from being sliced (the "weird white middle"), and
+    // stops any clipping on open road far from home where the streamed tiles ARE the ground.
+    if (!overhead) {
+      if (!(p3dtiles.holder && p3dtiles.holder.visible)) { planes.length = 0; return; }
+      _clipN.set(dx, dy, dz).multiplyScalar(1 / dist);
+      _camRayD.copy(_clipN); camRay.set(_camRayO.copy(camera.position), _camRayD); camRay.far = dist - 1.2;
+      _camHits.length = 0; p3dtiles.raycast(camRay, _camHits);
+      if (!(_camHits[0] && _camHits[0].distance < dist - 1.2)) { planes.length = 0; return; }   // clear sightline → cut nothing
+    }
+    const dh = Math.hypot(dx, dz);
+    const clearance = overhead ? 6 : 4.5;
+    // Overhead/near-vertical views: the tilted plane degenerates (h = d×up → 0), so fall back to a
+    // flat cap at car height + clearance. Looking straight down, there's no between-cam-and-car
+    // occlusion to chase anyway, so a horizontal cut is both correct and stable. Threshold: the
+    // sightline must be at least ~14° off vertical (dh/dist > 0.25) before we trust the tilt.
+    if (dh < dist * 0.25) {
+      _clipHoriz.normal.set(0, -1, 0);
+      _clipHoriz.constant = carY + clearance;
+    } else {
+      // nDown = down-pointing plane normal = -normalize(cross(d, h)), h = cross(d, up) = (dz,0,-dx).
+      // Worked out: cross(d,h) = (-dx·dy, dh², -dy·dz) (points UP), so nDown = (dx·dy, -dh², dy·dz).
+      let nx = dx * dy, ny = -dh * dh, nz = dy * dz;
+      const nl = Math.hypot(nx, ny, nz);
+      nx /= nl; ny /= nl; nz /= nl;                                   // ny < 0 → normal points DOWN, kept side = below the sightline
+      // Plane through (car lifted by `clearance` along the UP normal): planePoint = car - nDown*clearance.
+      const px = carX - nx * clearance, py = carY - ny * clearance, pz = carZ - nz * clearance;
+      _clipHoriz.normal.set(nx, ny, nz);
+      _clipHoriz.constant = -(nx * px + ny * py + nz * pz);          // kept where nDown·p + c >= 0 (below the tilted sightline)
+    }
     // Depth gate: keep everything at/beyond the car along the eye→car axis (never clip the car or
     // the road ahead). Camera side (nearer than ~2.6 m short of the car) is the only clipped side.
-    _clipN.set(carX - camera.position.x, carY - camera.position.y, carZ - camera.position.z);
-    const dist = _clipN.length();
-    if (dist < 1e-3) { planes.length = 0; return; }
-    _clipN.multiplyScalar(1 / dist);
+    _clipN.set(dx, dy, dz).multiplyScalar(1 / dist);
     _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);
     _clipDepth.normal.copy(_clipN);
     _clipDepth.constant = -_clipN.dot(_clipP);
@@ -2894,6 +2933,11 @@ export function createEngine({ canvas, ui, emit }) {
           // must be to actually make the turn. Without this the chauffeur blasts straight
           // through bends at top speed and leaves the route — "autodrive breaks when fast".
           autoTurnLimit = clamp(64 - Math.abs(dyaw) * 80, 12, 64);
+          // ...and slow BEFORE the bend, not at it: cap to a speed we can brake down to a corner-able
+          // pace by the time we reach the next turn (distToNextTurn looks ~500 m ahead). This is what
+          // actually keeps the chauffeur on the route far from home instead of blasting past corners.
+          const _turnDist = distToNextTurn();
+          autoTurnLimit = Math.min(autoTurnLimit, 26 + Math.sqrt(Math.max(0, 2 * 30 * (_turnDist - 18))));
           const want = Math.min(autoDriveTargetSpeed(dDest), autoTurnLimit);
           const gap = want - Math.abs(car.speed);
           throttle = clamp(0.42 + gap / Math.max(22, want) * 0.95, 0, 1) * align;
@@ -2929,7 +2973,7 @@ export function createEngine({ canvas, ui, emit }) {
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
     let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
-    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 240 * boostMul * speedMul);   // the chauffeur stays fast on a clear straight, but capped low enough to STILL make the next turn (was 330 → it overshot bends and lost the route)
+    if (autoDrive && (highway || openRoad)) maxF = Math.min(maxF, 130 * boostMul * speedMul);   // CAP the chauffeur to a speed it can actually STEER far from home — the old 240+ (and highway's 250) made it overshoot every real bend and ping-pong off the route. Still ~290 mph on a straight; the predictive turn cap below slows it for bends.
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -3052,10 +3096,11 @@ export function createEngine({ canvas, ui, emit }) {
       if (offRoadDist > 14) offRoadT += dt; else offRoadT = 0;
       const stuck = Math.abs(car.speed) < 3;
       if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
-    } else if (autoDrive && onRouteNow && recoverCooldown <= 0 && offRoadDist > 55) {
-      // The chauffeur wandered far off the ROUTE line (a fast bend it couldn't hold) — snap it
-      // back onto the route so it re-syncs instead of circling/getting lost far from home.
-      offRoadT = 0; resetToRoad();
+    } else if (autoDrive && onRouteNow && recoverCooldown <= 0) {
+      // The chauffeur wandered off the ROUTE line — snap back so it re-syncs. Require PERSISTENCE
+      // (off for a beat, or way off) so a single momentary overshoot on a bend doesn't teleport-loop.
+      if (offRoadDist > 30) offRoadT += dt; else offRoadT = 0;
+      if (offRoadDist > 80 || (offRoadT > 1.2 && offRoadDist > 45)) { offRoadT = 0; resetToRoad(); }
     } else offRoadT = 0;
     // HARD UNSTICK: a bad teleport/landing can bury the car inside a building footprint, where
     // the collision below collapses every move candidate to its own spot (can't budge in any
