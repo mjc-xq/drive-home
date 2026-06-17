@@ -120,7 +120,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     };
 
     onReady({
-      group, floorY, ceilingY, roomAABB, spawn, walls, occluders,
+      group, floorY, ceilingY, roomAABB, spawn, walls, occluders, rooms,
       // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
       // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
       collide(px, pz, nx, nz, rad) {

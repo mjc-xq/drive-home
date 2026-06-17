@@ -345,8 +345,8 @@ export function loadCarProto(url, length, flip, onReady) {
 }
 
 export function loadDrivableCar(car, url, slot, opts = {}) {
-  const { length = 4.6, black = true, flip = false, meta = {}, onReady } = opts;
-  const spin = CARYAW + (flip ? Math.PI : 0);     // +180° if the GLB's nose runs -Z
+  const { length = 4.6, black = true, flip = false, meta = {}, onReady, extraYaw = 0 } = opts;
+  const spin = CARYAW + (flip ? Math.PI : 0) + extraYaw;   // flip = +180° (nose runs -Z); extraYaw = a quarter-turn for GLBs whose length runs on X (e.g. the hot rod)
   let cancelled = false;
   const gl = new GLTFLoader();
   gl.setDRACOLoader(DracoShim);                   // decode Draco-compressed GLBs (e.g. the Granvia)
