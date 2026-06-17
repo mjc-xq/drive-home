@@ -82,19 +82,24 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       for (const s of sofas) { const c = new THREE.Box3().setFromObject(s).getCenter(new THREE.Vector3()); for (const w of wc) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; couchSofa = s; } } }
     }
     const couchName = couchSofa ? nameOf(couchSofa) : null;
-    const MAHOGANY = 0x35180b, CHAIR_BLACK = 0x141414, ARMY_GREEN = 0x4b5320;
+    const MAHOGANY = 0x35180b, BLACK = 0x141414, OLIVE = 0x343a16, STEEL = 0xc0c5c9;   // OLIVE = dark olive drab; STEEL = brushed appliance grey
     const bedBoxes = floors.filter(f => /bedroom/i.test(nameOf(f))).map(f => { const b = new THREE.Box3().setFromObject(f); return [b.min.x, b.max.x, b.min.z, b.max.z]; });
     const inBedroom = o => { const b = new THREE.Box3().setFromObject(o), x = (b.min.x + b.max.x) / 2, z = (b.min.z + b.max.z) / 2; return bedBoxes.some(bb => x >= bb[0] && x <= bb[1] && z >= bb[2] && z <= bb[3]); };
-    const tint = (hex, rough) => m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.setHex(hex); if (c.roughness !== undefined) c.roughness = rough; if (c.metalness !== undefined) c.metalness = 0.1; if (c.envMapIntensity !== undefined) c.envMapIntensity = 0; c.needsUpdate = true; return c; };
-    const paint = (o, hex, rough = 0.6) => { const f = tint(hex, rough); o.material = Array.isArray(o.material) ? o.material.map(f) : f(o.material); };
+    // metal/env are optional: STEEL needs a little metalness + IBL so it reads as brushed steel (the
+    // rest of the house keeps envMapIntensity 0 so it doesn't re-wash — appliances are small).
+    const tint = (hex, rough, metal = 0.1, env = 0) => m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.setHex(hex); if (c.roughness !== undefined) c.roughness = rough; if (c.metalness !== undefined) c.metalness = metal; if (c.envMapIntensity !== undefined) c.envMapIntensity = env; c.needsUpdate = true; return c; };
+    const paint = (o, hex, rough = 0.6, metal, env) => { const f = tint(hex, rough, metal, env); o.material = Array.isArray(o.material) ? o.material.map(f) : f(o.material); };
     model.traverse(o => {
       if (!o.isMesh || !o.material) return;
       const n = nameOf(o);
       if (/^table/.test(n)) paint(o, MAHOGANY, 0.5);                                  // tables -> mahogany
       else if (/^storage_shelf/.test(n)) { if (!inBedroom(o)) paint(o, MAHOGANY, 0.5); }   // bookshelves -> mahogany (not in bedrooms)
-      else if (/^chair_swivel/.test(n)) paint(o, CHAIR_BLACK, 0.45);                  // office / swivel-base chair -> black
+      else if (/^chair_swivel/.test(n)) paint(o, BLACK, 0.45);                        // office / swivel-base chair -> black
       else if (/^chair_dining/.test(n)) paint(o, MAHOGANY, 0.5);                      // kitchen / dining chairs -> mahogany like the table
-      else if (/^sofa/.test(n) && n !== couchName) paint(o, ARMY_GREEN, 0.8);         // main-room couches (NOT the dog couch) -> army green
+      else if (/^sofa/.test(n) && n !== couchName) paint(o, OLIVE, 0.8);              // main-room couches (NOT the dog couch) -> dark olive
+      else if (/^television/.test(n)) paint(o, BLACK, 0.35);                          // wall TV -> black
+      else if (/^washer_dryer/.test(n)) paint(o, BLACK, 0.4);                         // laundry machines -> black
+      else if (/^(refrigerator|oven|stove)/.test(n)) paint(o, STEEL, 0.32, 0.55, 0.5);   // fridge / oven / stove -> brushed steel
     });
 
     // Recenter: floor TOP (not min.y — that would sink the character ~10cm) to world floorY,
