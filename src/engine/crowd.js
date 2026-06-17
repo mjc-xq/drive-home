@@ -129,7 +129,9 @@ function nativeHeight(obj) {
 // CeCe: a single GLB with all clips merged. Nose runs -Z out of Meshy, so spin it to +Z.
 // MOVES = the ambient pool she rotates through; HITS = pain reactions for car strikes (the
 // rig ships BeHit_FlyUp / Fall_Down / falling_down — kid-friendly knockbacks, no gore clip).
-const CECE_MOVES = ['All_Night_Dance', 'FunnyDancing_01', 'FunnyDancing_03', 'Gangnam_Groove', 'Bass_Beats', 'Funky_Walk', 'Cheer_with_Both_Hands_1', '360_Power_Spin_Jump', 'Big_Heart_Gesture', 'bicycle_crunch', 'Angry_Stomp'];
+// NB: Big_Heart_Gesture + bicycle_crunch are deliberately OUT of the ambient loop — the heart read as
+// "she only ever does the heart", and the crunch lies her on the floor. Both remain HUD emotes.
+const CECE_MOVES = ['All_Night_Dance', 'FunnyDancing_01', 'FunnyDancing_03', 'Gangnam_Groove', 'Bass_Beats', 'Funky_Walk', 'Cheer_with_Both_Hands_1', '360_Power_Spin_Jump', 'Angry_Stomp'];
 const CECE_HITS = ['BeHit_FlyUp', 'Fall_Down', 'falling_down'];
 export function loadCeceCrowd(onReady, onFail) {
   const loader = new GLTFLoader();

@@ -1418,38 +1418,106 @@ export function createEngine({ canvas, ui, emit }) {
     if (audio.blip) audio.blip();
     toast('🏠 Inside the house! Open the ☰ menu (top-right) for characters &amp; actions · tap "Leave house 🚪" to head back out', 3600);
   }
-  // Each NPC emerges from a distinct far room and walks to a spread-out spot near the main room.
+  // ---- House NPCs: a small behaviour FSM (dad, mom) ------------------------------------------
+  // They WANDER room to room — collision-checked (interior.collide, so no walking through walls /
+  // furniture) and door-routed — with a bias to share the player's room. On arrival they pick an
+  // activity: cycle dances, sprinkle one-shot emote beats, idle, or (if they have a sit clip) SIT
+  // down on a couch. State per NPC: 'travel' | 'act'.
+  const NPC_RAD = 0.34, NPC_SPD = 1.35;
+  function playerRoomIndex() {
+    const rs = interior.rooms;
+    for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (CHAR.x >= r.minX && CHAR.x <= r.maxX && CHAR.z >= r.minZ && CHAR.z <= r.maxZ) return i; }
+    let best = 0, bd = Infinity; rs.forEach((r, i) => { const d = (r.x - CHAR.x) ** 2 + (r.z - CHAR.z) ** 2; if (d < bd) { bd = d; best = i; } }); return best;
+  }
+  // A doorway roughly between us and the target → head through it first so room-to-room actually works
+  // (a straight line into a wall would otherwise jam against it).
+  function nearestDoorBetween(x, z, tx, tz) {
+    const dw = interior.doorways; if (!dw || !dw.length) return null;
+    const mdx = tx - x, mdz = tz - z, ml2 = mdx * mdx + mdz * mdz || 1;
+    let best = null, bs = 1.6;
+    for (const d of dw) {
+      const t = ((d.x - x) * mdx + (d.z - z) * mdz) / ml2;
+      if (t < 0.12 || t > 0.92) continue;                                   // must lie between us and the target
+      const off = Math.hypot(d.x - (x + mdx * t), d.z - (z + mdz * t));     // perpendicular distance to the path
+      if (off < bs) { bs = off; best = [d.x, d.z]; }
+    }
+    return best;
+  }
+  function startTravel(npc, tx, tz) {
+    npc.state = 'travel'; npc.target = [tx, tz]; npc.waypoint = nearestDoorBetween(npc.x, npc.z, tx, tz);
+    npc.stuckT = 0; npc.lastD = Math.hypot(tx - npc.x, tz - npc.z);
+  }
+  function triggerMove(npc, now) {
+    const pool = npc.act === 'emote' && npc.ctrl.emotes.length ? npc.ctrl.emotes : npc.ctrl.dances;
+    if (pool && pool.length && npc.ctrl.react) npc.ctrl.react(pool[(Math.random() * pool.length) | 0]);
+    npc.nextMove = now + 3500 + Math.random() * 2500;
+  }
+  function enterActivity(npc, now) {
+    npc.state = 'act';
+    // Sit only if we actually reached the couch we set out for (a wall-jam arrival shouldn't teleport us).
+    if (npc.wantSeat && npc.ctrl.sitClip && npc.ctrl.pose && Math.hypot(npc.wantSeat.x - npc.x, npc.wantSeat.z - npc.z) < 1.5) {
+      const s = npc.wantSeat; npc.x = s.x; npc.z = s.z; npc.baseY = s.y; npc.yaw = s.yaw; npc.seat = s;
+      npc.act = 'sit'; npc.ctrl.pose(npc.ctrl.sitClip); npc.actUntil = now + 8000 + Math.random() * 9000; npc.wantSeat = null; return;
+    }
+    npc.wantSeat = null; npc.baseY = interior.floorY;
+    const roll = Math.random();
+    if (roll < 0.45 && npc.ctrl.dances.length) { npc.act = 'dance'; npc.nextMove = 0; triggerMove(npc, now); }
+    else if (roll < 0.78 && (npc.ctrl.emotes.length || npc.ctrl.dances.length)) { npc.act = 'emote'; npc.nextMove = 0; triggerMove(npc, now); }
+    else { npc.act = 'idle'; npc.ctrl.locomotion(0); }
+    npc.actUntil = now + 5000 + Math.random() * 7000;
+  }
+  function pickNextRoom(npc, now) {
+    if (npc.ctrl.reset) npc.ctrl.reset();   // stand up from a sit / end any dance cleanly before walking
+    npc.seat = null; npc.baseY = interior.floorY;
+    const rs = interior.rooms;
+    const room = (Math.random() < 0.55 ? rs[playerRoomIndex()] : rs[(Math.random() * rs.length) | 0]) || rs[0];
+    let wantSeat = null;   // sometimes go sit on a free couch
+    if (npc.ctrl.sitClip && interior.seats && interior.seats.length && Math.random() < 0.4) {
+      const taken = new Set(npcs.map(n => n.seat).filter(Boolean));
+      let bs = Infinity; for (const s of interior.seats) { if (taken.has(s)) continue; const d = (s.x - room.x) ** 2 + (s.z - room.z) ** 2; if (d < bs) { bs = d; wantSeat = s; } }
+    }
+    npc.wantSeat = wantSeat;
+    let tx, tz;
+    if (wantSeat) { const ap = interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75); tx = ap.x; tz = ap.z; }
+    else { const p = interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2)); tx = p.x; tz = p.z; }
+    startTravel(npc, tx, tz);
+  }
+  // Each NPC starts in a distinct far room and heads for the main room, then wanders.
   function resetNpcs() {
     if (!interior || !interior.rooms || !interior.rooms.length || !npcs.length) return;
     const main = interior.spawn;
     const byFar = [...interior.rooms].sort((a, b) => ((b.x - main.x) ** 2 + (b.z - main.z) ** 2) - ((a.x - main.x) ** 2 + (a.z - main.z) ** 2));
     npcs.forEach((npc, i) => {
-      if (npc.ctrl.reset) npc.ctrl.reset();   // clear any clamped mid-dance pose from last visit
-      const back = byFar[i % byFar.length];
-      const from = interior.clearAt(back.x, back.z);
-      const ang = (i / npcs.length) * Math.PI * 2;
-      const to = interior.clearAt(main.x + Math.cos(ang) * 1.8, main.z + Math.sin(ang) * 1.8);
-      npc.x = from.x; npc.z = from.z; npc.to = [to.x, to.z];
-      npc.yaw = Math.atan2(npc.to[0] - npc.x, npc.to[1] - npc.z);
-      npc.arrived = false; npc.group.visible = true;
+      if (npc.ctrl.reset) npc.ctrl.reset();
+      const from = interior.clearAt(byFar[i % byFar.length].x, byFar[i % byFar.length].z);
+      npc.x = from.x; npc.z = from.z; npc.yaw = 0; npc.seat = null; npc.wantSeat = null; npc.act = null; npc.baseY = interior.floorY;
+      startTravel(npc, main.x, main.z);
+      npc.group.visible = true; npc.group.position.set(npc.x, npc.baseY, npc.z);
     });
   }
   function updateNpcs(dt, now) {
     for (const npc of npcs) {
       npc.group.visible = true;
       let speed = 0;
-      if (npc.to && !npc.arrived) {
-        const dx = npc.to[0] - npc.x, dz = npc.to[1] - npc.z, d = Math.hypot(dx, dz);
-        if (d > 0.5) { speed = 1.4; const ux = dx / d, uz = dz / d; npc.x += ux * speed * dt; npc.z += uz * speed * dt; npc.yaw = Math.atan2(ux, uz); }
-        else { npc.arrived = true; npc.nextDance = now + 300; }   // arrived -> start the dance cycle
-      } else if (now > (npc.nextDance || 0)) {
-        const pool = npc.ctrl.dances;   // keep her moving: rotate through a pool of UPRIGHT dances (each resets to rest on finish)
-        if (pool && pool.length && npc.ctrl.react) npc.ctrl.react(pool[(Math.random() * pool.length) | 0]);
-        npc.nextDance = now + 4000 + Math.random() * 2500;
+      if (npc.state === 'travel') {
+        let tx = npc.target[0], tz = npc.target[1];
+        if (npc.waypoint) { if (Math.hypot(npc.waypoint[0] - npc.x, npc.waypoint[1] - npc.z) < 1.0) npc.waypoint = null; else { tx = npc.waypoint[0]; tz = npc.waypoint[1]; } }
+        const finalD = Math.hypot(npc.target[0] - npc.x, npc.target[1] - npc.z);
+        if (finalD < 0.5) enterActivity(npc, now);
+        else {
+          const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d;
+          const r = interior.collide(npc.x, npc.z, npc.x + ux * NPC_SPD * dt, npc.z + uz * NPC_SPD * dt, NPC_RAD);
+          const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
+          npc.x = r.x; npc.z = r.z; npc.yaw = Math.atan2(ux, uz); speed = moved / Math.max(dt, 1e-3);
+          if (finalD < npc.lastD - 0.02) { npc.lastD = finalD; npc.stuckT = 0; } else { npc.stuckT += dt; if (npc.stuckT > 1.5) enterActivity(npc, now); }   // jammed on a wall -> settle + repick
+        }
+        npc.baseY = interior.floorY; npc.ctrl.locomotion(speed);
+      } else {   // 'act' — staying put; sit holds, dance/emote cycle, idle just loops
+        if (now > npc.actUntil) pickNextRoom(npc, now);
+        else if ((npc.act === 'dance' || npc.act === 'emote') && now > (npc.nextMove || 0)) triggerMove(npc, now);
       }
-      npc.group.position.set(npc.x, interior.floorY, npc.z);
+      npc.group.position.set(npc.x, npc.baseY, npc.z);
       npc.group.rotation.y = npc.yaw - Math.PI / 2;
-      npc.ctrl.locomotion(speed);
       npc.ctrl.tick(dt);
     }
   }
