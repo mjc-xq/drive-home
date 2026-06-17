@@ -20,6 +20,10 @@ import phebUrl from '../assets/pheb.glb';
 const FLOOR_RE = /^floor_/;
 const WALL_RE = /^(wall_|joint_)/;
 const DOOR_RE = /^door_/;
+// Look knobs — tunable at load, no re-bake needed:
+const AO_INTENSITY = 1.0;     // baked-occlusion strength (three's aoMapIntensity); >1 deepens, <1 softens
+const FLOOR_BRIGHTNESS = 0.7; // extra darken for the bare floors (1.0 = none). The open floor gets almost
+                              // no AO, so the scan's pale ground reads washed-out without this.
 // Only the big floor-standing pieces a walking kid can bump into get colliders. Chairs and the
 // wall-hugging mid/low cabinets are skipped — they're already covered by the wall colliders.
 // Movement is blocked by ALL furniture (everything that isn't floor/wall/door/window) EXCEPT chairs,
@@ -68,16 +72,25 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       s.position.x += cx0 - (b2.min.x + b2.max.x) / 2; s.position.z += cz0 - (b2.min.z + b2.max.z) / 2; s.position.y += minY - b2.min.y;
       s.updateWorldMatrix(true, true);
     }
-    // The albedo correction (×0.7), roughness/metalness clamps and wall double-siding are now
-    // BAKED into the asset by scripts/bake_interior.py (walls are solidified, so inward faces are
-    // real geometry — no DoubleSide needed; baked vertex-AO gives the rooms depth). The one thing
-    // the GLB can't encode is that the matte scan must NOT pick up the car IBL (scene.environment),
-    // which re-washes the house — so that's all this loop still does.
+    // The albedo correction (×0.7), roughness/metalness clamps and wall double-siding are now BAKED
+    // into the asset by scripts/bake_interior.py (walls are solidified, so inward faces are real
+    // geometry — no DoubleSide needed; baked ambient occlusion rides the glTF occlusionTexture ->
+    // three's aoMap for depth). At load we (a) keep the matte scan off the car IBL (scene.environment),
+    // which would re-wash the house, and (b) set the AO strength knob.
     model.traverse(o => {
       if (!o.isMesh || !o.material) return;
-      for (const m of (Array.isArray(o.material) ? o.material : [o.material]))
-        if (m && m.envMapIntensity !== undefined) m.envMapIntensity = 0;
+      for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+        if (!m) continue;
+        if (m.envMapIntensity !== undefined) m.envMapIntensity = 0;
+        if (m.aoMap) m.aoMapIntensity = AO_INTENSITY;
+      }
     });
+    // Pull the bare floors down — AO can't darken the open floor (nothing occludes its middle), so the
+    // pale scan ground looks washed-out. Clone per floor so a shared material isn't multiplied twice.
+    if (FLOOR_BRIGHTNESS !== 1) for (const f of floors) {
+      const dk = m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.multiplyScalar(FLOOR_BRIGHTNESS); c.needsUpdate = true; return c; };
+      f.material = Array.isArray(f.material) ? f.material.map(dk) : dk(f.material);
+    }
 
     // Recolour furniture by type. Clone each material first (never touch a shared floor/wall material)
     // and tint over the scan map so detail survives. The dog couch (couchSofa = sofa nearest a window,
