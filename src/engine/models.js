@@ -24,39 +24,37 @@ function disposeSource(root) {
   });
 }
 
-// Pig: a Sketchfab export carrying ground/backdrop planes too. Drop the planes,
-// keep the body + eye meshes, paint the body (densest mesh) near-black while
-// leaving the eyes their own colour, then normalize to ~1.2 units long sitting
-// on the ground. `yaw` rotates the model so its nose runs with its motion.
-export function loadPigPrototype(url, yaw, onReady) {
+// Animated critter (pig / duck / iguana): a rigged Sketchfab export with a walk
+// (or basking) clip. Keep the live skinned hierarchy + its AnimationClips intact
+// so each spawned critter can play the cycle; just drop any ground/backdrop
+// planes and normalize the rig so its longest horizontal axis is `length` units,
+// centered in x/z and sitting on the ground. `yaw` turns the model so its nose
+// runs with its motion. Hands back { proto, animations } — the caller deep-clones
+// `proto` per critter (SkeletonUtils) and drives a mixer on each clone.
+export function loadAnimalModel(url, { yaw = 0, length = 1 }, onReady) {
   new GLTFLoader().load(url, gltf => {
     const root = gltf.scene;
     root.updateMatrixWorld(true);
-    // drop flat scene cruft (ground/backdrop planes)
-    root.traverse(o => { if (o.isMesh && /plane|ground|floor|backdrop/i.test(o.name)) o.userData._drop = true; });
-    let body = null, bodyN = -1;
-    root.traverse(o => { if (o.isMesh && !o.userData._drop) { const n = o.geometry.attributes.position.count; if (n > bodyN) { bodyN = n; body = o; } } });
-    if (!body) { console.warn('pig GLB had no usable mesh, keeping fallback', url); disposeSource(root); return; }
-    const proto = new THREE.Group();
-    root.traverse(o => {
-      if (!o.isMesh || o.userData._drop || !o.material) return;
-      const m = new THREE.Mesh(bakedGeom(o), o.material.clone());
-      if (o === body) { m.material.color && m.material.color.setHex(0x141210); m.material.map = null; m.material.metalness = 0; m.material.roughness = 0.66; }
-      m.castShadow = true;
-      proto.add(m);
-    });
-    // normalize the whole pig (body + eyes) as one unit
-    const box = new THREE.Box3().setFromObject(proto), size = new THREE.Vector3(); box.getSize(size);
-    const s = 1.2 / (Math.max(size.x, size.z) || 1);
+    // drop flat scene cruft (ground/backdrop planes some exports bake in)
+    const cruft = [];
+    root.traverse(o => { if (o.isMesh && /plane|ground|floor|backdrop/i.test(o.name)) cruft.push(o); });
+    for (const o of cruft) o.parent && o.parent.remove(o);
+    let hasMesh = false; root.traverse(o => { if (o.isMesh) { hasMesh = true; o.castShadow = true; o.frustumCulled = false; } });
+    if (!hasMesh) { console.warn('animal GLB had no usable mesh, keeping fallback', url); disposeSource(root); return; }
+    // normalize: longest horizontal axis -> `length`, centered in x/z, on the ground.
+    // Nested so model-facing yaw (outer) stays clean of the scale+offset (inner) —
+    // and SkeletonUtils.clone copies the whole transformed rig.
+    const box = new THREE.Box3().setFromObject(root), size = new THREE.Vector3(); box.getSize(size);
+    const s = length / (Math.max(size.x, size.z) || 1);
     const inner = new THREE.Group();
-    while (proto.children.length) inner.add(proto.children[0]);
+    inner.add(root);
     inner.scale.setScalar(s);
     inner.position.set(-((box.min.x + box.max.x) / 2) * s, -box.min.y * s, -((box.min.z + box.max.z) / 2) * s);
+    const proto = new THREE.Group();
     proto.add(inner);
     proto.rotation.y = yaw;                          // model-facing correction
-    onReady(proto);
-    disposeSource(root);
-  }, undefined, err => console.warn('pig model failed, keeping fallback', err));
+    onReady({ proto, animations: gltf.animations || [] });
+  }, undefined, err => console.warn('animal model failed, keeping fallback', url, err));
 }
 
 // Poop emoji: 4 parts (brown body + black/white eyes + mouth). Merge into one

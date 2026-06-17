@@ -1,15 +1,22 @@
 import * as THREE from 'three';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { merge, critterBuilder, makeRand } from './geom.js';
 import { clamp } from './coords.js';
-import { loadPigPrototype, loadPoopGeometry } from './models.js';
+import { loadAnimalModel, loadPoopGeometry } from './models.js';
 import { loadDrew } from './drew.js';
 import { loadCeceController } from './cece.js';
 import pigUrl from '../assets/pig.glb';
+import duckUrl from '../assets/duck.glb';
+import iguanaUrl from '../assets/iguana.glb';
 import poopUrl from '../assets/poop.glb';
 
-// Facing correction for the GLB pig (radians). Tune if the model drives
-// sideways/backwards relative to its motion.
-const PIG_YAW = Math.PI / 2;
+// Per-model facing + size, since each rigged GLB authors its own orientation.
+// yaw turns the nose to run with motion (all three models face +z, so +PI/2 ->
+// +x); length is the normalized body span in world units. Tune if a critter
+// drives sideways/backwards or reads too big/small.
+const PIG = { yaw: Math.PI / 2, length: 1.2 };
+const DUCK = { yaw: Math.PI / 2, length: 0.82 };
+const IGUANA = { yaw: Math.PI / 2, length: 1.9 };
 
 export const TOOLS = [
   { name: '🥄 Trowel', r: 1.6, cap: 16 },
@@ -115,23 +122,36 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
     a.hx = SREC.shed[0] - 1.6; a.hz = SREC.shed[1] - 1.4; a.poopT = 20 + rand() * 15;
   }
 
-  // Swap the procedural pigs for the black GLB pig once it loads (fallback
-  // stays on failure). Each pig keeps its own scale; the inner mesh carries the
-  // model-facing correction so the group can still steer by yaw.
-  loadPigPrototype(pigUrl, PIG_YAW, proto => {
+  // Swap the procedural critters for their rigged GLBs once loaded (the
+  // procedural mesh stays on any failure). Each spawn is a SkeletonUtils clone
+  // (shares geometry/material, owns its skeleton) wrapped in a steer-group so the
+  // engine still rotates it by yaw; an AnimationMixer plays the walk/basking
+  // clip, started at a random phase so the herd isn't in lockstep.
+  function swapKind(kind, geo, { proto, animations }) {
+    const clip = animations[0];
     let swapped = 0;
     for (const a of ANIMALS) {
-      if (a.kind !== 'pig') continue;
+      if (a.kind !== kind) continue;
       scene.remove(a.mesh);
       const grp = new THREE.Group();
-      grp.add(proto.clone());
+      const inst = cloneSkeleton(proto);
+      grp.add(inst);
       grp.scale.setScalar(a.scale);
       scene.add(grp);
       a.mesh = grp;
+      if (clip) {
+        const mx = new THREE.AnimationMixer(inst);
+        mx.clipAction(clip).play();
+        mx.setTime(rand() * clip.duration);
+        a.mixer = mx;
+      }
       swapped++;
     }
-    if (swapped) pigGeo.dispose();
-  });
+    if (swapped) geo.dispose();
+  }
+  loadAnimalModel(pigUrl, PIG, m => swapKind('pig', pigGeo, m));
+  loadAnimalModel(duckUrl, DUCK, m => swapKind('duck', duckGeo, m));
+  loadAnimalModel(iguanaUrl, IGUANA, m => swapKind('iguana', iguanaGeo, m));
 
   // --- poop: two instanced pools because r128 per-instance color is unreliable ---
   const poopGeoB = new THREE.IcosahedronGeometry(0.26, 0); poopGeoB.scale(1, 0.62, 1);
@@ -227,6 +247,9 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
         }
       }
       a.bob += dt * (spooked ? 13 : a.wait > 0 ? 2 : 7);
+      // drive the rig's walk/basking cycle: gentle while idling, brisk while
+      // wandering, frantic when a kid spooks it
+      if (a.mixer) a.mixer.update(dt * (spooked ? 2.4 : a.wait > 0 ? 0.45 : 1.2));
       const y = terrainAt(a.x, a.z);
       a.mesh.position.set(a.x, y + 0.02 + (a.wait > 0 ? 0 : Math.abs(Math.sin(a.bob)) * 0.04), a.z);
       a.mesh.rotation.y = a.yaw - Math.PI / 2;
