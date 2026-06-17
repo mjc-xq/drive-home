@@ -197,25 +197,33 @@ function distToLines(x, z, lines, max) {
   }
   return best;
 }
-const trees = [];                                // [x, z, canopyR, height]
-const ok = (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5) >= 4;
-// riparian band along the creek (both banks, 7..17 m off centerline)
-if (creekW) for (let k = 1; k < creekW.length; k++) {
-  const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
-  const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
-  for (let s = 0; s < seg; s += 5) {
-    const cx = ax + dx * s, cz = az + dz * s;
-    for (const side of [1, -1]) if (rand() < 0.8) {
-      const off = 7 + rand() * 10, x = cx + nx * off * side, z = cz + nz * off * side;
-      if (ok(x, z)) trees.push([x, z, 2 + rand() * 2, 6 + rand() * 6]);
+// Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
+// else heuristic positions along the creek + open yard.
+const TREESJSON = path.join(ROOT, 'exports/trees.json');
+let trees, treeSrc;
+if (existsSync(TREESJSON)) {
+  trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees;   // [x, z, canopyR, height]
+  treeSrc = 'LiDAR canopy 2021 (real)';
+} else {
+  trees = [];
+  treeSrc = 'heuristic (no LiDAR/OSM trees)';
+  const ok = (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5) >= 4;
+  if (creekW) for (let k = 1; k < creekW.length; k++) {
+    const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
+    const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
+    for (let s = 0; s < seg; s += 5) {
+      const cx = ax + dx * s, cz = az + dz * s;
+      for (const side of [1, -1]) if (rand() < 0.8) {
+        const off = 7 + rand() * 10, x = cx + nx * off * side, z = cz + nz * off * side;
+        if (ok(x, z)) trees.push([x, z, 2 + rand() * 2, 6 + rand() * 6]);
+      }
     }
   }
-}
-// scattered yard/parcel trees across the patch
-for (let n = 0; n < 900; n++) {
-  const x = (rand() * 2 - 1) * cropHalf, z = (rand() * 2 - 1) * cropHalf;
-  if (ok(x, z) && distToLines(x, z, [creekW || []], 9) >= 9 && rand() < 0.5) trees.push([x, z, 2 + rand() * 1.8, 5 + rand() * 5]);
-  if (trees.length > 240) break;
+  for (let n = 0; n < 900; n++) {
+    const x = (rand() * 2 - 1) * cropHalf, z = (rand() * 2 - 1) * cropHalf;
+    if (ok(x, z) && distToLines(x, z, [creekW || []], 9) >= 9 && rand() < 0.5) trees.push([x, z, 2 + rand() * 1.8, 5 + rand() * 5]);
+    if (trees.length > 240) break;
+  }
 }
 if (trees.length) {
   const tPos = [], tCol = [];
@@ -237,6 +245,26 @@ if (trees.length) {
   scene.add(mkMesh(tPos, null, 0x5e7d47, 'Trees', { colors: tCol, flat: true }));
 }
 
+// ---- Parcels / lot lines (real fences run along these) -------------------
+// LotLines = all county parcel boundaries; YourLots = APN 416-120-67 (house) +
+// 416-120-68 (back lot w/ creek), highlighted.
+const PARCELSJSON = path.join(ROOT, 'exports/parcels.json');
+let nParcels = 0, nMine = 0;
+if (existsSync(PARCELSJSON)) {
+  const P = JSON.parse(readFileSync(PARCELSJSON, 'utf8')).parcels || [];
+  const lPos = [], lIdx = [], yPos = [], yIdx = [];
+  for (const p of P) {
+    const ring = p.ring.map(([x, z]) => [x, z]);
+    if (ring.length < 2) continue;
+    const closed = ring[0][0] === ring[ring.length - 1][0] ? ring : ring.concat([ring[0]]);
+    if (p.mine) { ribbon(closed, 1.1, 0.25, yPos, yIdx); nMine++; }
+    else { ribbon(closed, 0.5, 0.12, lPos, lIdx); }
+    nParcels++;
+  }
+  if (lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
+  if (yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
+}
+
 // ---- export GLB ----------------------------------------------------------
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
 mkdirSync(path.join(ROOT, 'exports'), { recursive: true });
@@ -246,6 +274,6 @@ writeFileSync(out, Buffer.from(glb));
 const objs = [];
 scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
 console.log(`terrain: ${terrSrc}`);
-console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld}   trees: ${trees.length}`);
+console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld}   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
 console.log(`wrote ${out} (${(Buffer.from(glb).length / 1024).toFixed(0)} KB)`);
