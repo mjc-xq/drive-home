@@ -124,10 +124,6 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .miniFrame #minimap{position:absolute;inset:0;width:168px;height:140px;display:block;cursor:pointer}
 .miniFrame #gmap{position:absolute;inset:0;z-index:2;pointer-events:auto;cursor:pointer;background:#1b2027}
 .miniFrame #gmap:empty{display:none}   /* before the map mounts, let the canvas fallback show */
-/* The minimap is tiny; the Google "Map data / Terms" bar + logo cover most of it. Hide them
-   here — the required Google attribution still shows full-size in the #credits line below. */
-.miniFrame #gmap .gm-style-cc,.miniFrame #gmap a[href^="https://maps.google"],
-.miniFrame #gmap a[href*="maps.google.com"],.miniFrame #gmap img[alt="Google"]{display:none!important}
 .miniTag{position:absolute;left:6px;top:5px;z-index:3;font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.14em;color:rgba(255,255,255,.8);text-shadow:0 1px 2px #000;pointer-events:none}
 .miniHint{font-family:'Chakra Petch';font-weight:600;font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.62)}
 

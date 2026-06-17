@@ -1215,6 +1215,7 @@ export function createEngine({ canvas, ui, emit }) {
   function clearRouteRail() {
     car.railS = null;
     car.railSpeed = null;
+    car.railEndT = 0;
     _railRoute = null;
   }
   car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
@@ -1283,8 +1284,16 @@ export function createEngine({ canvas, ui, emit }) {
       // add the footprint collider only once the car actually loads, so a failed
       // load doesn't leave an invisible wall the driven car bounces off.
       modelLoadCancels.push(loadParkedCar(carsGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
-        const hl = len / 2, hw = 1.05;
-        bldPolys.push({ p: [[cx - hl, cz - hw], [cx + hl, cz - hw], [cx + hl, cz + hw], [cx - hl, cz + hw]], bb: [cx - hl, cx + hl, cz - hw, cz + hw] });
+        const hl = len / 2, hw = 1.05, yaw = carYaw + (flip ? Math.PI : 0);
+        const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+        const p = [
+          [cx + fx * hl + rx * hw, cz + fz * hl + rz * hw],
+          [cx + fx * hl - rx * hw, cz + fz * hl - rz * hw],
+          [cx - fx * hl - rx * hw, cz - fz * hl - rz * hw],
+          [cx - fx * hl + rx * hw, cz - fz * hl + rz * hw],
+        ];
+        const xs = p.map(q => q[0]), zs = p.map(q => q[1]);
+        bldPolys.push({ p, bb: [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)] });
       }));
     };
     park(rav4Url, 1, 4.6, false, false);  // RAV4 nose runs +Z → carYaw already faces it; black baked in (keeps taillights)
@@ -2177,7 +2186,12 @@ export function createEngine({ canvas, ui, emit }) {
       faceRouteStart();
     }
   }
-  function clearDestination() { routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false; clearRouteRail(); guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null; emit('dest', null); emit('autodrive', false); }
+  function clearDestination() {
+    routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false;
+    clearRouteRail(); clearRouteCaches();
+    guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null;
+    emit('dest', null); emit('autodrive', false);
+  }
   // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
   // Geocoding/Directions endpoints are CORS-blocked, which is why the old fetch box failed) ----
   function geocodeAddress(text) {
@@ -2669,6 +2683,10 @@ export function createEngine({ canvas, ui, emit }) {
   // Cached canopy-skipped ROAD height per ROUTE point. Fallback heights retry until
   // tiles stream, so a route line never gets stuck forever at a procedural/clamped y.
   let _routeYFor = null, _routeY = [];
+  function clearRouteCaches() {
+    _routeLenFor = null; _routeLen = 0;
+    _routeYFor = null; _routeY = [];
+  }
   function guideHeightAt(i) {
     if (_routeYFor !== ROUTE) { _routeYFor = ROUTE; _routeY = []; }
     const p = ROUTE[i], tA = terrainAt(p.x, p.z), nowMs = performance.now();
@@ -3941,7 +3959,7 @@ export function createEngine({ canvas, ui, emit }) {
     },
     // tap-to-drive: convert a minimap pixel (north-up, car-centred) to a world point
     // and let the robot drive there. range/scale mirror drawMinimap exactly.
-    tapMinimap: (px, py, w, h) => { const range = 460, scale = (w / 2) / range; setDriveTarget(car.x + (px - w / 2) / scale, car.z + (py - h / 2) / scale); },
+    tapMinimap: (px, py, w, h) => { const range = 620, scale = (w / 2) / range; setDriveTarget(car.x + (px - w / 2) / scale, car.z + (py - h / 2) / scale); },
     dispose,
     get mode() { return mode; }
   };
