@@ -48,7 +48,6 @@ export function createEngine({ canvas, ui, emit }) {
   // `ctx.car`/`ctx.CHAR`/`ctx.inp2` stay the existing aggregate bags. See plans/plan-engine-decomposition-*.
   const ctx = {};
   ctx.canvas = canvas; ctx.ui = ui; ctx.emit = emit;
-  ctx.occ = {};   // occlusion namespace — factories fold their methods in via Object.assign(ctx.occ, ...)
   ctx.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   ctx.toast = (html, ms) => ctx.emit('toast', { html, ms: ms || 1800 });
   // The toast is rendered via dangerouslySetInnerHTML, so any dynamic value that can carry
@@ -846,7 +845,7 @@ export function createEngine({ canvas, ui, emit }) {
   // you're driving somewhere far — so free-roam near home pays nothing. Low resolution means
   // it warms only cheap COARSE tiles, filling the LRU cache without blowing the mobile budget.
   ctx.scoutOn = false; ctx._scoutT = 0; ctx._scoutPhase = 0;
-  Object.assign(ctx.occ, createPrefetch(ctx));   // ctx.occ.{setScout, updateTilePrefetch, pointAlongRoute} — see occlusion/prefetch.js
+  ctx.prefetch = createPrefetch(ctx);   // ctx.prefetch.{setScout, updateTilePrefetch, pointAlongRoute} — see occlusion/prefetch.js
   // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
   // built (procedural) world at ground level (Drive/Scoop). The groundAt + camera
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
@@ -3233,7 +3232,7 @@ export function createEngine({ canvas, ui, emit }) {
   // vertical COLUMN instead: a flat canopy cap boxed to ±W around the car in x/z. Same outcome — the
   // canopy right over the car/road is cut, trees away from the road are untouched.
   // ---- occlusion: drive tile cutaway ---- (see occlusion/tile-clip.js)
-  Object.assign(ctx.occ, createTileClip(ctx));   // ctx.occ.updateTileClip
+  ctx.tileClip = createTileClip(ctx);   // ctx.tileClip.updateTileClip — see occlusion/tile-clip.js
 
   function updateDrive(dt, now) {
     // Mix stick (jx/jy), keyboard (kx/ky), and legacy pedal inputs. The left
@@ -3968,7 +3967,7 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.vehicleFillTarget.position.set(ctx.car.x, yC + 1.1, ctx.car.z);
       ctx.vehicleFillTarget.updateMatrixWorld();
     }
-    ctx.occ.updateTileClip(ctx.car.x, yC, ctx.car.z, DRIVE_CAMS[ctx.camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
+    ctx.tileClip.updateTileClip(ctx.car.x, yC, ctx.car.z, DRIVE_CAMS[ctx.camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
     if (ctx.ui.mph) ctx.ui.mph.textContent = Math.round(Math.abs(ctx.car.speed) * 2.237);
     {
       const f = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);
@@ -4080,7 +4079,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.sun.castShadow && now - ctx._shadowT > 140) { ctx.renderer.shadowMap.needsUpdate = true; ctx._shadowT = now; }
     ctx.camera.getWorldDirection(dirV);
     if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
-    ctx.occ.updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
+    ctx.prefetch.updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
     if (ctx.p3dtiles && photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (_attrStr) { _attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
     if (ctx.mode === 'drive') {
@@ -4199,7 +4198,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.dadCrowd) ctx.dadCrowd.dispose();
     if (ctx.momCrowd) ctx.momCrowd.dispose();
     for (const npc of ctx.npcs) { if (npc.ctrl.reset) npc.ctrl.reset(); if (npc.group.parent) npc.group.parent.remove(npc.group); }   // tear down the house NPCs
-    ctx.occ.setScout(false);                             // unregister the prefetch scout camera
+    ctx.prefetch.setScout(false);                             // unregister the prefetch scout camera
     if (ctx.p3dtiles && ctx.p3dtiles.disposeAll) ctx.p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
     ctx.scene.traverse(o => {
