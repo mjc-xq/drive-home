@@ -145,6 +145,10 @@ export function createEngine({ canvas, ui, emit }) {
   // all work EVERYWHERE, exactly like they do at home. Degrades to no-assist if Overpass is unreachable.
   let osmRoadSegs = [];          // world-space road segments fetched around the car ([[ax,az],[bx,bz]])
   let _osmCenter = null, _osmFetching = false, _osmT = 0;
+  // Overpass mirrors, tried in order — the main de host throttles (429/504) under load, so fall
+  // through to the public mirrors before giving up. Rotates start point so we don't always hammer #0.
+  const OVERPASS_MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  let _osmMirror = 0;
   let autoDrive = false;
   let _railRoute = null;   // the ROUTE the auto-drive rail's arc-length (car.railS) was acquired for; re-acquire when it changes
 
@@ -2467,21 +2471,30 @@ export function createEngine({ canvas, ui, emit }) {
     const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
     const s = Math.min(...lats).toFixed(6), n = Math.max(...lats).toFixed(6), w = Math.min(...lons).toFixed(6), e = Math.max(...lons).toFixed(6);
     const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
-    fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        const segs = [];
-        for (const el of (data.elements || [])) {
-          const g = el.geometry; if (el.type !== 'way' || !g || g.length < 2) continue;
-          for (let i = 0; i < g.length - 1; i++) {
-            const a = geoToWorld(g[i].lat, g[i].lon), b = geoToWorld(g[i + 1].lat, g[i + 1].lon);
-            segs.push([[a[0], a[1]], [b[0], b[1]]]);
+    const body = 'data=' + encodeURIComponent(q);
+    const tryMirror = (n) => {
+      if (n >= OVERPASS_MIRRORS.length) { _osmFetching = false; return; }   // all mirrors down: keep the last roads, retry next box
+      const url = OVERPASS_MIRRORS[(_osmMirror + n) % OVERPASS_MIRRORS.length];
+      // Hard 12 s cap per mirror: an overloaded Overpass host hangs ~48 s before its 504, which would
+      // pin _osmFetching and starve the road graph. Abort early and fall through to the next mirror.
+      const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 12000);
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: ac.signal })
+        .then(r => { clearTimeout(to); return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(data => {
+          const segs = [];
+          for (const el of (data.elements || [])) {
+            const g = el.geometry; if (el.type !== 'way' || !g || g.length < 2) continue;
+            for (let i = 0; i < g.length - 1; i++) {
+              const a = geoToWorld(g[i].lat, g[i].lon), b = geoToWorld(g[i + 1].lat, g[i + 1].lon);
+              segs.push([[a[0], a[1]], [b[0], b[1]]]);
+            }
           }
-        }
-        if (segs.length) { osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; }   // keep the last roads on an empty/failed response
-        _osmFetching = false;
-      })
-      .catch(() => { _osmFetching = false; });
+          if (segs.length) { osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length; }   // stick with the mirror that worked
+          _osmFetching = false;
+        })
+        .catch(() => { clearTimeout(to); tryMirror(n + 1); });   // this host is throttling/down — fall through to the next mirror
+    };
+    tryMirror(0);
   }
   // Local street fallback for minimap/tap auto-drive. Google Directions handles real
   // address trips; this keeps nearby "drive there" pins on neighborhood roads instead
