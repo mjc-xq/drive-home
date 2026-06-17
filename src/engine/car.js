@@ -39,6 +39,7 @@ export const VEHICLES = [
 let CAR_ANISO = 8;
 export function setCarAniso(n) { CAR_ANISO = Math.max(1, n | 0); }
 const TEX_KEYS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap'];
+const _darkVehicleLift = new THREE.Color(0x525a66);
 function liftVehicleMaterials(scene, lift = 0.22) {
   scene.traverse(o => {
     if (!o.isMesh || !o.material) return;
@@ -48,9 +49,18 @@ function liftVehicleMaterials(scene, lift = 0.22) {
       for (const k of TEX_KEYS) { const t = m[k]; if (t && t.isTexture && t.anisotropy < CAR_ANISO) { t.anisotropy = CAR_ANISO; t.needsUpdate = true; } }   // kill grazing-angle texture shimmer (grain)
       const nm = ((m.name || '') + (o.name || '')).toLowerCase();
       if (/glass|window|light|tail|head|lamp|mirror|chrome|plate|signal|amber/.test(nm)) continue;
-      if (m.emissive && m.color) {
+      const detail = /wheel|tire|tyre|rubber|rim|brake|rotor|disc|seat|interior|steer|trim|underbody|chassis/.test(nm);
+      if (m.envMapIntensity !== undefined) m.envMapIntensity = Math.max(m.envMapIntensity || 0, 1.15);
+      let darkPaint = false;
+      if (m.color && !detail) {
+        const lum = 0.2126 * m.color.r + 0.7152 * m.color.g + 0.0722 * m.color.b;
+        darkPaint = lum < 0.2;
+        if (darkPaint) m.color.lerp(_darkVehicleLift, 0.45);   // keep black cars black, but not crushed silhouettes
+      }
+      if (m.emissive && m.color && !detail) {
+        if (m.map && !m.emissiveMap) m.emissiveMap = m.map;       // preserve textured body detail in shadow
         m.emissive.copy(m.color).multiplyScalar(lift);
-        m.emissiveIntensity = Math.max(m.emissiveIntensity || 0, 0.24);
+        m.emissiveIntensity = Math.max(m.emissiveIntensity || 0, m.map ? (darkPaint ? 0.2 : 0.12) : (darkPaint ? 0.42 : 0.28));
       }
       if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.4);
       if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.42);   // softer specular = less metallic SPARKLE aliasing on detailed bodies (no MSAA on mobile)
@@ -221,10 +231,13 @@ function disposeLoadedObject(root) {
     for (const m of mats) if (m && m.dispose) m.dispose();
   });
 }
+function disposeGeometryOnly(root) {
+  root.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+}
 function stripStudio(scene) {
   const junk = [];
   scene.traverse(o => { if (o.isMesh && STUDIO_JUNK.test((o.name || '') + ' ' + ((o.material && o.material.name) || ''))) junk.push(o); });
-  for (const o of junk) { if (o.parent) o.parent.remove(o); disposeLoadedObject(o); }
+  for (const o of junk) { if (o.parent) o.parent.remove(o); disposeGeometryOnly(o); }
 }
 function normalizeCarGLB(scene, length, black) {
   stripStudio(scene);
@@ -240,7 +253,7 @@ function normalizeCarGLB(scene, length, black) {
     for (const m of mats) {
       const nm = ((m.name || '') + (o.name || '')).toLowerCase();
       if (m.color && !/glass|light|tail|head|lamp|mirror|chrome|window|plate|signal|amber/.test(nm)) {
-        m.color.setHex(0x17191d);
+        m.color.setHex(0x303842);
         if (m.metalness !== undefined) m.metalness = 0.45;
         if (m.roughness !== undefined) m.roughness = 0.5;
       }
@@ -260,7 +273,9 @@ export function loadParkedCar(parent, url, opts = {}, onReady) {
   new GLTFLoader().load(url, g => {
     if (cancelled) { if (g.scene) disposeLoadedObject(g.scene); return; }
     const grp = new THREE.Group();
-    grp.add(normalizeCarGLB(g.scene, length, black));
+    const model = normalizeCarGLB(g.scene, length, black);
+    liftVehicleMaterials(model, black ? 0.48 : 0.24);
+    grp.add(model);
     grp.position.set(x, y, z);
     grp.rotation.y = yaw + (flip ? Math.PI : 0);   // some GLBs' nose runs the opposite way
     parent.add(grp);
@@ -353,7 +368,9 @@ export function loadCarProto(url, length, flip, onReady) {
     if (cancelled) { if (g.scene) disposeLoadedObject(g.scene); return; }
     const inner = new THREE.Group();
     inner.rotation.y = flip ? Math.PI : 0;          // face nose +Z (traffic groups rotate by atan2(dx,dz))
-    inner.add(normalizeCarGLB(g.scene, length, false));
+    const model = normalizeCarGLB(g.scene, length, false);
+    liftVehicleMaterials(model, 0.24);
+    inner.add(model);
     onReady(inner);
   }, undefined, err => { if (!cancelled) console.warn('traffic model failed', url, err); });
   return () => { cancelled = true; };
@@ -370,7 +387,7 @@ export function loadDrivableCar(car, url, slot, opts = {}) {
     const inner = new THREE.Group();
     inner.rotation.y = spin;
     const model = normalizeCarGLB(g.scene, length, black);
-    liftVehicleMaterials(model, black ? 0.16 : 0.22);
+    liftVehicleMaterials(model, black ? 0.38 : 0.24);
     inner.add(model);
     registerVehicle(car, inner, slot, meta);
     if (onReady) onReady(slot);
