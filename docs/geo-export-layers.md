@@ -112,12 +112,20 @@ to be exact — though over this ~850 m photo the mercator-vs-linear error is on
   tiles into a static asset is not** — fine to know for a personal model.
 
 ### Cesium Ion
-- **Cesium OSM Buildings** = Ion asset **96188**: curated, **complete** global 3D
-  buildings (clean grey extrusions with heights) — good for filling footprint gaps
-  (e.g. a house Overture missed). Token: `CESIUM_ION_TOKEN` in `.env.local`.
-- Its tiles are **`b3dm`** (binary header + feature table + batch table + an
-  embedded glb) — strip the b3dm wrapper to get the glb before gltf-transform.
+- **Cesium OSM Buildings** = Ion asset **96188**. Endpoint:
+  `GET https://api.cesium.com/v1/assets/96188/endpoint?access_token=$CESIUM_ION_TOKEN`
+  → `{url, accessToken}`; fetch the tileset with `Authorization: Bearer <accessToken>`
+  (it's **gzipped** — use `curl --compressed`). Token: `CESIUM_ION_TOKEN` in `.env.local`.
+- **Reality check:** the asset URL is `.../OpenStreetMap/CWT/2025` — it's an **OSM
+  extract**, i.e. the *same source* as our OSM footprints, just extruded. Here it's
+  **less dense than the baked Overture set** (≈169 vs 516 buildings in-patch) and
+  won't contain a structure OSM is missing. Not an upgrade for completeness; skipped.
+- Its tiles are **`b3dm`** (binary header + feature/batch tables + an embedded glb,
+  often with an `RTC_CENTER`) — strip the b3dm wrapper before gltf-transform.
 - Ion also re-hosts Google Photoreal and Cesium World Terrain.
+- **To actually fill footprint gaps** (the missing house), the only complete vector
+  source is **LiDAR building detection** (planar tall clusters in the point cloud) —
+  or just trace it off the photoreal layer in Blender.
 
 ### OSM / Overture
 - **OSM Overpass:** `way[building];out geom;` (footprints + `height`/`building:levels`),
@@ -170,7 +178,17 @@ scripts/.venv/bin/python scripts/fetch_trees.py            # LiDAR canopy trees 
 scripts/.venv/bin/python scripts/fetch_parcels.py          # county lot lines (needs parcels_raw.json)
 scripts/.venv/bin/python scripts/gen_facade.py             # wall texture
 node scripts/export_property_glb.mjs                       # -> 1840-dahill-property.glb
-node scripts/fetch_photoreal.mjs 150 3                     # -> 1840-dahill-photoreal.glb
+node scripts/fetch_photoreal.mjs 150 3                     # -> 1840-dahill-photoreal.glb (Google tiles)
+scripts/.venv/bin/python scripts/fetch_region.py          # wide DEM + satellite (±5 mi)
+node scripts/export_region_glb.mjs                         # -> 1840-dahill-region.glb (terrain only)
 /Applications/Blender.app/Contents/MacOS/Blender --background \
   --python scripts/render_property.py -- exports/<file>.glb exports/preview
 ```
+
+## 7. Regional terrain model (`1840-dahill-region.glb`)
+±5-mile USGS 3DEP terrain (downsampled, e.g. 1024²) with the Mapbox satellite
+draped — terrain only, same frame, so it sits under the property/photoreal models.
+Uses the curvature-correct ENU horizontal + **orthometric elevation as Y** (matching
+the property DEM); the ~5 m earth-curvature drop at 8 km is intentionally omitted so
+the regional ground stays a clean datum. Camera far-clip must exceed the model size
+(`render_property.py` sets `clip_end = max(2000, span*5)`).
