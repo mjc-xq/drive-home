@@ -75,7 +75,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     // Mahogany the furniture wood: ALL tables + bookshelves, EXCEPT bookshelves in the bedrooms.
     // Clone each material first so we never recolour a shared floor/wall material, and tint over the
     // scan map so the wood grain survives. Bedroom floor boxes (model space) say which shelves to skip.
-    const MAHOGANY = 0x5a2a17;
+    const MAHOGANY = 0x35180b;   // deep dark mahogany
     const bedBoxes = floors.filter(f => /bedroom/i.test(nameOf(f))).map(f => { const b = new THREE.Box3().setFromObject(f); return [b.min.x, b.max.x, b.min.z, b.max.z]; });
     const inBedroom = o => { const b = new THREE.Box3().setFromObject(o), x = (b.min.x + b.max.x) / 2, z = (b.min.z + b.max.z) / 2; return bedBoxes.some(bb => x >= bb[0] && x <= bb[1] && z >= bb[2] && z <= bb[3]); };
     const mahog = m => { if (!m) return m; const c = m.clone(); if (c.color) c.color.setHex(MAHOGANY); if (c.roughness !== undefined) c.roughness = 0.5; if (c.metalness !== undefined) c.metalness = 0.1; if (c.envMapIntensity !== undefined) c.envMapIntensity = 0; c.needsUpdate = true; return c; };
@@ -244,10 +244,10 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         target.userData.permaHidden = true; target.visible = false;   // hide the cabinet (collider stays, so the cage blocks)
       }, undefined, e => console.warn('[interior] cage swap failed for ' + cabName + ', keeping the cabinet', e));
     };
-    const CAGE_YAW = Math.PI / 2;                          // all three Meshy cages export 90° off — face them into the room
-    placeOnCabinet('storage_cabinet_mid27', cageUrl, CAGE_YAW);     // bearded-dragon — couchy couch's room, across the table the couch faces
-    placeOnCabinet('storage_cabinet_mid25', guineasUrl, CAGE_YAW);  // guinea-pig — TV wall, behind the overstuffed chair, by the dining table
-    placeOnCabinet('storage_cabinet_tall20', phebUrl, CAGE_YAW);    // chinchilla — the tall cabinet across from the guinea one, by the dining table
+    const CAGE_YAW = Math.PI / 2;                          // the Meshy cages export 90° off — face them into the room
+    placeOnCabinet('storage_cabinet_mid27', cageUrl, CAGE_YAW);                // bearded-dragon — couchy couch's room, across the table the couch faces
+    placeOnCabinet('storage_cabinet_mid25', guineasUrl, CAGE_YAW + Math.PI);   // guinea-pig — flipped 180° from the others; TV wall, behind the overstuffed chair
+    placeOnCabinet('storage_cabinet_tall20', phebUrl, CAGE_YAW);               // chinchilla — the tall cabinet across from the guinea one, by the dining table
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
   return () => { cancelled = true; };
 }
