@@ -1760,10 +1760,10 @@ export function createEngine({ canvas, ui, emit }) {
       // Overhead views: ONE finger draws-to-drive; a SECOND finger is a pinch-zoom (the
       // phone-native way to zoom the map the user asked for) which suspends steering until
       // you lift back to one finger.
-      if (followMode) {
-        // FOLLOWING: the whole screen ORBITS/pinches the camera (one finger = look, two = pinch) — a drag
-        // must NOT draw-to-drive or grab the joystick, both of which would cancel follow. Gestures move the
-        // camera freely while the car keeps tracking you.
+      if (followMode || (autoDrive && driveTopDown())) {
+        // FOLLOWING, or AUTO-DRIVING in an overhead/aerial view: the whole screen ORBITS/pinches the camera
+        // (one finger = look, two = pinch) so you can rotate the "race day" view freely — a drag must NOT
+        // draw-to-drive or grab the joystick (which would cancel follow). Re-target via the minimap/search.
         lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (mode === 'drive') camOrbit.t = performance.now();
         if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
@@ -2331,7 +2331,7 @@ export function createEngine({ canvas, ui, emit }) {
     // Far from home with only sparse OSM coverage: if the nearest fetched road is still a long way off
     // (≥120 m), don't fling the car all the way onto it — force a fresh fetch and leave it put (below).
     const usedOSM = far && !(ROUTE && ROUTE.length > 1);
-    if (found && usedOSM && bd > 120 * 120) found = false;
+    if (found && usedOSM && bd > 250 * 250) found = false;   // snap to a road within 250 m; only force a refetch if the nearest known road is genuinely far (stale/sparse OSM)
     if (!found) {
       if (far) {
         // No local road data yet (the OSM fetch hasn't landed). Force a fetch now and LEAVE THE CAR PUT
@@ -2618,7 +2618,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Relocate the START: teleport the car to an address, land it on a ROAD (so it matches
   // where Drive-to arrives — Google geocodes to a rooftop/parcel, not the curb), clear any
   // destination, re-settle the camera. Lets you start anywhere on the map.
-  let jumpReqId = 0;
+  let jumpReqId = 0, _jumpSnapPending = false;   // after a FAR jump, snap onto the road once the OSM fetch for the NEW area lands
   // Full post-teleport reset in ONE place: zero the car's motion, force a fresh ground
   // sample, and RE-SEAT every camera reference (camGroundRef/camFloorRef were the ones the
   // old jump paths forgot — leaving the orbit cam floating at the OLD altitude for seconds,
@@ -2642,10 +2642,11 @@ export function createEngine({ canvas, ui, emit }) {
     clearDestination();
     settleAfterTeleport();
     toast('📍 Jumped to ' + esc(label || 'there'), 1500);
-    // Far from the neighborhood there's no local road graph, so the geocode rooftop would
-    // strand the car ON a building. Match Drive-to EXACTLY: ask Google for the route and slide
-    // the car to the route's curb-side end when it resolves (a few-metre nudge onto the road).
-    if (!onLocalRoad) snapJumpToRoad(ox, oz, lat, lon, ++jumpReqId);
+    // Far from the neighborhood there's no local road graph (osmRoadSegs still covers the OLD area), so
+    // the geocode rooftop strands the car off-road and "Back to road" can't find anything until OSM
+    // re-fetches. So: force an OSM fetch for the NEW area now AND ask Google for the curb (whichever lands
+    // first snaps the car onto the road — see the _jumpSnapPending handler in updateAreaRoads).
+    if (!onLocalRoad) { _jumpSnapPending = true; updateAreaRoads(performance.now(), true); snapJumpToRoad(ox, oz, lat, lon, ++jumpReqId); }
   }
   // One-shot road-snap for a FAR jump: route origin→destination and move the car to the
   // route's final point — the same curb Drive-to arrives at. Bails if a newer jump fired or
@@ -2667,6 +2668,7 @@ export function createEngine({ canvas, ui, emit }) {
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
           const np = nearestRoadPoint(car.x, car.z);
           if (np && (np.d < 90 || insideBuilding(car.x, car.z))) { car.x = np.x; car.z = np.z; }
+          _jumpSnapPending = false;   // Google curb landed first — no need for the OSM-fetch snap
           settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
         }
       );
@@ -3036,7 +3038,12 @@ export function createEngine({ canvas, ui, emit }) {
               segs.push([[a[0], a[1]], [b[0], b[1]]]);
             }
           }
-          if (segs.length) { osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length; }   // stick with the mirror that worked
+          if (segs.length) {
+            osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length;   // stick with the mirror that worked
+            // A far jump left the car off-road; now that we have THIS area's roads, snap it on (if it didn't
+            // already drive off or get a destination). Generous radius — a rooftop geocode can sit a bit off the street.
+            if (_jumpSnapPending && !DEST && Math.abs(car.speed) < 4) { const np = nearestRoadPoint(car.x, car.z); if (np && np.d < 250) { car.x = np.x; car.z = np.z; settleAfterTeleport(); toast('🛣️ On the road', 900); } _jumpSnapPending = false; }
+          }
           _osmFetching = false;
         })
         .catch(() => { clearTimeout(to); tryMirror(n + 1); });   // this host is throttling/down — fall through to the next mirror
