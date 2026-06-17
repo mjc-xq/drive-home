@@ -2268,7 +2268,7 @@ export function createEngine({ canvas, ui, emit }) {
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
     car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; car.revArmT = 0; boost = 0; car.group.visible = true; car.groundY = null;
-    camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null;
+    camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null; _viewYaw = viewHeading();
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
@@ -2625,7 +2625,7 @@ export function createEngine({ canvas, ui, emit }) {
   // which read as "we lost the car"). Short cooldown so a bad landing still recovers fast.
   function settleAfterTeleport() {
     car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.revArmT = 0; car.groundY = null;
-    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6;
+    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6; _viewYaw = viewHeading();   // snap the overhead/aerial framing to the new heading (no rotate-in after a jump/teleport)
   }
   function jumpTo(lat, lon, label) {
     const ox = car.x, oz = car.z;                         // origin for the road-end query (captured before we teleport)
@@ -3272,7 +3272,7 @@ export function createEngine({ canvas, ui, emit }) {
   function cycleCamera() {
     driveCamUserPicked = true;
     camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
-    czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false;   // fresh framing per view (pinch-zoom/look don't leak)
+    czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; _viewYaw = viewHeading();   // fresh framing per view (pinch-zoom/look don't leak)
     const dd = DRIVE_CAMS[camMode].dragdrive;
     if (!DRIVE_CAMS[camMode].topdown) camera.up.set(0, 1, 0);   // only top-down is heading-up
     if (!dd) { inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
@@ -3286,13 +3286,13 @@ export function createEngine({ canvas, ui, emit }) {
     const i = DRIVE_CAMS.findIndex(c => c.topdown);
     if (i < 0) return;
     if (camMode === i) {
-      camMode = 0; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false;
+      camMode = 0; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; _viewYaw = viewHeading();
       inp2.navActive = false; navPtr = null; camera.up.set(0, 1, 0);
       emit('driveCam', DRIVE_CAMS[camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
       toast('Camera: ' + DRIVE_CAMS[camMode].name, 1100);
       return;
     }
-    camMode = i; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false;
+    camMode = i; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; _viewYaw = viewHeading();
     emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
     toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
@@ -3657,7 +3657,7 @@ export function createEngine({ canvas, ui, emit }) {
     // tarmac from any angle, strongly, so it actively steers you home. Your steering always
     // overrides the corner/track assist (fades to 0 as you push the stick).
     let assistTargetRate = 0;
-    if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 4) {
+    if (!followMode && autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 4) {   // follow OWNS the heading (street-tangent ease below) — don't let the steer-assist fight it
       let dir = null, recover = false; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - car.x, t.z - car.z]; }
       else if (offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - car.x, nrp.z - car.z]; recover = true; }   // drifted off → steer straight back to the nearest road (hood OR the fetched OSM graph)
@@ -3807,7 +3807,7 @@ export function createEngine({ canvas, ui, emit }) {
       let mx = dx * k, mz = dz * k;
       const step = Math.hypot(mx, mz), MAXSTEP = 520 * speedMul * dt;
       if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; }
-      car.x += mx; car.z += mz; car.groundY = null; car.vlat = 0; car.steer = 0;
+      car.x += mx; car.z += mz; car.groundY = null; car.vlat = 0; car.steer = 0; car.assistRate = 0;   // assistRate=0 so a residual steer-assist rate can't keep rotating yaw under the street-tangent ease
       car.speed = Math.hypot(mx, mz) / Math.max(dt, 1e-3);   // for cam framing / wheel spin
       car.railS = null; car.railSpeed = null;
       // Face the car ALONG THE STREET (nearest road tangent, oriented toward travel) — NOT the compass.
