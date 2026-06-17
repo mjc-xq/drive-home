@@ -105,8 +105,10 @@ export function createEngine({ canvas, ui, emit }) {
   // without washing out the body colour.
   {
     const pmrem = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    const room = new RoomEnvironment();
+    scene.environment = pmrem.fromScene(room, 0.04).texture;
     if ('environmentIntensity' in scene) scene.environmentIntensity = 0.42;
+    room.dispose && room.dispose();   // free the throwaway studio's geometries/materials
     pmrem.dispose();
   }
 
@@ -1009,7 +1011,7 @@ export function createEngine({ canvas, ui, emit }) {
   const crowdSpots = [];   // { rec, zone }
   // Pedestrian density (settings slider): scales the spread-out pool size. 1 = default.
   let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
-  const CROWD_VIS_CAP = 16;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
+  const CROWD_VIS_CAP = 20;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
   const SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
   const CROWD_POOL_CAP = 120;     // total persistent clones at density 1 (×D). Spread EVENLY across the whole hood; the visibility cap keeps only the nearest 16 animating, so this stays cheap while looking populated everywhere. Bounds boot-time SkeletonUtils.clone cost.
   let _crowdReplaceT = 0, _crowdVisT = 0;   // debounce the slider re-pool; throttle the nearest-N visibility scan
@@ -1102,10 +1104,11 @@ export function createEngine({ canvas, ui, emit }) {
         put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, { yaw: a + Math.PI, clip });
       }
     };
-    scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), 16, 'All_Night_Dance');   // CeCe all over Stanton Elementary
-    scatterCluster(drewCrowd, POIS.find(q => q.key === 'canyon'), 16, 'dance');               // Drew all over Canyon Middle
+    const cn = Math.min(20, Math.round(16 * D));   // cluster size scales with the density slider (0 → none); capped at the visibility cap so clones aren't wasted
+    scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary
+    scatterCluster(drewCrowd, POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
     // MEEMAW: a CeCe + Drew pair dancing together right out front of the house.
-    const meemaw = POIS.find(q => q.key === 'meemaw');
+    const meemaw = D > 0 ? POIS.find(q => q.key === 'meemaw') : null;
     if (meemaw) {
       const a = Math.PI / 2, r = 7;   // out the front, side by side, facing back toward the house
       const fx = meemaw.x + Math.cos(a) * r, fz = meemaw.z + Math.sin(a) * r;
@@ -2912,17 +2915,19 @@ export function createEngine({ canvas, ui, emit }) {
     if (view.topdown || dh < dist * 0.25) {
       // OVERHEAD COLUMN: cap the canopy just above the car and box it to ±W around the car so the
       // cut is a tight column over the road, never spreading to trees off to the sides.
-      const W = 7, clearance = 3.0;                          // clearance ≥ tallest car roof so the car itself never clips
+      const W = 7, clearance = 2.5;                          // clearance ≥ tallest car roof (~2 m van) so the car never clips
       _clipHoriz.normal.set(0, -1, 0); _clipHoriz.constant = carY + clearance;   // kept BELOW carY+clearance
-      _clipBox[0].normal.set(1, 0, 0);  _clipBox[0].constant = -(carX - W);   // behind ⇔ x > carX−W
-      _clipBox[1].normal.set(-1, 0, 0); _clipBox[1].constant = (carX + W);    // behind ⇔ x < carX+W
-      _clipBox[2].normal.set(0, 0, 1);  _clipBox[2].constant = -(carZ - W);   // behind ⇔ z > carZ−W
-      _clipBox[3].normal.set(0, 0, -1); _clipBox[3].constant = (carZ + W);    // behind ⇔ z < carZ+W
+      // Box walls point INWARD so "behind EVERY plane" (clipIntersection) = inside the column. (Outward
+      // normals made the four behind-halves mutually exclusive → empty cut → overhead clipped nothing.)
+      _clipBox[0].normal.set(-1, 0, 0); _clipBox[0].constant = (carX - W);    // behind ⇔ x > carX−W
+      _clipBox[1].normal.set(1, 0, 0);  _clipBox[1].constant = -(carX + W);   // behind ⇔ x < carX+W
+      _clipBox[2].normal.set(0, 0, -1); _clipBox[2].constant = (carZ - W);    // behind ⇔ z > carZ−W
+      _clipBox[3].normal.set(0, 0, 1);  _clipBox[3].constant = -(carZ + W);   // behind ⇔ z < carZ+W
       planes.length = 0; planes.push(_clipHoriz, _clipBox[0], _clipBox[1], _clipBox[2], _clipBox[3]);
       return;
     }
-    // OBLIQUE (chase / cruise / aerial): cone from the camera to the car.
-    const W = 5, clearance = 1.2;                            // ±W at the car; low clearance so a tree's SIDES go, not just its top
+    // OBLIQUE (chase / cruise / aerial): a constant-width CORRIDOR from the camera to the car.
+    const W = 6, clearance = 0.4;                            // ±W slab around the look axis; clearance ≈0 cuts trees down to the line of sight (their SIDES, not just tops)
     // (1) tilted sightline height plane (down-normal; kept side = below). h = cross(d,up) = (dz,0,−dx),
     // cross(d,h) = (−dx·dy, dh², −dy·dz) points UP, so the down normal nDown = (dx·dy, −dh², dy·dz).
     let nx = dx * dy, ny = -dh * dh, nz = dy * dz;
@@ -2930,23 +2935,22 @@ export function createEngine({ canvas, ui, emit }) {
     const hpx = carX - nx * clearance, hpy = carY - ny * clearance, hpz = carZ - nz * clearance;
     _clipHoriz.normal.set(nx, ny, nz);
     _clipHoriz.constant = -(nx * hpx + ny * hpy + nz * hpz);
-    // (2) depth gate: keep everything at/beyond (car − 2.6 m) along the eye→car axis.
+    // (2) depth gate: keep everything at/beyond (car − 2.6 m) along the eye→car axis. 2.6 m (not less)
+    // because the car's own tail sits ~2.25 m behind its centre along this axis in chase/cruise; a
+    // tighter band would clip the car's rear.
     const fx = dx / dist, fy = dy / dist, fz = dz / dist;
     _clipN.set(fx, fy, fz);
     _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);
     _clipDepth.normal.copy(_clipN);
     _clipDepth.constant = -_clipN.dot(_clipP);
-    // (3) cone walls: horizontal lateral axis u = normalize(up × f) = normalize(f.z,0,−f.x); the two
-    // planes nA=u−tanθ·f, nB=−u−tanθ·f through the camera bound a wedge that is a point at the lens
-    // and ±W at the car (tanθ = W/dist). Removed (behind both) = inside that wedge.
+    // (3) corridor walls — a constant-width slab, NOT an apex cone (a cone is a point at the lens and
+    // only ±W/2 at mid-corridor, which leaves the SIDES of the trees). u = horizontal ⊥ the look axis
+    // = normalize(f.z,0,−f.x); two VERTICAL planes ±W along u bound a ±W strip around the WHOLE eye→car
+    // line. Removed (behind both) = within W m either side of the line of sight — "a few metres each side".
     const ul = Math.hypot(fz, fx) || 1, ux = fz / ul, uz = -fx / ul;   // unit horizontal ⊥ f
-    const tt = W / dist;
-    let ax = ux - tt * fx, ay = -tt * fy, az = uz - tt * fz;
-    let al = Math.hypot(ax, ay, az); ax /= al; ay /= al; az /= al;
-    _clipConeA.normal.set(ax, ay, az); _clipConeA.constant = -(ax * ex + ay * ey + az * ez);
-    let bx = -ux - tt * fx, by = -tt * fy, bz = -uz - tt * fz;
-    let bl = Math.hypot(bx, by, bz); bx /= bl; by /= bl; bz /= bl;
-    _clipConeB.normal.set(bx, by, bz); _clipConeB.constant = -(bx * ex + by * ey + bz * ez);
+    const ue = ux * ex + uz * ez;                                      // u·E (u has no y component)
+    _clipConeA.normal.set(ux, 0, uz);   _clipConeA.constant = -ue - W;   // behind ⇔ u·P < u·E + W
+    _clipConeB.normal.set(-ux, 0, -uz); _clipConeB.constant = ue - W;    // behind ⇔ u·P > u·E − W
     planes.length = 0; planes.push(_clipHoriz, _clipDepth, _clipConeA, _clipConeB);
   }
 
