@@ -3863,7 +3863,7 @@ export function createEngine({ canvas, ui, emit }) {
     const h = vv ? Math.round(vv.height) : document.documentElement.clientHeight || innerHeight;
     return [Math.max(1, w), Math.max(1, h)];
   }
-  let _rw = 0, _rh = 0, _resizeRaf = 0;
+  let _rw = 0, _rh = 0, _resizeRaf = 0, _kbdOpen = false;
   function resize() {
     const [w, h] = viewportSize();
     _rw = w; _rh = h;
@@ -3878,6 +3878,11 @@ export function createEngine({ canvas, ui, emit }) {
   // continuously during the URL-bar show/hide, and a raw resize() per event churns the GL
   // viewport + tile-resolution recompute mid-gesture. Skip when the size hasn't changed.
   function requestResize() {
+    // iPad/iOS: focusing the address box opens the on-screen keyboard, which SHRINKS visualViewport.
+    // Resizing the canvas + HUD to that smaller strip is what "screws up the rest of the screen" — the
+    // 3D scene squished into the top while you type. Hold the size steady while a text field is focused
+    // and restore it on blur (see the focusin/focusout listeners below).
+    if (_kbdOpen) return;
     if (_resizeRaf) return;
     _resizeRaf = requestAnimationFrame(() => {
       _resizeRaf = 0;
@@ -3981,6 +3986,14 @@ export function createEngine({ canvas, ui, emit }) {
     visualViewport.addEventListener('resize', requestResize);
     visualViewport.addEventListener('scroll', requestResize);
   }
+  // Keyboard-open detection: a focused text field (the address box) is what brings up the on-screen
+  // keyboard. While it's focused we freeze the viewport size; on blur we resize once to restore + also
+  // un-scroll the page (iOS scrolls the document to reveal the input, leaving the fixed UI offset).
+  const _isTextField = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(range|checkbox|radio|button|submit|color)$/.test(el.type || 'text')));
+  const onFocusIn = e => { if (_isTextField(e.target)) _kbdOpen = true; };
+  const onFocusOut = e => { if (_isTextField(e.target)) { _kbdOpen = false; window.scrollTo(0, 0); requestResize(); } };
+  addEventListener('focusin', onFocusIn);
+  addEventListener('focusout', onFocusOut);
   resize();
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
 
@@ -4017,6 +4030,8 @@ export function createEngine({ canvas, ui, emit }) {
     removeEventListener('keydown', onKeyDown);
     removeEventListener('keyup', onKeyUp);
     removeEventListener('resize', requestResize);
+    removeEventListener('focusin', onFocusIn);
+    removeEventListener('focusout', onFocusOut);
     if (window.visualViewport) {
       visualViewport.removeEventListener('resize', requestResize);
       visualViewport.removeEventListener('scroll', requestResize);
