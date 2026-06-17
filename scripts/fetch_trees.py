@@ -97,14 +97,23 @@ def main():
     chm = np.where(dsm > -1e8, dsm - ground, 0.0).reshape(G, G)
     print(f"  CHM grid {G}x{G}; cells >= {HMIN} m: {(chm >= HMIN).sum():,}  max {chm.max():.1f} m")
 
+    # mask = where a 3D model already exists: existing footprints + road corridors.
+    # Rasterize onto the grid (for gap detection) and keep polys (for the tree test).
+    from PIL import Image, ImageDraw
+    from collections import deque
+    from shapely.geometry import MultiPoint
+    g2w = lambda x, z: ((x + HALF) / CELL, (z + HALF) / CELL)          # world -> grid px
+    maskimg = Image.new("L", (G, G), 0); md = ImageDraw.Draw(maskimg)
+    labelimg = Image.new("I", (G, G), 0); ld = ImageDraw.Draw(labelimg)  # per-building id (for LiDAR height)
     polys = []
-    for b in SCENE["buildings"]:
+    for ib, b in enumerate(SCENE["buildings"]):
         llat, llon = geo.flat_to_ll(np.array([e for e, n in b["p"]]), np.array([n for e, n in b["p"]]))
         ring = list(zip(*geo.to_world(llat, llon)))
         cxv = sum(p[0] for p in ring) / len(ring); czv = sum(p[1] for p in ring) / len(ring)
         if abs(cxv) <= HALF + 30 and abs(czv) <= HALF + 30:
             polys.append(Polygon(ring).buffer(1.0))
-    # mask road corridors too, so canopy overhanging the street isn't placed in it
+            md.polygon([g2w(x, z) for x, z in ring], fill=255)
+            ld.polygon([g2w(x, z) for x, z in ring], fill=ib + 1)
     for r in SCENE.get("roads", []):
         pl = r.get("p") if isinstance(r, dict) else r
         if not isinstance(pl, list) or len(pl) < 2:
@@ -112,14 +121,67 @@ def main():
         llat, llon = geo.flat_to_ll(np.array([e for e, n in pl]), np.array([n for e, n in pl]))
         line = list(zip(*geo.to_world(llat, llon)))
         if any(abs(x) <= HALF + 30 and abs(z) <= HALF + 30 for x, z in line):
-            polys.append(LineString(line).buffer(4.5))   # ~road half-width + curb
+            polys.append(LineString(line).buffer(4.5))
+            md.line([g2w(x, z) for x, z in line], fill=255, width=max(1, int(9 / CELL)))
     tree_strtree = STRtree(polys) if polys else None
+    existing = np.asarray(maskimg) > 0                                 # cells already modelled
 
+    # real roof height per existing footprint (median canopy-height over its cells),
+    # so the generated buildings match the photoreal instead of OSM tags / 4.5 m default
+    labels = np.asarray(labelimg)
+    heights = {}
+    for ib in np.unique(labels):
+        if ib == 0:
+            continue
+        hv = chm[labels == ib]; hv = hv[hv > 0.5]
+        if hv.size >= 4:
+            heights[int(ib - 1)] = round(float(np.median(hv)), 2)
+    json.dump(heights, open(os.path.join(EXPORTS, "buildings_height.json"), "w"), separators=(",", ":"))
+    print(f"  {len(heights)} building heights from LiDAR")
+
+    # ---- gap buildings: tall + PLANAR (low canopy roughness) + not already modelled ----
+    pad = np.pad(chm, 1, mode="edge")
+    rough = np.lib.stride_tricks.sliding_window_view(pad, (3, 3)).std(axis=(2, 3))
+    exd = existing.copy()                                              # dilate existing ~2 m so footprint-edge slivers don't count
+    for _ in range(2):
+        exd = exd | np.roll(exd, 1, 0) | np.roll(exd, -1, 0) | np.roll(exd, 1, 1) | np.roll(exd, -1, 1)
+    bmask = (chm >= 2.8) & (chm <= 12) & (rough < 0.8) & ~exd          # building-tall, very planar (roofs), not already modelled
+    claimed = np.zeros((G, G), bool)
+    fills = []
+    lab = np.zeros((G, G), np.int32)
+    for sj in range(G):
+        for si in range(G):
+            if not bmask[sj, si] or lab[sj, si]:
+                continue
+            lab[sj, si] = 1; q = deque([(sj, si)]); cells = []
+            while q:
+                j, i = q.popleft(); cells.append((j, i))
+                for dj, di in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nj, ni = j + dj, i + di
+                    if 0 <= nj < G and 0 <= ni < G and bmask[nj, ni] and not lab[nj, ni]:
+                        lab[nj, ni] = 1; q.append((nj, ni))
+            if len(cells) < 50:                                        # ignore < ~50 m² (sheds/noise)
+                continue
+            pts = [((i + 0.5) * CELL - HALF, (j + 0.5) * CELL - HALF) for j, i in cells]
+            try:
+                rect = MultiPoint(pts).minimum_rotated_rectangle
+                ring = [[round(x, 2), round(z, 2)] for x, z in list(rect.exterior.coords)[:-1]]
+            except Exception:
+                continue
+            h = float(np.median([chm[j, i] for j, i in cells]))
+            fills.append({"ring": ring, "h": round(h, 2)})
+            for j, i in cells:
+                claimed[j, i] = True
+    json.dump({"source": "USGS 3DEP LiDAR 2021 (gap buildings: planar tall blobs not already modelled)",
+               "count": len(fills), "buildings": fills},
+              open(os.path.join(EXPORTS, "buildings_fill.json"), "w"), separators=(",", ":"))
+    print(f"  {len(fills)} gap buildings (LiDAR-detected, no existing footprint)")
+
+    # ---- trees: peak-pick remaining tall cells (skip existing models + gap buildings) ----
     cand = np.argwhere(chm >= HMIN)
-    order = np.argsort(-chm[cand[:, 0], cand[:, 1]])
-    cand = cand[order]
+    cand = cand[np.argsort(-chm[cand[:, 0], cand[:, 1]])]
     R = int(round(NMS_M / CELL))
-    taken = np.zeros((G, G), bool)
+    taken = claimed.copy()
     trees = []
     for j, i in cand:
         if taken[j, i]:
@@ -137,12 +199,10 @@ def main():
         trees.append([round(x, 2), round(z, 2), round(cr, 2), round(h, 2)])
         taken[max(0, j - R):j + R + 1, max(0, i - R):i + R + 1] = True
 
-    out = {"source": "USGS 3DEP LiDAR 2021 CHM (curvature-correct ENU)",
-           "count": len(trees), "trees": trees}
-    json.dump(out, open(os.path.join(EXPORTS, "trees.json"), "w"), separators=(",", ":"))
+    json.dump({"source": "USGS 3DEP LiDAR 2021 CHM (curvature-correct ENU)", "count": len(trees), "trees": trees},
+              open(os.path.join(EXPORTS, "trees.json"), "w"), separators=(",", ":"))
     hs = np.array([t[3] for t in trees]) if trees else np.array([0])
     print(f"  {len(trees)} trees  (height {hs.min():.1f}..{hs.max():.1f} m, median {np.median(hs):.1f})")
-    print(f"  wrote {os.path.join(EXPORTS, 'trees.json')}")
 
 
 if __name__ == "__main__":
