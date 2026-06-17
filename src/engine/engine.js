@@ -334,7 +334,7 @@ export function createEngine({ canvas, ui, emit }) {
     [['meemaw', 37.6995618, -122.0639216, '🏡', "Meemaw's", "🏡 Meemaw's house!"],
      ['canyon', 37.7046462, -122.0524363, '🏫', 'Canyon Middle', '🏫 Canyon Middle School!'],
      ['stanton', 37.7005734, -122.0940411, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
-     ['dad', 37.8004778, -122.2739559, '💼', "Dad's work", "💼 Dad's work — the XQ Institute!"]
+     ['dad', 37.8004778, -122.2739559, '💼', 'XQ', "💼 XQ — Mike's work!"]
     ].map(([key, lat, lon, icon, label, msg]) => { const w = geoToWorld(lat, lon); return { key, x: w[0], z: w[1], lat, lon, icon, label, msg }; }));
   let tripScore = 0;
   let boost = 0, boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
@@ -1060,7 +1060,7 @@ export function createEngine({ canvas, ui, emit }) {
     // across the WHOLE neighbourhood, not just near home. Denser slider → smaller spacing.
     const D = CROWD_DENSITY;
     const cn = Math.min(20, Math.round(16 * D));                 // school-cluster size (also used below); hoisted so it counts against the cap
-    const RESERVED = (D > 0 ? 18 : 0) + cn * 2 + (D > 0 ? 2 : 0);   // POI dancers (18) + 2 school clusters + meemaw pair — reserved out of the single cap
+    const RESERVED = (D > 0 ? 18 : 0) + cn * 2 + Math.min(8, cn) + (D > 0 ? 2 : 0);   // POI dancers (18) + 2 school clusters + XQ Mike cluster + meemaw pair — reserved out of the single cap
     const POOL = Math.max(0, Math.round(CROWD_POOL_CAP * D) - RESERVED);   // sidewalk+scatter share of ONE hard clone cap (keeps total boot clones ≈ CROWD_POOL_CAP×D)
     let placed = 0;
     if (D > 0 && POOL > 0) {
@@ -1128,6 +1128,7 @@ export function createEngine({ canvas, ui, emit }) {
     };
     scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary (cn hoisted above, counted against the cap)
     scatterCluster(drewCrowd, POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
+    scatterCluster(dadCrowd, D > 0 ? POIS.find(q => q.key === 'dad') : null, Math.min(8, cn), 'Bass_Beats');   // a few Mikes hanging around XQ (Dad's work)
     // MEEMAW: a CeCe + Drew pair dancing together right out front of the house.
     const meemaw = D > 0 ? POIS.find(q => q.key === 'meemaw') : null;
     if (meemaw) {

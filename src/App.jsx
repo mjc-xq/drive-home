@@ -198,7 +198,7 @@ export default function App() {
     { label: "Meemaw's", q: '4311 Circle Ave, Castro Valley, CA', ll: [37.6995618, -122.0639216] },
     { label: 'Canyon Middle', q: 'Canyon Middle School, Castro Valley, CA', ll: [37.7046462, -122.0524363] },
     { label: 'Stanton Elem', q: 'Stanton Elementary School, Castro Valley, CA', ll: [37.7005734, -122.0940411] },
-    { label: "Dad's work", q: '807 Broadway, Oakland, CA', ll: [37.8004778, -122.2739559] },
+    { label: 'XQ', q: '807 Broadway, Oakland, CA', ll: [37.8004778, -122.2739559] },
   ];
   const traceDrive = camName === 'Top-down' || camName === 'Aerial';
   const driveHelp = traceDrive
@@ -210,7 +210,7 @@ export default function App() {
     <div id="appShell">
       <div id="loading" className={engineError ? 'error' : (ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
         <div className="loadInner">
-          <div className="loadKick">1840 Dahill Lane</div>
+          <div className="loadKick">Welcome home</div>
           <div className="loadTitle">Neighborhood<br />Drive</div>
           {!engineError && <div className="loadBar"><i /></div>}
           <div className="loadSub">{engineError || 'Building the neighborhood…'}</div>
@@ -218,7 +218,7 @@ export default function App() {
       </div>
       <canvas
         id="scene" ref={canvasRef} tabIndex={0}
-        aria-label="Interactive 3D model of 1840 Dahill Lane with drivable neighborhood"
+        aria-label="Interactive 3D model of a drivable neighborhood"
       />
       <div id="fx" ref={el => (uiRefs.current.fx = el)} />
       {ready && picking && (
@@ -227,7 +227,7 @@ export default function App() {
             <div className="menuHead">
               <div>
                 <div className="menuKick">Welcome back</div>
-                <h1 className="menuTitle">1840 Dahill<br />Lane</h1>
+                <h1 className="menuTitle">Neighborhood<br />Drive</h1>
               </div>
               {poi.found > 0 && (
                 <div className="placesBadge">
