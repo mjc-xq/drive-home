@@ -322,6 +322,7 @@ export default function App() {
                 <span className="sbGo">GO</span>
               </button>
             )}
+            {!dest && subline && <div className="locNow">📍 {subline}</div>}
 
             {/* ══ TOP-RIGHT: segmented VIEW / FIX-ROAD / ☰ menu ══ */}
             <div className="dvTopRight" ref={dvTopRightRef}>

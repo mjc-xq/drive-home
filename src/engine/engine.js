@@ -330,7 +330,7 @@ export function createEngine({ canvas, ui, emit }) {
   const POI_KEY = 'dahill.drive.poisFound';
   const poiFound = new Set((() => { try { return JSON.parse(localStorage.getItem(POI_KEY) || '[]'); } catch (e) { return []; } })());
   const homeGeo = worldToGeo(house.c[0], house.c[1]);
-  const POIS = [{ key: 'home', x: house.c[0], z: house.c[1], lat: homeGeo.lat, lon: homeGeo.lon, icon: '🏠', label: 'your house', msg: "👋 That's YOUR house — 1840 Dahill Lane!" }].concat(
+  const POIS = [{ key: 'home', x: house.c[0], z: house.c[1], lat: homeGeo.lat, lon: homeGeo.lon, icon: '🏠', label: 'your house', msg: "👋 That's YOUR house — welcome home!" }].concat(
     [['meemaw', 37.6995618, -122.0639216, '🏡', "Meemaw's", "🏡 Meemaw's house!"],
      ['canyon', 37.7046462, -122.0524363, '🏫', 'Canyon Middle', '🏫 Canyon Middle School!'],
      ['stanton', 37.7005734, -122.0940411, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
@@ -2159,7 +2159,13 @@ export function createEngine({ canvas, ui, emit }) {
       };
       hideAlong(CHAR.x, fy + 1.1, CHAR.z);                                                            // torso
       hideAlong(CHAR.x, fy + 1.75, CHAR.z);                                                           // head
-      for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; hideAlong(CHAR.x + Math.cos(a) * 0.85, fy + 0.9, CHAR.z + Math.sin(a) * 0.85); }   // ring boundary
+      // Ring boundary — clears walls right around the kid. SKIP ring points that fall outside the room
+      // shell: when the kid hugs a perimeter wall the 0.85 radius overshoots PAST the outer wall, so a
+      // camera->outside ray would punch through (hide) the exterior wall/window and expose the skybox.
+      for (let i = 0; i < 6; i++) {
+        const a = i / 6 * Math.PI * 2, rx = CHAR.x + Math.cos(a) * 0.85, rz = CHAR.z + Math.sin(a) * 0.85;
+        if (rx > ra[0] + 0.2 && rx < ra[1] - 0.2 && rz > ra[2] + 0.2 && rz < ra[3] - 0.2) hideAlong(rx, fy + 0.9, rz);
+      }
     }
   }
   // hop from walking straight into driving (the car spawns at the driveway)
@@ -2814,13 +2820,14 @@ export function createEngine({ canvas, ui, emit }) {
       new maps.Geocoder().geocode({ location: { lat: g.lat, lng: g.lon } }, (res, status) => {
         _geoBusy = false;
         if (status !== 'OK' || !res || !res.length) return;
-        let route = '', city = '', state = '';
+        let route = '', locality = '', hood = '', state = '';
         for (const r of res) for (const c of (r.address_components || [])) {
           if (!route && c.types.includes('route')) route = c.short_name || c.long_name;
-          if (!city && (c.types.includes('locality') || c.types.includes('sublocality') || c.types.includes('neighborhood'))) city = c.long_name;
+          if (!locality && c.types.includes('locality')) locality = c.long_name;            // the actual CITY (preferred)
+          if (!hood && (c.types.includes('neighborhood') || c.types.includes('sublocality'))) hood = c.long_name;   // fallback only when there's no locality
           if (!state && c.types.includes('administrative_area_level_1')) state = c.short_name;
         }
-        const place = [city, state].filter(Boolean).join(', ');
+        const place = [locality || hood, state].filter(Boolean).join(', ');
         const label = [route, place].filter(Boolean).join(' · ');
         if (label && label !== _geoLabel) { _geoLabel = label; emit('subline', label); }
       });
@@ -3648,7 +3655,7 @@ export function createEngine({ canvas, ui, emit }) {
         // PARK IN FRONT: over the last few metres, turn from the route tangent to FACE the actual
         // address so the car pulls up looking at the building instead of stopping mid-lane.
         let aimYaw = rp.yaw;
-        if (DEST && remain < 9) { const fy = Math.atan2(DEST.x - car.x, DEST.z - car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); }
+        if (DEST && remain < 9 && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 1.5) { const fy = Math.atan2(DEST.x - car.x, DEST.z - car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); }   // guard: as the car glues onto the snapped route end, (DEST−car) collapses to float noise and atan2 jitters — below ~1.5 m fall back to the stable route tangent (rp.yaw)
         let _dy = aimYaw - car.yaw; while (_dy > Math.PI) _dy -= 2 * Math.PI; while (_dy < -Math.PI) _dy += 2 * Math.PI;
         car.yaw += _dy * Math.min(1, dt * 12);                                    // ease the heading onto the route tangent / toward the address on arrival
         car.vlat = 0; car.steer = 0;                                             // no physics slide while on rails
@@ -4110,7 +4117,7 @@ export function createEngine({ canvas, ui, emit }) {
   resize();
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
 
-  emit('subline', `Hayward, CA · ${S.creek ? S.creek.n + ' · ' : ''}sanctuary: 5 🐷 2 🦆 1 🦎`);
+  emit('subline', 'Castro Valley, CA');   // clean default for the live location readout; the reverse-geocoder refines it to STREET · CITY, ST as you drive
   applyCam();
   renderer.render(scene, camera);
   emit('ready');
