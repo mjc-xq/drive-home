@@ -15,6 +15,7 @@ import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import { createGround } from './occlusion/ground-height.js';
 import { createTileClip } from './occlusion/tile-clip.js';
+import { createPrefetch } from './occlusion/prefetch.js';
 import { createGeo } from './nav/geo.js';
 import { createRoadGraph } from './nav/road-graph.js';
 import { DRIVE_CAMS, SCOOP_CAMS } from './camera/presets.js';
@@ -47,6 +48,7 @@ export function createEngine({ canvas, ui, emit }) {
   // `ctx.car`/`ctx.CHAR`/`ctx.inp2` stay the existing aggregate bags. See plans/plan-engine-decomposition-*.
   const ctx = {};
   ctx.canvas = canvas; ctx.ui = ui; ctx.emit = emit;
+  ctx.occ = {};   // occlusion namespace — factories fold their methods in via Object.assign(ctx.occ, ...)
   ctx.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   ctx.toast = (html, ms) => ctx.emit('toast', { html, ms: ms || 1800 });
   // The toast is rendered via dangerouslySetInnerHTML, so any dynamic value that can carry
@@ -843,38 +845,8 @@ export function createEngine({ canvas, ui, emit }) {
   // ground-height probe ahead has data). Only on while a destination is set — exactly when
   // you're driving somewhere far — so free-roam near home pays nothing. Low resolution means
   // it warms only cheap COARSE tiles, filling the LRU cache without blowing the mobile budget.
-  const scoutCam = new THREE.PerspectiveCamera(60, 1.5, 1, 4000);
-  ctx.scoutOn = false, ctx._scoutT = 0, ctx._scoutPhase = 0;
-  function pointAlongRoute(dist) {
-    if (!ctx.ROUTE || ctx.ROUTE.length < 2) return null;
-    let px = ctx.car.x, pz = ctx.car.z, acc = 0;
-    for (let i = Math.max(0, ctx.routeIdx); i < ctx.ROUTE.length; i++) {
-      const dx = ctx.ROUTE[i].x - px, dz = ctx.ROUTE[i].z - pz, seg = Math.hypot(dx, dz) || 1e-3;
-      if (acc + seg >= dist) { const t = (dist - acc) / seg; return { x: px + dx * t, z: pz + dz * t }; }
-      acc += seg; px = ctx.ROUTE[i].x; pz = ctx.ROUTE[i].z;
-    }
-    return { x: px, z: pz };
-  }
-  function setScout(on) {
-    if (on === ctx.scoutOn || !ctx.p3dtiles) return;
-    ctx.scoutOn = on;
-    if (on) { ctx.p3dtiles.setCamera(scoutCam); ctx.p3dtiles.setResolution(scoutCam, 360, 240); }
-    else if (ctx.p3dtiles.deleteCamera) ctx.p3dtiles.deleteCamera(scoutCam);
-  }
-  function updateTilePrefetch(now) {
-    if (!ctx.p3dtiles || ctx.mode !== 'drive' || !ctx.p3dtiles.holder.visible || !ctx.DEST || !ctx.ROUTE || ctx.ROUTE.length < 2) { setScout(false); return; }
-    if (now - ctx._scoutT < 220) return;                       // ~4.5 Hz
-    ctx._scoutT = now;
-    setScout(true);
-    ctx._scoutPhase = (ctx._scoutPhase + 1) % 6;                   // sweep the aim through the corridor ahead…
-    const p = pointAlongRoute(90 + ctx._scoutPhase * 135);     // …≈90–765 m along the route (reach matches the faster rail cruise)
-    if (!p) { setScout(false); return; }
-    const gy = ctx.car.groundY != null ? ctx.car.groundY : 0;
-    scoutCam.up.set(0, 0, -1);
-    scoutCam.position.set(p.x, gy + 260, p.z);             // high, straight down → warms the ground tiles ahead
-    scoutCam.lookAt(p.x, gy, p.z);
-    scoutCam.updateMatrixWorld(true);
-  }
+  ctx.scoutOn = false; ctx._scoutT = 0; ctx._scoutPhase = 0;
+  Object.assign(ctx.occ, createPrefetch(ctx));   // ctx.occ.{setScout, updateTilePrefetch, pointAlongRoute} — see occlusion/prefetch.js
   // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
   // built (procedural) world at ground level (Drive/Scoop). The groundAt + camera
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
@@ -3261,7 +3233,7 @@ export function createEngine({ canvas, ui, emit }) {
   // vertical COLUMN instead: a flat canopy cap boxed to ±W around the car in x/z. Same outcome — the
   // canopy right over the car/road is cut, trees away from the road are untouched.
   // ---- occlusion: drive tile cutaway ---- (see occlusion/tile-clip.js)
-  ctx.occ = { ...createTileClip(ctx) };   // ctx.occ.updateTileClip; more occlusion methods folded in as they extract
+  Object.assign(ctx.occ, createTileClip(ctx));   // ctx.occ.updateTileClip
 
   function updateDrive(dt, now) {
     // Mix stick (jx/jy), keyboard (kx/ky), and legacy pedal inputs. The left
@@ -4108,7 +4080,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.sun.castShadow && now - ctx._shadowT > 140) { ctx.renderer.shadowMap.needsUpdate = true; ctx._shadowT = now; }
     ctx.camera.getWorldDirection(dirV);
     if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
-    updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
+    ctx.occ.updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
     if (ctx.p3dtiles && photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (_attrStr) { _attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
     if (ctx.mode === 'drive') {
@@ -4227,7 +4199,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.dadCrowd) ctx.dadCrowd.dispose();
     if (ctx.momCrowd) ctx.momCrowd.dispose();
     for (const npc of ctx.npcs) { if (npc.ctrl.reset) npc.ctrl.reset(); if (npc.group.parent) npc.group.parent.remove(npc.group); }   // tear down the house NPCs
-    setScout(false);                             // unregister the prefetch scout camera
+    ctx.occ.setScout(false);                             // unregister the prefetch scout camera
     if (ctx.p3dtiles && ctx.p3dtiles.disposeAll) ctx.p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
     ctx.scene.traverse(o => {
