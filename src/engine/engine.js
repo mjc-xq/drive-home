@@ -137,12 +137,16 @@ export function createEngine({ canvas, ui, emit }) {
   let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
   let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
   let routeIdx = 0;       // current target waypoint along ROUTE
-  // FAR-FROM-HOME road reference: the procedural road graph only covers the ~±330 m neighbourhood,
-  // so out on the open photoreal tiles the lane-keep assist has nothing to hug unless you're
-  // navigating. This is a rolling polyline of the REAL road ahead, snapped via Google Directions,
-  // refreshed as you drive — it lets the assist + soft-wall work everywhere, not just at home.
-  let freeRoamPath = null, _frT = 0, _frReq = 0;
+  // FAR-FROM-HOME road graph: the procedural roadSegs only cover the ~±330 m hood, so out on the open
+  // photoreal tiles the lane-keep assist had nothing to hug. Instead of a fragile 1-D "route ahead",
+  // fetch the REAL road NETWORK from OpenStreetMap (Overpass) in a box around the car, projected
+  // through the same ENU geoToWorld as the tiles, and re-fetch as you drive into new areas. This is a
+  // true graph (segments on every side), so nearestRoadPoint / roadTargetAhead / the soft-wall / reset
+  // all work EVERYWHERE, exactly like they do at home. Degrades to no-assist if Overpass is unreachable.
+  let osmRoadSegs = [];          // world-space road segments fetched around the car ([[ax,az],[bx,bz]])
+  let _osmCenter = null, _osmFetching = false, _osmT = 0;
   let autoDrive = false;
+  let _railRoute = null;   // the ROUTE the auto-drive rail's arc-length (car.railS) was acquired for; re-acquire when it changes
 
   // ---- drive collectibles: gold coins scattered along the neighbourhood roads ----
   const coins = [];
@@ -1864,7 +1868,6 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('drive'); camInit = false;
     setInside(false);
     DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false;
-    freeRoamPath = null; _frReq++; _frT = 0;   // fresh free-roam road probe; invalidate any in-flight one from a prior drive
     guideLine.visible = false; destPin.visible = false; if (navMarker) navMarker.visible = false;
     emit('dest', null); emit('autodrive', false);
     // Default to the Roblox-style CHASE cam ('Close') so driving leads with the
@@ -1909,7 +1912,6 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function exitDrive() {
     setMode('explore');
-    freeRoamPath = null; _frReq++;   // don't let a stale far-from-home road snap leak into non-drive nearestRoadPoint callers
     camera.up.set(0, 1, 0);
     hideJoy();
     navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
@@ -1949,10 +1951,10 @@ export function createEngine({ canvas, ui, emit }) {
     };
     if (ROUTE && ROUTE.length > 1) {
       for (let i = 0; i < ROUTE.length - 1; i++) consider(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
-    } else if (freeRoamPath && freeRoamPath.length > 1 && Math.hypot(car.x, car.z) > 320) {
-      // far from home: snap to the rolling real-road reference, NOT the hood graph (which would
+    } else if (osmRoadSegs.length && Math.hypot(car.x, car.z) > 320) {
+      // far from home: snap to the fetched OSM road network, NOT the hood graph (which would
       // teleport the car all the way back to the neighbourhood).
-      for (let i = 0; i < freeRoamPath.length - 1; i++) consider(freeRoamPath[i].x, freeRoamPath[i].z, freeRoamPath[i + 1].x, freeRoamPath[i + 1].z);
+      for (const s of osmRoadSegs) consider(s[0][0], s[0][1], s[1][0], s[1][1]);
     } else {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
@@ -2354,6 +2356,34 @@ export function createEngine({ canvas, ui, emit }) {
     }
     return acc;
   }
+  // ---- auto-drive RAIL: a chauffeur is not a physics sim. Glue the car to the route polyline and
+  // advance it by arc-length at a fast cruise, so a cross-town trip takes ~30-90 s and it can never
+  // overshoot a bend or ping-pong off the route, no matter the speed. (Supernatural traction by design.)
+  function routeTotalLen() { let L = 0; for (let i = 0; i < ROUTE.length - 1; i++) L += Math.hypot(ROUTE[i + 1].x - ROUTE[i].x, ROUTE[i + 1].z - ROUTE[i].z); return L; }
+  function railArcAt(x, z) {   // arc-length (m from ROUTE[0]) of the nearest point on the route to (x,z)
+    let bestS = 0, bd = 1e18, acc = 0;
+    for (let i = 0; i < ROUTE.length - 1; i++) {
+      const ax = ROUTE[i].x, az = ROUTE[i].z, vx = ROUTE[i + 1].x - ax, vz = ROUTE[i + 1].z - az, L = Math.hypot(vx, vz) || 1;
+      let t = ((x - ax) * vx + (z - az) * vz) / (L * L); t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d < bd) { bd = d; bestS = acc + t * L; }
+      acc += L;
+    }
+    return bestS;
+  }
+  function railPointAt(s) {   // { x, z, yaw, i } at arc-length s along the route
+    let acc = 0;
+    for (let i = 0; i < ROUTE.length - 1; i++) {
+      const ax = ROUTE[i].x, az = ROUTE[i].z, vx = ROUTE[i + 1].x - ax, vz = ROUTE[i + 1].z - az, L = Math.hypot(vx, vz) || 1;
+      if (acc + L >= s || i === ROUTE.length - 2) {
+        const t = clamp((s - acc) / L, 0, 1);
+        return { x: ax + vx * t, z: az + vz * t, yaw: Math.atan2(vx, vz), i };
+      }
+      acc += L;
+    }
+    const last = ROUTE[ROUTE.length - 1], prev = ROUTE[ROUTE.length - 2];
+    return { x: last.x, z: last.z, yaw: Math.atan2(last.x - prev.x, last.z - prev.z), i: ROUTE.length - 2 };
+  }
   function autoDriveTargetSpeed(dDest) {
     const turn = distToNextTurn();
     const straight = clamp((turn - 12) / 95, 0, 1);          // reach full speed on shorter straights
@@ -2368,7 +2398,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoMaxMph) s = Math.min(s, autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
     return s;
   }
-  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
+  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; car.railS = null; if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
   // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
   // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
@@ -2379,18 +2409,19 @@ export function createEngine({ canvas, ui, emit }) {
   // when you run wide, and it needs no wide-angle gate to survive a 90° street corner.
   // Returns null when the car is >10 m off any road (don't tug you around a lawn).
   function roadTargetAhead(x, z, yaw, speed) {
+    const segs = (x * x + z * z < 330 * 330) ? roadSegs : osmRoadSegs;   // hood graph near home, the fetched OSM graph everywhere else
     let carD = 1e18;                                 // how far the car is from the road right now
-    for (const s of roadSegs) {
+    for (const s of segs) {
       const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
       let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
       const ex = ax + vx * t - x, ez = az + vz * t - z, d = ex * ex + ez * ez;
       if (d < carD) carD = d;
     }
     if (carD > 100) return null;                     // >10 m off any road → no assist
-    const La = clamp(Math.abs(speed) * 0.55, 7, 24); // look further ahead the faster you go
+    const La = clamp(Math.abs(speed) * 0.55, 7, 40); // look further ahead the faster you go
     const px = x + Math.sin(yaw) * La, pz = z + Math.cos(yaw) * La;
     let btx = 0, btz = 0, bd = 1e18; let found = false;
-    for (const s of roadSegs) {
+    for (const s of segs) {
       const ax = s[0][0], az = s[0][1];
       const mx = (ax + s[1][0]) / 2 - x, mz = (az + s[1][1]) / 2 - z;
       if (mx * mx + mz * mz > 900) continue;         // only roads within ~30 m (stay on THIS road)
@@ -2411,70 +2442,46 @@ export function createEngine({ canvas, ui, emit }) {
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; bx = px; bz = pz; }
     };
-    // Live Google route first (real roads, works far from the procedural hood), then the rolling
-    // free-roam road snap, then EVERY mapped neighbourhood road. So the steer-back + soft wall +
-    // reset always have a target to aim at, anywhere on the map.
+    // Live Google route first (real roads), then the OSM road network fetched around the car (works
+    // far from the procedural hood), then EVERY mapped neighbourhood road. So the steer-back + soft
+    // wall + reset always have a real road to aim at, anywhere on the map.
     if (ROUTE && ROUTE.length > 1) for (let i = 0; i < ROUTE.length - 1; i++) tryAB(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
-    if (freeRoamPath && freeRoamPath.length > 1) for (let i = 0; i < freeRoamPath.length - 1; i++) tryAB(freeRoamPath[i].x, freeRoamPath[i].z, freeRoamPath[i + 1].x, freeRoamPath[i + 1].z);
+    for (const s of osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return { x: bx, z: bz, d: Math.sqrt(bd) };
   }
-  // A look-ahead aim point along a polyline: snap to the nearest point on the path, then walk
-  // `look` metres forward along it. Drives the free-roam assist (and mirrors navTarget's feel).
-  function aheadOnPath(path, x, z, speed) {
-    if (!path || path.length < 2) return null;
-    let bi = 0, bt = 0, bd = 1e18, bpx = x, bpz = z;
-    for (let i = 0; i < path.length - 1; i++) {
-      const ax = path[i].x, az = path[i].z, vx = path[i + 1].x - ax, vz = path[i + 1].z - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d < bd) { bd = d; bi = i; bt = t; bpx = px; bpz = pz; }
-    }
-    let look = clamp(Math.abs(speed) * 0.5, 14, 70), px = bpx, pz = bpz;   // aim further ahead at speed (was capped at 40 m — too close when flat-out)
-    for (let i = bi; i < path.length - 1; i++) {
-      const ax = (i === bi) ? bpx : path[i].x, az = (i === bi) ? bpz : path[i].z;
-      const bx2 = path[i + 1].x, bz2 = path[i + 1].z, seg = Math.hypot(bx2 - ax, bz2 - az);
-      if (seg >= look) { const f = look / (seg || 1); return { x: ax + (bx2 - ax) * f, z: az + (bz2 - az) * f }; }
-      look -= seg;
-    }
-    return { x: path[path.length - 1].x, z: path[path.length - 1].z };
-  }
-  // Rolling free-roam road snap: out past the procedural hood and NOT navigating, ask Google
-  // Directions for the REAL road ahead and cache its polyline as the assist's road reference.
-  // The fetch distance scales with SPEED (a fixed 280 m is <1 s of road at 250 u/s — the car
-  // outruns it), and it only refreshes when the cached road is running out or you've turned off
-  // it — so one call covers many seconds even flat-out, capped to ~1 call / 1.2 s. Keeps the last
-  // good path on a transient failure, and degrades to "no assist" (the prior behaviour) with no key.
-  function updateFreeRoamRoad(now, offDist) {
-    if (mode !== 'drive' || !autoSteer) { freeRoamPath = null; return; }
-    const fromHome = Math.hypot(car.x, car.z);
-    if (fromHome < 320 || (ROUTE && routeIdx < ROUTE.length)) { freeRoamPath = null; return; }   // hood has roadSegs; a route already feeds the assist
-    const spd = Math.abs(car.speed);
-    let needs = !freeRoamPath || freeRoamPath.length < 2;
-    if (!needs) {
-      const end = freeRoamPath[freeRoamPath.length - 1];
-      if (Math.hypot(end.x - car.x, end.z - car.z) < Math.max(260, spd * 5)) needs = true;   // ~5 s of road left → fetch the next stretch BEFORE it runs out
-      else if (offDist != null && offDist > 60) needs = true;                                 // wandered off the cached road (took a turn) → re-snap
-    }
-    if (!needs || now - _frT < 1200) return;   // hard min interval bounds Directions QPS/cost
-    _frT = now;
-    const reqId = ++_frReq;
-    const D = clamp(spd * 12, 700, 3000);   // fetch ~12 s of real road ahead, speed-scaled so a fast car never outruns the cached path
-    const aheadX = car.x + Math.sin(car.yaw) * D, aheadZ = car.z + Math.cos(car.yaw) * D;
-    const o = worldToGeo(car.x, car.z), a = worldToGeo(aheadX, aheadZ);
-    loadMapsSDK().then(maps => {
-      new maps.DirectionsService().route(
-        { origin: { lat: o.lat, lng: o.lon }, destination: { lat: a.lat, lng: a.lon }, travelMode: 'DRIVING' },
-        (res, status) => {
-          if (reqId !== _frReq || mode !== 'drive') return;                 // a newer probe (or left drive) supersedes this
-          if (status !== 'OK' || !res.routes || !res.routes[0]) return;     // keep the last good path on a transient failure (don't blank the assist)
-          const pts = [];
-          for (const leg of res.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) pts.push(p);
-          const src = pts.length ? pts : res.routes[0].overview_path;
-          if (src && src.length > 1) freeRoamPath = src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
+  // Fetch the REAL road network around the car from OpenStreetMap (Overpass) in a ~2.6 km box,
+  // projected through the same ENU geoToWorld as the photoreal tiles, and refresh it as you drive
+  // into new areas. This gives the lane-keep assist + soft-wall + reset a true road GRAPH everywhere,
+  // not just the procedural hood — so road-hugging works far from home exactly like it does at home.
+  // Self-throttled (one request at a time, ≥4 s apart, only when the car leaves the last box), and
+  // fully graceful: if Overpass is unreachable it just keeps whatever roads it had (or none).
+  function updateAreaRoads(now) {
+    if (mode !== 'drive') return;
+    if (Math.hypot(car.x, car.z) < 300) return;                                  // the hood's own roadSegs already cover here
+    if (_osmFetching || now - _osmT < 4000) return;                              // one fetch at a time, min 4 s apart
+    if (_osmCenter && Math.hypot(car.x - _osmCenter.x, car.z - _osmCenter.z) < 850) return;   // the current box still covers us
+    _osmFetching = true; _osmT = now;
+    const fx = car.x, fz = car.z, R = 1300;                                      // ~2.6 km box around the car
+    const cs = [worldToGeo(fx - R, fz - R), worldToGeo(fx + R, fz - R), worldToGeo(fx - R, fz + R), worldToGeo(fx + R, fz + R)];
+    const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
+    const s = Math.min(...lats).toFixed(6), n = Math.max(...lats).toFixed(6), w = Math.min(...lons).toFixed(6), e = Math.max(...lons).toFixed(6);
+    const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
+    fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        const segs = [];
+        for (const el of (data.elements || [])) {
+          const g = el.geometry; if (el.type !== 'way' || !g || g.length < 2) continue;
+          for (let i = 0; i < g.length - 1; i++) {
+            const a = geoToWorld(g[i].lat, g[i].lon), b = geoToWorld(g[i + 1].lat, g[i + 1].lon);
+            segs.push([[a[0], a[1]], [b[0], b[1]]]);
+          }
         }
-      );
-    }).catch(() => { });   // keep the last good path on error
+        if (segs.length) { osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; }   // keep the last roads on an empty/failed response
+        _osmFetching = false;
+      })
+      .catch(() => { _osmFetching = false; });
   }
   // Local street fallback for minimap/tap auto-drive. Google Directions handles real
   // address trips; this keeps nearby "drive there" pins on neighborhood roads instead
@@ -2801,17 +2808,10 @@ export function createEngine({ canvas, ui, emit }) {
     const dist = Math.hypot(dx, dy, dz);
     if (dist < 1e-3) { planes.length = 0; return; }
     const overhead = view.topdown || view.aerial;
-    // GATE (chase views only): only cut when something ACTUALLY blocks the car. Cast the eye→car ray
-    // and bail (clip NOTHING) when it reaches the car unobstructed. This is what stops an off-axis hill
-    // that's above the sightline but not in the way from being sliced (the "weird white middle"), and
-    // stops any clipping on open road far from home where the streamed tiles ARE the ground.
-    if (!overhead) {
-      if (!(p3dtiles.holder && p3dtiles.holder.visible)) { planes.length = 0; return; }
-      _clipN.set(dx, dy, dz).multiplyScalar(1 / dist);
-      _camRayD.copy(_clipN); camRay.set(_camRayO.copy(camera.position), _camRayD); camRay.far = dist - 1.2;
-      _camHits.length = 0; p3dtiles.raycast(camRay, _camHits);
-      if (!(_camHits[0] && _camHits[0].distance < dist - 1.2)) { planes.length = 0; return; }   // clear sightline → cut nothing
-    }
+    // (No raycast "gate": it only fired when the dead-centre eye→car ray hit something, so trees that
+    // covered the car's BODY but not that one point slipped through — Cruise stopped hiding occluders.
+    // The tilted sightline plane below ALWAYS cuts above the line of sight, which reliably hides the
+    // occluders while still keeping every hill BELOW the sightline — the actual fix for the white middle.)
     const dh = Math.hypot(dx, dz);
     const clearance = overhead ? 6 : 4.5;
     // Overhead/near-vertical views: the tilted plane degenerates (h = d×up → 0), so fall back to a
@@ -2873,7 +2873,7 @@ export function createEngine({ canvas, ui, emit }) {
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
     if (autoDrive && (Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky)) {
-      autoDrive = false; inp2.navActive = false; emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
+      autoDrive = false; inp2.navActive = false; car.railS = null; emit('autodrive', false); toast('🕹️ You took the wheel!', 900);
     }
     // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
     // has travelled along the current segment), not just proximity — at high speed the car
@@ -2973,7 +2973,7 @@ export function createEngine({ canvas, ui, emit }) {
     boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
     let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
-    if (autoDrive && (highway || openRoad)) maxF = Math.min(maxF, 130 * boostMul * speedMul);   // CAP the chauffeur to a speed it can actually STEER far from home — the old 240+ (and highway's 250) made it overshoot every real bend and ping-pong off the route. Still ~290 mph on a straight; the predictive turn cap below slows it for bends.
+    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 440 * boostMul * speedMul);   // let the chauffeur RIP — it follows the route on rails (see the rail block), so it can't overshoot; a cross-town trip should take ~30-90 s
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -3047,7 +3047,7 @@ export function createEngine({ canvas, ui, emit }) {
     const inHood = Math.hypot(car.x, car.z) < 330;
     const nrp = nearestRoadPoint(car.x, car.z);
     const offRoadDist = nrp.d;
-    updateFreeRoamRoad(now, offRoadDist);   // refresh the snapped real-road reference ahead (speed-scaled; self-throttled). Pass offRoadDist so it can re-snap when you turn off the cached road.
+    updateAreaRoads(now);   // fetch/refresh the OSM road network around the car so the assist has real roads to hug far from home
     // AUTO-STEER assist: aim the car along the ROUTE (when navigating), or — in free-roam —
     // along the nearest road via a look-ahead point that takes street corners for you. When
     // you've drifted OFF the road it switches to RECOVERY: aim straight back at the nearest
@@ -3057,9 +3057,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (autoSteer && !inp2.navActive && !hb && Math.abs(car.speed) > 4) {
       let dir = null, recover = false; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - car.x, t.z - car.z]; }
-      else if (freeRoamPath && offRoadDist < 80) { const t = aheadOnPath(freeRoamPath, car.x, car.z, car.speed); if (t) { dir = [t.x - car.x, t.z - car.z]; recover = offRoadDist > 8; } }   // FAR FROM HOME: hug the snapped real road ahead
-      else if (offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - car.x, nrp.z - car.z]; recover = true; }
-      else { const tp = roadTargetAhead(car.x, car.z, car.yaw, car.speed); if (tp) dir = [tp[0] - car.x, tp[1] - car.z]; }
+      else if (offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - car.x, nrp.z - car.z]; recover = true; }   // drifted off → steer straight back to the nearest road (hood OR the fetched OSM graph)
+      else { const tp = roadTargetAhead(car.x, car.z, car.yaw, car.speed); if (tp) dir = [tp[0] - car.x, tp[1] - car.z]; }   // hug the road ahead (roadTargetAhead uses the OSM graph far from home)
       if (dir && (dir[0] || dir[1])) {
         let d = Math.atan2(dir[0], dir[1]) - car.yaw;
         while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
@@ -3133,7 +3132,7 @@ export function createEngine({ canvas, ui, emit }) {
     // can't. Ramps in over a few metres (soft edge), clamps under driving speed (never yanks), and
     // fades as you steer, so it reads like an invisible berm on the shoulder. Only where a road
     // graph exists (the hood or a live route) so it never tugs you back into town from the open road.
-    if (autoSteer && !hb && (inHood || onRouteNow || freeRoamPath) && offRoadDist > LANE_HALF && offRoadDist < 120) {
+    if (autoSteer && !hb && (inHood || onRouteNow || osmRoadSegs.length) && offRoadDist > LANE_HALF && offRoadDist < 120) {
       const over = offRoadDist - LANE_HALF;
       const ramp = clamp(over / 6, 0, 1);                       // ease in over the first 6 m
       const yours = clamp(Math.abs(jx) * 1.5, 0, 1);            // fade out as the player steers hard
@@ -3192,6 +3191,27 @@ export function createEngine({ canvas, ui, emit }) {
     const lim = 30000;   // 30 km: reach the East Bay address presets (Oakland ≈ 22 km) across the streamed tiles
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
     car.x = nx; car.z = nz;
+    // AUTO-DRIVE RAIL: when the chauffeur has a route, ignore the physics result and glide the car
+    // ALONG the route by arc-length at a fast cruise — so it follows the road EXACTLY (no overshoot,
+    // no ping-pong) and a cross-town trip takes ~30-90 s. Position is overridden here (after the
+    // collision step), so it phases through obstacles on the route — that's the point.
+    if (autoDrive && ROUTE && ROUTE.length > 1) {
+      if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; }
+      const _cruise = clamp(140 + distToNextTurn() * 1.6, 140, 440 * speedMul);   // ~140 m/s through tight bends, up to ~440 on long straights
+      car.speed += (_cruise - car.speed) * Math.min(1, dt * 2.5);
+      car.railS += Math.abs(car.speed) * dt;
+      if (car.railS >= routeTotalLen() - 4) {                                     // reached the end → arrive
+        car.railS = null;
+        if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
+        clearDestination();
+      } else {
+        const rp = railPointAt(car.railS);
+        car.x = rp.x; car.z = rp.z; routeIdx = rp.i;
+        let _dy = rp.yaw - car.yaw; while (_dy > Math.PI) _dy -= 2 * Math.PI; while (_dy < -Math.PI) _dy += 2 * Math.PI;
+        car.yaw += _dy * Math.min(1, dt * 12);                                    // ease the heading onto the route tangent
+        car.vlat = 0; car.steer = 0;                                             // no physics slide while on rails
+      }
+    }
     // Ride the real photoreal ROAD surface (canopy-skipped + clamped to topology),
     // tracked ASYMMETRICALLY: settle DOWN gently (smooth on descents + bumps) but catch
     // UP quickly, and never let the smoothed height sink more than a hair below the real
