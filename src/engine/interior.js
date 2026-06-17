@@ -71,10 +71,10 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const ctrX = (overall.min.x + overall.max.x) / 2, ctrZ = (overall.min.z + overall.max.z) / 2;
     const ceilingH = overall.max.y - floorTop;
 
-    // Scale the house up so the real-height kids (Drew 5'4", CeCe 4'10") have room to move around
-    // the small scanned rooms — at 1:1 they felt boxed-in. Colliders below are read AFTER this
-    // scale (world space), so they track it.
-    const S = 1.4;
+    // House at REAL scale (1:1). It was scaled 1.4x for the old, smaller map so the kids could move,
+    // but that dwarfed the real-height people ("everyone's too short"). The current scan is bigger and
+    // the floor-footprint collision is forgiving, so 1:1 keeps people correctly proportioned.
+    const S = 1.0;
     const group = new THREE.Group();
     group.add(model);
     group.scale.setScalar(S);

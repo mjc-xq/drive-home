@@ -8,7 +8,7 @@ import dadUrl from '../assets/dad.glb';
 // loads it. Same controller shape as Drew/CeCe, but the player can never BE him — he's wired only
 // as an ambient walk-out-of-a-room NPC in engine.js.
 const DAD_YAW = Math.PI / 2;            // Meshy rig faces like the (fixed) CeCe: spin nose -> +X
-const DAD_HEIGHT_M = 1.85;              // ~6 ft — a grown-up, taller than the kids
+const DAD_HEIGHT_M = 1.778;            // 5'10" — a grown-up, taller than the kids
 const DAD_NAME_MAP = { idle: 'Arm_Circle_Shuffle', walk: 'Walking', run: 'Running', dance: 'All_Night_Dance', cheer: 'Bass_Beats' };
 
 function nativeHeight(obj) {
