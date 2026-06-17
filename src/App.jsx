@@ -81,6 +81,7 @@ export default function App() {
   const [dest, setDest] = useState(null);               // { label }
   const [autoDrive, setAutoDrive] = useState(false);
   const [camName, setCamName] = useState('Cruise');     // current drive camera label (on the 🎥 button)
+  const [driveZoom, setDriveZoom] = useState({ norm: 0.3, overhead: false });   // overhead/aerial zoom-out slider
   const [poi, setPoi] = useState({ found: 0, total: 5 });  // neighbourhood places visited (persisted)
   const [arrived, setArrived] = useState(null);         // finish-line "ARRIVED" card
   const [sound, setSound] = useState(true);             // master sound on/off (🔊 toggle)
@@ -111,6 +112,7 @@ export default function App() {
         case 'driveScore': setDriveScore(p); break;
         case 'autodrive': setAutoDrive(p); break;
         case 'driveCam': setCamName(p); break;
+        case 'driveZoom': setDriveZoom(p); break;
         case 'poiProgress': setPoi(p); break;
         case 'cars': setCars(p); break;
         case 'sound': setSound(p); break;
@@ -326,6 +328,17 @@ export default function App() {
               </button>
             )}
             {!dest && subline && <div className="locNow">📍 {subline}</div>}
+
+            {/* ══ overhead/aerial ZOOM-OUT slider (also pinch-zoomable; this gives a wide, precise range) ══ */}
+            {driveZoom.overhead && (
+              <div className="zoomCtl">
+                <span>＋</span>
+                <input className="zoomSlider" type="range" min="0" max="1" step="0.01"
+                  value={1 - driveZoom.norm}
+                  onChange={e => eng().setDriveZoom(1 - +e.target.value)} aria-label="Zoom out" />
+                <span>－</span>
+              </div>
+            )}
 
             {/* ══ TOP-RIGHT: segmented VIEW / FIX-ROAD / ☰ menu ══ */}
             <div className="dvTopRight" ref={dvTopRightRef}>
