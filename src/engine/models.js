@@ -12,6 +12,7 @@ function bakedGeom(mesh) {
   const g = mesh.geometry.clone();
   g.applyMatrix4(mesh.matrixWorld);
   const ng = g.index ? g.toNonIndexed() : g;
+  if (ng !== g) g.dispose();
   if (!ng.attributes.normal) ng.computeVertexNormals();
   return ng;
 }
@@ -35,7 +36,7 @@ export function loadPigPrototype(url, yaw, onReady) {
     root.traverse(o => { if (o.isMesh && /plane|ground|floor|backdrop/i.test(o.name)) o.userData._drop = true; });
     let body = null, bodyN = -1;
     root.traverse(o => { if (o.isMesh && !o.userData._drop) { const n = o.geometry.attributes.position.count; if (n > bodyN) { bodyN = n; body = o; } } });
-    if (!body) { console.warn('pig GLB had no usable mesh, keeping fallback', url); return; }
+    if (!body) { console.warn('pig GLB had no usable mesh, keeping fallback', url); disposeSource(root); return; }
     const proto = new THREE.Group();
     root.traverse(o => {
       if (!o.isMesh || o.userData._drop || !o.material) return;
@@ -71,7 +72,7 @@ export function loadPoopGeometry(url, onReady) {
       const color = (o.material && o.material.color) ? o.material.color.clone() : new THREE.Color(0x6b4a2a);
       parts.push({ g, color });
     });
-    if (!parts.length) { console.warn('poop GLB had no meshes, keeping fallback', url); return; }
+    if (!parts.length) { console.warn('poop GLB had no meshes, keeping fallback', url); disposeSource(gltf.scene); return; }
     const geo = merge(parts);                        // model is already Y-up
     geo.computeBoundingBox();
     const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
@@ -106,6 +107,6 @@ export function loadVegetation(url, onReady) {
       variants.push({ name: o.name, geom: geo, mat, height: size.y || 1, bush: /bush/i.test(o.name) });
     });
     if (variants.length) { onReady(variants); disposeSource(gltf.scene); }
-    else console.warn('veg GLB had no variant meshes, keeping fallback', url);
+    else { console.warn('veg GLB had no variant meshes, keeping fallback', url); disposeSource(gltf.scene); }
   }, undefined, err => console.warn('veg model failed, keeping fallback', err));
 }
