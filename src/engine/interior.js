@@ -144,7 +144,16 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     };
 
     // Per-room centroids (world) — spawn in the largest room's open centre.
-    const rooms = floors.map(f => { tmp.setFromObject(f); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2, area: (tmp.max.x - tmp.min.x) * (tmp.max.z - tmp.min.z) }; });
+    // The scan PAIRS each floor mesh (…_1 and …_4 are the same room), so dedup by centre and keep the
+    // bigger box. Each room carries its AABB so NPCs can pick an interior point + detect the player's room.
+    const rooms = [];
+    for (const f of floors) {
+      tmp.setFromObject(f);
+      const x = (tmp.min.x + tmp.max.x) / 2, z = (tmp.min.z + tmp.max.z) / 2;
+      const rec = { x, z, area: (tmp.max.x - tmp.min.x) * (tmp.max.z - tmp.min.z), minX: tmp.min.x, maxX: tmp.max.x, minZ: tmp.min.z, maxZ: tmp.max.z };
+      const dup = rooms.find(r => Math.abs(r.x - x) < 0.7 && Math.abs(r.z - z) < 0.7);
+      if (dup) { if (rec.area > dup.area) Object.assign(dup, rec); } else rooms.push(rec);
+    }
     rooms.sort((a, b) => b.area - a.area);
     const sp = rooms[0] || { x: cx, z: cz };
     // Spawn must clear furniture/walls AT THE COLLISION RADIUS — a bare-AABB test dropped the player
@@ -159,8 +168,25 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const spawn = { x: sx, z: sz, yaw: Math.atan2(cx - sx, cz - sz) };
     const ceilingY = floorY + ceilingH * S;
 
+    // The couchy dog-couch lands on the sofa nearest a window (computed once, reused by the swap below);
+    // NPCs may SIT on the OTHER sofas. Each seat = its top surface + a facing yaw toward the room centre.
+    let couchSofa = null;
+    if (sofas.length && windows.length) {
+      const wc = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
+      let bd = Infinity;
+      for (const s of sofas) { const c = new THREE.Box3().setFromObject(s).getCenter(new THREE.Vector3()); for (const w of wc) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; couchSofa = s; } } }
+    }
+    const seats = [];
+    for (const s of sofas) {
+      if (s === couchSofa) continue;                            // the dog couch is taken
+      const b = new THREE.Box3().setFromObject(s), c = b.getCenter(new THREE.Vector3());
+      let rm = rooms[0], bdr = Infinity; for (const r of rooms) { const d = (r.x - c.x) ** 2 + (r.z - c.z) ** 2; if (d < bdr) { bdr = d; rm = r; } }
+      seats.push({ x: c.x, z: c.z, y: b.min.y + 0.42 * (b.max.y - b.min.y), yaw: Math.atan2(rm.x - c.x, rm.z - c.z) });   // face into the room
+    }
+    const doorways = doors.map(d => { tmp.setFromObject(d); return { x: (tmp.min.x + tmp.max.x) / 2, z: (tmp.min.z + tmp.max.z) / 2 }; });
+
     onReady({
-      group, floorY, ceilingY, roomAABB, spawn, walls, occluders, rooms,
+      group, floorY, ceilingY, roomAABB, spawn, walls, occluders, rooms, seats, doorways,
       // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
       // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
       collide(px, pz, nx, nz, rad) {
@@ -197,13 +223,8 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     // the binary USDC + AVIF textures (pure JS, no wasm) and auto-converts Z-up. Scaled to the
     // original couch's length and dropped on its spot — the original's furniture collider stays, so
     // the new couch still blocks. The original sofa is then hidden.
-    if (sofas.length && windows.length) {
-      const wCtr = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
-      let target = null, tBox = null, bd = Infinity;
-      for (const s of sofas) {
-        const b = new THREE.Box3().setFromObject(s), c = b.getCenter(new THREE.Vector3());
-        for (const w of wCtr) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; target = s; tBox = b; } }
-      }
+    {
+      const target = couchSofa, tBox = couchSofa ? new THREE.Box3().setFromObject(couchSofa) : null;
       if (target) new USDLoader().load(couchyUrl, dog => {
         if (cancelled || !dog) { if (dog) disposeLoadedObject(dog); return; }
         dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });   // keep default frustumCulled so the far-away couch isn't drawn in the yard

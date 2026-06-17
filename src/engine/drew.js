@@ -92,7 +92,9 @@ export function makeController(group, mixer, actions, opts = {}) {
     group,
     kind: opts.kind || 'drew',
     actions: opts.actionList || [],         // [{key,label}] emotes for the HUD action menu
-    dances: opts.dances || [],              // upright move pool the NPC cycler rotates through
+    dances: opts.dances || [],              // upright LOOP pool the NPC cycler rotates through
+    emotes: opts.emotes || [],              // one-shot expressive clips the NPC FSM sprinkles in
+    sitClip: opts.sitClip || null,          // a held sitting clip (e.g. mom's Sit_and_Doze_Off), or null
     // pick idle/walk/run from ground speed (m/s); skip while a reaction plays
     locomotion(speed) {
       if (reacting) return;
@@ -122,7 +124,10 @@ export function makeController(group, mixer, actions, opts = {}) {
       };
       mixer.addEventListener('finished', _reactL);
     },
-    // Hard-reset to rest + idle (avatar swap, or to un-stick a clamped/lying pose).
+    // Hold a LOOPING clip indefinitely (no auto-return) — used to sit an NPC on a couch. Caller must
+    // NOT drive locomotion() while posed (it would crossfade back to idle); reset()/react() ends it.
+    pose(name) { if (_reactL) { mixer.removeEventListener('finished', _reactL); _reactL = null; } reacting = false; fadeTo(name, 0.3, 1); },
+    // Hard-reset to rest + idle (avatar swap, stand up from a sit, or un-stick a clamped/lying pose).
     reset() { if (_reactL) { mixer.removeEventListener('finished', _reactL); _reactL = null; } reacting = false; mixer.stopAllAction(); resetPose(); playIdle(); },
     tick(dt) { mixer.update(dt); }
   };

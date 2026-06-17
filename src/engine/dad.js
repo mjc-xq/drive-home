@@ -38,6 +38,8 @@ export function loadDadController(onReady, onFail) {
     const actions = {};
     for (const c of g.animations) actions[c.name] = mixer.clipAction(c);
     onReady(makeController(inner, mixer, actions, { kind: 'dad', nameMap: DAD_NAME_MAP, actionList: [],
-      dances: ['All_Night_Dance', 'Bass_Beats', 'Arm_Circle_Shuffle'] }));   // upright moves the NPC cycler rotates through
+      dances: ['All_Night_Dance', 'Bass_Beats', 'Arm_Circle_Shuffle'],         // upright loops the NPC cycler rotates through
+      emotes: ['360_Power_Spin_Jump', 'Angry_Ground_Stomp_2', 'air_squat'],    // one-shot expressive beats
+      sitClip: null }));                                                       // no clean sit clip in dad's set
   }, undefined, e => { console.warn('[dad] load failed', e); onFail && onFail(e); });
 }

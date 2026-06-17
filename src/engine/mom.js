@@ -37,6 +37,8 @@ export function loadMomController(onReady, onFail) {
     const actions = {};
     for (const c of g.animations) actions[c.name] = mixer.clipAction(c);
     onReady(makeController(inner, mixer, actions, { kind: 'mom', nameMap: MOM_NAME_MAP, actionList: [],
-      dances: ['Shake_It_Off_Dance', 'You_Groove', 'All_Night_Dance'] }));   // upright moves the NPC cycler rotates through
+      dances: ['Shake_It_Off_Dance', 'You_Groove', 'All_Night_Dance'],   // upright loops the NPC cycler rotates through
+      emotes: ['Squat_Stance', 'Alert_Quick_Turn_Right'],                // one-shot expressive beats
+      sitClip: 'Sit_and_Doze_Off' }));                                   // mom can actually sit on a couch
   }, undefined, e => { console.warn('[mom] load failed', e); onFail && onFail(e); });
 }
