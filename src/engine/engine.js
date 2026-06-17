@@ -605,6 +605,12 @@ export function createEngine({ canvas, ui, emit }) {
   const exitMarker = new THREE.Mesh(doorMarker.geometry, doorMarker.material.clone());
   exitMarker.rotation.x = Math.PI; exitMarker.renderOrder = 20; exitMarker.visible = false; exitMarker.frustumCulled = false;
   scene.add(exitMarker);
+  // Flat blue "exit pad" ring on the floor (the floating cone sits overhead, easy to miss when you
+  // spawn standing on it) — drawn through walls so it's findable from anywhere inside.
+  const exitRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 1.05, 32),
+    new THREE.MeshBasicMaterial({ color: 0x49b0ff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthTest: false }));
+  exitRing.rotation.x = -Math.PI / 2; exitRing.renderOrder = 19; exitRing.visible = false; exitRing.frustumCulled = false;
+  scene.add(exitRing);
   // Address guide: a ground-draped ribbon that FOLLOWS THE ROUTE through its turns — a
   // real navigation line over the road, not a single rotating bar. The geometry is a
   // triangle-strip rebuilt each frame from the route polyline just ahead of the car,
@@ -1263,7 +1269,7 @@ export function createEngine({ canvas, ui, emit }) {
     scoopScene = on ? 'interior' : 'yard';
     if (interior) interior.group.visible = on;
     if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (nearCar) { nearCar = false; emit('nearCar', false); } }
-    else { exitMarker.visible = false; if (dad) dad.group.visible = false; }
+    else { exitMarker.visible = false; exitRing.visible = false; if (dad) dad.group.visible = false; }
     emit('house', { inside: on, ready: !!interior });
   }
   function enterHouse(now) {
@@ -1622,7 +1628,7 @@ export function createEngine({ canvas, ui, emit }) {
     CHAR.x = (SREC.coop[0] + SREC.pen[0]) / 2; CHAR.z = (SREC.coop[1] + SREC.pen[1]) / 2;
     CHAR.yaw = Math.atan2(SREC.barn[0] - CHAR.x, SREC.barn[1] - CHAR.z);
     camYawS = CHAR.yaw;
-    scoopScene = 'yard'; entryArmed = true; exitArmed = false; doorMarker.visible = false; exitMarker.visible = false;
+    scoopScene = 'yard'; entryArmed = true; exitArmed = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
     emit('avatar', { name: CHAR.avatar, actions: CHAR.getActions() });
     audio.ensure();
     setTool(CHAR.lvl);
@@ -1635,7 +1641,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (groundPatch) groundPatch.visible = false;
     if (scoopGrass) scoopGrass.visible = false;
     if (scoopFence) scoopFence.visible = false;
-    marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; exitMarker.visible = false;
+    marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
     if (nearCar) { nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of labelSprites) s.visible = true;
@@ -1799,6 +1805,8 @@ export function createEngine({ canvas, ui, emit }) {
     const sp = interior.spawn;
     exitMarker.visible = true;
     exitMarker.position.set(sp.x, interior.floorY + 2.4 + Math.abs(Math.sin(now * 0.005)) * 0.25, sp.z);
+    exitRing.visible = true;
+    exitRing.position.set(sp.x, interior.floorY + 0.05, sp.z);
     const dex = Math.hypot(CHAR.x - sp.x, CHAR.z - sp.z);
     if (dex > 3.2) exitArmed = true;
     if (exitArmed && dex < 2.2 && now > doorT) { leaveHouse(now); return; }
