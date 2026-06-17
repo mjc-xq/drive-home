@@ -3076,23 +3076,25 @@ export function createEngine({ canvas, ui, emit }) {
   // 2D minimap (HEADING-UP, centred on the car): roads, house, destination + line, car. The map
   // rotates so the car's forward is always "up" — oriented like the driver / user, the way a phone
   // GPS does. A small N tick shows where north is; tapMinimap inverts the SAME rotation so taps land.
-  function drawMinimap(ctx, w, h) {
-    ctx.clearRect(0, 0, w, h);
+  // `g` = the canvas 2D context (renamed from `ctx` so it doesn't shadow the engine ctx —
+  // the procedural minimap reads engine state via ctx.* and draws via g.*).
+  function drawMinimap(g, w, h) {
+    g.clearRect(0, 0, w, h);
     const cx = w / 2, cy = h / 2, range = 620, scale = (w / 2) / range;   // wider view to match the live map zoom-out
     let _d = viewHeading() - ctx._miniYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI;
     ctx._miniYaw += _d * 0.2;                                                  // ease the map's rotation (viewHeading = compass while following) so jitter doesn't shimmer the whole map
     const ca = Math.cos(ctx._miniYaw), sa = Math.sin(ctx._miniYaw);
     const toPx = (wx, wz) => { const dx = wx - ctx.car.x, dz = wz - ctx.car.z; return [cx + (-dx * ca + dz * sa) * scale, cy + (-dx * sa - dz * ca) * scale]; };   // heading-up rotation: forward → screen-up
-    ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath();
+    g.lineWidth = 1.4; g.strokeStyle = 'rgba(255,255,255,0.55)'; g.beginPath();
     for (const s of ctx.roadSegs) {
       const a = toPx(s[0][0], s[0][1]), b = toPx(s[1][0], s[1][1]);
       if ((a[0] < -10 && b[0] < -10) || (a[0] > w + 10 && b[0] > w + 10) || (a[1] < -10 && b[1] < -10) || (a[1] > h + 10 && b[1] > h + 10)) continue;
-      ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+      g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]);
     }
-    ctx.stroke();
-    const hp = toPx(0, 0); ctx.fillStyle = '#4ea1ff'; ctx.beginPath(); ctx.arc(hp[0], hp[1], 3, 0, 7); ctx.fill();
-    ctx.fillStyle = '#ffcb2e';                            // uncollected coins
-    for (const c of ctx.coins) { if (c.got) continue; const p = toPx(c.x, c.z); if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) { ctx.beginPath(); ctx.arc(p[0], p[1], 2, 0, 7); ctx.fill(); } }
+    g.stroke();
+    const hp = toPx(0, 0); g.fillStyle = '#4ea1ff'; g.beginPath(); g.arc(hp[0], hp[1], 3, 0, 7); g.fill();
+    g.fillStyle = '#ffcb2e';                            // uncollected coins
+    for (const c of ctx.coins) { if (c.got) continue; const p = toPx(c.x, c.z); if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) { g.beginPath(); g.arc(p[0], p[1], 2, 0, 7); g.fill(); } }
     // neighbourhood landmarks — your 5 real places. On-map = dot; off-map = clamped to
     // the edge as a "that way" hint. Pink = still to find, green = found.
     for (const poi of POIS) {
@@ -3100,30 +3102,30 @@ export function createEngine({ canvas, ui, emit }) {
       const m = 7, edge = p[0] < m || p[0] > w - m || p[1] < m || p[1] > h - m;
       const px = clamp(p[0], m, w - m), py = clamp(p[1], m, h - m);
       const found = poiFound.has(poi.key);
-      ctx.fillStyle = found ? '#3ad17a' : '#ff5ad0';
-      ctx.beginPath(); ctx.arc(px, py, edge ? 2.6 : 3.4, 0, 7); ctx.fill();
-      if (!found && !edge) { ctx.strokeStyle = 'rgba(255,90,208,0.8)'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(px, py, 5.4, 0, 7); ctx.stroke(); }
+      g.fillStyle = found ? '#3ad17a' : '#ff5ad0';
+      g.beginPath(); g.arc(px, py, edge ? 2.6 : 3.4, 0, 7); g.fill();
+      if (!found && !edge) { g.strokeStyle = 'rgba(255,90,208,0.8)'; g.lineWidth = 1.3; g.beginPath(); g.arc(px, py, 5.4, 0, 7); g.stroke(); }
     }
     if (ctx.DEST) {
       // draw the route from the CAR forward (not from ROUTE[0]) so the already-driven
       // part doesn't whip around the car-centred map during auto-drive.
-      ctx.strokeStyle = '#2f8bff'; ctx.lineWidth = 2.6; ctx.lineJoin = 'round'; ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = Math.max(0, ctx.routeIdx); i < ctx.ROUTE.length; i++) { const p = toPx(ctx.ROUTE[i].x, ctx.ROUTE[i].z); ctx.lineTo(p[0], p[1]); }
-      else { const dp = toPx(ctx.DEST.x, ctx.DEST.z); ctx.lineTo(dp[0], dp[1]); }
-      ctx.stroke();
+      g.strokeStyle = '#2f8bff'; g.lineWidth = 2.6; g.lineJoin = 'round'; g.beginPath();
+      g.moveTo(cx, cy);
+      if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = Math.max(0, ctx.routeIdx); i < ctx.ROUTE.length; i++) { const p = toPx(ctx.ROUTE[i].x, ctx.ROUTE[i].z); g.lineTo(p[0], p[1]); }
+      else { const dp = toPx(ctx.DEST.x, ctx.DEST.z); g.lineTo(dp[0], dp[1]); }
+      g.stroke();
       const dp = toPx(ctx.DEST.x, ctx.DEST.z);
-      ctx.fillStyle = '#ffc21e'; ctx.beginPath(); ctx.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); ctx.fill();
+      g.fillStyle = '#ffc21e'; g.beginPath(); g.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); g.fill();
     }
     // CAR: on a heading-up map the car always points straight UP (forward).
-    ctx.fillStyle = '#d94f1e'; ctx.beginPath();
-    ctx.moveTo(cx, cy - 7); ctx.lineTo(cx + 4, cy + 5); ctx.lineTo(cx - 4, cy + 5);
-    ctx.closePath(); ctx.fill();
+    g.fillStyle = '#d94f1e'; g.beginPath();
+    g.moveTo(cx, cy - 7); g.lineTo(cx + 4, cy + 5); g.lineTo(cx - 4, cy + 5);
+    g.closePath(); g.fill();
     // NORTH tick: world north (-z) maps to screen dir (-sin, cos) of the map heading — so the user can
     // still orient even as the whole map spins under them.
     const nlen = Math.min(cx, cy) - 8, nNx = cx - sa * nlen, nNy = cy + ca * nlen;
-    ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.font = 'bold 9px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('N', nNx, nNy);
+    g.fillStyle = 'rgba(255,255,255,0.92)'; g.font = 'bold 9px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('N', nNx, nNy);
   }
 
   // collision feedback: a thunk, a kick of camera shake, and a haptic buzz, scaled
