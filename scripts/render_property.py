@@ -65,6 +65,7 @@ def shoot(loc, suffix, ortho=None, aim=None):
     cam.location = loc
     d = a - cam.location
     cam.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
+    cam_d.clip_start = 0.1; cam_d.clip_end = max(2000.0, span * 5)
     if ortho:
         cam_d.type = "ORTHO"; cam_d.ortho_scale = ortho
     else:
