@@ -7,11 +7,14 @@ derive everything from geometry — nothing hard-codes a room).
 
 ## The GLB (`src/assets/house-interior.glb`)
 
-- **Plain GLB** (the 6/16 scan, **baked** — see "Bake pipeline" below — ~1.55 MB): ~304 meshes,
-  ~40k tris, 31 materials, 10 small textures (~1 MB), **no Draco, no animations, no extensions,
-  position-only (no normals — three computes flat)** → the **stock `GLTFLoader`** loads it (NOT the
-  DracoShim path the cars/CeCe use — don't mix them up). The scan is re-generated periodically,
-  so nothing hard-codes counts — the loader is name-driven and `floorTop`/bounds are computed.
+- **Plain GLB** (the 6/16 scan, **baked** — see "Bake pipeline" below — ~2.84 MB): ~304 meshes,
+  ~40k tris, 31 materials, 10 base textures + a **2K AO atlas** (JPEG), **no Draco, no animations,
+  no extensions, position-only (no normals — three computes flat)** → the **stock `GLTFLoader`** loads it
+  (NOT the DracoShim path the cars/CeCe use — don't mix them up). Baked ambient occlusion rides the
+  standard glTF `occlusionTexture` → three's `aoMap` (survives the loader's runtime furniture tinting,
+  which only touches base colour). The **raw, un-baked scan lives at `house-interior.raw.glb`** (the
+  reproducible bake input — it is NOT imported by the app). The scan is re-generated periodically, so
+  nothing hard-codes counts — the loader is name-driven and `floorTop`/bounds are computed.
 - Bounds ≈ 8.5 × 3.42 (tall) × 17.9; floor **top** ≈ −1.30 (recenter is computed, not constant).
 - **Names live on NODES** — traverse the loaded scene by `object.name`. Categories on the 6/16
   scan: ~187 `wall_*`/`joint_*` (structure), 14 `door_*`, 20 `window_*`, 20 `floor_*` (rooms:
@@ -22,26 +25,33 @@ derive everything from geometry — nothing hard-codes a room).
 
 ## Bake pipeline (`scripts/bake_interior.py`)
 
-The raw scan ships washed-out, zero-thickness-walled, and with **174 near-duplicate materials** —
-which `interior.js` used to patch at load. That's now baked **once, offline** into the asset by a
-repeatable headless Blender pass (Blender 5.1+), so the loader stays thin and a re-scan just re-runs it:
+The raw scan ships washed-out, zero-thickness-walled, flat-lit, and with **174 near-duplicate
+materials** — which `interior.js` used to patch at load. That's now baked **once, offline** into the
+asset by a repeatable headless Blender pass (Blender 5.1+), so the loader stays thin and a re-scan just
+re-runs it. **Bake from the RAW scan** (`house-interior.raw.glb`) — the corrections are not idempotent
+(`color*0.7`, decimate, etc. would double-apply if run on an already-baked file):
 
 ```
-blender --background --python scripts/bake_interior.py -- \
-  src/assets/house-interior.glb src/assets/house-interior.glb        # in place; git is the undo
+"/Applications/Blender.app/Contents/MacOS/Blender" --background --python scripts/bake_interior.py -- \
+  src/assets/house-interior.raw.glb src/assets/house-interior.glb ao
 ```
 
 In order: **merge** duplicate materials (174 → ~31, fewer draw calls) · **bake the albedo fix**
 (`color*0.7`, `roughness≥0.9`, `metalness≤0.3`) into the materials · **solidify** the 102 thin/zero-
 thickness wall slabs (real back-faces → no runtime DoubleSide; colliders get true thickness) ·
-**decimate** the furniture (97 % of the tris) for phone perf. Node names are **preserved** (the loader
-categorises by name) and Draco stays **off** (`verify_interior_node.mjs` fails otherwise). Net: ~61k → ~40k
-tris, 1.9 → 1.55 MB. Always re-run `verify_interior_node.mjs` after.
+**decimate** the furniture (97 % of the tris) for phone perf · (`ao`) bake **ambient occlusion to a 2K
+texture atlas** and wire it through glTF's `occlusionTexture` (the `glTF Material Output` node group →
+three's `aoMap`). Each object is smart-unwrapped into a shared 18×18 lightmap atlas; AO is finite-distance
+(0.5 m contact) and softened toward white (`AO_STRENGTH`, in-shader). Node names are **preserved** and
+Draco stays **off** (`verify_interior_node.mjs` fails otherwise). Net: ~61k → ~40k tris, 1.9 → 2.84 MB
+(the +0.9 MB is the lightmap UVs on every mesh + the ~500 KB AO atlas). Always re-run
+`verify_interior_node.mjs` after.
 
-Optional `ao` arg bakes ambient occlusion into a per-vertex `COLOR_0` (three multiplies it in
-automatically). It's **off by default**: vertex-AO needs the flat walls subdivided to carry the gradient,
-which roughly doubles tris/size for a benefit that only shows in-app (the app has no GI; a Cycles preview
-hides it). `scripts/render_interior.py` renders a dollhouse preview (`FLAT=1` for flat-lit) to A/B it.
+Tuning the AO without re-baking: three reads `occlusionTexture.strength` into `material.aoMapIntensity`
+(default 1.0) — lower it in `interior.js` to dial AO back. `scripts/render_interior.py <glb> <out.png>`
+renders a dollhouse preview that composites the AO the way three does (`FLAT=1` for flat-lit). Drop the
+`ao` arg for a no-AO build (kept ~1.55 MB) to A/B in-app. Vertex-colour AO was tried first and rejected:
+it needs the flat walls subdivided to carry the gradient, ~doubling tris.
 
 ## Normalisation
 

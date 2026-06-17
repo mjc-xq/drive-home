@@ -14,26 +14,25 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=GLB)
 meshes = [o for o in bpy.data.objects if o.type == "MESH"]
 
-# replicate three.js: multiply COLOR_0 into Base Color where the attribute exists
+# replicate three.js aoMap: multiply the imported occlusion (AO_atlas) texture into Base Color,
+# reusing the UV the glTF importer already wired to that texture node.
 for o in meshes:
-    if "AO" not in o.data.color_attributes:
-        continue
     for ms in o.material_slots:
         m = ms.material
         if not m or not m.use_nodes:
             continue
-        b = next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
-        if not b:
-            continue
         nt = m.node_tree
-        ca = nt.nodes.new("ShaderNodeVertexColor"); ca.layer_name = "AO"
+        b = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        ao = next((n for n in nt.nodes if n.type == "TEX_IMAGE" and n.image and n.image.name.startswith("AO_atlas")), None)
+        if not b or not ao:
+            continue
         mix = nt.nodes.new("ShaderNodeMixRGB"); mix.blend_type = "MULTIPLY"; mix.inputs["Fac"].default_value = 1.0
         bc = b.inputs["Base Color"]
         if bc.is_linked:
             nt.links.new(bc.links[0].from_socket, mix.inputs["Color1"])
         else:
             mix.inputs["Color1"].default_value = bc.default_value
-        nt.links.new(ca.outputs["Color"], mix.inputs["Color2"])
+        nt.links.new(ao.outputs["Color"], mix.inputs["Color2"])
         nt.links.new(mix.outputs["Color"], bc)
 
 # frame the whole model
