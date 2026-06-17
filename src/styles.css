@@ -140,6 +140,8 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .searchBar .sbText{flex:1;display:flex;align-items:center;padding:13px 14px;font-weight:500;font-size:15px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .searchBar .sbGo{display:grid;place-items:center;padding:0 18px;background:var(--nav);color:#041422;font-weight:700;font-size:13px;letter-spacing:.08em}
 .searchBar:active{transform:translateX(-50%) scale(.99)}
+/* live "where you are" readout (reverse-geocoded street · city, state), under the search bar */
+.locNow{position:absolute;left:50%;top:calc(66px + var(--safe-t));transform:translateX(-50%);max-width:min(86vw,420px);padding:5px 12px;border-radius:12px;background:rgba(16,18,24,.6);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.85);font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:4}
 
 /* ── TOP-CENTER: nav card (route active) ── */
 .navCard{position:absolute;left:50%;top:calc(14px + var(--safe-t));transform:translateX(-50%);
