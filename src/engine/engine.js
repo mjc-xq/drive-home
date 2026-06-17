@@ -43,7 +43,7 @@ export function createEngine({ canvas, ui, emit }) {
   const ctx = {};
   ctx.canvas = canvas; ctx.ui = ui; ctx.emit = emit;
   ctx.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  ctx.toast = (html, ms) => emit('toast', { html, ms: ms || 1800 });
+  ctx.toast = (html, ms) => ctx.emit('toast', { html, ms: ms || 1800 });
   // The toast is rendered via dangerouslySetInnerHTML, so any dynamic value that can carry
   // user/network text (geocoded addresses, place names) MUST be escaped before it goes in.
   // Static literals in toast() calls don't need this; only interpolated place/address text does.
@@ -72,7 +72,7 @@ export function createEngine({ canvas, ui, emit }) {
   // of r152+ colour management and keep linear output to preserve that look;
   // the lights are re-scaled below for r155+ physically-correct units.
   THREE.ColorManagement.enabled = false;
-  ctx.renderer = new THREE.WebGLRenderer({ canvas, antialias: !ctx.LITE && !ctx.MOBILE, powerPreference: 'high-performance' });   // skip the MSAA resolve on mobile (fill-rate bound)
+  ctx.renderer = new THREE.WebGLRenderer({ canvas: ctx.canvas, antialias: !ctx.LITE && !ctx.MOBILE, powerPreference: 'high-performance' });   // skip the MSAA resolve on mobile (fill-rate bound)
   ctx.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   // Cap pixel ratio: 1.25 on phones (the fill-rate dial — at DPR 2 a 3x phone draws ~2.6×
   // the fragments of the full-screen photoreal tiles for little visible gain; 1.25 supersampling
@@ -287,7 +287,7 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.bestMs = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem(BEST_KEY)) || '0', 10) || 0;
   const fmtTime = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   function startRun(now) { if (!ctx.runActive && ctx.coinsGot < ctx.coins.length) { ctx.runActive = true; ctx.runStart = now; } }
-  function emitScore(extra) { emit('driveScore', Object.assign({ got: ctx.coinsGot, total: ctx.coins.length, best: ctx.bestMs, bestStr: ctx.bestMs ? fmtTime(ctx.bestMs) : '', combo: ctx.combo, trip: ctx.tripScore }, extra)); }
+  function emitScore(extra) { ctx.emit('driveScore', Object.assign({ got: ctx.coinsGot, total: ctx.coins.length, best: ctx.bestMs, bestStr: ctx.bestMs ? fmtTime(ctx.bestMs) : '', combo: ctx.combo, trip: ctx.tripScore }, extra)); }
   function collectCoin(now) {
     if (ctx.audio.sfxChime) ctx.audio.sfxChime(ctx.combo >= 2 ? [784, 1047, 1319] : [784, 1047]);
     startRun(now);
@@ -310,7 +310,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.combo <= ctx.comboPeak) { if (ctx.combo < 2) ctx.comboPeak = 0; return; }
     ctx.comboPeak = ctx.combo;
     if (ctx.combo === 3) { ctx.toast('🔥 Combo ×3!', 1100); if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(0.6); }
-    else if (ctx.combo === 5) { ctx.toast('🔥🔥 ON FIRE! ×5', 1500); if (ctx.audio.sfxChime) ctx.audio.sfxChime([784, 988, 1319, 1568]); if (ui.fx && !ctx.reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 420); } }
+    else if (ctx.combo === 5) { ctx.toast('🔥🔥 ON FIRE! ×5', 1500); if (ctx.audio.sfxChime) ctx.audio.sfxChime([784, 988, 1319, 1568]); if (ctx.ui.fx && !ctx.reduceMotion) { ctx.ui.fx.classList.add('arrive'); setTimeout(() => ctx.ui.fx && ctx.ui.fx.classList.remove('arrive'), 420); } }
     else if (ctx.combo >= 8 && ctx.combo % 3 === 2) { ctx.toast('🔥🔥🔥 UNSTOPPABLE! ×' + ctx.combo, 1500); }
   }
   function resetRun() { ctx.runActive = false; ctx.runStart = 0; ctx.lastRunMs = 0; ctx.combo = 0; ctx.comboExpired = true; ctx.tripScore = 0; }   // tripScore resets per drive so combo/score chips start clean (was carrying over)
@@ -345,7 +345,7 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.tripScore = 0;
   ctx.boost = 0, ctx.boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
   function addBoost(amt) { ctx.boost = clamp(ctx.boost + amt, 0, 1); }
-  function emitPOIs() { emit('poiProgress', { found: poiFound.size, total: POIS.length }); }
+  function emitPOIs() { ctx.emit('poiProgress', { found: poiFound.size, total: POIS.length }); }
   // Route the player to the nearest place they HAVEN'T found yet — turns 5 one-shot
   // discoveries into a chained road trip ("now drive to the next place!").
   function chainToNextPOI(now) {
@@ -563,7 +563,7 @@ export function createEngine({ canvas, ui, emit }) {
     addBoost(0.5);                                     // arriving fills a big chunk of nitro for the next leg
     if (!ctx.reduceMotion) {
       ctx.timeScale = 0.4; ctx.slowmoHold = 0.32;             // HELD slow-mo (then it eases back) — a real beat, not a blink
-      if (ui.fx) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 850); }
+      if (ctx.ui.fx) { ctx.ui.fx.classList.add('arrive'); setTimeout(() => ctx.ui.fx && ctx.ui.fx.classList.remove('arrive'), 850); }
     }
     // a second triumphant spark wave a beat later
     setTimeout(() => {
@@ -572,7 +572,7 @@ export function createEngine({ canvas, ui, emit }) {
       for (let k = 0; k < 3; k++) spawnCoinBurst(ctx.car.x + (k - 1) * 1.6, ctx.car.z, y2, performance.now());
       if (ctx.audio.sfxChime) ctx.audio.sfxChime([784, 1047, 1319, 1568]);
     }, 280);
-    emit('arrived', { label, points: points || 0, trip: ctx.tripScore });
+    ctx.emit('arrived', { label, points: points || 0, trip: ctx.tripScore });
   }
 
   // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
@@ -978,7 +978,7 @@ export function createEngine({ canvas, ui, emit }) {
       applyP3DT();
       let tries = 0;
       ctx.p3dtiles.addEventListener('load-model', () => {
-        if (!ctx.tilesReady) { ctx.tilesReady = true; emit('photoreal', true); }
+        if (!ctx.tilesReady) { ctx.tilesReady = true; ctx.emit('photoreal', true); }
         // Vertically align the photoreal ground to the procedural terrain as the
         // street tiles stream (Explore/Drive only — Scoop never shows tiles).
         if (tries < 24) { tries++; alignP3DT(); }
@@ -1341,7 +1341,7 @@ export function createEngine({ canvas, ui, emit }) {
     vehLoading.add(slot);
     modelLoadCancels.push(loadDrivableCar(ctx.car, def.url, slot, {
       length: def.length, flip: def.flip !== false, black: false, extraYaw: def.extraYaw || 0, meta: VEHICLES[slot],   // default nose -Z (flip:true); extraYaw is a per-car quarter-turn for odd model axes
-      onReady: (s) => { vehLoading.delete(s); emit('cars', getCars()); if (ctx.car.modelIdx === s) showCarCard(); }
+      onReady: (s) => { vehLoading.delete(s); ctx.emit('cars', getCars()); if (ctx.car.modelIdx === s) showCarCard(); }
     }));
   }
   if (!ctx.flags.has('nocar')) {
@@ -1388,7 +1388,7 @@ export function createEngine({ canvas, ui, emit }) {
   function showCarCard() {
     const v = ctx.car.models[ctx.car.modelIdx];
     const meta = v && v.name ? v : VEHICLES[0];     // fallback card while no GLB has loaded yet
-    emit('carCard', { name: meta.name, spec: meta.spec, credit: meta.credit || '' });
+    ctx.emit('carCard', { name: meta.name, spec: meta.spec, credit: meta.credit || '' });
   }
   function cycleCar() {
     if (!cycleVehicle(ctx.car)) { ctx.toast('Open the garage (☰ → Cars) to pick another ride'); return; }
@@ -1403,7 +1403,7 @@ export function createEngine({ canvas, ui, emit }) {
     try { localStorage.setItem('dahill.drive.ferrari', '1'); } catch (e) { }
     ctx.toast('🏎️ You earned the Ferrari 458! Tap 🚗 to drive it', 4000);
     if (ctx.audio.sfxChime) ctx.audio.sfxChime([523, 659, 784, 1047]);
-    emit('cars', getCars());
+    ctx.emit('cars', getCars());
   }
   function getCars() { return vehicleList(ctx.car).map(v => v.slot === 2 ? Object.assign({}, v, { locked: !ctx.ferrariUnlocked }) : v); }
   function pickCar(slot) {
@@ -1433,7 +1433,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   if (!ctx.flags.has('nointerior')) {
     modelLoadCancels.push(createInterior(ctx.scene, { cx: INT_CX, cz: INT_CZ, floorY: INT_FLOOR },
-      mod => { ctx.interior = mod; ctx.interior.group.visible = ctx.scoopScene === 'interior'; placeInteriorDancers(); emit('house', { inside: ctx.scoopScene === 'interior', ready: true }); },
+      mod => { ctx.interior = mod; ctx.interior.group.visible = ctx.scoopScene === 'interior'; placeInteriorDancers(); ctx.emit('house', { inside: ctx.scoopScene === 'interior', ready: true }); },
       () => { /* fail-soft: the door pad just stays inert */ }));
   }
 
@@ -1442,9 +1442,9 @@ export function createEngine({ canvas, ui, emit }) {
   function setInside(on) {
     ctx.scoopScene = on ? 'interior' : 'yard';
     if (ctx.interior) ctx.interior.group.visible = on;
-    if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (ctx.nearCar) { ctx.nearCar = false; emit('nearCar', false); } }
+    if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (ctx.nearCar) { ctx.nearCar = false; ctx.emit('nearCar', false); } }
     else { exitMarker.visible = false; exitRing.visible = false; for (const npc of ctx.npcs) npc.group.visible = false; }
-    emit('house', { inside: on, ready: !!ctx.interior });
+    ctx.emit('house', { inside: on, ready: !!ctx.interior });
   }
   function enterHouse(now) {
     if (!ctx.interior) return;
@@ -1692,7 +1692,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (m === 'scoop') { ctx.scene.fog.near = 38; ctx.scene.fog.far = 92; }
       else { ctx.scene.fog.near = 460; ctx.scene.fog.far = 1200; }
     }
-    emit('mode', m); applyModeVisuals();
+    ctx.emit('mode', m); applyModeVisuals();
   };
   const ptrs = new Map(); let lastPinch = 0, lastMid = null, moved = 0;
   const lookPtrs = new Map();
@@ -1721,10 +1721,10 @@ export function createEngine({ canvas, ui, emit }) {
   // Overhead/Aerial zoom-out slider support: czoom is the altitude/orbit multiplier. Map it log-wise to
   // a 0..1 slider and push the value to the UI whenever it changes (pinch, wheel, view switch, slider).
   const driveZoomRange = () => (driveTopDown() ? [0.14, 7] : [0.4, 3.4]);
-  function emitDriveZoom() { const [lo, hi] = driveZoomRange(); emit('driveZoom', { norm: clamp(Math.log(clamp(ctx.czoom, lo, hi) / lo) / Math.log(hi / lo), 0, 1), overhead: driveTopDown() }); }
+  function emitDriveZoom() { const [lo, hi] = driveZoomRange(); ctx.emit('driveZoom', { norm: clamp(Math.log(clamp(ctx.czoom, lo, hi) / lo) / Math.log(hi / lo), 0, 1), overhead: driveTopDown() }); }
   function setDriveZoom(norm) { const [lo, hi] = driveZoomRange(); ctx.czoom = lo * Math.pow(hi / lo, clamp(norm, 0, 1)); emitDriveZoom(); }
   function setNavFromPointer(clientX, clientY) {
-    const r = canvas.getBoundingClientRect();
+    const r = ctx.canvas.getBoundingClientRect();
     _navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     _navRay.setFromCamera(_navNDC, ctx.camera);
     _navPlane.constant = -(ctx.car && ctx.car.groundY != null ? ctx.car.groundY : 0);   // ground plane at the car's height
@@ -1734,8 +1734,8 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.shiftLock = false, ctx.azVel = 0, ctx.poVel = 0;
 
   function lookDelta(dx, dy) {
-    const w = Math.max(320, canvas.clientWidth || innerWidth || 800);
-    const h = Math.max(320, canvas.clientHeight || innerHeight || 600);
+    const w = Math.max(320, ctx.canvas.clientWidth || innerWidth || 800);
+    const h = Math.max(320, ctx.canvas.clientHeight || innerHeight || 600);
     return { yaw: dx / w * LOOK_YAW_PER_SCREEN, pitch: dy / h * LOOK_PITCH_PER_SCREEN };
   }
   function scaledDeadzoneMagnitude(x, y) {
@@ -1746,7 +1746,7 @@ export function createEngine({ canvas, ui, emit }) {
   function hideJoy() {
     ctx.movePtr = null; ctx.inp2.jx = 0; ctx.inp2.jy = 0;
     if (ctx.mode === 'scoop') ctx.scoopMoveActive = false;
-    if (ui.joy) ui.joy.style.display = 'none';
+    if (ctx.ui.joy) ctx.ui.joy.style.display = 'none';
   }
 
   function clearLiveInput() {
@@ -1756,13 +1756,13 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.inp2.steer = ctx.inp2.gas = ctx.inp2.brake = 0;
     ctx.inp2.hbrake = false; ctx.inp2.boost = false; ctx.inp2.navActive = false;
     ctx.scoopMoveActive = false;
-    if (ui.joy) ui.joy.style.display = 'none';
-    canvas.classList.remove('dragging');
+    if (ctx.ui.joy) ctx.ui.joy.style.display = 'none';
+    ctx.canvas.classList.remove('dragging');
   }
 
   function onPointerDown(e) {
     if (ctx.mode !== 'explore') {
-      canvas.setPointerCapture(e.pointerId);
+      ctx.canvas.setPointerCapture(e.pointerId);
       // Overhead views: ONE finger draws-to-drive; a SECOND finger is a pinch-zoom (the
       // phone-native way to zoom the map the user asked for) which suspends steering until
       // you lift back to one finger.
@@ -1785,7 +1785,7 @@ export function createEngine({ canvas, ui, emit }) {
         }
         return;
       }
-      const VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
+      const VW = ctx.canvas.clientWidth || innerWidth, VH = ctx.canvas.clientHeight || innerHeight;
       // Roblox touch convention, identical in drive + scoop: the LEFT HALF is the
       // movement zone — a press there SPAWNS the dynamic thumbstick under the thumb
       // (drag farther = move faster: full throttle / a run). The RIGHT HALF is dead
@@ -1798,11 +1798,11 @@ export function createEngine({ canvas, ui, emit }) {
       if (ctx.movePtr === null && e.clientX < VW * steerZoneW && e.clientY > VH * steerZoneTop) {
         ctx.movePtr = e.pointerId; ctx.joyBX = e.clientX; ctx.joyBY = e.clientY;
         if (ctx.mode === 'scoop') { ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = true; }
-        if (ui.joy) {
-          ui.joy.style.display = 'block';
-          ui.joy.style.left = (e.clientX - JOY_R) + 'px'; ui.joy.style.top = (e.clientY - JOY_R) + 'px';
+        if (ctx.ui.joy) {
+          ctx.ui.joy.style.display = 'block';
+          ctx.ui.joy.style.left = (e.clientX - JOY_R) + 'px'; ctx.ui.joy.style.top = (e.clientY - JOY_R) + 'px';
         }
-        if (ui.knob) ui.knob.style.transform = 'translate(-50%,-50%)';
+        if (ctx.ui.knob) ctx.ui.knob.style.transform = 'translate(-50%,-50%)';
       } else {
         lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (ctx.mode === 'drive') ctx.camOrbit.t = performance.now();   // count a look-start as activity so the hold timer doesn't snap a resting finger back
@@ -1813,10 +1813,10 @@ export function createEngine({ canvas, ui, emit }) {
       }
       return;
     }
-    canvas.setPointerCapture(e.pointerId);
+    ctx.canvas.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, b: e.button }); moved = 0;
     ctx.azVel = ctx.poVel = 0;
-    canvas.classList.add('dragging');
+    ctx.canvas.classList.add('dragging');
     if (ptrs.size === 2) {
       const [a, b] = [...ptrs.values()];
       lastPinch = Math.hypot(a.x - b.x, a.y - b.y); lastMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -1831,7 +1831,7 @@ export function createEngine({ canvas, ui, emit }) {
         const d = Math.hypot(dx, dy), mx = JOY_MAX;
         if (d > mx) { dx *= mx / d; dy *= mx / d; }
         ctx.inp2.jx = dx / mx; ctx.inp2.jy = dy / mx;
-        if (ui.knob) ui.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+        if (ctx.ui.knob) ctx.ui.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
         if (Math.hypot(ctx.inp2.jx, ctx.inp2.jy) > 0.25) ctx.showT = 0;
         return;
       }
@@ -1897,7 +1897,7 @@ export function createEngine({ canvas, ui, emit }) {
     lookPtrs.delete(e.pointerId);
     if (lookPtrs.size < 2) ctx.pinchD = 0;
     ptrs.delete(e.pointerId); lastPinch = 0; lastMid = null;
-    if (!ptrs.size) canvas.classList.remove('dragging');
+    if (!ptrs.size) ctx.canvas.classList.remove('dragging');
   }
 
   function onWheel(e) {
@@ -1941,7 +1941,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (isEditable(e.target)) return;   // let typing through — never hijack form input
     if (ctx.mode === 'drive' || ctx.mode === 'scoop') {
       if (ctx.mode === 'scoop' && e.key === 'Shift' && !e.repeat) {
-        ctx.shiftLock = !ctx.shiftLock; emit('shiftLock', ctx.shiftLock);
+        ctx.shiftLock = !ctx.shiftLock; ctx.emit('shiftLock', ctx.shiftLock);
         ctx.toast(ctx.shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
       }
       if (ctx.mode === 'scoop' && (e.key === 'e' || e.key === 'E') && ctx.nearCar) { driveFromScoop(); e.preventDefault(); return; }
@@ -1981,7 +1981,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   // ---------- scoop mode ----------
   function pushScoopHud() {
-    emit('scoopHud', {
+    ctx.emit('scoopHud', {
       lvl: ctx.CHAR.lvl, name: TOOLS[ctx.CHAR.lvl].name, bag: ctx.CHAR.bag,
       cap: TOOLS[ctx.CHAR.lvl].cap, total: ctx.CHAR.total, clean: cleanPct()
     });
@@ -2004,7 +2004,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.CHAR.yaw = Math.atan2(SREC.barn[0] - ctx.CHAR.x, SREC.barn[1] - ctx.CHAR.z);
     ctx.camYawS = ctx.CHAR.yaw; ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = false;
     ctx.scoopScene = 'yard'; ctx.entryArmed = true; ctx.exitArmed = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
-    emit('avatar', { name: ctx.CHAR.avatar, actions: ctx.CHAR.getActions() });
+    ctx.emit('avatar', { name: ctx.CHAR.avatar, actions: ctx.CHAR.getActions() });
     ctx.audio.ensure();
     setTool(ctx.CHAR.lvl);
     ctx.toast('Scoop the sanctuary poop! 💩<br><small>Empty at the green compost bin · the 🚪 pad takes you inside the house</small>', 3200);
@@ -2017,7 +2017,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.scoopGrass) ctx.scoopGrass.visible = false;
     if (ctx.scoopFence) ctx.scoopFence.visible = false;
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
-    if (ctx.nearCar) { ctx.nearCar = false; emit('nearCar', false); }
+    if (ctx.nearCar) { ctx.nearCar = false; ctx.emit('nearCar', false); }
     hideJoy();
     for (const s of ctx.labelSprites) s.visible = true;
     ctx.CHAR.group.visible = false;
@@ -2170,7 +2170,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (d < 3.6) near = true;
       if (d < bestD) { bestD = d; best = s; }
     }
-    if (near !== ctx.nearCar) { ctx.nearCar = near; emit('nearCar', near); }
+    if (near !== ctx.nearCar) { ctx.nearCar = near; ctx.emit('nearCar', near); }
     carMarker.visible = !!best && !near;
     if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
   }
@@ -2233,7 +2233,7 @@ export function createEngine({ canvas, ui, emit }) {
   // hop from walking straight into driving (the car spawns at the driveway)
   function driveFromScoop() {
     if (ctx.mode !== 'scoop' || !ctx.nearCar) return;
-    ctx.nearCar = false; emit('nearCar', false);
+    ctx.nearCar = false; ctx.emit('nearCar', false);
     ctx.audio.blip();
     enterDrive();
   }
@@ -2258,7 +2258,7 @@ export function createEngine({ canvas, ui, emit }) {
     for (const c of ctx.coins) { c.got = false; c.groundY = null; } ctx.coinsGot = 0;   // fresh coins each drive
     resetRun(); resetParticles();
     emitScore({ finishMs: 0 });
-    emit('driveCam', DRIVE_CAMS[ctx.camMode].name);
+    ctx.emit('driveCam', DRIVE_CAMS[ctx.camMode].name);
     // FREE ROAM by default — no auto-destination, so the route line is OFF until you
     // choose somewhere (🧭 / tap the map). The pink POI beacons still point the way.
     const sp = ctx.frontPt || [ctx.house.c[0], ctx.house.c[1] + 14];
@@ -2291,7 +2291,7 @@ export function createEngine({ canvas, ui, emit }) {
     hideJoy();
     navPtr = null; ctx.inp2.navActive = false; if (navMarker) navMarker.visible = false;
     guideLine.visible = false; destPin.visible = false;
-    if (ui.fx) ui.fx.classList.remove('on');
+    if (ctx.ui.fx) ctx.ui.fx.classList.remove('on');
     if (ctx.camera.fov !== 46) { ctx.camera.fov = 46; ctx.camera.updateProjectionMatrix(); }
     for (const c of ctx.coins) c.mesh.visible = false;
     resetParticles();
@@ -2453,13 +2453,13 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.ROUTE = seedRoute || null; ctx.routeIdx = 0;
     if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
     destPin.userData.groundY = null;
-    emit('dest', { label: ctx.DEST.label });
+    ctx.emit('dest', { label: ctx.DEST.label });
     ctx._quietRoute = !!opts.quiet;   // suppress the follow-up "Route ready" toast on quiet (follow-mode) re-routes
     if (!isChain && !opts.quiet) { const km = (Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) / 1000).toFixed(1); ctx.toast('📍 ' + ctx.esc(ctx.DEST.label) + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
     if (opts.drive) {
       ctx.autoDrive = true; ctx.inp2.navActive = false;
-      emit('autodrive', true);
+      ctx.emit('autodrive', true);
       faceRouteStart();
     }
   }
@@ -2467,7 +2467,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.routeReqId++; ctx.DEST = null; ctx.ROUTE = null; ctx.routeIdx = 0; ctx.autoDrive = false; ctx.inp2.navActive = false;
     clearRouteRail(); clearRouteCaches();
     guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null;
-    emit('dest', null); emit('autodrive', false);
+    ctx.emit('dest', null); ctx.emit('autodrive', false);
   }
   // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
   // Geocoding/Directions endpoints are CORS-blocked, which is why the old fetch box failed) ----
@@ -2734,7 +2734,7 @@ export function createEngine({ canvas, ui, emit }) {
     const was = ctx.followMode || ctx._geoWatch != null;
     if (ctx._geoWatch != null) { try { navigator.geolocation.clearWatch(ctx._geoWatch); } catch (e) { } ctx._geoWatch = null; }
     ctx.followMode = false; ctx._followGeo = null; ctx._followSeeded = false; ctx._followVx = 0; ctx._followVz = 0; ctx._jumpSnap = null; stopHeading();
-    if (was) emit('follow', false);
+    if (was) ctx.emit('follow', false);
   }
   // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
   // mapping + ground tiles break down, and the glide — which bypasses the physics ring clamp — would
@@ -2752,7 +2752,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (follow) {
       startHeading();                                                  // request the compass NOW, inside the button-tap gesture (iOS requires that)
       ctx.followMode = true; ctx.autoDrive = false; clearRouteRail(); clearDestination();   // exact-follow OWNS the car — kill any rail/route
-      emit('autodrive', false); emit('follow', true);
+      ctx.emit('autodrive', false); ctx.emit('follow', true);
       ctx.toast('📍 Following you — the car tracks your location', 1700);
     }
     return new Promise((resolve, reject) => {
@@ -2786,7 +2786,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
   ctx.autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
-  function setAutoMaxMph(mph) { ctx.autoMaxMph = Math.max(0, mph | 0); try { localStorage.setItem('dahill.automax', String(ctx.autoMaxMph)); } catch (e) { } emit('automax', ctx.autoMaxMph); }
+  function setAutoMaxMph(mph) { ctx.autoMaxMph = Math.max(0, mph | 0); try { localStorage.setItem('dahill.automax', String(ctx.autoMaxMph)); } catch (e) { } ctx.emit('automax', ctx.autoMaxMph); }
   // Global driving-speed/accel multiplier (settings slider). Scales top speed AND accel so the
   // whole envelope slows together — a parent can dial it down for little kids on tight streets.
   ctx.speedMul = (() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } })();
@@ -2823,7 +2823,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
     fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
     ctx.autoDrive = true; ctx.inp2.navActive = false;
-    emit('dest', { label: ctx.DEST.label }); emit('autodrive', true);
+    ctx.emit('dest', { label: ctx.DEST.label }); ctx.emit('autodrive', true);
     faceRouteStart();
     ctx.toast(route ? '🤖 Cruising the streets' : '🗺️ Finding a road route…', 1200);
   }
@@ -2919,7 +2919,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.autoMaxMph) s = Math.min(s, ctx.autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
     return s;
   }
-  function toggleAutoDrive() { if (!ctx.DEST) return; ctx.autoDrive = !ctx.autoDrive; clearRouteRail(); if (!ctx.autoDrive) ctx.inp2.navActive = false; else faceRouteStart(); emit('autodrive', ctx.autoDrive); ctx.toast(ctx.autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
+  function toggleAutoDrive() { if (!ctx.DEST) return; ctx.autoDrive = !ctx.autoDrive; clearRouteRail(); if (!ctx.autoDrive) ctx.inp2.navActive = false; else faceRouteStart(); ctx.emit('autodrive', ctx.autoDrive); ctx.toast(ctx.autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
   // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
   // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
@@ -3013,7 +3013,7 @@ export function createEngine({ canvas, ui, emit }) {
         }
         const place = [locality || hood, state].filter(Boolean).join(', ');
         const label = [route, place].filter(Boolean).join(' · ');
-        if (label && label !== _geoLabel) { _geoLabel = label; emit('subline', label); }
+        if (label && label !== _geoLabel) { _geoLabel = label; ctx.emit('subline', label); }
       });
     }).catch(() => { _geoBusy = false; });
   }
@@ -3264,7 +3264,7 @@ export function createEngine({ canvas, ui, emit }) {
     // BIG hit → a celebrated moment: a beat of slow-mo, a white flash, a CRUNCH. It also
     // BREAKS your combo — that's the risk that makes near-misses worth the reward.
     else if (impact > 40) {
-      if (!ctx.reduceMotion) { ctx.timeScale = 0.32; if (ui.fx) { ui.fx.classList.add('crash'); setTimeout(() => ui.fx && ui.fx.classList.remove('crash'), 320); } }
+      if (!ctx.reduceMotion) { ctx.timeScale = 0.32; if (ctx.ui.fx) { ctx.ui.fx.classList.add('crash'); setTimeout(() => ctx.ui.fx && ctx.ui.fx.classList.remove('crash'), 320); } }
       // halve the combo (not a full wipe) — a hard knock on an invisible footprint
       // shouldn't erase a whole chain, but it should sting.
       const lost = ctx.combo > 2 ? '  ·  combo halved' : '';
@@ -3308,7 +3308,7 @@ export function createEngine({ canvas, ui, emit }) {
     const dd = DRIVE_CAMS[ctx.camMode].dragdrive;
     if (!DRIVE_CAMS[ctx.camMode].topdown) ctx.camera.up.set(0, 1, 0);   // only top-down is heading-up
     if (!dd) { ctx.inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
-    emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();
+    ctx.emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();
     ctx.toast('Camera: ' + DRIVE_CAMS[ctx.camMode].name + (dd ? ' · drag to drive 🪄' : ''), dd ? 1700 : 1100);
   }
   // Jump straight to the one-finger draw-to-drive (top-down) view — the most phone-native
@@ -3320,12 +3320,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.camMode === i) {
       ctx.camMode = 0; ctx.camInit = false; ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();
       ctx.inp2.navActive = false; navPtr = null; ctx.camera.up.set(0, 1, 0);
-      emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
+      ctx.emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
       ctx.toast('Camera: ' + DRIVE_CAMS[ctx.camMode].name, 1100);
       return;
     }
     ctx.camMode = i; ctx.camInit = false; ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();
-    emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
+    ctx.emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
     ctx.toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
   // Scoop camera presets [dist, height] — cycled with the 🎥 button.
@@ -3500,7 +3500,7 @@ export function createEngine({ canvas, ui, emit }) {
     // instantly takes over instead of fighting the robot.
     const _userInput = Math.abs(ctx.inp2.jx + ctx.inp2.kx + ctx.inp2.steer) > 0.2 || Math.abs(ctx.inp2.jy) > MOVE_DEADZONE || ctx.inp2.gas || ctx.inp2.brake || ctx.inp2.ky;
     if (ctx.autoDrive && _userInput) {
-      ctx.autoDrive = false; ctx.inp2.navActive = false; clearRouteRail(); stopFollow(); emit('autodrive', false); ctx.toast('🕹️ You took the wheel!', 900);
+      ctx.autoDrive = false; ctx.inp2.navActive = false; clearRouteRail(); stopFollow(); ctx.emit('autodrive', false); ctx.toast('🕹️ You took the wheel!', 900);
     }
     // FOLLOW runs with autoDrive OFF, so the grab-wheel check above won't catch it — let real input end it too.
     if (ctx.followMode && _userInput) { stopFollow(); ctx.toast('🕹️ You took the wheel!', 900); }
@@ -3603,7 +3603,7 @@ export function createEngine({ canvas, ui, emit }) {
     // auto-fire: flooring the throttle (or the Shift/🚀 input) with charge dumps nitro —
     // no spare thumb is free for a manual button (left=steer, right=pedals).
     const boosting = (ctx.inp2.boost || throttle > 0.92) && ctx.boost > 0.02 && Math.abs(ctx.car.speed) > 1.5;
-    if (boosting) { ctx.boost = Math.max(0, ctx.boost - dt * 0.4); if (!ctx.boostWas) { if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(1); ctx.toast('🚀 NITRO!', 700); if (!ctx.reduceMotion) { ctx.shakeMag = Math.max(ctx.shakeMag, 0.6); if (ui.fx) { ui.fx.classList.add('boost'); setTimeout(() => ui.fx && ui.fx.classList.remove('boost'), 160); } } } }   // hard-earned nitro gets a real punch: camera kick + a brief flash
+    if (boosting) { ctx.boost = Math.max(0, ctx.boost - dt * 0.4); if (!ctx.boostWas) { if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(1); ctx.toast('🚀 NITRO!', 700); if (!ctx.reduceMotion) { ctx.shakeMag = Math.max(ctx.shakeMag, 0.6); if (ctx.ui.fx) { ctx.ui.fx.classList.add('boost'); setTimeout(() => ctx.ui.fx && ctx.ui.fx.classList.remove('boost'), 160); } } } }   // hard-earned nitro gets a real punch: camera kick + a brief flash
     ctx.boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
     let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * ctx.speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
@@ -3963,7 +3963,7 @@ export function createEngine({ canvas, ui, emit }) {
         collectCoin(now);
         if (ctx.coinsGot === ctx.coins.length) {
           ctx.toast('💛 All ' + ctx.coins.length + ' coins in ' + fmtTime(ctx.lastRunMs) + '! ' + (wasBest ? '🏆 New best!' : 'Best ' + fmtTime(ctx.bestMs)), 3600);
-          if (ui.fx && !ctx.reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 650); }
+          if (ctx.ui.fx && !ctx.reduceMotion) { ctx.ui.fx.classList.add('arrive'); setTimeout(() => ctx.ui.fx && ctx.ui.fx.classList.remove('arrive'), 650); }
         }
       }
     }
@@ -3984,7 +3984,7 @@ export function createEngine({ canvas, ui, emit }) {
     // DRIFT reward: a held slide glows the ✋ button + a 'DRIFT' chip, and every ~0.9 s of
     // sustained drift ticks the combo + trip score — the best mechanic finally pays out.
     const drifting = Math.abs(ctx.car.vlat) > 6 && Math.abs(ctx.car.speed) > 9;
-    if (drifting !== ctx.driftState) { ctx.driftState = drifting; emit('drift', drifting); }
+    if (drifting !== ctx.driftState) { ctx.driftState = drifting; ctx.emit('drift', drifting); }
     if (drifting) {
       ctx.driftAccum += dt;
       if (ctx.driftAccum > 0.9) {
@@ -3997,24 +3997,24 @@ export function createEngine({ canvas, ui, emit }) {
     checkPOIs(now);
     updateBeacons(now);
     // live rally clock (direct DOM, no React churn) + combo expiry
-    if (ui.runTime) ui.runTime.textContent = fmtTime(ctx.runActive ? now - ctx.runStart : ctx.lastRunMs);
+    if (ctx.ui.runTime) ctx.ui.runTime.textContent = fmtTime(ctx.runActive ? now - ctx.runStart : ctx.lastRunMs);
     if (!ctx.comboExpired && now > ctx.comboExpire) { ctx.comboExpired = true; ctx.combo = 0; emitScore({}); }
     // reverse tell-tales: 'R' in the speedo + the STOP pedal flips to REV
     const reversing = ctx.car.speed < -0.4;
-    if (ui.rev) ui.rev.style.opacity = reversing ? '1' : '0';
-    if (ui.brakeLbl && ui.brakeLbl.textContent !== (reversing ? 'REV' : 'STOP')) ui.brakeLbl.textContent = reversing ? 'REV' : 'STOP';
+    if (ctx.ui.rev) ctx.ui.rev.style.opacity = reversing ? '1' : '0';
+    if (ctx.ui.brakeLbl && ctx.ui.brakeLbl.textContent !== (reversing ? 'REV' : 'STOP')) ctx.ui.brakeLbl.textContent = reversing ? 'REV' : 'STOP';
     // GEAR readout for the dash cluster: R reverse · P parked · N coasting · D driving.
-    if (ui.gear) {
+    if (ctx.ui.gear) {
       const g = reversing ? 'R' : (Math.abs(ctx.car.speed) < 0.4 && throttle < 0.1) ? 'P' : (throttle > 0.05 ? 'D' : 'N');
-      if (ui.gear.textContent !== g) { ui.gear.textContent = g; ui.gear.dataset.gear = g; }
+      if (ctx.ui.gear.textContent !== g) { ctx.ui.gear.textContent = g; ctx.ui.gear.dataset.gear = g; }
     }
-    if (ui.eta) {
+    if (ctx.ui.eta) {
       if (ctx.DEST) {
         const dd = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
         const etaMs = dd / Math.max(9, Math.abs(ctx.car.speed)) * 1000;
-        ui.eta.textContent = dd < 18 ? 'arriving…'
+        ctx.ui.eta.textContent = dd < 18 ? 'arriving…'
           : (dd > 950 ? (dd / 1000).toFixed(1) + ' km' : Math.round(dd) + ' m') + ' · ~' + fmtTime(etaMs);
-      } else ui.eta.textContent = '';
+      } else ctx.ui.eta.textContent = '';
     }
     if (navMarker) {
       navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
@@ -4194,25 +4194,25 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.vehicleFillTarget.updateMatrixWorld();
     }
     updateTileClip(ctx.car.x, yC, ctx.car.z, DRIVE_CAMS[ctx.camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
-    if (ui.mph) ui.mph.textContent = Math.round(Math.abs(ctx.car.speed) * 2.237);
+    if (ctx.ui.mph) ctx.ui.mph.textContent = Math.round(Math.abs(ctx.car.speed) * 2.237);
     {
       const f = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);
-      if (ui.speedBar) {                                 // speed-bar fill + colour band
-        ui.speedBar.style.width = (f * 100).toFixed(1) + '%';
-        ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
+      if (ctx.ui.speedBar) {                                 // speed-bar fill + colour band
+        ctx.ui.speedBar.style.width = (f * 100).toFixed(1) + '%';
+        ctx.ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
       }
-      if (ui.boostBar) {                                 // nitro meter (direct DOM, no React churn)
-        ui.boostBar.style.width = (ctx.boost * 100).toFixed(0) + '%';
-        ui.boostBar.parentElement.classList.toggle('ready', ctx.boost > 0.25 && !boosting);
-        ui.boostBar.parentElement.classList.toggle('firing', boosting);
+      if (ctx.ui.boostBar) {                                 // nitro meter (direct DOM, no React churn)
+        ctx.ui.boostBar.style.width = (ctx.boost * 100).toFixed(0) + '%';
+        ctx.ui.boostBar.parentElement.classList.toggle('ready', ctx.boost > 0.25 && !boosting);
+        ctx.ui.boostBar.parentElement.classList.toggle('firing', boosting);
       }
-      if (ui.fx && !ctx.reduceMotion) {                      // speed streaks + vignette: build from ~18%, keep growing flat out
+      if (ctx.ui.fx && !ctx.reduceMotion) {                      // speed streaks + vignette: build from ~18%, keep growing flat out
         const fHi = clamp((Math.abs(ctx.car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
         const v = clamp((f - 0.18) / 0.62, 0, 1) * 0.82 + fHi * 0.18;
-        ui.fx.style.setProperty('--spd', v.toFixed(2));
-        ui.fx.style.setProperty('--ox', (50 - (ctx.car.steer + ctx.camOrbit.yaw * 0.4) * 16).toFixed(1) + '%');  // streaks flow from where you're heading
-        ui.fx.classList.toggle('on', v > 0.01);
-        ui.fx.classList.toggle('fast', v > 0.6);         // motion-blur the streaks only when truly flying
+        ctx.ui.fx.style.setProperty('--spd', v.toFixed(2));
+        ctx.ui.fx.style.setProperty('--ox', (50 - (ctx.car.steer + ctx.camOrbit.yaw * 0.4) * 16).toFixed(1) + '%');  // streaks flow from where you're heading
+        ctx.ui.fx.classList.toggle('on', v > 0.01);
+        ctx.ui.fx.classList.toggle('fast', v > 0.6);         // motion-blur the streaks only when truly flying
       }
     }
     ctx.audio.engineUpdate(ctx.car.speed, feelRef, throttle); // rev maps to the feel reference; load brightens it
@@ -4234,8 +4234,8 @@ export function createEngine({ canvas, ui, emit }) {
     _rw = w; _rh = h;
     ctx.renderer.setPixelRatio(ctx.renderPixelRatio());
     ctx.renderer.setSize(w, h, false);
-    canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
-    if (ui.box) { ui.box.style.width = w + 'px'; ui.box.style.height = h + 'px'; }
+    ctx.canvas.style.width = w + 'px'; ctx.canvas.style.height = h + 'px';
+    if (ctx.ui.box) { ctx.ui.box.style.width = w + 'px'; ctx.ui.box.style.height = h + 'px'; }
     ctx.camera.aspect = w / h; ctx.camera.updateProjectionMatrix();
     if (ctx.p3dtiles) ctx.p3dtiles.setResolutionFromRenderer(ctx.camera, ctx.renderer);
   }
@@ -4269,7 +4269,7 @@ export function createEngine({ canvas, ui, emit }) {
     _attrT = now; _attrTarget.length = 0;
     try { ctx.p3dtiles.getAttributions(_attrTarget); } catch (e) { return; }
     const s = _attrTarget.filter(a => a && a.type === 'string').map(a => a.value).filter(Boolean).join(' · ');
-    if (s !== _attrStr) { _attrStr = s; emit('attribution', s); }
+    if (s !== _attrStr) { _attrStr = s; ctx.emit('attribution', s); }
   }
   function loop(now) {
     if (ctx.disposed || ctx.paused || ctx.ctxLost) return;
@@ -4304,16 +4304,16 @@ export function createEngine({ canvas, ui, emit }) {
     }
     if (ctx.sun.castShadow && now - ctx._shadowT > 140) { ctx.renderer.shadowMap.needsUpdate = true; ctx._shadowT = now; }
     ctx.camera.getWorldDirection(dirV);
-    if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
+    if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
     if (ctx.p3dtiles && photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
-    else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
+    else if (_attrStr) { _attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
     if (ctx.mode === 'drive') {
       updateMiniMap(now);                                            // live Google minimap (when up)
-      if (!ctx._gmap && ui.minimap && now - ctx._miniT > 80) {              // procedural fallback until/unless it loads
+      if (!ctx._gmap && ctx.ui.minimap && now - ctx._miniT > 80) {              // procedural fallback until/unless it loads
         ctx._miniT = now;
-        if (ctx._miniEl !== ui.minimap) { ctx._miniEl = ui.minimap; ctx._miniCtx = ui.minimap.getContext('2d'); }
-        if (ctx._miniCtx) drawMinimap(ctx._miniCtx, ui.minimap.width, ui.minimap.height);
+        if (ctx._miniEl !== ctx.ui.minimap) { ctx._miniEl = ctx.ui.minimap; ctx._miniCtx = ctx.ui.minimap.getContext('2d'); }
+        if (ctx._miniCtx) drawMinimap(ctx._miniCtx, ctx.ui.minimap.width, ctx.ui.minimap.height);
       }
     }
     ctx.renderer.render(ctx.scene, ctx.camera);
@@ -4332,15 +4332,15 @@ export function createEngine({ canvas, ui, emit }) {
   function onContextRestored() { if (!ctx.disposed) location.reload(); }   // rebuild streamed GPU state via reload
 
   // ---------- wire up ----------
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerEnd);
-  canvas.addEventListener('pointercancel', onPointerEnd);
-  canvas.addEventListener('contextmenu', onContextMenu);
-  canvas.addEventListener('dblclick', onDblClick);
-  canvas.addEventListener('wheel', onWheel, { passive: false });
-  canvas.addEventListener('webglcontextlost', onContextLost, false);
-  canvas.addEventListener('webglcontextrestored', onContextRestored, false);
+  ctx.canvas.addEventListener('pointerdown', onPointerDown);
+  ctx.canvas.addEventListener('pointermove', onPointerMove);
+  ctx.canvas.addEventListener('pointerup', onPointerEnd);
+  ctx.canvas.addEventListener('pointercancel', onPointerEnd);
+  ctx.canvas.addEventListener('contextmenu', onContextMenu);
+  ctx.canvas.addEventListener('dblclick', onDblClick);
+  ctx.canvas.addEventListener('wheel', onWheel, { passive: false });
+  ctx.canvas.addEventListener('webglcontextlost', onContextLost, false);
+  ctx.canvas.addEventListener('webglcontextrestored', onContextRestored, false);
   document.addEventListener('visibilitychange', onVisibility);
   addEventListener('pagehide', suspend); addEventListener('freeze', suspend);     // iOS lock / app-switch
   addEventListener('pageshow', resume); addEventListener('resume', resume);
@@ -4370,15 +4370,15 @@ export function createEngine({ canvas, ui, emit }) {
   resize();
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
 
-  emit('subline', 'Castro Valley, CA');   // clean default for the live location readout; the reverse-geocoder refines it to STREET · CITY, ST as you drive
+  ctx.emit('subline', 'Castro Valley, CA');   // clean default for the live location readout; the reverse-geocoder refines it to STREET · CITY, ST as you drive
   applyCam();
   ctx.renderer.render(ctx.scene, ctx.camera);
-  emit('ready');
+  ctx.emit('ready');
   emitPOIs();                 // seed the start-card "places found" badge from saved progress
   if (ctx.audio.setMuted) ctx.audio.setMuted(!ctx.soundOn);   // sync the master mute with the saved pref
-  emit('sound', ctx.soundOn);   // seed the 🔊 toggle state
-  emit('autosteer', ctx.autoSteer);
-  emit('roadlife', ctx.roadLifeOn);
+  ctx.emit('sound', ctx.soundOn);   // seed the 🔊 toggle state
+  ctx.emit('autosteer', ctx.autoSteer);
+  ctx.emit('roadlife', ctx.roadLifeOn);
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
   if (document.hidden) ctx.paused = true;   // born in a background tab → don't render/stream until shown
   else ctx.raf = requestAnimationFrame(loop);
@@ -4387,15 +4387,15 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.disposed = true;
     cancelAnimationFrame(ctx.raf);
     clearTimeout(t1); clearTimeout(t2); clearTimeout(_crowdReplaceT);
-    canvas.removeEventListener('pointerdown', onPointerDown);
-    canvas.removeEventListener('pointermove', onPointerMove);
-    canvas.removeEventListener('pointerup', onPointerEnd);
-    canvas.removeEventListener('pointercancel', onPointerEnd);
-    canvas.removeEventListener('contextmenu', onContextMenu);
-    canvas.removeEventListener('dblclick', onDblClick);
-    canvas.removeEventListener('wheel', onWheel);
-    canvas.removeEventListener('webglcontextlost', onContextLost);
-    canvas.removeEventListener('webglcontextrestored', onContextRestored);
+    ctx.canvas.removeEventListener('pointerdown', onPointerDown);
+    ctx.canvas.removeEventListener('pointermove', onPointerMove);
+    ctx.canvas.removeEventListener('pointerup', onPointerEnd);
+    ctx.canvas.removeEventListener('pointercancel', onPointerEnd);
+    ctx.canvas.removeEventListener('contextmenu', onContextMenu);
+    ctx.canvas.removeEventListener('dblclick', onDblClick);
+    ctx.canvas.removeEventListener('wheel', onWheel);
+    ctx.canvas.removeEventListener('webglcontextlost', onContextLost);
+    ctx.canvas.removeEventListener('webglcontextrestored', onContextRestored);
     document.removeEventListener('visibilitychange', onVisibility);
     removeEventListener('pagehide', suspend); removeEventListener('freeze', suspend);
     removeEventListener('pageshow', resume); removeEventListener('resume', resume);
@@ -4443,7 +4443,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
-    toggleShiftLock: () => { ctx.shiftLock = !ctx.shiftLock; emit('shiftLock', ctx.shiftLock); },
+    toggleShiftLock: () => { ctx.shiftLock = !ctx.shiftLock; ctx.emit('shiftLock', ctx.shiftLock); },
     // hop: only from the ground; a keyboard Space also jumps (wired in onKeyDown)
     jump: () => { if (ctx.mode === 'scoop' && ctx.CHAR.airY <= 0 && ctx.CHAR.vy === 0) { ctx.CHAR.vy = 8.5; if (ctx.audio.blip) ctx.audio.blip(); } },
     // random celebration from the active avatar's emote set
@@ -4458,10 +4458,10 @@ export function createEngine({ canvas, ui, emit }) {
     // Drew <-> CeCe avatar swap (avatar only — the side-menu switch). Emits 'avatar' optimistically
     // (the toggle flips at once) and again once the new rig + its action list are ready.
     setAvatar: (name) => {
-      ctx.CHAR.swapAvatar(name, n => emit('avatar', { name: n, actions: ctx.CHAR.getActions() }));   // real actions once the rig is mounted
+      ctx.CHAR.swapAvatar(name, n => ctx.emit('avatar', { name: n, actions: ctx.CHAR.getActions() }));   // real actions once the rig is mounted
       // optimistic: flip the toggle now, but only carry actions if that avatar is ALREADY mounted —
       // otherwise the grid would show the previous kid's emotes during CeCe's async load.
-      emit('avatar', { name, actions: ctx.CHAR.avatar === name ? ctx.CHAR.getActions() : [] });
+      ctx.emit('avatar', { name, actions: ctx.CHAR.avatar === name ? ctx.CHAR.getActions() : [] });
     },
     getAvatar: () => ctx.CHAR.avatar,
     getScoopActions: () => ctx.CHAR.getActions(),
@@ -4506,12 +4506,12 @@ export function createEngine({ canvas, ui, emit }) {
     setBoost: (on) => { ctx.inp2.boost = !!on; },                        // nitro (hold while charged)
     setBrake: (on) => { ctx.inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
     // "Sound" toggle = master mute over EVERYTHING (engine drone + sfx + music), not just the soundtrack.
-    toggleSound: () => { ctx.soundOn = !ctx.soundOn; try { localStorage.setItem('dahill.sound', ctx.soundOn ? '1' : '0'); } catch (e) { } if (ctx.audio.ensure) ctx.audio.ensure(); if (ctx.audio.setMuted) ctx.audio.setMuted(!ctx.soundOn); if (ctx.mode === 'drive' && ctx.audio.setMusic) ctx.audio.setMusic(ctx.soundOn); emit('sound', ctx.soundOn); return ctx.soundOn; },
-    toggleAutoSteer: () => { ctx.autoSteer = !ctx.autoSteer; try { localStorage.setItem('dahill.autosteer', ctx.autoSteer ? '1' : '0'); } catch (e) { } emit('autosteer', ctx.autoSteer); ctx.toast(ctx.autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return ctx.autoSteer; },
+    toggleSound: () => { ctx.soundOn = !ctx.soundOn; try { localStorage.setItem('dahill.sound', ctx.soundOn ? '1' : '0'); } catch (e) { } if (ctx.audio.ensure) ctx.audio.ensure(); if (ctx.audio.setMuted) ctx.audio.setMuted(!ctx.soundOn); if (ctx.mode === 'drive' && ctx.audio.setMusic) ctx.audio.setMusic(ctx.soundOn); ctx.emit('sound', ctx.soundOn); return ctx.soundOn; },
+    toggleAutoSteer: () => { ctx.autoSteer = !ctx.autoSteer; try { localStorage.setItem('dahill.autosteer', ctx.autoSteer ? '1' : '0'); } catch (e) { } ctx.emit('autosteer', ctx.autoSteer); ctx.toast(ctx.autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return ctx.autoSteer; },
     toggleRoadLife: () => {
       ctx.roadLifeOn = !ctx.roadLifeOn;
       try { localStorage.setItem('dahill.roadlife', ctx.roadLifeOn ? '1' : '0'); } catch (e) { }
-      emit('roadlife', ctx.roadLifeOn);
+      ctx.emit('roadlife', ctx.roadLifeOn);
       if (!ctx.roadLifeOn) { hideTraffic(); hideCrowd(); }
       ctx.toast(ctx.roadLifeOn ? 'People + traffic ON' : 'People + traffic off', 1300);
       return ctx.roadLifeOn;
