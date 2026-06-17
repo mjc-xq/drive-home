@@ -1451,19 +1451,40 @@ export function createEngine({ canvas, ui, emit }) {
     for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (CHAR.x >= r.minX && CHAR.x <= r.maxX && CHAR.z >= r.minZ && CHAR.z <= r.maxZ) return i; }
     let best = 0, bd = Infinity; rs.forEach((r, i) => { const d = (r.x - CHAR.x) ** 2 + (r.z - CHAR.z) ** 2; if (d < bd) { bd = d; best = i; } }); return best;
   }
-  // A doorway roughly between us and the target → head through it first so room-to-room actually works
-  // (a straight line into a wall would otherwise jam against it).
-  function nearestDoorBetween(x, z, tx, tz) {
-    const dw = interior.doorways; if (!dw || !dw.length) return null;
-    const mdx = tx - x, mdz = tz - z, ml2 = mdx * mdx + mdz * mdz || 1;
-    let best = null, bs = 1.6;
-    for (const d of dw) {
-      const t = ((d.x - x) * mdx + (d.z - z) * mdz) / ml2;
-      if (t < 0.12 || t > 0.92) continue;                                   // must lie between us and the target
-      const off = Math.hypot(d.x - (x + mdx * t), d.z - (z + mdz * t));     // perpendicular distance to the path
-      if (off < bs) { bs = off; best = [d.x, d.z]; }
+  // ---- ROOM-GRAPH NAVIGATION: NPCs PLAN a path room-to-room (BFS through doorways) instead of walking
+  // a straight line into a wall and jamming. The rooms + doorways are static, so the connectivity graph
+  // is built once and cached on `interior`. Each doorway connects the two rooms whose AABBs it sits on.
+  function roomGraph() {
+    if (interior._navGraph) return interior._navGraph;
+    const rooms = interior.rooms || [], dws = interior.doorways || [];
+    const adj = rooms.map(() => []);
+    for (const d of dws) {
+      const near = [];
+      for (let i = 0; i < rooms.length; i++) { const r = rooms[i]; if (d.x >= r.minX - 0.7 && d.x <= r.maxX + 0.7 && d.z >= r.minZ - 0.7 && d.z <= r.maxZ + 0.7) near.push({ i, d2: (r.x - d.x) ** 2 + (r.z - d.z) ** 2 }); }
+      near.sort((a, b) => a.d2 - b.d2);
+      if (near.length >= 2 && near[0].i !== near[1].i) { const a = near[0].i, b = near[1].i; adj[a].push({ to: b, door: d }); adj[b].push({ to: a, door: d }); }
     }
-    return best;
+    return (interior._navGraph = adj);
+  }
+  function roomIndexAt(x, z) {
+    const rooms = interior.rooms || [];
+    for (let i = 0; i < rooms.length; i++) { const r = rooms[i]; if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) return i; }
+    let best = -1, bd = Infinity; for (let i = 0; i < rooms.length; i++) { const r = rooms[i]; const d = (r.x - x) ** 2 + (r.z - z) ** 2; if (d < bd) { bd = d; best = i; } } return best;
+  }
+  // The doorway to head for FIRST on the shortest room-path from `from` to `to` (BFS), or null if same
+  // room / unreachable. Recomputed each frame: as the NPC clears one door its room index advances and
+  // the next door takes over, so multi-room routes work without storing a path.
+  function routeDoor(from, to) {
+    if (from < 0 || to < 0 || from === to) return null;
+    const adj = roomGraph(); if (!adj[from]) return null;
+    const prev = new Array(adj.length).fill(-2); prev[from] = -1;
+    const prevDoor = new Array(adj.length).fill(null);
+    const q = [from];
+    for (let qi = 0; qi < q.length; qi++) { const u = q[qi]; if (u === to) break; for (const e of adj[u]) if (prev[e.to] === -2) { prev[e.to] = u; prevDoor[e.to] = e.door; q.push(e.to); } }
+    if (prev[to] === -2) return null;
+    let cur = to, door = null;
+    while (prev[cur] !== -1) { if (prev[cur] === from) door = prevDoor[cur]; cur = prev[cur]; }
+    return door;
   }
   function startTravel(npc, tx, tz) {
     npc.state = 'travel'; npc.target = [tx, tz];   // door routing is recomputed each frame in updateNpcs
@@ -1509,13 +1530,15 @@ export function createEngine({ canvas, ui, emit }) {
   function resetNpcs() {
     if (!interior || !interior.rooms || !interior.rooms.length || !npcs.length) return;
     _syncDance = false; _syncDanceNext = 0;   // re-arm the dance-party timer fresh on entry, so it doesn't fire instantly every time you step back inside
-    const main = interior.spawn;
-    const byFar = [...interior.rooms].sort((a, b) => ((b.x - main.x) ** 2 + (b.z - main.z) ** 2) - ((a.x - main.x) ** 2 + (a.z - main.z) ** 2));
+    const main = interior.spawn, now = performance.now();
     npcs.forEach((npc, i) => {
       if (npc.ctrl.reset) npc.ctrl.reset();
-      const from = interior.clearAt(byFar[i % byFar.length].x, byFar[i % byFar.length].z, NPC_RAD, true);
-      npc.x = from.x; npc.z = from.z; npc.yaw = 0; npc.seat = null; npc.wantSeat = null; npc.act = null; npc.baseY = interior.floorY;
-      startTravel(npc, main.x, main.z);
+      // START clustered around the MAIN room (where the player enters) so they're together near you, not
+      // scattered into far bedrooms they then get stuck pathing out of. They idle a beat, then wander off.
+      const a = i / Math.max(1, npcs.length) * Math.PI * 2 + 0.4;
+      const from = interior.clearAt(main.x + Math.cos(a) * 1.5, main.z + Math.sin(a) * 1.5, NPC_RAD, true);
+      npc.x = from.x; npc.z = from.z; npc.yaw = Math.atan2(main.x - from.x, main.z - from.z); npc.seat = null; npc.wantSeat = null; npc.baseY = interior.floorY;
+      npc.state = 'act'; npc.act = 'idle'; npc.actUntil = now + 2200 + Math.random() * 3500; npc.ctrl.locomotion(0);
       npc.group.visible = true; npc.group.position.set(npc.x, npc.baseY, npc.z);
     });
   }
@@ -1552,11 +1575,12 @@ export function createEngine({ canvas, ui, emit }) {
         const gx = npc.target[0], gz = npc.target[1], finalD = Math.hypot(gx - npc.x, gz - npc.z);
         if (finalD < 0.5) enterActivity(npc, now);
         else {
-          // Greedily route through the nearest doorway on the path — re-evaluated EVERY frame, so as
-          // the NPC clears one door the next door toward the goal takes over (multi-room paths work).
+          // PLAN the path: find our room + the goal's room and head for the next DOORWAY on the BFS route
+          // (not a straight line into a wall). Re-evaluated every frame, so clearing one door hands off to
+          // the next. Far from the door → aim at it; close → aim at the goal so we step THROUGH it.
           let tx = gx, tz = gz;
-          const wp = nearestDoorBetween(npc.x, npc.z, gx, gz);
-          if (wp && Math.hypot(wp[0] - npc.x, wp[1] - npc.z) > 0.6) { tx = wp[0]; tz = wp[1]; }
+          const cur = roomIndexAt(npc.x, npc.z), goalRoom = roomIndexAt(gx, gz);
+          if (cur !== goalRoom) { const door = routeDoor(cur, goalRoom); if (door && Math.hypot(door.x - npc.x, door.z - npc.z) > 0.55) { tx = door.x; tz = door.z; } }
           const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = NPC_SPD * dt;
           const r = interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD, true);
           const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
