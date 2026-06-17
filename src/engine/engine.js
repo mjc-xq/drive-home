@@ -130,16 +130,16 @@ export function createEngine({ canvas, ui, emit }) {
 
   // ---- minimap + address navigation ----
   // World-frame road segments for the minimap (drawn as a 2D map).
-  const roadSegs = [];
+  ctx.roadSegs = [];
   for (const r of S.roads) {
     if (r.k !== 'residential' && r.k !== 'tertiary' && r.k !== 'service') continue;
-    for (let k = 0; k < r.p.length - 1; k++) roadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
+    for (let k = 0; k < r.p.length - 1; k++) ctx.roadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
   }
   // EVERY mapped road (any type) for the off-road auto-correct + reset-to-road: the
   // drivable-only roadSegs above (used by the minimap/traffic/crowd) miss roads the car
   // can still wander off, so nearestRoadPoint/resetToRoad search this wider graph instead.
-  const allRoadSegs = [];
-  for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) allRoadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
+  ctx.allRoadSegs = [];
+  for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) ctx.allRoadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
   // geo <-> world, anchored at 1840 Dahill Lane. CURVATURE-CORRECT local ENU (East/North metres) so
   // routes / jumps / the road-snap line up with the real photoreal-tile roads even far from home —
   // the old flat-tangent version drifted ~d²/2R from the (curved-earth) tiles (~a lane at 5 km,
@@ -154,93 +154,93 @@ export function createEngine({ canvas, ui, emit }) {
   function worldToGeo(x, z) {
     return _enu.toGeo(x + C[0], C[1] - z);
   }
-  let DEST = null;        // { x, z, label }
-  let soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
-  let autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
-  let roadLifeOn = (() => { try { return localStorage.getItem('dahill.roadlife') !== '0'; } catch (e) { return true; } })();   // pedestrians + traffic on by default
-  let trafficDensity = (() => { try { const v = parseFloat(localStorage.getItem('dahill.trafficdensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();   // traffic amount slider (0..2, 1 = default)
+  ctx.DEST = null;        // { x, z, label }
+  ctx.soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
+  ctx.autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
+  ctx.roadLifeOn = (() => { try { return localStorage.getItem('dahill.roadlife') !== '0'; } catch (e) { return true; } })();   // pedestrians + traffic on by default
+  ctx.trafficDensity = (() => { try { const v = parseFloat(localStorage.getItem('dahill.trafficdensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();   // traffic amount slider (0..2, 1 = default)
   const TRAFFIC_MAX = 18;   // hard pool ceiling (perf); density scales how many are ACTIVE
-  const trafficActiveCount = () => Math.round(clamp(trafficDensity, 0, 2) / 2 * TRAFFIC_MAX);   // d:0→0, d:1→9, d:2→18
+  const trafficActiveCount = () => Math.round(clamp(ctx.trafficDensity, 0, 2) / 2 * TRAFFIC_MAX);   // d:0→0, d:1→9, d:2→18
   // Soft-wall / gravity-well that keeps the car on the street: past LANE_HALF metres off the
   // nearest road it gets pulled back, ramping in softly and clamped to WALL_MAX m/s so it never
   // overpowers a deliberate drive (and fades as the player steers).
   const LANE_HALF = 4.2, WALL_GAIN = 3.5, WALL_MAX = 9.0;
-  let offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
-  let recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
-  let ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
-  let routeIdx = 0;       // current target waypoint along ROUTE
+  ctx.offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
+  ctx.recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
+  ctx.ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
+  ctx.routeIdx = 0;       // current target waypoint along ROUTE
   // FAR-FROM-HOME road graph: the procedural roadSegs only cover the ~±330 m hood, so out on the open
   // photoreal tiles the lane-keep assist had nothing to hug. Instead of a fragile 1-D "route ahead",
   // fetch the REAL road NETWORK from OpenStreetMap (Overpass) in a box around the car, projected
   // through the same ENU geoToWorld as the tiles, and re-fetch as you drive into new areas. This is a
   // true graph (segments on every side), so nearestRoadPoint / roadTargetAhead / the soft-wall / reset
   // all work EVERYWHERE, exactly like they do at home. Degrades to no-assist if Overpass is unreachable.
-  let osmRoadSegs = [];          // world-space road segments fetched around the car ([[ax,az],[bx,bz]])
+  ctx.osmRoadSegs = [];          // world-space road segments fetched around the car ([[ax,az],[bx,bz]])
   let _osmCenter = null, _osmFetching = false, _osmT = 0;
   // Overpass mirrors, tried in order — the main de host throttles (429/504) under load, so fall
   // through to the public mirrors before giving up. Rotates start point so we don't always hammer #0.
   const OVERPASS_MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
   let _osmMirror = 0;
-  let autoDrive = false;
-  let _railRoute = null;   // the ROUTE the auto-drive rail's arc-length (car.railS) was acquired for; re-acquire when it changes
+  ctx.autoDrive = false;
+  ctx._railRoute = null;   // the ROUTE the auto-drive rail's arc-length (car.railS) was acquired for; re-acquire when it changes
 
   // ---- drive collectibles: gold coins scattered along the neighbourhood roads ----
-  const coins = [];
-  let coinsGot = 0;
+  ctx.coins = [];
+  ctx.coinsGot = 0;
   {
     const coinGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.16, 18); coinGeo.rotateX(Math.PI / 2);
     const coinMat = new THREE.MeshStandardMaterial({ color: 0xffcb2e, metalness: 0.85, roughness: 0.22, emissive: 0x6b4a00, emissiveIntensity: 0.5 });
-    const near = roadSegs.filter(s => Math.hypot(s[0][0], s[0][1]) < 250);
+    const near = ctx.roadSegs.filter(s => Math.hypot(s[0][0], s[0][1]) < 250);
     const step = Math.max(1, Math.floor(near.length / 18));
-    for (let i = 0; i < near.length && coins.length < 18; i += step) {
+    for (let i = 0; i < near.length && ctx.coins.length < 18; i += step) {
       const s = near[i], mx = (s[0][0] + s[1][0]) / 2, mz = (s[0][1] + s[1][1]) / 2;
       const m = new THREE.Mesh(coinGeo, coinMat); m.castShadow = true; m.frustumCulled = false; m.visible = false;
       m.position.set(mx, terrainAt(mx, mz) + 1.1, mz);
-      ctx.scene.add(m); coins.push({ mesh: m, x: mx, z: mz, got: false, groundY: null });
+      ctx.scene.add(m); ctx.coins.push({ mesh: m, x: mx, z: mz, got: false, groundY: null });
     }
   }
-  let coinGroundCursor = 0;
+  ctx.coinGroundCursor = 0;
 
   // ---- drive particles: skid decals + tyre smoke + coin sparks (all pooled) ----
-  const FX = { skids: [], smoke: [], sparks: [], si: 0, mi: 0, pi: 0 };
+  ctx.FX = { skids: [], smoke: [], sparks: [], si: 0, mi: 0, pi: 0 };
   {
     const skidGeo = new THREE.PlaneGeometry(0.42, 1.5); skidGeo.rotateX(-Math.PI / 2);  // lies flat on the ground
     for (let i = 0; i < 110; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: 0x16120f, transparent: true, opacity: 0, depthWrite: false });
       const m = new THREE.Mesh(skidGeo, mat); m.visible = false; m.frustumCulled = false; m.renderOrder = 2;
-      ctx.scene.add(m); FX.skids.push({ mesh: m, born: -1e9 });
+      ctx.scene.add(m); ctx.FX.skids.push({ mesh: m, born: -1e9 });
     }
     const smokeBase = new THREE.SpriteMaterial({ color: 0xc8c8c8, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     for (let i = 0; i < 34; i++) {
       const s = new THREE.Sprite(smokeBase.clone()); s.visible = false; s.frustumCulled = false;
-      ctx.scene.add(s); FX.smoke.push({ spr: s, born: -1e9, vx: 0, vz: 0 });
+      ctx.scene.add(s); ctx.FX.smoke.push({ spr: s, born: -1e9, vx: 0, vz: 0 });
     }
     const sparkBase = new THREE.SpriteMaterial({ color: 0xffd34d, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     for (let i = 0; i < 28; i++) {
       const s = new THREE.Sprite(sparkBase.clone()); s.visible = false; s.frustumCulled = false;
-      ctx.scene.add(s); FX.sparks.push({ spr: s, born: -1e9, vx: 0, vy: 0, vz: 0 });
+      ctx.scene.add(s); ctx.FX.sparks.push({ spr: s, born: -1e9, vx: 0, vy: 0, vz: 0 });
     }
   }
-  let lastSkidT = 0;
+  ctx.lastSkidT = 0;
   function spawnSkid(x, z, y, yaw, now) {
-    const s = FX.skids[FX.si++ % FX.skids.length];
+    const s = ctx.FX.skids[ctx.FX.si++ % ctx.FX.skids.length];
     s.born = now; s.mesh.visible = true;
     s.mesh.position.set(x, y + 0.035, z);
     s.mesh.rotation.set(0, yaw, 0);
     s.mesh.material.opacity = 0.5;
   }
   function spawnSmoke(x, z, y, now, onRoad) {
-    const p = FX.smoke[FX.mi++ % FX.smoke.length];
+    const p = ctx.FX.smoke[ctx.FX.mi++ % ctx.FX.smoke.length];
     p.born = now; p.spr.visible = true;
     p.spr.position.set(x, y + 0.3, z);
-    p.vx = (FX.mi % 7 - 3) * 0.25; p.vz = (FX.mi % 5 - 2) * 0.25;
+    p.vx = (ctx.FX.mi % 7 - 3) * 0.25; p.vz = (ctx.FX.mi % 5 - 2) * 0.25;
     p.spr.scale.setScalar(1.1);
     p.spr.material.color.setHex(onRoad === false ? 0xb89066 : 0xc8c8c8);   // brown dust off-road, grey tyre smoke on tarmac
     p.spr.material.opacity = 0.32;
   }
   function spawnCoinBurst(x, z, y, now) {
     for (let i = 0; i < 6; i++) {
-      const p = FX.sparks[FX.pi++ % FX.sparks.length];
+      const p = ctx.FX.sparks[ctx.FX.pi++ % ctx.FX.sparks.length];
       const a = i / 6 * Math.PI * 2;
       p.born = now; p.spr.visible = true;
       p.spr.position.set(x, y + 0.8, z);
@@ -250,13 +250,13 @@ export function createEngine({ canvas, ui, emit }) {
     }
   }
   function tickParticles(now, dt) {
-    for (const s of FX.skids) {
+    for (const s of ctx.FX.skids) {
       if (!s.mesh.visible) continue;
       const age = (now - s.born) / 1000;
       if (age > 6) { s.mesh.visible = false; continue; }
       s.mesh.material.opacity = 0.5 * (1 - age / 6);
     }
-    for (const p of FX.smoke) {
+    for (const p of ctx.FX.smoke) {
       if (!p.spr.visible) continue;
       const age = (now - p.born) / 1000;
       if (age > 0.85) { p.spr.visible = false; continue; }
@@ -265,7 +265,7 @@ export function createEngine({ canvas, ui, emit }) {
       p.spr.scale.setScalar(1.1 + age * 5);
       p.spr.material.opacity = 0.32 * (1 - age / 0.85);
     }
-    for (const p of FX.sparks) {
+    for (const p of ctx.FX.sparks) {
       if (!p.spr.visible) continue;
       const age = (now - p.born) / 1000;
       if (age > 0.6) { p.spr.visible = false; continue; }
@@ -275,56 +275,56 @@ export function createEngine({ canvas, ui, emit }) {
     }
   }
   function resetParticles() {
-    for (const s of FX.skids) s.mesh.visible = false;
-    for (const p of FX.smoke) p.spr.visible = false;
-    for (const p of FX.sparks) p.spr.visible = false;
+    for (const s of ctx.FX.skids) s.mesh.visible = false;
+    for (const p of ctx.FX.smoke) p.spr.visible = false;
+    for (const p of ctx.FX.sparks) p.spr.visible = false;
   }
 
   // ---- drive run: a coin-rally clock, a quick-chain combo, and a saved best time ----
-  let runStart = 0, runActive = false, lastRunMs = 0, comboExpired = true;
-  let combo = 0, comboExpire = 0;
+  ctx.runStart = 0, ctx.runActive = false, ctx.lastRunMs = 0, ctx.comboExpired = true;
+  ctx.combo = 0, ctx.comboExpire = 0;
   const BEST_KEY = 'dahill.drive.bestMs';
-  let bestMs = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem(BEST_KEY)) || '0', 10) || 0;
+  ctx.bestMs = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem(BEST_KEY)) || '0', 10) || 0;
   const fmtTime = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-  function startRun(now) { if (!runActive && coinsGot < coins.length) { runActive = true; runStart = now; } }
-  function emitScore(extra) { emit('driveScore', Object.assign({ got: coinsGot, total: coins.length, best: bestMs, bestStr: bestMs ? fmtTime(bestMs) : '', combo, trip: tripScore }, extra)); }
+  function startRun(now) { if (!ctx.runActive && ctx.coinsGot < ctx.coins.length) { ctx.runActive = true; ctx.runStart = now; } }
+  function emitScore(extra) { emit('driveScore', Object.assign({ got: ctx.coinsGot, total: ctx.coins.length, best: ctx.bestMs, bestStr: ctx.bestMs ? fmtTime(ctx.bestMs) : '', combo: ctx.combo, trip: ctx.tripScore }, extra)); }
   function collectCoin(now) {
-    if (ctx.audio.sfxChime) ctx.audio.sfxChime(combo >= 2 ? [784, 1047, 1319] : [784, 1047]);
+    if (ctx.audio.sfxChime) ctx.audio.sfxChime(ctx.combo >= 2 ? [784, 1047, 1319] : [784, 1047]);
     startRun(now);
-    combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1;   // chain within 4s to ramp it
-    comboExpire = now + 4000; comboExpired = false;
+    ctx.combo = (!ctx.comboExpired && now < ctx.comboExpire) ? ctx.combo + 1 : 1;   // chain within 4s to ramp it
+    ctx.comboExpire = now + 4000; ctx.comboExpired = false;
     comboFx(now);
     // First coin teaches the loop: tell the kid what the coins are FOR (a time trial).
-    if (coinsGot === 1 && coins.length > 1) ctx.toast('💛 First coin! Grab them all for a time trial 🏁', 1600);
+    if (ctx.coinsGot === 1 && ctx.coins.length > 1) ctx.toast('💛 First coin! Grab them all for a time trial 🏁', 1600);
     let finishMs = 0;
-    if (coinsGot >= coins.length) {                                // rally complete → stop clock, save best
-      runActive = false; lastRunMs = now - runStart; finishMs = lastRunMs;
-      if (!bestMs || lastRunMs < bestMs) { bestMs = lastRunMs; try { localStorage.setItem(BEST_KEY, String(bestMs)); } catch (e) { } }
+    if (ctx.coinsGot >= ctx.coins.length) {                                // rally complete → stop clock, save best
+      ctx.runActive = false; ctx.lastRunMs = now - ctx.runStart; finishMs = ctx.lastRunMs;
+      if (!ctx.bestMs || ctx.lastRunMs < ctx.bestMs) { ctx.bestMs = ctx.lastRunMs; try { localStorage.setItem(BEST_KEY, String(ctx.bestMs)); } catch (e) { } }
     }
     emitScore({ finishMs });
   }
   // combo crescendo: a chain that's BUILDING should look and sound like it (was silent
   // — x7 read the same as x2). Escalates at 3 and 5+.
-  let comboPeak = 0;
+  ctx.comboPeak = 0;
   function comboFx(now) {
-    if (combo <= comboPeak) { if (combo < 2) comboPeak = 0; return; }
-    comboPeak = combo;
-    if (combo === 3) { ctx.toast('🔥 Combo ×3!', 1100); if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(0.6); }
-    else if (combo === 5) { ctx.toast('🔥🔥 ON FIRE! ×5', 1500); if (ctx.audio.sfxChime) ctx.audio.sfxChime([784, 988, 1319, 1568]); if (ui.fx && !ctx.reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 420); } }
-    else if (combo >= 8 && combo % 3 === 2) { ctx.toast('🔥🔥🔥 UNSTOPPABLE! ×' + combo, 1500); }
+    if (ctx.combo <= ctx.comboPeak) { if (ctx.combo < 2) ctx.comboPeak = 0; return; }
+    ctx.comboPeak = ctx.combo;
+    if (ctx.combo === 3) { ctx.toast('🔥 Combo ×3!', 1100); if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(0.6); }
+    else if (ctx.combo === 5) { ctx.toast('🔥🔥 ON FIRE! ×5', 1500); if (ctx.audio.sfxChime) ctx.audio.sfxChime([784, 988, 1319, 1568]); if (ui.fx && !ctx.reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 420); } }
+    else if (ctx.combo >= 8 && ctx.combo % 3 === 2) { ctx.toast('🔥🔥🔥 UNSTOPPABLE! ×' + ctx.combo, 1500); }
   }
-  function resetRun() { runActive = false; runStart = 0; lastRunMs = 0; combo = 0; comboExpired = true; tripScore = 0; }   // tripScore resets per drive so combo/score chips start clean (was carrying over)
+  function resetRun() { ctx.runActive = false; ctx.runStart = 0; ctx.lastRunMs = 0; ctx.combo = 0; ctx.comboExpired = true; ctx.tripScore = 0; }   // tripScore resets per drive so combo/score chips start clean (was carrying over)
   // close-call reward: skim a tree/animal/car at speed without hitting it → ramp the
   // same combo, a whoosh, and a 'Close!' beat. Turns every hazard into a thrill.
-  let lastNearT = -1e9, driftState = false, driftAccum = 0;
+  ctx.lastNearT = -1e9, ctx.driftState = false, ctx.driftAccum = 0;
   function nearMiss(now) {
-    if (now - lastNearT < 650) return;
-    lastNearT = now;
-    combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1;
-    comboExpire = now + 4000; comboExpired = false;
-    tripScore += 40 + combo * 20; addBoost(0.13);
+    if (now - ctx.lastNearT < 650) return;
+    ctx.lastNearT = now;
+    ctx.combo = (!ctx.comboExpired && now < ctx.comboExpire) ? ctx.combo + 1 : 1;
+    ctx.comboExpire = now + 4000; ctx.comboExpired = false;
+    ctx.tripScore += 40 + ctx.combo * 20; addBoost(0.13);
     if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(0.8);
-    ctx.toast('💨 Close one!' + (combo > 1 ? ' ×' + combo : ''), 850);
+    ctx.toast('💨 Close one!' + (ctx.combo > 1 ? ' ×' + ctx.combo : ''), 850);
     comboFx(now);
     emitScore({});
   }
@@ -342,9 +342,9 @@ export function createEngine({ canvas, ui, emit }) {
      ['stanton', 37.7005734, -122.0940411, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
      ['dad', 37.8004778, -122.2739559, '💼', 'XQ', "💼 XQ — Mike's work!"]
     ].map(([key, lat, lon, icon, label, msg]) => { const w = geoToWorld(lat, lon); return { key, x: w[0], z: w[1], lat, lon, icon, label, msg }; }));
-  let tripScore = 0;
-  let boost = 0, boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
-  function addBoost(amt) { boost = clamp(boost + amt, 0, 1); }
+  ctx.tripScore = 0;
+  ctx.boost = 0, ctx.boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
+  function addBoost(amt) { ctx.boost = clamp(ctx.boost + amt, 0, 1); }
   function emitPOIs() { emit('poiProgress', { found: poiFound.size, total: POIS.length }); }
   // Route the player to the nearest place they HAVEN'T found yet — turns 5 one-shot
   // discoveries into a chained road trip ("now drive to the next place!").
@@ -352,9 +352,9 @@ export function createEngine({ canvas, ui, emit }) {
     let best = null, bd = 1e18;
     for (const p of POIS) { if (poiFound.has(p.key)) continue; const d = Math.hypot(p.x - ctx.car.x, p.z - ctx.car.z); if (d < 35) continue; if (d < bd) { bd = d; best = p; } }   // skip the one you're at
     if (!best) return;
-    autoDrive = false;
+    ctx.autoDrive = false;
     setDestination(best.lat, best.lon, best.label, true);
-    if (DEST) DEST.poiKey = best.key;   // tag so the chain only continues for places you chose
+    if (ctx.DEST) ctx.DEST.poiKey = best.key;   // tag so the chain only continues for places you chose
     ctx.toast('🏁 Next stop: floor it to ' + ctx.esc(best.label) + ' — follow the pink beam! 🏁', 2600);
   }
   function checkPOIs(now) {
@@ -367,9 +367,9 @@ export function createEngine({ canvas, ui, emit }) {
         try { localStorage.setItem(POI_KEY, JSON.stringify([...poiFound])); } catch (e) { }
         // fare score: a base + a speed bonus + the running combo (rewards a brisk trip)
         if (fresh && poi.key !== 'home') {
-          const pts = 250 + Math.round(Math.abs(ctx.car.speed) * 4) + combo * 50;
-          tripScore += pts;
-          combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1; comboExpire = now + 6000; comboExpired = false;
+          const pts = 250 + Math.round(Math.abs(ctx.car.speed) * 4) + ctx.combo * 50;
+          ctx.tripScore += pts;
+          ctx.combo = (!ctx.comboExpired && now < ctx.comboExpire) ? ctx.combo + 1 : 1; ctx.comboExpire = now + 6000; ctx.comboExpired = false;
           arriveCelebrate(poi.label, pts, now);   // the finish-line moment
         } else {
           ctx.toast(poi.msg + (fresh ? '  ·  🏆 ' + poiFound.size + '/' + POIS.length : ''), 2600);
@@ -378,8 +378,8 @@ export function createEngine({ canvas, ui, emit }) {
         emitScore({}); emitPOIs();
         if (poiFound.size === POIS.length && fresh) {
           checkFerrariUnlock();
-          ctx.toast('🏆 ALL 5 places found! Trip score ' + tripScore + ' 🎉', 3800);
-        } else if (fresh && DEST && poi.key === (DEST.poiKey || '') ) {
+          ctx.toast('🏆 ALL 5 places found! Trip score ' + ctx.tripScore + ' 🎉', 3800);
+        } else if (fresh && ctx.DEST && poi.key === (ctx.DEST.poiKey || '') ) {
           // only chain the road-trip if THIS was the place you were navigating to (you
           // opted in) — never force a new route line on a free-roam drive-by.
           chainToNextPOI(now);
@@ -423,7 +423,7 @@ export function createEngine({ canvas, ui, emit }) {
   const modelLoadCancels = [];
   const traffic = [];
   {
-    const tSegs = roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 700 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);   // wider radius so the bigger pool covers outer streets too
+    const tSegs = ctx.roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 700 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);   // wider radius so the bigger pool covers outer streets too
     const cols = [0xb53a32, 0x2f5fb0, 0xd9d9d9, 0x2a2a2a, 0xd6a52e, 0x3f9e63, 0x8a8f96];
     const bodyGeo = new THREE.BoxGeometry(1.9, 1.0, 4.0), cabGeo = new THREE.BoxGeometry(1.6, 0.72, 1.9);
     // shared materials: one cab + 7 body colours, reused across all cars (was 22 clones)
@@ -485,11 +485,11 @@ export function createEngine({ canvas, ui, emit }) {
     else { const tmp = c.a; c.a = c.b; c.b = tmp; }   // dead end → U-turn
     c.t = 0;
   }
-  let trafficTick = 0;
+  ctx.trafficTick = 0;
   function updateTraffic(dt, now) {
-    if (!roadLifeOn) { hideTraffic(); return; }
+    if (!ctx.roadLifeOn) { hideTraffic(); return; }
     const active = trafficActiveCount();
-    trafficTick++;
+    ctx.trafficTick++;
     for (let ci = 0; ci < traffic.length; ci++) {
       const c = traffic[ci];
       if (ci >= active) { if (c.group.visible) c.group.visible = false; continue; }   // parked by the density slider
@@ -519,7 +519,7 @@ export function createEngine({ canvas, ui, emit }) {
       // bumpy photogrammetry mesh near home while the player rides the smooth
       // terrain road, which made traffic visibly float/sink on a different surface.
       // Keep the staggered refresh so only a few traffic cars sample tiles per frame.
-      if (c.gy === undefined || (trafficTick + c.ti) % 4 === 0) c.gyT = actorGroundY(x, z, c.gy) + 0.05;
+      if (c.gy === undefined || (ctx.trafficTick + c.ti) % 4 === 0) c.gyT = actorGroundY(x, z, c.gy) + 0.05;
       c.gy = c.gy === undefined ? c.gyT : c.gy + (c.gyT - c.gy) * Math.min(1, dt * 6);
       c.group.position.set(x, c.gy, z);
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);
@@ -554,32 +554,32 @@ export function createEngine({ canvas, ui, emit }) {
 
   // the finish-line moment: a big gold burst, a fanfare, a beat of slow-mo + flash, and
   // an 'ARRIVED' card. Fires for reaching a real place (or any nav destination).
-  let arriveCenterT = 0;   // while now < this, the drive cams zero their look-ahead so the car frames dead-centre on arrival
+  ctx.arriveCenterT = 0;   // while now < this, the drive cams zero their look-ahead so the car frames dead-centre on arrival
   function arriveCelebrate(label, points, now) {
-    arriveCenterT = now + 2600;
+    ctx.arriveCenterT = now + 2600;
     const y = ctx.car.group ? ctx.car.group.position.y : 1;
     for (let k = 0; k < 4; k++) spawnCoinBurst(ctx.car.x + (k - 1.5) * 1.2, ctx.car.z, y, now);   // ~24 sparks
     if (ctx.audio.sfxChime) ctx.audio.sfxChime([523, 659, 784, 1047, 1319]);
     addBoost(0.5);                                     // arriving fills a big chunk of nitro for the next leg
     if (!ctx.reduceMotion) {
-      timeScale = 0.4; slowmoHold = 0.32;             // HELD slow-mo (then it eases back) — a real beat, not a blink
+      ctx.timeScale = 0.4; ctx.slowmoHold = 0.32;             // HELD slow-mo (then it eases back) — a real beat, not a blink
       if (ui.fx) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 850); }
     }
     // a second triumphant spark wave a beat later
     setTimeout(() => {
-      if (mode !== 'drive') return;
+      if (ctx.mode !== 'drive') return;
       const y2 = ctx.car.group ? ctx.car.group.position.y : 1;
       for (let k = 0; k < 3; k++) spawnCoinBurst(ctx.car.x + (k - 1) * 1.6, ctx.car.z, y2, performance.now());
       if (ctx.audio.sfxChime) ctx.audio.sfxChime([784, 1047, 1319, 1568]);
     }, 280);
-    emit('arrived', { label, points: points || 0, trip: tripScore });
+    emit('arrived', { label, points: points || 0, trip: ctx.tripScore });
   }
 
   // "Clean patch" under the car (Drive): a flat disc of the REAL aerial imagery
   // that follows the car and fades into the 3D photoreal, masking the melty
   // photogrammetry right around the actor. uvAt is affine, so the aerial UV is
   // computed from world position in-shader — the disc just moves, no UV rebuild.
-  let groundPatch = null;
+  ctx.groundPatch = null;
   {
     const A = S.aerial;
     const uS = 1 / (A.E1 - A.E0), uO = (C[0] - A.E0) / (A.E1 - A.E0);
@@ -602,9 +602,9 @@ export function createEngine({ canvas, ui, emit }) {
           c = (c - 0.5) * 1.12 + 0.5; c *= 0.9;        // nudge toward the darker, contrastier Google tiles
           gl_FragColor = vec4(c, a); }`
     });
-    groundPatch = new THREE.Mesh(geo, mat);
-    groundPatch.renderOrder = 3; groundPatch.visible = false; groundPatch.frustumCulled = false;
-    ctx.scene.add(groundPatch);
+    ctx.groundPatch = new THREE.Mesh(geo, mat);
+    ctx.groundPatch.renderOrder = 3; ctx.groundPatch.visible = false; ctx.groundPatch.frustumCulled = false;
+    ctx.scene.add(ctx.groundPatch);
   }
 
   // Parked cars live in their own group (NOT staticGroup) so they stay visible
@@ -639,10 +639,10 @@ export function createEngine({ canvas, ui, emit }) {
   // The interior loads lazily and is mounted FAR from the yard (~2 km). Scoop's tight fog
   // (near 38 / far 92) hides the distant yard so the indoor camera only ever frames the room —
   // no per-object yard hide needed. scoopScene forks updateScoop between 'yard' and 'interior'.
-  let scoopScene = 'yard', interior = null, doorT = 0, entryArmed = true, exitArmed = false;
-  let npcs = [], npcsLoadStarted = false;   // non-playable house NPCs (dad, mom) — walk out of rooms + dance, never playable
+  ctx.scoopScene = 'yard', ctx.interior = null, ctx.doorT = 0, ctx.entryArmed = true, ctx.exitArmed = false;
+  ctx.npcs = [], ctx.npcsLoadStarted = false;   // non-playable house NPCs (dad, mom) — walk out of rooms + dance, never playable
   const NPC_LOADERS = [loadDadController, loadMomController];
-  let _syncDance = false, _syncDanceUntil = 0, _syncDanceNext = 0;   // periodic in-house "everybody dance the SAME thing" moment
+  ctx._syncDance = false, ctx._syncDanceUntil = 0, ctx._syncDanceNext = 0;   // periodic in-house "everybody dance the SAME thing" moment
   const SYNC_DANCES = ['All_Night_Dance'];   // clip Dad + Mom both carry, so a pose() on all of them actually lines up
   const INT_CX = 0, INT_CZ = 3000, INT_FLOOR = 0;
   // Blue glowing pads: the front-yard "enter" pad and the indoor "exit" pad (drawn through walls).
@@ -698,7 +698,7 @@ export function createEngine({ canvas, ui, emit }) {
   // The scoop backyard: a disc of the REAL procedural ground — true topology
   // (terrainAt heights) + the aerial photo (uvAt on the shared terrain material),
   // not a flat green pad. The photoreal neighborhood streams beyond it.
-  let scoopGrass = null;
+  ctx.scoopGrass = null;
   {
     const R = SCOOP_CLEAR_R + 4, rings = 24, segs = 60, pos = [], uv = [], idx = [];
     const addV = (x, z) => { pos.push(x, terrainAt(x, z) + 0.05, z); const t = uvAt(x, z); uv.push(t[0], t[1]); };
@@ -745,14 +745,14 @@ export function createEngine({ canvas, ui, emit }) {
           'gl_FragColor.a *= 1.0 - smoothstep(uYR * 0.72, uYR * 0.98, distance(vWPy.xz, uYC));\n#include <dithering_fragment>');
     };
     yardMat.customProgramCacheKey = () => 'scoopYard';
-    scoopGrass = new THREE.Mesh(geo, yardMat);
-    scoopGrass.renderOrder = 2; scoopGrass.visible = false; scoopGrass.frustumCulled = false;
-    scoopGrass.receiveShadow = true;
-    ctx.scene.add(scoopGrass);
+    ctx.scoopGrass = new THREE.Mesh(geo, yardMat);
+    ctx.scoopGrass.renderOrder = 2; ctx.scoopGrass.visible = false; ctx.scoopGrass.frustumCulled = false;
+    ctx.scoopGrass.receiveShadow = true;
+    ctx.scene.add(ctx.scoopGrass);
   }
 
   // Wood fence ring marking the backyard property line (procedural, Scoop only).
-  let scoopFence = null;
+  ctx.scoopFence = null;
   {
     const parts = [], woodC = new THREE.Color(0x8a6f49), railC = new THREE.Color(0x9c8259);
     const Rf = SCOOP_CLEAR_R, Np = 60;
@@ -770,9 +770,9 @@ export function createEngine({ canvas, ui, emit }) {
         parts.push({ g: rail, color: railC });
       }
     }
-    scoopFence = new THREE.Mesh(merge(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .85 }));
-    scoopFence.castShadow = true; scoopFence.visible = false; scoopFence.frustumCulled = false;
-    ctx.scene.add(scoopFence);
+    ctx.scoopFence = new THREE.Mesh(merge(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .85 }));
+    ctx.scoopFence.castShadow = true; ctx.scoopFence.visible = false; ctx.scoopFence.frustumCulled = false;
+    ctx.scene.add(ctx.scoopFence);
   }
   // Building collision for Scoop. The sanctuary structures (barn/shed/coop) and
   // the house are all rendered procedurally in Scoop now, so Drew should bump
@@ -799,8 +799,8 @@ export function createEngine({ canvas, ui, emit }) {
   // stays the collision + fallback (offline / no key / load failure). Geo:
   // anchor the tileset to the house centroid's lat/lon (origin of the local
   // frame). LAT0/LON0 = the geocode origin; C is the house centroid (orig E/N).
-  let p3dtiles = null;
-  let _tilesUpdT = 0;   // throttle the (expensive, full-tree) tiles LOD traversal to ~18 Hz
+  ctx.p3dtiles = null;
+  ctx._tilesUpdT = 0;   // throttle the (expensive, full-tree) tiles LOD traversal to ~18 Hz
   const DEG = Math.PI / 180;
   // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
   // yOffset lifts the photoreal ground to the procedural terrain height; xOffset/
@@ -808,8 +808,8 @@ export function createEngine({ canvas, ui, emit }) {
   // it matches the procedural frame (spawns + collision). Spin pivots on origin.
   const P3DT = { yOffset: 32, xOffset: 0, zOffset: 0, spin: 0 };
   const applyP3DT = () => {
-    if (!p3dtiles || !p3dtiles.holder) return;
-    const h = p3dtiles.holder;
+    if (!ctx.p3dtiles || !ctx.p3dtiles.holder) return;
+    const h = ctx.p3dtiles.holder;
     h.rotation.y = P3DT.spin * DEG;
     h.position.set(P3DT.xOffset, P3DT.yOffset, P3DT.zOffset);
   };
@@ -821,13 +821,13 @@ export function createEngine({ canvas, ui, emit }) {
   const _downRay = new THREE.Raycaster(); _downRay.firstHitOnly = true;
   const _gO = new THREE.Vector3(), _gD = new THREE.Vector3(0, -1, 0), _gHits = [];
   function rawTileY(x, z, fromY) {
-    if (!p3dtiles || !p3dtiles.holder.visible) return null;
+    if (!ctx.p3dtiles || !ctx.p3dtiles.holder.visible) return null;
     // Cast from `fromY` (default high). Casting from just above an actor skips
     // tree canopies / eaves overhead, so we read the ROAD under them, not the
     // canopy — that's what keeps the car from climbing trees.
     const oy = fromY != null ? fromY : 600;
     _downRay.set(_gO.set(x, oy, z), _gD); _downRay.far = oy + 700; _gHits.length = 0;
-    p3dtiles.raycast(_downRay, _gHits);
+    ctx.p3dtiles.raycast(_downRay, _gHits);
     return _gHits.length ? _gHits[0].point.y : null;
   }
   function groundAt(x, z, fallback, fromY) {
@@ -843,7 +843,7 @@ export function createEngine({ canvas, ui, emit }) {
   // road surface, not a layer the 3D rises over) while never climbing trees.
   function actorGroundY(x, z, prevY) {
     const tA = terrainAt(x, z);
-    if (!p3dtiles || !p3dtiles.holder.visible) return tA;
+    if (!ctx.p3dtiles || !ctx.p3dtiles.holder.visible) return tA;
     // Inside the procedural neighborhood (±330 m) the FLAT heightfield is ground
     // truth — ride it DIRECTLY. That's the whole point of the game: keep the
     // photoreal tiles fully VISIBLE for the high-res look, but drive on smooth,
@@ -875,9 +875,9 @@ export function createEngine({ canvas, ui, emit }) {
   // (radius 14 m, away from the house roof), take the median tile height, and
   // set yOffset so it meets terrainAt(0,0). Clamped + single-shot so it can't
   // run away accumulating.
-  let alignDone = false;
+  ctx.alignDone = false;
   function alignP3DT() {
-    if (alignDone || !p3dtiles || !p3dtiles.holder) return false;
+    if (ctx.alignDone || !ctx.p3dtiles || !ctx.p3dtiles.holder) return false;
     const ys = [];
     for (let i = 0; i < 12; i++) {
       const a = i / 12 * Math.PI * 2;
@@ -890,7 +890,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (Math.abs(adjust) > 18) return false;  // garbage (rays hit roofs/voids/coarse tiles) — retry
     P3DT.yOffset = clamp(P3DT.yOffset + adjust, 8, 56);
     applyP3DT();
-    alignDone = true;
+    ctx.alignDone = true;
     return true;
   }
   // ---- tile prefetch ----------------------------------------------------------
@@ -900,30 +900,30 @@ export function createEngine({ canvas, ui, emit }) {
   // you're driving somewhere far — so free-roam near home pays nothing. Low resolution means
   // it warms only cheap COARSE tiles, filling the LRU cache without blowing the mobile budget.
   const scoutCam = new THREE.PerspectiveCamera(60, 1.5, 1, 4000);
-  let scoutOn = false, _scoutT = 0, _scoutPhase = 0;
+  ctx.scoutOn = false, ctx._scoutT = 0, ctx._scoutPhase = 0;
   function pointAlongRoute(dist) {
-    if (!ROUTE || ROUTE.length < 2) return null;
+    if (!ctx.ROUTE || ctx.ROUTE.length < 2) return null;
     let px = ctx.car.x, pz = ctx.car.z, acc = 0;
-    for (let i = Math.max(0, routeIdx); i < ROUTE.length; i++) {
-      const dx = ROUTE[i].x - px, dz = ROUTE[i].z - pz, seg = Math.hypot(dx, dz) || 1e-3;
+    for (let i = Math.max(0, ctx.routeIdx); i < ctx.ROUTE.length; i++) {
+      const dx = ctx.ROUTE[i].x - px, dz = ctx.ROUTE[i].z - pz, seg = Math.hypot(dx, dz) || 1e-3;
       if (acc + seg >= dist) { const t = (dist - acc) / seg; return { x: px + dx * t, z: pz + dz * t }; }
-      acc += seg; px = ROUTE[i].x; pz = ROUTE[i].z;
+      acc += seg; px = ctx.ROUTE[i].x; pz = ctx.ROUTE[i].z;
     }
     return { x: px, z: pz };
   }
   function setScout(on) {
-    if (on === scoutOn || !p3dtiles) return;
-    scoutOn = on;
-    if (on) { p3dtiles.setCamera(scoutCam); p3dtiles.setResolution(scoutCam, 360, 240); }
-    else if (p3dtiles.deleteCamera) p3dtiles.deleteCamera(scoutCam);
+    if (on === ctx.scoutOn || !ctx.p3dtiles) return;
+    ctx.scoutOn = on;
+    if (on) { ctx.p3dtiles.setCamera(scoutCam); ctx.p3dtiles.setResolution(scoutCam, 360, 240); }
+    else if (ctx.p3dtiles.deleteCamera) ctx.p3dtiles.deleteCamera(scoutCam);
   }
   function updateTilePrefetch(now) {
-    if (!p3dtiles || mode !== 'drive' || !p3dtiles.holder.visible || !DEST || !ROUTE || ROUTE.length < 2) { setScout(false); return; }
-    if (now - _scoutT < 220) return;                       // ~4.5 Hz
-    _scoutT = now;
+    if (!ctx.p3dtiles || ctx.mode !== 'drive' || !ctx.p3dtiles.holder.visible || !ctx.DEST || !ctx.ROUTE || ctx.ROUTE.length < 2) { setScout(false); return; }
+    if (now - ctx._scoutT < 220) return;                       // ~4.5 Hz
+    ctx._scoutT = now;
     setScout(true);
-    _scoutPhase = (_scoutPhase + 1) % 6;                   // sweep the aim through the corridor ahead…
-    const p = pointAlongRoute(90 + _scoutPhase * 135);     // …≈90–765 m along the route (reach matches the faster rail cruise)
+    ctx._scoutPhase = (ctx._scoutPhase + 1) % 6;                   // sweep the aim through the corridor ahead…
+    const p = pointAlongRoute(90 + ctx._scoutPhase * 135);     // …≈90–765 m along the route (reach matches the faster rail cruise)
     if (!p) { setScout(false); return; }
     const gy = ctx.car.groundY != null ? ctx.car.groundY : 0;
     scoutCam.up.set(0, 0, -1);
@@ -935,7 +935,7 @@ export function createEngine({ canvas, ui, emit }) {
   // built (procedural) world at ground level (Drive/Scoop). The groundAt + camera
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
   // and never climb the bumpy photogrammetry mesh.
-  let tilesReady = false;
+  ctx.tilesReady = false;
   // Photoreal Google tiles are the AERIAL + Drive backdrop only. Scoop plays in
   // the clean procedural world (the real house, the pig barn / iguana shed / duck
   // coop, the compost bin, trees, and the aerial-photo terrain) — Google
@@ -944,22 +944,22 @@ export function createEngine({ canvas, ui, emit }) {
   // the house) and pristine tiles in Explore/Drive.
   const photoModes = mode => mode === 'explore' || mode === 'drive';
   function applyModeVisuals() {
-    const photoOn = photoModes(mode) && p3dtiles && tilesReady;
-    if (p3dtiles) p3dtiles.holder.visible = photoModes(mode);
-    if (p3dtiles && p3dtiles.clipPlanes && mode !== 'drive') p3dtiles.clipPlanes.length = 0;   // R8 cutaway is Drive-only; never slice the Explore high-orbit / Scoop
-    ctx.staticGroup.visible = mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
-    carsGroup.visible = mode === 'drive' || mode === 'scoop';   // parked cars: ground modes only
-    if (ctx.ring) ctx.ring.visible = mode === 'explore';   // marker only makes sense from the air
+    const photoOn = photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
+    if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = photoModes(ctx.mode);
+    if (ctx.p3dtiles && ctx.p3dtiles.clipPlanes && ctx.mode !== 'drive') ctx.p3dtiles.clipPlanes.length = 0;   // R8 cutaway is Drive-only; never slice the Explore high-orbit / Scoop
+    ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
+    carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
+    if (ctx.ring) ctx.ring.visible = ctx.mode === 'explore';   // marker only makes sense from the air
     // SHADOWS only in Scoop: in Drive/Explore the procedural receivers are hidden and the
     // Google tiles are MeshBasicMaterial (can't receive), so a full extra depth pass each
     // frame would render onto nothing. Gate the whole shadow pass off there.
-    ctx.sun.castShadow = (mode === 'scoop') && !ctx.LITE;
-    ctx.vehicleFill.visible = mode === 'drive';
+    ctx.sun.castShadow = (ctx.mode === 'scoop') && !ctx.LITE;
+    ctx.vehicleFill.visible = ctx.mode === 'drive';
     ctx.renderer.shadowMap.enabled = ctx.sun.castShadow;
     if (ctx.sun.castShadow) ctx.renderer.shadowMap.needsUpdate = true;
   }
   function delayedTileFallbackToast(msg) {
-    setTimeout(() => { if (!disposed && photoModes(mode) && !tilesReady) ctx.toast(msg, 2600); }, 6100);
+    setTimeout(() => { if (!ctx.disposed && photoModes(ctx.mode) && !ctx.tilesReady) ctx.toast(msg, 2600); }, 6100);
   }
   if (!ctx.flags.has('flat')) {
     if (!import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map key missing — showing the built world');
@@ -967,18 +967,18 @@ export function createEngine({ canvas, ui, emit }) {
     const houseLat = (LAT0 + C[1] / 110540) * DEG;
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
-      if (disposed) return;
-      p3dtiles = createPhotorealTiles(ctx.scene, ctx.camera, ctx.renderer, {
+      if (ctx.disposed) return;
+      ctx.p3dtiles = createPhotorealTiles(ctx.scene, ctx.camera, ctx.renderer, {
         // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
         // is the dominant iOS memory cost, and Drive can now roam far and stream more.
         lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: ctx.MOBILE ? 16 : 10, mobile: ctx.MOBILE
       });
-      if (!p3dtiles) { if (import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); return; }
-      if (disposed) { if (p3dtiles.disposeAll) p3dtiles.disposeAll(); p3dtiles = null; return; }
+      if (!ctx.p3dtiles) { if (import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); return; }
+      if (ctx.disposed) { if (ctx.p3dtiles.disposeAll) ctx.p3dtiles.disposeAll(); ctx.p3dtiles = null; return; }
       applyP3DT();
       let tries = 0;
-      p3dtiles.addEventListener('load-model', () => {
-        if (!tilesReady) { tilesReady = true; emit('photoreal', true); }
+      ctx.p3dtiles.addEventListener('load-model', () => {
+        if (!ctx.tilesReady) { ctx.tilesReady = true; emit('photoreal', true); }
         // Vertically align the photoreal ground to the procedural terrain as the
         // street tiles stream (Explore/Drive only — Scoop never shows tiles).
         if (tries < 24) { tries++; alignP3DT(); }
@@ -987,10 +987,10 @@ export function createEngine({ canvas, ui, emit }) {
       // surface auth/quota/referrer failures instead of silently falling back to
       // the procedural world (a baked, referrer-blocked or over-quota key 403s here).
       let warnedErr = false;
-      p3dtiles.addEventListener('load-error', e => {
+      ctx.p3dtiles.addEventListener('load-error', e => {
         if (warnedErr) return; warnedErr = true;
         console.warn('[tiles3d] tile load error (check VITE_GOOGLE_MAPS_KEY restrictions/quota)', e && e.error);
-        if (!tilesReady) ctx.toast('Photoreal map unavailable — showing the built world', 2600);
+        if (!ctx.tilesReady) ctx.toast('Photoreal map unavailable — showing the built world', 2600);
       });
     }).catch(e => { console.warn('[tiles3d] import failed; staying procedural', e); delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); });
   }
@@ -1029,8 +1029,8 @@ export function createEngine({ canvas, ui, emit }) {
 
   ctx.audio = createAudio();
 
-  let scoopHudDirty = false;
-  const animals = createAnimals(ctx.scene, { terrainAt, SREC, bldBoxes: ctx.bldBoxes, onPoopChange: () => { scoopHudDirty = true; } });
+  ctx.scoopHudDirty = false;
+  const animals = createAnimals(ctx.scene, { terrainAt, SREC, bldBoxes: ctx.bldBoxes, onPoopChange: () => { ctx.scoopHudDirty = true; } });
   const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
   ctx.CHAR = createCharacter(ctx.scene, SREC);
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
@@ -1038,10 +1038,10 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- CROWD: dancing CeCe + Drew characters. Yard dancers liven up Scoop; street
   // dancers + clusters at every preset destination liven up Drive. Visibility is mode- and
   // distance-gated so only a handful animate at once (skinned meshes aren't cheap).
-  let ceceCrowd = null, drewCrowd = null, dadCrowd = null, momCrowd = null;
+  ctx.ceceCrowd = null, ctx.drewCrowd = null, ctx.dadCrowd = null, ctx.momCrowd = null;
   // Pick a street/scatter pedestrian: mostly the CeCe/Drew kids, with the occasional grown-up Dad/Mom
   // mixed in (taller, distinct models). Falls back to the kids if the adult rigs haven't loaded.
-  const pickPed = (i) => { const r = Math.random(); if (dadCrowd && r < 0.09) return dadCrowd; if (momCrowd && r < 0.18) return momCrowd; return (i & 1) ? ceceCrowd : drewCrowd; };
+  const pickPed = (i) => { const r = Math.random(); if (ctx.dadCrowd && r < 0.09) return ctx.dadCrowd; if (ctx.momCrowd && r < 0.18) return ctx.momCrowd; return (i & 1) ? ctx.ceceCrowd : ctx.drewCrowd; };
   const crowdSpots = [];   // { rec, zone }
   // Pedestrian density (settings slider): scales the spread-out pool size. 1 = default.
   let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
@@ -1072,8 +1072,8 @@ export function createEngine({ canvas, ui, emit }) {
       return [x, z];
     };
     // YARD (Scoop): a few CeCes + Drews dancing around the front yard (clear of the walls)
-    for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + 0.5, r = 6 + i * 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * r, hz + Math.sin(a) * r); put(ceceCrowd, px, pz, 'yard', false); }
-    for (let i = 0; i < 2; i++) { const a = i * 2.3 + 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * 8.5, hz + Math.sin(a) * 8.5); put(drewCrowd, px, pz, 'yard', false, { clip: 'dance' }); }
+    for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + 0.5, r = 6 + i * 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * r, hz + Math.sin(a) * r); put(ctx.ceceCrowd, px, pz, 'yard', false); }
+    for (let i = 0; i < 2; i++) { const a = i * 2.3 + 1.6; const [px, pz] = clearYard(hx + Math.cos(a) * 8.5, hz + Math.sin(a) * 8.5); put(ctx.drewCrowd, px, pz, 'yard', false, { clip: 'dance' }); }
     // STREETS (Drive): walk EVERY drivable road segment and drop pedestrians along its whole
     // length, on randomized sidewalk offsets and either side — so they line the sidewalks
     // across the WHOLE neighbourhood, not just near home. Denser slider → smaller spacing.
@@ -1088,9 +1088,9 @@ export function createEngine({ canvas, ui, emit }) {
       // the cap there. ~70% of the pool lines sidewalks; the rest scatters on open ground.
       const sidewalkTarget = Math.round(POOL * 0.7);
       let totalCurb = 0;
-      for (const s of roadSegs) { const L = Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]); if (L >= 6) totalCurb += L; }
+      for (const s of ctx.roadSegs) { const L = Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]); if (L >= 6) totalCurb += L; }
       const step = totalCurb > 0 ? Math.max(12, totalCurb / Math.max(1, sidewalkTarget)) : 1e9;
-      for (const s of roadSegs) {
+      for (const s of ctx.roadSegs) {
         if (placed >= sidewalkTarget) break;
         const ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
         const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
@@ -1125,10 +1125,10 @@ export function createEngine({ canvas, ui, emit }) {
       for (let i = 0; i < count; i++) {
         const a = pi * 0.7 + i / count * Math.PI * 2 + 0.35;
         const r = p.key === 'home' ? 5.5 + i * 1.4 : 1.3 + (i % 2) * 2.9;
-        const crowd = (i + pi) % 2 ? ceceCrowd : drewCrowd;
+        const crowd = (i + pi) % 2 ? ctx.ceceCrowd : ctx.drewCrowd;
         put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, {
           yaw: a + Math.PI,
-          clip: crowd === drewCrowd ? (i % 2 ? 'dance' : 'cheer') : undefined
+          clip: crowd === ctx.drewCrowd ? (i % 2 ? 'dance' : 'cheer') : undefined
         });
       }
     });
@@ -1145,16 +1145,16 @@ export function createEngine({ canvas, ui, emit }) {
         put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, { yaw: a + Math.PI, clip });
       }
     };
-    scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary (cn hoisted above, counted against the cap)
-    scatterCluster(drewCrowd, POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
-    scatterCluster(dadCrowd, D > 0 ? POIS.find(q => q.key === 'dad') : null, Math.min(8, cn), 'Bass_Beats');   // a few Mikes hanging around XQ (Dad's work)
+    scatterCluster(ctx.ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary (cn hoisted above, counted against the cap)
+    scatterCluster(ctx.drewCrowd, POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
+    scatterCluster(ctx.dadCrowd, D > 0 ? POIS.find(q => q.key === 'dad') : null, Math.min(8, cn), 'Bass_Beats');   // a few Mikes hanging around XQ (Dad's work)
     // MEEMAW: a CeCe + Drew pair dancing together right out front of the house.
     const meemaw = D > 0 ? POIS.find(q => q.key === 'meemaw') : null;
     if (meemaw) {
       const a = Math.PI / 2, r = 7;   // out the front, side by side, facing back toward the house
       const fx = meemaw.x + Math.cos(a) * r, fz = meemaw.z + Math.sin(a) * r;
-      put(ceceCrowd, fx - 1.2, fz, 'meemaw', true, { yaw: a + Math.PI, clip: 'All_Night_Dance' });
-      put(drewCrowd, fx + 1.2, fz, 'meemaw', true, { yaw: a + Math.PI, clip: 'dance' });
+      put(ctx.ceceCrowd, fx - 1.2, fz, 'meemaw', true, { yaw: a + Math.PI, clip: 'All_Night_Dance' });
+      put(ctx.drewCrowd, fx + 1.2, fz, 'meemaw', true, { yaw: a + Math.PI, clip: 'dance' });
     }
     placeInteriorDancers();   // the decorative Drew + CeCe inside the house (survives a density re-pool)
   }
@@ -1163,8 +1163,8 @@ export function createEngine({ canvas, ui, emit }) {
   function clearCrowd() {
     for (const sp of crowdSpots) { if (sp.rec.grp.parent) sp.rec.grp.parent.remove(sp.rec.grp); sp.rec.mixer.stopAllAction(); }
     crowdSpots.length = 0;
-    if (ceceCrowd) ceceCrowd.removeAll(); if (drewCrowd) drewCrowd.removeAll();
-    if (dadCrowd) dadCrowd.removeAll(); if (momCrowd) momCrowd.removeAll();
+    if (ctx.ceceCrowd) ctx.ceceCrowd.removeAll(); if (ctx.drewCrowd) ctx.drewCrowd.removeAll();
+    if (ctx.dadCrowd) ctx.dadCrowd.removeAll(); if (ctx.momCrowd) ctx.momCrowd.removeAll();
   }
   function setCrowdDensity(v) {
     CROWD_DENSITY = clamp(+v || 0, 0, 2);
@@ -1173,24 +1173,24 @@ export function createEngine({ canvas, ui, emit }) {
     // re-clones the whole pedestrian pool (skinned-mesh clones) — doing that per step stalls the
     // main thread. Re-pool once, ~220 ms after the drag settles.
     clearTimeout(_crowdReplaceT);
-    _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
+    _crowdReplaceT = setTimeout(() => { if (!ctx.disposed && ctx.ceceCrowd && ctx.drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
     return CROWD_DENSITY;
   }
   let _crowdN = 0, _crowdPlaced = false, _placedNoAdults = false;
-  const _doPlace = () => { if (disposed || _crowdPlaced || !(ceceCrowd && drewCrowd)) return; _crowdPlaced = true; _placedNoAdults = !(dadCrowd && momCrowd); placeCrowd(); geocodePOIs(); };
+  const _doPlace = () => { if (ctx.disposed || _crowdPlaced || !(ctx.ceceCrowd && ctx.drewCrowd)) return; _crowdPlaced = true; _placedNoAdults = !(ctx.dadCrowd && ctx.momCrowd); placeCrowd(); geocodePOIs(); };
   const _onCrowd = () => {
-    if (disposed) return;
+    if (ctx.disposed) return;
     _crowdN++;
     if (!_crowdPlaced) { if (_crowdN >= 4) _doPlace(); return; }   // wait for all four rigs so Dad/Mom are mixed in from the FIRST placement (no slider needed)
     // If the 9 s fallback placed a kids-only crowd before the adult rigs loaded, re-pool ONCE (debounced,
     // same path as the density slider) when both Dad + Mom finally arrive so they aren't absent all session.
-    if (_placedNoAdults && dadCrowd && momCrowd) { _placedNoAdults = false; clearTimeout(_crowdReplaceT); _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220); }
+    if (_placedNoAdults && ctx.dadCrowd && ctx.momCrowd) { _placedNoAdults = false; clearTimeout(_crowdReplaceT); _crowdReplaceT = setTimeout(() => { if (!ctx.disposed && ctx.ceceCrowd && ctx.drewCrowd) { clearCrowd(); placeCrowd(); } }, 220); }
   };
   if (!ctx.flags.has('nochar')) {
-    loadCeceCrowd(c => { if (!disposed) ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
-    loadDrewCrowd(c => { if (!disposed) drewCrowd = c; _onCrowd(); }, () => _onCrowd());
-    loadDadCrowd(c => { if (!disposed) dadCrowd = c; _onCrowd(); }, () => _onCrowd());
-    loadMomCrowd(c => { if (!disposed) momCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadCeceCrowd(c => { if (!ctx.disposed) ctx.ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadDrewCrowd(c => { if (!ctx.disposed) ctx.drewCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadDadCrowd(c => { if (!ctx.disposed) ctx.dadCrowd = c; _onCrowd(); }, () => _onCrowd());
+    loadMomCrowd(c => { if (!ctx.disposed) ctx.momCrowd = c; _onCrowd(); }, () => _onCrowd());
     setTimeout(() => _doPlace(), 9000);   // …but don't let a slow Dad/Mom rig hold the whole crowd hostage
   } else geocodePOIs();
   let _crowdHitT = 0;
@@ -1217,7 +1217,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ground if no road is handy. No raycast here — settleCrowdSpot snaps the height when it turns visible.
   function relocateStreetSpot(sp) {
     const fromHome = Math.hypot(ctx.car.x, ctx.car.z);
-    const segs = (fromHome < 340 && roadSegs.length) ? roadSegs : (osmRoadSegs.length ? osmRoadSegs : roadSegs);
+    const segs = (fromHome < 340 && ctx.roadSegs.length) ? ctx.roadSegs : (ctx.osmRoadSegs.length ? ctx.osmRoadSegs : ctx.roadSegs);
     let nx = null, nz = null;
     if (segs && segs.length) {
       for (let tr = 0; tr < 8; tr++) {
@@ -1242,13 +1242,13 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function updateCrowd(dt, now) {
     if (!crowdSpots.length) return;
-    const inDrive = mode === 'drive', inScoop = mode === 'scoop';
-    const wantInt = inScoop && scoopScene === 'interior';
-    if (!roadLifeOn) {
+    const inDrive = ctx.mode === 'drive', inScoop = ctx.mode === 'scoop';
+    const wantInt = inScoop && ctx.scoopScene === 'interior';
+    if (!ctx.roadLifeOn) {
       // "People + traffic" OFF hides street/yard pedestrians — but the in-house companion is gameplay,
       // not road life, so keep showing + ticking it.
       for (const sp of crowdSpots) sp.rec.grp.visible = wantInt && sp.zone === 'interior' && sp.char !== ctx.CHAR.avatar;
-      if (wantInt) { if (ceceCrowd) ceceCrowd.tick(dt, now); if (drewCrowd) drewCrowd.tick(dt, now); if (dadCrowd) dadCrowd.tick(dt, now); if (momCrowd) momCrowd.tick(dt, now); }
+      if (wantInt) { if (ctx.ceceCrowd) ctx.ceceCrowd.tick(dt, now); if (ctx.drewCrowd) ctx.drewCrowd.tick(dt, now); if (ctx.dadCrowd) ctx.dadCrowd.tick(dt, now); if (ctx.momCrowd) ctx.momCrowd.tick(dt, now); }
       return;
     }
     if (inScoop) {
@@ -1285,22 +1285,22 @@ export function createEngine({ canvas, ui, emit }) {
     // COMEDY: plough into a pedestrian and they cartwheel off the road (then pop back up).
     if (inDrive && Math.abs(ctx.car.speed) > 6 && now - _crowdHitT > 250) {
       const dir = Math.sign(ctx.car.speed) || 1, vx = Math.sin(ctx.car.yaw) * dir, vz = Math.cos(ctx.car.yaw) * dir, sp = Math.abs(ctx.car.speed);
-      const hit = (ceceCrowd && ceceCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (drewCrowd && drewCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (dadCrowd && dadCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (momCrowd && momCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp));
+      const hit = (ctx.ceceCrowd && ctx.ceceCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (ctx.drewCrowd && ctx.drewCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (ctx.dadCrowd && ctx.dadCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (ctx.momCrowd && ctx.momCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp));
       if (hit) { _crowdHitT = now; if (ctx.audio.sfxThunk) ctx.audio.sfxThunk(0.5); ctx.toast('🎳 WHEEE!', 700); if (navigator.vibrate) { try { navigator.vibrate(22); } catch (e) { } } }
     }
-    if (ceceCrowd) ceceCrowd.tick(dt, now);   // tick() advances visible mixers + any in-flight launch
-    if (drewCrowd) drewCrowd.tick(dt, now);
-    if (dadCrowd) dadCrowd.tick(dt, now);
-    if (momCrowd) momCrowd.tick(dt, now);
+    if (ctx.ceceCrowd) ctx.ceceCrowd.tick(dt, now);   // tick() advances visible mixers + any in-flight launch
+    if (ctx.drewCrowd) ctx.drewCrowd.tick(dt, now);
+    if (ctx.dadCrowd) ctx.dadCrowd.tick(dt, now);
+    if (ctx.momCrowd) ctx.momCrowd.tick(dt, now);
   }
 
-  let disposed = false;
+  ctx.disposed = false;
   ctx.car = createCar(ctx.scene);
   function clearRouteRail() {
     ctx.car.railS = null;
     ctx.car.railSpeed = null;
     ctx.car.railEndT = 0;
-    _railRoute = null;
+    ctx._railRoute = null;
   }
   ctx.car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
   let cancelCarLoad = null;
@@ -1327,12 +1327,12 @@ export function createEngine({ canvas, ui, emit }) {
   const vehLoading = new Set();
   let ferrariLoadStarted = false;
   function ensureVehicle(slot) {
-    if (ctx.flags.has('nocar') || disposed) return;
+    if (ctx.flags.has('nocar') || ctx.disposed) return;
     if (slot === 2) {   // Ferrari — Draco, lazy on first need (its own fallback toast)
       if (ferrariLoadStarted) return;
       ferrariLoadStarted = true;
       installDracoDecoder();
-      cancelCarLoad = loadRealCar(ctx.car, carGlbUrl, () => { if (!disposed) ctx.toast('Using fallback car model'); });
+      cancelCarLoad = loadRealCar(ctx.car, carGlbUrl, () => { if (!ctx.disposed) ctx.toast('Using fallback car model'); });
       return;
     }
     if (ctx.car.models[slot] || vehLoading.has(slot)) return;   // already loaded / in flight
@@ -1352,7 +1352,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.car.defaultSlot = startable[(Math.random() * startable.length) | 0];
     ctx.car.heldForDefault = true;
     // fallback: if the random default is slow/fails, after ~2.8 s show whatever HAS loaded
-    setTimeout(() => { if (!disposed && ctx.car.heldForDefault) { ctx.car.heldForDefault = false; const f = ctx.car.models.findIndex(Boolean); if (f >= 0) setVehicle(ctx.car, f); else ensureVehicle(0); } }, 2800);
+    setTimeout(() => { if (!ctx.disposed && ctx.car.heldForDefault) { ctx.car.heldForDefault = false; const f = ctx.car.models.findIndex(Boolean); if (f >= 0) setVehicle(ctx.car, f); else ensureVehicle(0); } }, 2800);
     ensureVehicle(ctx.car.defaultSlot);
   }
   // Two black Toyotas parked in the driveway (part of the clean ground world;
@@ -1383,7 +1383,7 @@ export function createEngine({ canvas, ui, emit }) {
     park(rav4Url, 1, 4.6, false, false);  // RAV4 nose runs +Z → carYaw already faces it; black baked in (keeps taillights)
     park(siennaUrl, -1, 5.1, false, false);   // GLB nose runs -Z; black baked in (keeps taillights)
   }
-  let showT = 0;
+  ctx.showT = 0;
 
   function showCarCard() {
     const v = ctx.car.models[ctx.car.modelIdx];
@@ -1396,18 +1396,18 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.audio.blip();
   }
   // The Ferrari (slot 2) is the reward for finding all 5 neighbourhood places.
-  let ferrariUnlocked = (() => { try { return localStorage.getItem('dahill.drive.ferrari') === '1'; } catch (e) { return false; } })();
+  ctx.ferrariUnlocked = (() => { try { return localStorage.getItem('dahill.drive.ferrari') === '1'; } catch (e) { return false; } })();
   function checkFerrariUnlock() {
-    if (ferrariUnlocked || poiFound.size < POIS.length) return;
-    ferrariUnlocked = true;
+    if (ctx.ferrariUnlocked || poiFound.size < POIS.length) return;
+    ctx.ferrariUnlocked = true;
     try { localStorage.setItem('dahill.drive.ferrari', '1'); } catch (e) { }
     ctx.toast('🏎️ You earned the Ferrari 458! Tap 🚗 to drive it', 4000);
     if (ctx.audio.sfxChime) ctx.audio.sfxChime([523, 659, 784, 1047]);
     emit('cars', getCars());
   }
-  function getCars() { return vehicleList(ctx.car).map(v => v.slot === 2 ? Object.assign({}, v, { locked: !ferrariUnlocked }) : v); }
+  function getCars() { return vehicleList(ctx.car).map(v => v.slot === 2 ? Object.assign({}, v, { locked: !ctx.ferrariUnlocked }) : v); }
   function pickCar(slot) {
-    if (slot === 2 && !ferrariUnlocked) { ctx.toast('🔒 Find all 5 neighbourhood places to unlock the Ferrari!', 2400); return; }
+    if (slot === 2 && !ctx.ferrariUnlocked) { ctx.toast('🔒 Find all 5 neighbourhood places to unlock the Ferrari!', 2400); return; }
     ensureVehicle(slot);                              // lazy: fetch its GLB now if it isn't loaded yet
     if (setVehicle(ctx.car, slot)) { showCarCard(); ctx.audio.blip(); }
     else { ctx.car.pendingPick = slot; ctx.toast('Loading ' + (VEHICLES[slot] ? ctx.esc(VEHICLES[slot].name) : 'car') + '…', 1500); }   // it swaps in (registerVehicle) the moment it arrives
@@ -1433,30 +1433,30 @@ export function createEngine({ canvas, ui, emit }) {
 
   if (!ctx.flags.has('nointerior')) {
     modelLoadCancels.push(createInterior(ctx.scene, { cx: INT_CX, cz: INT_CZ, floorY: INT_FLOOR },
-      mod => { interior = mod; interior.group.visible = scoopScene === 'interior'; placeInteriorDancers(); emit('house', { inside: scoopScene === 'interior', ready: true }); },
+      mod => { ctx.interior = mod; ctx.interior.group.visible = ctx.scoopScene === 'interior'; placeInteriorDancers(); emit('house', { inside: ctx.scoopScene === 'interior', ready: true }); },
       () => { /* fail-soft: the door pad just stays inert */ }));
   }
 
   // Show/hide the interior. The yard is NOT hidden object-by-object — it's 2 km away and fogged
   // out — so this only flips the scene flag, the interior group, and yard-only pins.
   function setInside(on) {
-    scoopScene = on ? 'interior' : 'yard';
-    if (interior) interior.group.visible = on;
-    if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (nearCar) { nearCar = false; emit('nearCar', false); } }
-    else { exitMarker.visible = false; exitRing.visible = false; for (const npc of npcs) npc.group.visible = false; }
-    emit('house', { inside: on, ready: !!interior });
+    ctx.scoopScene = on ? 'interior' : 'yard';
+    if (ctx.interior) ctx.interior.group.visible = on;
+    if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (ctx.nearCar) { ctx.nearCar = false; emit('nearCar', false); } }
+    else { exitMarker.visible = false; exitRing.visible = false; for (const npc of ctx.npcs) npc.group.visible = false; }
+    emit('house', { inside: on, ready: !!ctx.interior });
   }
   function enterHouse(now) {
-    if (!interior) return;
+    if (!ctx.interior) return;
     setInside(true);
-    const sp = interior.spawn;
-    ctx.CHAR.x = sp.x; ctx.CHAR.z = sp.z; ctx.CHAR.yaw = sp.yaw; camYawS = sp.yaw;
-    ctx.CHAR.airY = 0; ctx.CHAR.vy = 0; camInit = false; szoom = 1; scPitch = 0.2; camGroundRef = null;   // reset tilt so indoor entry framing is consistent (not pinned to the ceiling)
-    doorT = now + 1200; exitArmed = false;
+    const sp = ctx.interior.spawn;
+    ctx.CHAR.x = sp.x; ctx.CHAR.z = sp.z; ctx.CHAR.yaw = sp.yaw; ctx.camYawS = sp.yaw;
+    ctx.CHAR.airY = 0; ctx.CHAR.vy = 0; ctx.camInit = false; ctx.szoom = 1; ctx.scPitch = 0.2; ctx.camGroundRef = null;   // reset tilt so indoor entry framing is consistent (not pinned to the ceiling)
+    ctx.doorT = now + 1200; ctx.exitArmed = false;
     // House NPCs (dad, mom): lazy-load on first entry, then have each walk out of a room and dance.
-    if (!npcsLoadStarted) {
-      npcsLoadStarted = true;
-      for (const load of NPC_LOADERS) load(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; ctx.scene.add(g); npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, state: 'act', act: 'idle', actUntil: 0 }); resetNpcs(); }, () => {});
+    if (!ctx.npcsLoadStarted) {
+      ctx.npcsLoadStarted = true;
+      for (const load of NPC_LOADERS) load(ctrl => { if (ctx.disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; ctx.scene.add(g); ctx.npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, state: 'act', act: 'idle', actUntil: 0 }); resetNpcs(); }, () => {});
     } else resetNpcs();
     if (ctx.audio.blip) ctx.audio.blip();
     ctx.toast('🏠 Inside the house! Open the ☰ menu (top-right) for characters &amp; actions · tap "Leave house 🚪" to head back out', 3600);
@@ -1468,7 +1468,7 @@ export function createEngine({ canvas, ui, emit }) {
   // down on a couch. State per NPC: 'travel' | 'act'.
   const NPC_RAD = 0.34, NPC_SPD = 1.35;
   function playerRoomIndex() {
-    const rs = interior.rooms;
+    const rs = ctx.interior.rooms;
     if (!rs || !rs.length) return 0;
     for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (ctx.CHAR.x >= r.minX && ctx.CHAR.x <= r.maxX && ctx.CHAR.z >= r.minZ && ctx.CHAR.z <= r.maxZ) return i; }
     let best = 0, bd = Infinity; rs.forEach((r, i) => { const d = (r.x - ctx.CHAR.x) ** 2 + (r.z - ctx.CHAR.z) ** 2; if (d < bd) { bd = d; best = i; } }); return best;
@@ -1477,8 +1477,8 @@ export function createEngine({ canvas, ui, emit }) {
   // a straight line into a wall and jamming. The rooms + doorways are static, so the connectivity graph
   // is built once and cached on `interior`. Each doorway connects the two rooms whose AABBs it sits on.
   function roomGraph() {
-    if (interior._navGraph) return interior._navGraph;
-    const rooms = interior.rooms || [], dws = interior.doorways || [];
+    if (ctx.interior._navGraph) return ctx.interior._navGraph;
+    const rooms = ctx.interior.rooms || [], dws = ctx.interior.doorways || [];
     const adj = rooms.map(() => []);
     // Connect rooms whose floor AABBs ABUT (share a wall) — NOT by door-mesh containment, which left
     // most rooms isolated (the scan's door_* meshes are sparse + several openings have no door mesh).
@@ -1497,10 +1497,10 @@ export function createEngine({ canvas, ui, emit }) {
       for (const d of dws) { const dd = (d.x - bx) ** 2 + (d.z - bz) ** 2; if (dd < bd) { bd = dd; door = d; } }
       adj[i].push({ to: j, door }); adj[j].push({ to: i, door });
     }
-    return (interior._navGraph = adj);
+    return (ctx.interior._navGraph = adj);
   }
   function roomIndexAt(x, z) {
-    const rooms = interior.rooms || [];
+    const rooms = ctx.interior.rooms || [];
     // Prefer the CONTAINING room whose centroid is nearest — room AABBs can overlap in the scan, so the
     // first container isn't necessarily the right one. Fall back to the nearest centroid if none contains it.
     let best = -1, bd = Infinity, hit = false;
@@ -1543,7 +1543,7 @@ export function createEngine({ canvas, ui, emit }) {
       const s = npc.wantSeat; npc.x = s.x; npc.z = s.z; npc.baseY = s.y; npc.yaw = s.yaw; npc.seat = s;
       npc.act = 'sit'; npc.ctrl.pose(npc.ctrl.sitClip); npc.actUntil = now + 8000 + Math.random() * 9000; npc.wantSeat = null; return;
     }
-    npc.wantSeat = null; npc.baseY = interior.floorY;
+    npc.wantSeat = null; npc.baseY = ctx.interior.floorY;
     const roll = Math.random();
     if (roll < 0.45 && npc.ctrl.dances.length) { npc.act = 'dance'; npc.nextMove = 0; triggerMove(npc, now); }
     else if (roll < 0.78 && (npc.ctrl.emotes.length || npc.ctrl.dances.length)) { npc.act = 'emote'; npc.nextMove = 0; triggerMove(npc, now); }
@@ -1552,33 +1552,33 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function pickNextRoom(npc, now) {
     if (npc.ctrl.reset) npc.ctrl.reset();   // stand up from a sit / end any dance cleanly before walking
-    npc.seat = null; npc.baseY = interior.floorY;
-    const rs = interior.rooms;
+    npc.seat = null; npc.baseY = ctx.interior.floorY;
+    const rs = ctx.interior.rooms;
     if (!rs || !rs.length) { npc.state = 'act'; npc.act = 'idle'; npc.actUntil = now + 4000; return; }   // no rooms (GLB w/o floors) — just idle
     const room = (Math.random() < 0.55 ? rs[playerRoomIndex()] : rs[(Math.random() * rs.length) | 0]) || rs[0];
     let wantSeat = null;   // sometimes go sit on a free couch
-    if (npc.ctrl.sitClip && interior.seats && interior.seats.length && Math.random() < 0.4) {
-      const taken = new Set(npcs.map(n => n.seat).filter(Boolean));
-      let bs = Infinity; for (const s of interior.seats) { if (taken.has(s)) continue; const d = (s.x - room.x) ** 2 + (s.z - room.z) ** 2; if (d < bs) { bs = d; wantSeat = s; } }
+    if (npc.ctrl.sitClip && ctx.interior.seats && ctx.interior.seats.length && Math.random() < 0.4) {
+      const taken = new Set(ctx.npcs.map(n => n.seat).filter(Boolean));
+      let bs = Infinity; for (const s of ctx.interior.seats) { if (taken.has(s)) continue; const d = (s.x - room.x) ** 2 + (s.z - room.z) ** 2; if (d < bs) { bs = d; wantSeat = s; } }
     }
     npc.wantSeat = wantSeat;
     let tx, tz;
-    if (wantSeat) { const ap = interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75, NPC_RAD, true); tx = ap.x; tz = ap.z; }
-    else { const p = interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2), NPC_RAD, true); tx = p.x; tz = p.z; }
+    if (wantSeat) { const ap = ctx.interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75, NPC_RAD, true); tx = ap.x; tz = ap.z; }
+    else { const p = ctx.interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2), NPC_RAD, true); tx = p.x; tz = p.z; }
     startTravel(npc, tx, tz);
   }
   // Each NPC starts in a distinct far room and heads for the main room, then wanders.
   function resetNpcs() {
-    if (!interior || !interior.rooms || !interior.rooms.length || !npcs.length) return;
-    _syncDance = false; _syncDanceNext = 0;   // re-arm the dance-party timer fresh on entry, so it doesn't fire instantly every time you step back inside
-    const main = interior.spawn, now = performance.now();
-    npcs.forEach((npc, i) => {
+    if (!ctx.interior || !ctx.interior.rooms || !ctx.interior.rooms.length || !ctx.npcs.length) return;
+    ctx._syncDance = false; ctx._syncDanceNext = 0;   // re-arm the dance-party timer fresh on entry, so it doesn't fire instantly every time you step back inside
+    const main = ctx.interior.spawn, now = performance.now();
+    ctx.npcs.forEach((npc, i) => {
       if (npc.ctrl.reset) npc.ctrl.reset();
       // START clustered around the MAIN room (where the player enters) so they're together near you, not
       // scattered into far bedrooms they then get stuck pathing out of. They idle a beat, then wander off.
-      const a = i / Math.max(1, npcs.length) * Math.PI * 2 + 0.4;
-      const from = interior.clearAt(main.x + Math.cos(a) * 1.5, main.z + Math.sin(a) * 1.5, NPC_RAD, true);
-      npc.x = from.x; npc.z = from.z; npc.yaw = Math.atan2(main.x - from.x, main.z - from.z); npc.seat = null; npc.wantSeat = null; npc.baseY = interior.floorY;
+      const a = i / Math.max(1, ctx.npcs.length) * Math.PI * 2 + 0.4;
+      const from = ctx.interior.clearAt(main.x + Math.cos(a) * 1.5, main.z + Math.sin(a) * 1.5, NPC_RAD, true);
+      npc.x = from.x; npc.z = from.z; npc.yaw = Math.atan2(main.x - from.x, main.z - from.z); npc.seat = null; npc.wantSeat = null; npc.baseY = ctx.interior.floorY;
       npc.state = 'act'; npc.act = 'idle'; npc.actUntil = now + 2200 + Math.random() * 3500; npc.ctrl.locomotion(0);
       npc.group.visible = true; npc.group.position.set(npc.x, npc.baseY, npc.z);
     });
@@ -1586,32 +1586,32 @@ export function createEngine({ canvas, ui, emit }) {
   function updateNpcs(dt, now) {
     // SYNCHRONIZED DANCE PARTY: every ~30-55 s the whole house stops what it's doing and dances the
     // SAME clip together (pose() loops it, started on the same frame for all, so they stay in lockstep).
-    if (!_syncDanceNext) _syncDanceNext = now + 20000 + Math.random() * 16000;
-    if (_syncDance && now > _syncDanceUntil) { _syncDance = false; _syncDanceNext = now + 30000 + Math.random() * 25000; for (const npc of npcs) pickNextRoom(npc, now); }
-    else if (!_syncDance && now > _syncDanceNext && npcs.length > 1 && interior) {
-      _syncDance = true; _syncDanceUntil = now + 11000 + Math.random() * 6000;
+    if (!ctx._syncDanceNext) ctx._syncDanceNext = now + 20000 + Math.random() * 16000;
+    if (ctx._syncDance && now > ctx._syncDanceUntil) { ctx._syncDance = false; ctx._syncDanceNext = now + 30000 + Math.random() * 25000; for (const npc of ctx.npcs) pickNextRoom(npc, now); }
+    else if (!ctx._syncDance && now > ctx._syncDanceNext && ctx.npcs.length > 1 && ctx.interior) {
+      ctx._syncDance = true; ctx._syncDanceUntil = now + 11000 + Math.random() * 6000;
       const clip = SYNC_DANCES[(Math.random() * SYNC_DANCES.length) | 0];
-      for (const npc of npcs) {
-        npc.state = 'act'; npc.act = 'dance'; npc.seat = null; npc.wantSeat = null; npc.baseY = interior.floorY;
-        npc.yaw = Math.atan2(interior.spawn.x - npc.x, interior.spawn.z - npc.z);   // turn in toward the middle → a little dance circle
+      for (const npc of ctx.npcs) {
+        npc.state = 'act'; npc.act = 'dance'; npc.seat = null; npc.wantSeat = null; npc.baseY = ctx.interior.floorY;
+        npc.yaw = Math.atan2(ctx.interior.spawn.x - npc.x, ctx.interior.spawn.z - npc.z);   // turn in toward the middle → a little dance circle
         if (npc.ctrl.pose) npc.ctrl.pose(clip);
       }
     }
-    for (const npc of npcs) {
+    for (const npc of ctx.npcs) {
       npc.group.visible = true;
       // GREET: when the player walks up, turn to face them and throw a quick move (not mid-party).
-      if (!_syncDance && npc.state === 'act' && now > (npc.greetT || 0)) {
+      if (!ctx._syncDance && npc.state === 'act' && now > (npc.greetT || 0)) {
         const dpx = ctx.CHAR.x - npc.x, dpz = ctx.CHAR.z - npc.z;
         if (dpx * dpx + dpz * dpz < 2.7 * 2.7) {
           npc.greetT = now + 6500;
-          if (npc.seat) { if (npc.ctrl.reset) npc.ctrl.reset(); npc.seat = null; npc.baseY = interior.floorY; }   // get up off the couch first, else she'd "stand" floating at seat height + hog the seat
+          if (npc.seat) { if (npc.ctrl.reset) npc.ctrl.reset(); npc.seat = null; npc.baseY = ctx.interior.floorY; }   // get up off the couch first, else she'd "stand" floating at seat height + hog the seat
           npc.yaw = Math.atan2(dpx, dpz);                                          // look at the player
           const pool = (npc.ctrl.emotes && npc.ctrl.emotes.length) ? npc.ctrl.emotes : npc.ctrl.dances;
           if (pool && pool.length && npc.ctrl.react) { npc.ctrl.react(pool[(Math.random() * pool.length) | 0]); npc.act = 'emote'; npc.nextMove = now + 2600; npc.actUntil = Math.max(npc.actUntil || 0, now + 2600); }
         }
       }
       let speed = 0;
-      if (_syncDance) { npc.group.position.set(npc.x, npc.baseY, npc.z); npc.group.rotation.y = npc.yaw - Math.PI / 2; npc.ctrl.tick(dt); continue; }   // partying: hold position, the pose() loops
+      if (ctx._syncDance) { npc.group.position.set(npc.x, npc.baseY, npc.z); npc.group.rotation.y = npc.yaw - Math.PI / 2; npc.ctrl.tick(dt); continue; }   // partying: hold position, the pose() loops
       if (npc.state === 'travel') {
         const gx = npc.target[0], gz = npc.target[1], finalD = Math.hypot(gx - npc.x, gz - npc.z);
         if (finalD < 0.5) enterActivity(npc, now);
@@ -1623,18 +1623,18 @@ export function createEngine({ canvas, ui, emit }) {
           const cur = roomIndexAt(npc.x, npc.z), goalRoom = roomIndexAt(gx, gz);
           if (cur !== goalRoom) {
             let door = routeDoor(cur, goalRoom);
-            if (!door) { let bd = Infinity; for (const dw of (interior.doorways || [])) { const dd = (dw.x - npc.x) ** 2 + (dw.z - npc.z) ** 2; if (dd < bd) { bd = dd; door = dw; } } }   // graph said nothing → at least aim at the NEAREST opening, never a wall
+            if (!door) { let bd = Infinity; for (const dw of (ctx.interior.doorways || [])) { const dd = (dw.x - npc.x) ** 2 + (dw.z - npc.z) ** 2; if (dd < bd) { bd = dd; door = dw; } } }   // graph said nothing → at least aim at the NEAREST opening, never a wall
             if (door && Math.hypot(door.x - npc.x, door.z - npc.z) > 0.3) { const px = gx - door.x, pz = gz - door.z, pl = Math.hypot(px, pz) || 1; tx = door.x + px / pl * 0.4; tz = door.z + pz / pl * 0.4; }   // aim ~0.4 m PAST the door toward the goal so the heading carries straight THROUGH the opening, not into the jamb
           }
           const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = NPC_SPD * dt;
-          const r = interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD, true);
+          const r = ctx.interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD, true);
           const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
           npc.x = r.x; npc.z = r.z; npc.yaw = Math.atan2(ux, uz); speed = moved / Math.max(dt, 1e-3);
           // "stuck" = collision is eating the step (a wall-jam) — judged by ACTUAL displacement, NOT
           // progress toward the final target, so routing to a side doorway waypoint can't false-trigger.
           if (moved < want * 0.35) { npc.stuckT += dt; if (npc.stuckT > 1.5) enterActivity(npc, now); } else npc.stuckT = 0;
         }
-        npc.baseY = interior.floorY; npc.ctrl.locomotion(speed);
+        npc.baseY = ctx.interior.floorY; npc.ctrl.locomotion(speed);
       } else {   // 'act' — staying put; sit holds, dance/emote cycle, idle just loops
         if (now > npc.actUntil) pickNextRoom(npc, now);
         else if ((npc.act === 'dance' || npc.act === 'emote') && now > (npc.nextMove || 0)) triggerMove(npc, now);
@@ -1647,24 +1647,24 @@ export function createEngine({ canvas, ui, emit }) {
   function leaveHouse(now) {
     setInside(false);
     if (entryPt) { ctx.CHAR.x = entryPt[0] + entryU[0] * 1.6; ctx.CHAR.z = entryPt[1] + entryU[1] * 1.6; ctx.CHAR.yaw = Math.atan2(entryU[0], entryU[1]); }
-    camYawS = ctx.CHAR.yaw; ctx.CHAR.airY = 0; ctx.CHAR.vy = 0; camInit = false; szoom = 1; camGroundRef = null;
-    doorT = now + 1200; entryArmed = false;
+    ctx.camYawS = ctx.CHAR.yaw; ctx.CHAR.airY = 0; ctx.CHAR.vy = 0; ctx.camInit = false; ctx.szoom = 1; ctx.camGroundRef = null;
+    ctx.doorT = now + 1200; ctx.entryArmed = false;
     if (ctx.audio.blip) ctx.audio.blip();
   }
   // A Drew + a CeCe hanging out inside (the original "a drew and cece inside") — decorative crowd
   // dancers, distinct from the playable avatar, gated to the interior scene. Re-added after a
   // pedestrian-density re-pool (placeCrowd calls this) so the slider doesn't wipe them.
   function placeInteriorDancers() {
-    if (!interior || !ceceCrowd || !drewCrowd) return;
+    if (!ctx.interior || !ctx.ceceCrowd || !ctx.drewCrowd) return;
     if (crowdSpots.some(s => s.zone === 'interior')) return;
-    const sp = interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)];
-    const c = interior.clearAt(sp.x + fwd[0] * 2.6, sp.z + fwd[1] * 2.6);   // open floor, not embedded in a sofa/table
+    const sp = ctx.interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)];
+    const c = ctx.interior.clearAt(sp.x + fwd[0] * 2.6, sp.z + fwd[1] * 2.6);   // open floor, not embedded in a sofa/table
     // Both stand at the same (cleared) spot; updateCrowd shows only the ONE you're not currently playing.
     const add = (crowd, charName, h, clip) => {
-      crowdSpots.push({ rec: crowd.add(ctx.scene, { x: c.x, y: interior.floorY, z: c.z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
+      crowdSpots.push({ rec: crowd.add(ctx.scene, { x: c.x, y: ctx.interior.floorY, z: c.z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
     };
-    add(drewCrowd, 'drew', DREW_HEIGHT_M, 'dance');
-    add(ceceCrowd, 'cece', CECE_HEIGHT_M);
+    add(ctx.drewCrowd, 'drew', DREW_HEIGHT_M, 'dance');
+    add(ctx.ceceCrowd, 'cece', CECE_HEIGHT_M);
   }
 
   // ---------- controls (explore) ----------
@@ -1681,9 +1681,9 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.camera.lookAt(ctl.tx, ctl.ty, ctl.tz);
   }
 
-  let mode = 'explore';
+  ctx.mode = 'explore';
   const setMode = m => {
-    mode = m;
+    ctx.mode = m;
     // Scoop plays at ground level where the photoreal horizon turns to melt; pull
     // the fog in close (haze color = background) so the distant photogrammetry
     // dissolves softly instead of reading as a melty wall — the play area within
@@ -1696,20 +1696,20 @@ export function createEngine({ canvas, ui, emit }) {
   };
   const ptrs = new Map(); let lastPinch = 0, lastMid = null, moved = 0;
   const lookPtrs = new Map();
-  const camOrbit = { yaw: 0, pitch: 0, t: 0 };
-  let _orbitUserSet = false;   // has the user dragged to set the orbit angle? (until then, autodrive/follow runs cinematic "race day" camera sweeps)
-  let _viewYaw = 0;            // smoothed heading the MAP views (overhead/aerial) + minimap orient to — car-heading normally, compass in follow. Eased so turns don't shimmer.
-  let _cineAmt = 0;            // 0..1 amount of the cinematic "race day" sweep currently applied (eased out once the user takes the camera)
-  let movePtr = null, joyBX = 0, joyBY = 0, pinchD = 0, czoom = 1, szoom = 1;
+  ctx.camOrbit = { yaw: 0, pitch: 0, t: 0 };
+  ctx._orbitUserSet = false;   // has the user dragged to set the orbit angle? (until then, autodrive/follow runs cinematic "race day" camera sweeps)
+  ctx._viewYaw = 0;            // smoothed heading the MAP views (overhead/aerial) + minimap orient to — car-heading normally, compass in follow. Eased so turns don't shimmer.
+  ctx._cineAmt = 0;            // 0..1 amount of the cinematic "race day" sweep currently applied (eased out once the user takes the camera)
+  ctx.movePtr = null, ctx.joyBX = 0, ctx.joyBY = 0, ctx.pinchD = 0, ctx.czoom = 1, ctx.szoom = 1;
   // Roblox-style controls: shared look/zoom feel across drive+scoop, a steering
   // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
   const LOOK_YAW_PER_SCREEN = 2.8, LOOK_PITCH_PER_SCREEN = 2.4, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.10;   // screen-normalized free-look
   const JOY_R = 66, JOY_MAX = 52;
-  const inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
-  let camYawS = 0, scPitch = 0.34, bagWarned = false, spotless = false, nearCar = false;
-  let scoopMoveYaw = 0, scoopMoveActive = false;
+  ctx.inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
+  ctx.camYawS = 0, ctx.scPitch = 0.34, ctx.bagWarned = false, ctx.spotless = false, ctx.nearCar = false;
+  ctx.scoopMoveYaw = 0, ctx.scoopMoveActive = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
   // path with one finger. (Joystick/keyboard still drive the other camera views.)
@@ -1717,21 +1717,21 @@ export function createEngine({ canvas, ui, emit }) {
   const _navRay = new THREE.Raycaster(), _navNDC = new THREE.Vector2();
   const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
   // drag-to-drive ("trace") is available in the overhead-style views (Top-down AND Aerial)
-  const driveTopDown = () => mode === 'drive' && DRIVE_CAMS[camMode] && DRIVE_CAMS[camMode].dragdrive;
+  const driveTopDown = () => ctx.mode === 'drive' && DRIVE_CAMS[ctx.camMode] && DRIVE_CAMS[ctx.camMode].dragdrive;
   // Overhead/Aerial zoom-out slider support: czoom is the altitude/orbit multiplier. Map it log-wise to
   // a 0..1 slider and push the value to the UI whenever it changes (pinch, wheel, view switch, slider).
   const driveZoomRange = () => (driveTopDown() ? [0.14, 7] : [0.4, 3.4]);
-  function emitDriveZoom() { const [lo, hi] = driveZoomRange(); emit('driveZoom', { norm: clamp(Math.log(clamp(czoom, lo, hi) / lo) / Math.log(hi / lo), 0, 1), overhead: driveTopDown() }); }
-  function setDriveZoom(norm) { const [lo, hi] = driveZoomRange(); czoom = lo * Math.pow(hi / lo, clamp(norm, 0, 1)); emitDriveZoom(); }
+  function emitDriveZoom() { const [lo, hi] = driveZoomRange(); emit('driveZoom', { norm: clamp(Math.log(clamp(ctx.czoom, lo, hi) / lo) / Math.log(hi / lo), 0, 1), overhead: driveTopDown() }); }
+  function setDriveZoom(norm) { const [lo, hi] = driveZoomRange(); ctx.czoom = lo * Math.pow(hi / lo, clamp(norm, 0, 1)); emitDriveZoom(); }
   function setNavFromPointer(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
     _navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     _navRay.setFromCamera(_navNDC, ctx.camera);
     _navPlane.constant = -(ctx.car && ctx.car.groundY != null ? ctx.car.groundY : 0);   // ground plane at the car's height
-    if (_navRay.ray.intersectPlane(_navPlane, _navHit)) { inp2.navX = _navHit.x; inp2.navZ = _navHit.z; inp2.navActive = true; }
+    if (_navRay.ray.intersectPlane(_navPlane, _navHit)) { ctx.inp2.navX = _navHit.x; ctx.inp2.navZ = _navHit.z; ctx.inp2.navActive = true; }
   }
-  let lastLookT = -1e9;   // last manual look-drag time (ms); suppresses scoop follow-cam briefly
-  let shiftLock = false, azVel = 0, poVel = 0;
+  ctx.lastLookT = -1e9;   // last manual look-drag time (ms); suppresses scoop follow-cam briefly
+  ctx.shiftLock = false, ctx.azVel = 0, ctx.poVel = 0;
 
   function lookDelta(dx, dy) {
     const w = Math.max(320, canvas.clientWidth || innerWidth || 800);
@@ -1744,44 +1744,44 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function hideJoy() {
-    movePtr = null; inp2.jx = 0; inp2.jy = 0;
-    if (mode === 'scoop') scoopMoveActive = false;
+    ctx.movePtr = null; ctx.inp2.jx = 0; ctx.inp2.jy = 0;
+    if (ctx.mode === 'scoop') ctx.scoopMoveActive = false;
     if (ui.joy) ui.joy.style.display = 'none';
   }
 
   function clearLiveInput() {
     navPtr = null; lookPtrs.clear(); ptrs.clear();
-    lastPinch = 0; lastMid = null; pinchD = 0; moved = 0;
-    inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
-    inp2.steer = inp2.gas = inp2.brake = 0;
-    inp2.hbrake = false; inp2.boost = false; inp2.navActive = false;
-    scoopMoveActive = false;
+    lastPinch = 0; lastMid = null; ctx.pinchD = 0; moved = 0;
+    ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0;
+    ctx.inp2.steer = ctx.inp2.gas = ctx.inp2.brake = 0;
+    ctx.inp2.hbrake = false; ctx.inp2.boost = false; ctx.inp2.navActive = false;
+    ctx.scoopMoveActive = false;
     if (ui.joy) ui.joy.style.display = 'none';
     canvas.classList.remove('dragging');
   }
 
   function onPointerDown(e) {
-    if (mode !== 'explore') {
+    if (ctx.mode !== 'explore') {
       canvas.setPointerCapture(e.pointerId);
       // Overhead views: ONE finger draws-to-drive; a SECOND finger is a pinch-zoom (the
       // phone-native way to zoom the map the user asked for) which suspends steering until
       // you lift back to one finger.
-      if (followMode || (autoDrive && driveTopDown())) {
+      if (ctx.followMode || (ctx.autoDrive && driveTopDown())) {
         // FOLLOWING, or AUTO-DRIVING in an overhead/aerial view: the whole screen ORBITS/pinches the camera
         // (one finger = look, two = pinch) so you can rotate the "race day" view freely — a drag must NOT
         // draw-to-drive or grab the joystick (which would cancel follow). Re-target via the minimap/search.
         lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (mode === 'drive') camOrbit.t = performance.now();
-        if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+        if (ctx.mode === 'drive') ctx.camOrbit.t = performance.now();
+        if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
         return;
       }
       if (driveTopDown()) {
         if (navPtr === null && lookPtrs.size === 0) {
-          navPtr = e.pointerId; navDownX = navCurX = e.clientX; navDownY = navCurY = e.clientY; navMoved = false; showT = 0; setNavFromPointer(e.clientX, e.clientY);
+          navPtr = e.pointerId; navDownX = navCurX = e.clientX; navDownY = navCurY = e.clientY; navMoved = false; ctx.showT = 0; setNavFromPointer(e.clientX, e.clientY);
         } else {
-          if (navPtr !== null) { lookPtrs.set(navPtr, { x: navCurX, y: navCurY }); navPtr = null; inp2.navActive = false; }   // 2nd finger → stop driving, pinch instead
+          if (navPtr !== null) { lookPtrs.set(navPtr, { x: navCurX, y: navCurY }); navPtr = null; ctx.inp2.navActive = false; }   // 2nd finger → stop driving, pinch instead
           lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+          if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
         }
         return;
       }
@@ -1794,10 +1794,10 @@ export function createEngine({ canvas, ui, emit }) {
       // top strip from the move zone so a drag that begins up near the HUD reads as
       // a look, and so the thumbstick never spawns under the top bar.
       const steerZoneW = ctx.MOBILE ? 0.5 : 0.44;          // left half = move (slightly narrower with a mouse)
-      const steerZoneTop = mode === 'drive' ? 0.14 : 0.18;
-      if (movePtr === null && e.clientX < VW * steerZoneW && e.clientY > VH * steerZoneTop) {
-        movePtr = e.pointerId; joyBX = e.clientX; joyBY = e.clientY;
-        if (mode === 'scoop') { scoopMoveYaw = camYawS; scoopMoveActive = true; }
+      const steerZoneTop = ctx.mode === 'drive' ? 0.14 : 0.18;
+      if (ctx.movePtr === null && e.clientX < VW * steerZoneW && e.clientY > VH * steerZoneTop) {
+        ctx.movePtr = e.pointerId; ctx.joyBX = e.clientX; ctx.joyBY = e.clientY;
+        if (ctx.mode === 'scoop') { ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = true; }
         if (ui.joy) {
           ui.joy.style.display = 'block';
           ui.joy.style.left = (e.clientX - JOY_R) + 'px'; ui.joy.style.top = (e.clientY - JOY_R) + 'px';
@@ -1805,17 +1805,17 @@ export function createEngine({ canvas, ui, emit }) {
         if (ui.knob) ui.knob.style.transform = 'translate(-50%,-50%)';
       } else {
         lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (mode === 'drive') camOrbit.t = performance.now();   // count a look-start as activity so the hold timer doesn't snap a resting finger back
+        if (ctx.mode === 'drive') ctx.camOrbit.t = performance.now();   // count a look-start as activity so the hold timer doesn't snap a resting finger back
         if (lookPtrs.size === 2) {
           const a = [...lookPtrs.values()];
-          pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+          ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         }
       }
       return;
     }
     canvas.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, b: e.button }); moved = 0;
-    azVel = poVel = 0;
+    ctx.azVel = ctx.poVel = 0;
     canvas.classList.add('dragging');
     if (ptrs.size === 2) {
       const [a, b] = [...ptrs.values()];
@@ -1824,15 +1824,15 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function onPointerMove(e) {
-    if (mode !== 'explore') {
+    if (ctx.mode !== 'explore') {
       if (e.pointerId === navPtr) { navCurX = e.clientX; navCurY = e.clientY; if (Math.hypot(e.clientX - navDownX, e.clientY - navDownY) > 12) navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
-      if (e.pointerId === movePtr) {
-        let dx = e.clientX - joyBX, dy = e.clientY - joyBY;
+      if (e.pointerId === ctx.movePtr) {
+        let dx = e.clientX - ctx.joyBX, dy = e.clientY - ctx.joyBY;
         const d = Math.hypot(dx, dy), mx = JOY_MAX;
         if (d > mx) { dx *= mx / d; dy *= mx / d; }
-        inp2.jx = dx / mx; inp2.jy = dy / mx;
+        ctx.inp2.jx = dx / mx; ctx.inp2.jy = dy / mx;
         if (ui.knob) ui.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-        if (Math.hypot(inp2.jx, inp2.jy) > 0.25) showT = 0;
+        if (Math.hypot(ctx.inp2.jx, ctx.inp2.jy) > 0.25) ctx.showT = 0;
         return;
       }
       const lp = lookPtrs.get(e.pointerId);
@@ -1842,26 +1842,26 @@ export function createEngine({ canvas, ui, emit }) {
       if (lookPtrs.size === 2) {
         const a = [...lookPtrs.values()];
         const nd = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
-        if (pinchD > 0 && nd > 0) {
-          const f = pinchD / nd;
-          if (mode === 'drive') { czoom = clamp(czoom * f, driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }   // overhead gets a much wider+finer range (read one intersection ↔ neighbourhood overview)
-          else szoom = clamp(szoom * f, 0.32, 2.6);                   // close over-the-shoulder → wide yard overview
+        if (ctx.pinchD > 0 && nd > 0) {
+          const f = ctx.pinchD / nd;
+          if (ctx.mode === 'drive') { ctx.czoom = clamp(ctx.czoom * f, driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }   // overhead gets a much wider+finer range (read one intersection ↔ neighbourhood overview)
+          else ctx.szoom = clamp(ctx.szoom * f, 0.32, 2.6);                   // close over-the-shoulder → wide yard overview
         }
-        pinchD = nd;
+        ctx.pinchD = nd;
         return;
       }
       const dx = e.clientX - ox, dy = e.clientY - oy;
       if (Math.abs(dx) + Math.abs(dy) < 4) return; // look deadzone (kill resting-finger jitter on high-DPI screens)
       const ld = lookDelta(dx, dy);
-      if (mode === 'drive') {
-        camOrbit.yaw = clamp(camOrbit.yaw - ld.yaw, -2.4, 2.4);   // clamp so a hard drag can't orbit under the map / lose the car
-        camOrbit.pitch = clamp(camOrbit.pitch + ld.pitch, -0.45, 0.8);
-        camOrbit.t = performance.now(); _orbitUserSet = true;   // user grabbed the camera → stop the cinematic sweep, hold THEIR angle (relative to the car)
-        showT = 0;
+      if (ctx.mode === 'drive') {
+        ctx.camOrbit.yaw = clamp(ctx.camOrbit.yaw - ld.yaw, -2.4, 2.4);   // clamp so a hard drag can't orbit under the map / lose the car
+        ctx.camOrbit.pitch = clamp(ctx.camOrbit.pitch + ld.pitch, -0.45, 0.8);
+        ctx.camOrbit.t = performance.now(); ctx._orbitUserSet = true;   // user grabbed the camera → stop the cinematic sweep, hold THEIR angle (relative to the car)
+        ctx.showT = 0;
       } else {
-        camYawS -= ld.yaw;
-        scPitch = clamp(scPitch + ld.pitch, -0.3, 0.8);
-        lastLookT = performance.now();   // pause follow-cam while the player looks
+        ctx.camYawS -= ld.yaw;
+        ctx.scPitch = clamp(ctx.scPitch + ld.pitch, -0.3, 0.8);
+        ctx.lastLookT = performance.now();   // pause follow-cam while the player looks
       }
       return;
     }
@@ -1874,7 +1874,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (p.b === 2 || e.shiftKey) pan(dx, dy);
       else {
         ctl.gaz -= dx * 0.0052; ctl.gpo = clamp(ctl.gpo - dy * 0.0042, 0.14, 1.46);
-        azVel = -dx * 0.0052; poVel = -dy * 0.0042; // for flick momentum on release
+        ctx.azVel = -dx * 0.0052; ctx.poVel = -dy * 0.0042; // for flick momentum on release
       }
     } else if (ptrs.size === 2) {
       const [a, b] = [...ptrs.values()];
@@ -1890,27 +1890,27 @@ export function createEngine({ canvas, ui, emit }) {
       navPtr = null;
       // A TAP (no drag) on a road point → route there ALONG the roads and auto-drive, not a
       // straight line off-road. A DRAG was the freeform draw-to-drive, so release just coasts.
-      if (!navMoved) setDriveTarget(inp2.navX, inp2.navZ);
-      else inp2.navActive = false;
+      if (!navMoved) setDriveTarget(ctx.inp2.navX, ctx.inp2.navZ);
+      else ctx.inp2.navActive = false;
     }
-    if (e.pointerId === movePtr) hideJoy();
+    if (e.pointerId === ctx.movePtr) hideJoy();
     lookPtrs.delete(e.pointerId);
-    if (lookPtrs.size < 2) pinchD = 0;
+    if (lookPtrs.size < 2) ctx.pinchD = 0;
     ptrs.delete(e.pointerId); lastPinch = 0; lastMid = null;
     if (!ptrs.size) canvas.classList.remove('dragging');
   }
 
   function onWheel(e) {
     e.preventDefault();
-    if (mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
-    else if (mode === 'drive') { czoom = clamp(czoom * Math.exp(e.deltaY * ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }
-    else if (mode === 'scoop') szoom = clamp(szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.32, 2.6);
+    if (ctx.mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
+    else if (ctx.mode === 'drive') { ctx.czoom = clamp(ctx.czoom * Math.exp(e.deltaY * ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }
+    else if (ctx.mode === 'scoop') ctx.szoom = clamp(ctx.szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.32, 2.6);
   }
 
   function onContextMenu(e) { e.preventDefault(); }
 
   function onDblClick() {
-    if (mode === 'explore') { ctl.gtx = ctx.house.c[0]; ctl.gtz = ctx.house.c[1]; ctl.gr = 160; ctl.gpo = 0.95; }
+    if (ctx.mode === 'explore') { ctl.gtx = ctx.house.c[0]; ctl.gtz = ctx.house.c[1]; ctl.gr = 160; ctl.gpo = 0.95; }
   }
 
   function pan(dx, dy) {
@@ -1939,21 +1939,21 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function onKeyDown(e) {
     if (isEditable(e.target)) return;   // let typing through — never hijack form input
-    if (mode === 'drive' || mode === 'scoop') {
-      if (mode === 'scoop' && e.key === 'Shift' && !e.repeat) {
-        shiftLock = !shiftLock; emit('shiftLock', shiftLock);
-        ctx.toast(shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
+    if (ctx.mode === 'drive' || ctx.mode === 'scoop') {
+      if (ctx.mode === 'scoop' && e.key === 'Shift' && !e.repeat) {
+        ctx.shiftLock = !ctx.shiftLock; emit('shiftLock', ctx.shiftLock);
+        ctx.toast(ctx.shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
       }
-      if (mode === 'scoop' && (e.key === 'e' || e.key === 'E') && nearCar) { driveFromScoop(); e.preventDefault(); return; }
-      if (mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
-      if (mode === 'drive' && e.key === ' ') { inp2.hbrake = true; e.preventDefault(); return; }        // Space = handbrake
+      if (ctx.mode === 'scoop' && (e.key === 'e' || e.key === 'E') && ctx.nearCar) { driveFromScoop(); e.preventDefault(); return; }
+      if (ctx.mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
+      if (ctx.mode === 'drive' && e.key === ' ') { ctx.inp2.hbrake = true; e.preventDefault(); return; }        // Space = handbrake
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;
-      if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = -1;
-      if (e.key === 'ArrowDown' || e.key === 's') inp2.ky = 1;
-      if (e.key === 'ArrowLeft' || e.key === 'a') inp2.kx = -1;
-      if (e.key === 'ArrowRight' || e.key === 'd') inp2.kx = 1;
-      if (e.key === 'Escape') (mode === 'drive' ? exitDrive : exitScoop)();
+      if (e.key === 'ArrowUp' || e.key === 'w') ctx.inp2.ky = -1;
+      if (e.key === 'ArrowDown' || e.key === 's') ctx.inp2.ky = 1;
+      if (e.key === 'ArrowLeft' || e.key === 'a') ctx.inp2.kx = -1;
+      if (e.key === 'ArrowRight' || e.key === 'd') ctx.inp2.kx = 1;
+      if (e.key === 'Escape') (ctx.mode === 'drive' ? exitDrive : exitScoop)();
       e.preventDefault(); return;
     }
     const step = 0.12;
@@ -1971,12 +1971,12 @@ export function createEngine({ canvas, ui, emit }) {
     // No editable-guard here on purpose: keyup never preventDefault()s (so it can't
     // block typing) and CLEARING a movement flag is always safe — guarding it could
     // strand a held key as "down" if focus moved to an input mid-press.
-    if (mode === 'explore') return;
-    if (e.key === 'ArrowUp' || e.key === 'w') inp2.ky = 0;
-    if (e.key === 'ArrowDown' || e.key === 's') inp2.ky = 0;
-    if (e.key === 'ArrowLeft' || e.key === 'a') inp2.kx = 0;
-    if (e.key === 'ArrowRight' || e.key === 'd') inp2.kx = 0;
-    if (e.key === ' ') inp2.hbrake = false;
+    if (ctx.mode === 'explore') return;
+    if (e.key === 'ArrowUp' || e.key === 'w') ctx.inp2.ky = 0;
+    if (e.key === 'ArrowDown' || e.key === 's') ctx.inp2.ky = 0;
+    if (e.key === 'ArrowLeft' || e.key === 'a') ctx.inp2.kx = 0;
+    if (e.key === 'ArrowRight' || e.key === 'd') ctx.inp2.kx = 0;
+    if (e.key === ' ') ctx.inp2.hbrake = false;
   }
 
   // ---------- scoop mode ----------
@@ -1993,7 +1993,7 @@ export function createEngine({ canvas, ui, emit }) {
     pushScoopHud();
   }
   function enterScoop() {
-    setMode('scoop'); camInit = false; szoom = 1; camGroundRef = null; ctx.CHAR.groundY = null;   // fresh framing per scoop entry (pinch-zoom shouldn't leak in)
+    setMode('scoop'); ctx.camInit = false; ctx.szoom = 1; ctx.camGroundRef = null; ctx.CHAR.groundY = null;   // fresh framing per scoop entry (pinch-zoom shouldn't leak in)
     setInside(false);
     for (const s of ctx.labelSprites) s.visible = false;
     ctx.CHAR.group.visible = true;
@@ -2002,8 +2002,8 @@ export function createEngine({ canvas, ui, emit }) {
     // and animals, not flat house walls.
     ctx.CHAR.x = (SREC.coop[0] + SREC.pen[0]) / 2; ctx.CHAR.z = (SREC.coop[1] + SREC.pen[1]) / 2;
     ctx.CHAR.yaw = Math.atan2(SREC.barn[0] - ctx.CHAR.x, SREC.barn[1] - ctx.CHAR.z);
-    camYawS = ctx.CHAR.yaw; scoopMoveYaw = camYawS; scoopMoveActive = false;
-    scoopScene = 'yard'; entryArmed = true; exitArmed = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
+    ctx.camYawS = ctx.CHAR.yaw; ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = false;
+    ctx.scoopScene = 'yard'; ctx.entryArmed = true; ctx.exitArmed = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
     emit('avatar', { name: ctx.CHAR.avatar, actions: ctx.CHAR.getActions() });
     ctx.audio.ensure();
     setTool(ctx.CHAR.lvl);
@@ -2013,56 +2013,56 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('explore');
     ctx.camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
     setInside(false);                       // back to the yard scene (hide the interior if we left from inside)
-    if (groundPatch) groundPatch.visible = false;
-    if (scoopGrass) scoopGrass.visible = false;
-    if (scoopFence) scoopFence.visible = false;
+    if (ctx.groundPatch) ctx.groundPatch.visible = false;
+    if (ctx.scoopGrass) ctx.scoopGrass.visible = false;
+    if (ctx.scoopFence) ctx.scoopFence.visible = false;
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
-    if (nearCar) { nearCar = false; emit('nearCar', false); }
+    if (ctx.nearCar) { ctx.nearCar = false; emit('nearCar', false); }
     hideJoy();
     for (const s of ctx.labelSprites) s.visible = true;
     ctx.CHAR.group.visible = false;
-    inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0; scoopMoveActive = false;
+    ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0; ctx.scoopMoveActive = false;
     ctl.gtx = clamp(ctx.CHAR.x, -310, 310); ctl.gtz = clamp(ctx.CHAR.z, -310, 310);
     ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3; ctl.gr = 60; ctl.gpo = 0.85;
     ctl.tx = ctl.gtx; ctl.tz = ctl.gtz;
   }
 
   function updateScoop(dt, now) {
-    const inside = scoopScene === 'interior' && interior;
+    const inside = ctx.scoopScene === 'interior' && ctx.interior;
     // Keyboard Left/Right TURN the keeper (tank-style) instead of strafing sideways; the touch
     // joystick still strafes camera-relative. (Walking sideways on arrow keys felt wrong.)
-    if (inp2.kx) { camYawS -= inp2.kx * 2.6 * dt; ctx.CHAR.yaw = camYawS; scoopMoveYaw = camYawS; lastLookT = now; }
-    let jx = clamp(inp2.jx, -1, 1), jy = clamp(inp2.jy + inp2.ky, -1, 1);
+    if (ctx.inp2.kx) { ctx.camYawS -= ctx.inp2.kx * 2.6 * dt; ctx.CHAR.yaw = ctx.camYawS; ctx.scoopMoveYaw = ctx.camYawS; ctx.lastLookT = now; }
+    let jx = clamp(ctx.inp2.jx, -1, 1), jy = clamp(ctx.inp2.jy + ctx.inp2.ky, -1, 1);
     const rawMag = Math.min(1, Math.hypot(jx, jy));
     const mag = scaledDeadzoneMagnitude(jx, jy);
-    if (shiftLock) ctx.CHAR.yaw = camYawS; // Roblox shift-lock: keeper faces the camera
+    if (ctx.shiftLock) ctx.CHAR.yaw = ctx.camYawS; // Roblox shift-lock: keeper faces the camera
     if (mag > 0) {
-      if (!scoopMoveActive) { scoopMoveYaw = camYawS; scoopMoveActive = true; }
+      if (!ctx.scoopMoveActive) { ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = true; }
       // Capture the movement camera when the stick engages. Right-side look can
       // orbit freely while a walk is held without re-aiming that active walk.
-      const basisYaw = shiftLock ? camYawS : scoopMoveYaw;
+      const basisYaw = ctx.shiftLock ? ctx.camYawS : ctx.scoopMoveYaw;
       const fX = Math.sin(basisYaw), fZ = Math.cos(basisYaw);
       const rX = -Math.cos(basisYaw), rZ = Math.sin(basisYaw);
       let mx = rX * jx - fX * jy, mz = rZ * jx - fZ * jy;
       const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
-      if (!shiftLock) ctx.CHAR.yaw = Math.atan2(mx, mz); // else keep facing camera, strafe
+      if (!ctx.shiftLock) ctx.CHAR.yaw = Math.atan2(mx, mz); // else keep facing camera, strafe
       // Roblox follow cam: your right-side swipe OWNS the camera. We only add a very
       // gentle drift to bring it back behind the keeper, and only after you've left
       // the camera alone for a good while (2.5 s) — so looking around actually holds
       // instead of being yanked back the instant you start walking. Shift-lock opts
       // out entirely (the camera leads and the keeper strafes).
-      if (!shiftLock && now - lastLookT > 2500) {
-        let dyaw = ctx.CHAR.yaw - camYawS;
+      if (!ctx.shiftLock && now - ctx.lastLookT > 2500) {
+        let dyaw = ctx.CHAR.yaw - ctx.camYawS;
         while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
         while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-        camYawS += dyaw * Math.min(1, dt * 0.8);   // ~1.2 s settle, barely noticeable
+        ctx.camYawS += dyaw * Math.min(1, dt * 0.8);   // ~1.2 s settle, barely noticeable
       }
       const sp = 4.4 * mag;
       let nx = ctx.CHAR.x + mx * sp * dt, nz = ctx.CHAR.z + mz * sp * dt;
       const rad = 0.42;
       if (inside) {
         // per-wall + furniture pushout/slide with passable doorways (interior.collide)
-        const r = interior.collide(ctx.CHAR.x, ctx.CHAR.z, nx, nz, 0.34); nx = r.x; nz = r.z;   // slimmer radius so doorways/tight spots pass
+        const r = ctx.interior.collide(ctx.CHAR.x, ctx.CHAR.z, nx, nz, 0.34); nx = r.x; nz = r.z;   // slimmer radius so doorways/tight spots pass
       } else {
         // collide against real building/structure footprints (not the oversized
         // AABBs) and slide along the wall — otherwise the house's AABB walls off
@@ -2084,9 +2084,9 @@ export function createEngine({ canvas, ui, emit }) {
       }
       ctx.CHAR.x = nx; ctx.CHAR.z = nz;
       ctx.CHAR.bob += dt * 10 * mag;
-    } else { scoopMoveActive = false; ctx.CHAR.bob += dt * 1.5; }
+    } else { ctx.scoopMoveActive = false; ctx.CHAR.bob += dt * 1.5; }
     // ground on the fixed interior floor, or the procedural yard terrain
-    const cy = inside ? interior.floorY : terrainAt(ctx.CHAR.x, ctx.CHAR.z);
+    const cy = inside ? ctx.interior.floorY : terrainAt(ctx.CHAR.x, ctx.CHAR.z);
     // jump arc: integrate vertical velocity under gravity; land back on the ground
     if (ctx.CHAR.vy !== 0 || ctx.CHAR.airY > 0) {
       ctx.CHAR.airY += ctx.CHAR.vy * dt; ctx.CHAR.vy -= 22 * dt;
@@ -2099,12 +2099,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (inside) { updateScoopInterior(dt, now); return; }
     // ===== YARD =====
     // door ENTRY: stand on the front-yard pad to walk inside the house
-    if (interior && entryPt) {
+    if (ctx.interior && entryPt) {
       doorMarker.visible = true;
       doorMarker.position.set(entryPt[0], terrainAt(entryPt[0], entryPt[1]) + 2.6 + Math.abs(Math.sin(now * 0.005)) * 0.3, entryPt[1]);
       const din = Math.hypot(ctx.CHAR.x - entryPt[0], ctx.CHAR.z - entryPt[1]);
-      if (din > 4.0) entryArmed = true;
-      if (entryArmed && din < 2.6 && now > doorT) { enterHouse(now); updateScoopInterior(dt, now); return; }   // run the interior frame now — no 1-frame yard flash
+      if (din > 4.0) ctx.entryArmed = true;
+      if (ctx.entryArmed && din < 2.6 && now > ctx.doorT) { enterHouse(now); updateScoopInterior(dt, now); return; }   // run the interior frame now — no 1-frame yard flash
     } else doorMarker.visible = false;
     // always-on-top marker so Drew is never lost behind a real tree
     marker.visible = true;
@@ -2116,7 +2116,7 @@ export function createEngine({ canvas, ui, emit }) {
       const p = POOPS[i];
       if (Math.hypot(ctx.CHAR.x - p.x, ctx.CHAR.z - p.z) < tool.r) {
         if (ctx.CHAR.bag >= tool.cap) {
-          if (!bagWarned) { ctx.toast('Scoop is full! Empty it at the green bin ♻️'); bagWarned = true; }
+          if (!ctx.bagWarned) { ctx.toast('Scoop is full! Empty it at the green bin ♻️'); ctx.bagWarned = true; }
           break;
         }
         removePoop(p); ctx.CHAR.bag++; ctx.CHAR.total++; ctx.audio.sfxScoop();
@@ -2134,30 +2134,30 @@ export function createEngine({ canvas, ui, emit }) {
       compostMarker.visible = ctx.CHAR.bag > 0;
       if (compostMarker.visible) compostMarker.position.set(ctx.COMPOST[0], terrainAt(ctx.COMPOST[0], ctx.COMPOST[1]) + 3.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, ctx.COMPOST[1]);
       if (ctx.CHAR.bag > 0 && Math.hypot(ctx.CHAR.x - ctx.COMPOST[0], ctx.CHAR.z - ctx.COMPOST[1]) < 3) {
-        const dumped = ctx.CHAR.bag; ctx.CHAR.bag = 0; bagWarned = false; ctx.audio.sfxChime([392, 523]); pushScoopHud();
+        const dumped = ctx.CHAR.bag; ctx.CHAR.bag = 0; ctx.bagWarned = false; ctx.audio.sfxChime([392, 523]); pushScoopHud();
         ctx.toast('Composted ' + dumped + ' ♻️');
       }
     }
-    if (POOPS.length === 0 && !spotless) { spotless = true; ctx.toast('Yard is spotless ✨ (for now…)', 2400); if (ctx.CHAR.drew) ctx.CHAR.drew.react('dance'); _syncDanceNext = now; }   // clean yard → the house throws a dance party next time you step inside
-    if (POOPS.length > 0) spotless = false;
-    if (scoopHudDirty) { scoopHudDirty = false; pushScoopHud(); }
+    if (POOPS.length === 0 && !ctx.spotless) { ctx.spotless = true; ctx.toast('Yard is spotless ✨ (for now…)', 2400); if (ctx.CHAR.drew) ctx.CHAR.drew.react('dance'); ctx._syncDanceNext = now; }   // clean yard → the house throws a dance party next time you step inside
+    if (POOPS.length > 0) ctx.spotless = false;
+    if (ctx.scoopHudDirty) { ctx.scoopHudDirty = false; pushScoopHud(); }
     // Scoop renders the full procedural world (its aerial-photo terrain IS the
     // backyard ground, with the real house + sanctuary structures), so the old
     // grass disc / fence ring (workarounds for the photoreal case) are off — they
     // would z-fight the terrain and the ring would cut through the house.
-    if (groundPatch) groundPatch.visible = false;
-    if (scoopGrass) scoopGrass.visible = false;
-    if (scoopFence) scoopFence.visible = false;
+    if (ctx.groundPatch) ctx.groundPatch.visible = false;
+    if (ctx.scoopGrass) ctx.scoopGrass.visible = false;
+    if (ctx.scoopFence) ctx.scoopFence.visible = false;
     // follow cam — preset (Overhead / Angled / Close), cycled with the 🎥 button.
-    const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const SC = SCOOP_CAMS[scCam];
+    const fx = Math.sin(ctx.camYawS), fz = Math.cos(ctx.camYawS);
+    const SC = SCOOP_CAMS[ctx.scCam];
     // vertical look = TILT only (raise/lower the camera height); pinch/scroll
     // (szoom) is the sole distance control. Mirrors Drive (pitch->height, zoom->dist)
     // instead of the old dolly that stacked scPitch into both dist AND szoom.
-    const dist = SC.dist * szoom, h = (SC.h + scPitch * 9) * Math.max(0.75, szoom);
-    camGroundRef = camGroundRef == null ? cy : camGroundRef + (cy - camGroundRef) * Math.min(1, dt * 1.5);
-    const camT = _camT.set(ctx.CHAR.x - fx * dist, camGroundRef + h, ctx.CHAR.z - fz * dist);
-    if (!camInit) { camV.copy(camT); camInit = true; }
+    const dist = SC.dist * ctx.szoom, h = (SC.h + ctx.scPitch * 9) * Math.max(0.75, ctx.szoom);
+    ctx.camGroundRef = ctx.camGroundRef == null ? cy : ctx.camGroundRef + (cy - ctx.camGroundRef) * Math.min(1, dt * 1.5);
+    const camT = _camT.set(ctx.CHAR.x - fx * dist, ctx.camGroundRef + h, ctx.CHAR.z - fz * dist);
+    if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
     camV.lerp(camT, Math.min(1, dt * 6));
     camV.y = Math.max(camV.y, terrainAt(camV.x, camV.z) + 1.2);
     ctx.camera.position.copy(camV);
@@ -2170,7 +2170,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (d < 3.6) near = true;
       if (d < bestD) { bestD = d; best = s; }
     }
-    if (near !== nearCar) { nearCar = near; emit('nearCar', near); }
+    if (near !== ctx.nearCar) { ctx.nearCar = near; emit('nearCar', near); }
     carMarker.visible = !!best && !near;
     if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
   }
@@ -2183,35 +2183,35 @@ export function createEngine({ canvas, ui, emit }) {
     updateNpcs(dt, now);
     // small indoor follow cam: pull IN before it pokes a wall (but never collapse onto the avatar),
     // and rise toward overhead when forced close; clamp under the ceiling.
-    const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
-    const szi = clamp(szoom, 0.7, 1.35), ra = interior.roomAABB, MIND = 1.6;
-    let dist = (4.0 + Math.max(0, scPitch) * 1.2) * szi;
+    const fx = Math.sin(ctx.camYawS), fz = Math.cos(ctx.camYawS);
+    const szi = clamp(ctx.szoom, 0.7, 1.35), ra = ctx.interior.roomAABB, MIND = 1.6;
+    let dist = (4.0 + Math.max(0, ctx.scPitch) * 1.2) * szi;
     let camX = ctx.CHAR.x - fx * dist, camZ = ctx.CHAR.z - fz * dist;
     for (let k = 0; k < 6 && dist > MIND && (camX < ra[0] + 0.3 || camX > ra[1] - 0.3 || camZ < ra[2] + 0.3 || camZ > ra[3] - 0.3); k++) {
       dist = Math.max(MIND, dist * 0.78); camX = ctx.CHAR.x - fx * dist; camZ = ctx.CHAR.z - fz * dist;
     }
-    const camY = interior.floorY + 2.1 + scPitch * 3.4 * Math.max(0.75, szi);
-    const cc = interior.clampCam(camX, camY, camZ, 0.3);
+    const camY = ctx.interior.floorY + 2.1 + ctx.scPitch * 3.4 * Math.max(0.75, szi);
+    const cc = ctx.interior.clampCam(camX, camY, camZ, 0.3);
     const camT = _camT.set(cc.x, cc.y, cc.z);
-    if (!camInit) { camV.copy(camT); camInit = true; }
+    if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
     camV.lerp(camT, Math.min(1, dt * 6));
-    const cl = interior.clampCam(camV.x, camV.y, camV.z, 0.28);
-    camV.set(cl.x, Math.max(cl.y, interior.floorY + 0.7), cl.z);
+    const cl = ctx.interior.clampCam(camV.x, camV.y, camV.z, 0.28);
+    camV.set(cl.x, Math.max(cl.y, ctx.interior.floorY + 0.7), cl.z);
     // if an outer-wall corner clamped the camera in close, rise toward overhead so we look DOWN at the
     // kid instead of zooming into their head.
     const pd = Math.hypot(camV.x - ctx.CHAR.x, camV.z - ctx.CHAR.z);
-    if (pd < MIND) camV.y = Math.min(interior.ceilingY - 0.3, Math.max(camV.y, interior.floorY + 1.1 + (MIND - pd) * 2.0 + 1.2));
+    if (pd < MIND) camV.y = Math.min(ctx.interior.ceilingY - 0.3, Math.max(camV.y, ctx.interior.floorY + 1.1 + (MIND - pd) * 2.0 + 1.2));
     ctx.camera.position.copy(camV);
-    ctx.camera.lookAt(ctx.CHAR.x, interior.floorY + 1.1, ctx.CHAR.z);
+    ctx.camera.lookAt(ctx.CHAR.x, ctx.interior.floorY + 1.1, ctx.CHAR.z);
     // SEE-THROUGH: hide any non-floor mesh between the camera and a BOUNDARY around the avatar — not just
     // the one dead-centre ray (which left walls covering the kid's body/sides in the way). Cast a small fan
     // to the torso, head, and a ring around them, so a wall blocking ANY part of the kid (or right around
     // them) is cut — a clean cutout boundary. Collision still uses precomputed AABBs, so hidden walls block.
-    const occ = interior.occluders;
+    const occ = ctx.interior.occluders;
     if (occ && now - _wallCutT > (ctx.MOBILE ? 75 : 45)) {
       _wallCutT = now;
       for (const w of occ) if (!w.userData.permaHidden) w.visible = true;
-      const cp = ctx.camera.position, fy = interior.floorY;
+      const cp = ctx.camera.position, fy = ctx.interior.floorY;
       const hideAlong = (tx, ty, tz) => {
         const dx = tx - cp.x, dy = ty - cp.y, dz = tz - cp.z, len = Math.hypot(dx, dy, dz) || 1;
         _wallRay.set(cp, _wallDir.set(dx / len, dy / len, dz / len)); _wallRay.far = Math.max(0.1, len - 0.5);
@@ -2232,15 +2232,15 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // hop from walking straight into driving (the car spawns at the driveway)
   function driveFromScoop() {
-    if (mode !== 'scoop' || !nearCar) return;
-    nearCar = false; emit('nearCar', false);
+    if (ctx.mode !== 'scoop' || !ctx.nearCar) return;
+    ctx.nearCar = false; emit('nearCar', false);
     ctx.audio.blip();
     enterDrive();
   }
 
   // ---------- drive mode ----------
   function enterDrive() {
-    setMode('drive'); camInit = false;
+    setMode('drive'); ctx.camInit = false;
     setInside(false);
     clearDestination();
     if (navMarker) navMarker.visible = false;
@@ -2249,16 +2249,16 @@ export function createEngine({ canvas, ui, emit }) {
     // player expects. The overhead drag-to-drive map stays one tap away on the VIEW
     // cycle for anyone who prefers steering by tapping the map. We only honour a cam
     // the player chose themselves on a previous drive (driveCamUserPicked).
-    if (!driveCamUserPicked) {
+    if (!ctx.driveCamUserPicked) {
       const i = DRIVE_CAMS.findIndex(c => c.name === 'Close');
-      if (i >= 0) camMode = i;
+      if (i >= 0) ctx.camMode = i;
     }
-    czoom = 1;                                            // fresh zoom (pinch shouldn't leak between drives)
+    ctx.czoom = 1;                                            // fresh zoom (pinch shouldn't leak between drives)
     poiSeen.clear();                                      // re-arm the neighbourhood callouts
-    for (const c of coins) { c.got = false; c.groundY = null; } coinsGot = 0;   // fresh coins each drive
+    for (const c of ctx.coins) { c.got = false; c.groundY = null; } ctx.coinsGot = 0;   // fresh coins each drive
     resetRun(); resetParticles();
     emitScore({ finishMs: 0 });
-    emit('driveCam', DRIVE_CAMS[camMode].name);
+    emit('driveCam', DRIVE_CAMS[ctx.camMode].name);
     // FREE ROAM by default — no auto-destination, so the route line is OFF until you
     // choose somewhere (🧭 / tap the map). The pink POI beacons still point the way.
     const sp = ctx.frontPt || [ctx.house.c[0], ctx.house.c[1] + 14];
@@ -2273,12 +2273,12 @@ export function createEngine({ canvas, ui, emit }) {
       const sg = run(1) >= run(-1) ? 1 : -1;
       ctx.car.yaw = Math.atan2(ctx.frontDir[0] * sg, ctx.frontDir[1] * sg);
     } else ctx.car.yaw = 0;
-    ctx.car.speed = 0; ctx.car.throttle = 0; ctx.car.brakeAmt = 0; ctx.car.pitchDyn = 0; ctx.car.kSteer = 0; ctx.car.revArmT = 0; boost = 0; ctx.car.group.visible = true; ctx.car.groundY = null;
-    camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; camGroundRef = null; _viewYaw = viewHeading(); _miniYaw = viewHeading(); _gmapHeading = ((180 - viewHeading() * 180 / Math.PI) % 360 + 360) % 360;   // re-arm the cinematic sweep + snap BOTH minimaps to the heading (no rotate-in)
-    showT = 0;                                   // skip the low cinematic orbit (melty up close)
+    ctx.car.speed = 0; ctx.car.throttle = 0; ctx.car.brakeAmt = 0; ctx.car.pitchDyn = 0; ctx.car.kSteer = 0; ctx.car.revArmT = 0; ctx.boost = 0; ctx.car.group.visible = true; ctx.car.groundY = null;
+    ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx.camGroundRef = null; ctx._viewYaw = viewHeading(); ctx._miniYaw = viewHeading(); ctx._gmapHeading = ((180 - viewHeading() * 180 / Math.PI) % 360 + 360) % 360;   // re-arm the cinematic sweep + snap BOTH minimaps to the heading (no rotate-in)
+    ctx.showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of ctx.labelSprites) s.visible = false;
     ctx.audio.engineStart();
-    if (soundOn && ctx.audio.startMusic) ctx.audio.startMusic();
+    if (ctx.soundOn && ctx.audio.startMusic) ctx.audio.startMusic();
     showCarCard();
     // TRUE free roam: never auto-set a destination on entry. The pink POI beacons still
     // point the way; pick a place with 🧭 or by tapping the map when YOU want a route+ETA.
@@ -2289,19 +2289,19 @@ export function createEngine({ canvas, ui, emit }) {
     stopFollow();
     ctx.camera.up.set(0, 1, 0);
     hideJoy();
-    navPtr = null; inp2.navActive = false; if (navMarker) navMarker.visible = false;
+    navPtr = null; ctx.inp2.navActive = false; if (navMarker) navMarker.visible = false;
     guideLine.visible = false; destPin.visible = false;
     if (ui.fx) ui.fx.classList.remove('on');
     if (ctx.camera.fov !== 46) { ctx.camera.fov = 46; ctx.camera.updateProjectionMatrix(); }
-    for (const c of coins) c.mesh.visible = false;
+    for (const c of ctx.coins) c.mesh.visible = false;
     resetParticles();
     hideBeacons();
     hideTraffic();
     carLocator.visible = false;
     ctx.car.group.visible = false;
-    if (groundPatch) groundPatch.visible = false;
+    if (ctx.groundPatch) ctx.groundPatch.visible = false;
     for (const s of ctx.labelSprites) s.visible = true;
-    inp2.jx = inp2.jy = inp2.kx = inp2.ky = 0;
+    ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0;
     ctx.audio.engineStop();
     if (ctx.audio.stopMusic) ctx.audio.stopMusic();
     ctl.gtx = clamp(ctx.car.x, -310, 310); ctl.gtz = clamp(ctx.car.z, -310, 310);
@@ -2311,8 +2311,8 @@ export function createEngine({ canvas, ui, emit }) {
   // Unstick: snap the car to the nearest point ON a drivable road segment, facing
   // along it, stopped. Projects onto each segment (not just vertices) for accuracy.
   function resetToRoad() {
-    if (mode !== 'drive') return;
-    if (followMode) stopFollow();   // FIX·ROAD must OWN the snap — else the follow spring drags the car right back, so the button looks dead
+    if (ctx.mode !== 'drive') return;
+    if (ctx.followMode) stopFollow();   // FIX·ROAD must OWN the snap — else the follow spring drags the car right back, so the button looks dead
     // Build the candidate segment list: the live Google route (real roads, works
     // even far from home) if we have one, else EVERY mapped road (any type) near the
     // neighbourhood — the old residential/tertiary-only filter missed the road the
@@ -2326,18 +2326,18 @@ export function createEngine({ canvas, ui, emit }) {
       if (d < bd) { bd = d; bx = px; bz = pz; const L = Math.sqrt(len2); dirX = vx / L; dirZ = vz / L; found = true; }
     };
     const far = Math.hypot(ctx.car.x, ctx.car.z) > 320;
-    if (ROUTE && ROUTE.length > 1) {
-      for (let i = 0; i < ROUTE.length - 1; i++) consider(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
+    if (ctx.ROUTE && ctx.ROUTE.length > 1) {
+      for (let i = 0; i < ctx.ROUTE.length - 1; i++) consider(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
     } else if (far) {
       // far from home: snap ONLY to the fetched OSM (Google-map) road network — NEVER the hood graph,
       // which would teleport the car all the way back to the neighbourhood (the reported bug).
-      for (const s of osmRoadSegs) consider(s[0][0], s[0][1], s[1][0], s[1][1]);
+      for (const s of ctx.osmRoadSegs) consider(s[0][0], s[0][1], s[1][0], s[1][1]);
     } else {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
     // Far from home with only sparse OSM coverage: if the nearest fetched road is still a long way off
     // (≥120 m), don't fling the car all the way onto it — force a fresh fetch and leave it put (below).
-    const usedOSM = far && !(ROUTE && ROUTE.length > 1);
+    const usedOSM = far && !(ctx.ROUTE && ctx.ROUTE.length > 1);
     if (found && usedOSM && bd > 250 * 250) found = false;   // snap to a road within 250 m; only force a refetch if the nearest known road is genuinely far (stale/sparse OSM)
     if (!found) {
       if (far) {
@@ -2354,7 +2354,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     ctx.car.x = bx; ctx.car.z = bz; ctx.car.speed = 0; ctx.car.steer = 0; ctx.car.vlat = 0; ctx.car.revArmT = 0; ctx.car.groundY = null; ctx.car.yaw = Math.atan2(dirX, dirZ);
     clearRouteRail();   // if auto-drive is still on, reacquire rail arc from the snapped road point
-    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 1.8;   // re-seat the chase/orbit cam at the new spot; grace so auto-recover can't immediately re-fire
+    ctx.camInit = false; ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.inp2.navActive = false; ctx.recoverCooldown = 1.8;   // re-seat the chase/orbit cam at the new spot; grace so auto-recover can't immediately re-fire
     ctx.audio.blip && ctx.audio.blip();
     ctx.toast('Back on the road 🛣️', 1000);
   }
@@ -2363,7 +2363,7 @@ export function createEngine({ canvas, ui, emit }) {
   // browser — the Directions web service is CORS-blocked). Falls back to a straight
   // line if the SDK/Directions API isn't enabled on the key.
   let _mapsSDK = null;
-  let routeReqId = 0, _quietRoute = false;
+  ctx.routeReqId = 0, ctx._quietRoute = false;
   function loadMapsSDK() {
     if (window.google && window.google.maps && window.google.maps.DirectionsService) return Promise.resolve(window.google.maps);
     if (_mapsSDK) return _mapsSDK;
@@ -2397,14 +2397,14 @@ export function createEngine({ canvas, ui, emit }) {
   const LANE_OFFSET = 2.8;   // metres right of centreline ≈ middle of the right-hand lane
 
   function fetchRoute(destLat, destLon) {
-    const reqId = ++routeReqId;
+    const reqId = ++ctx.routeReqId;
     loadMapsSDK().then(maps => {
       const o = worldToGeo(ctx.car.x, ctx.car.z);
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat: destLat, lng: destLon }, travelMode: 'DRIVING' },
         (result, status) => {
-          if (reqId !== routeReqId || !DEST || !DEST.geo ||
-            Math.abs(DEST.geo.lat - destLat) > 1e-7 || Math.abs(DEST.geo.lon - destLon) > 1e-7) return;
+          if (reqId !== ctx.routeReqId || !ctx.DEST || !ctx.DEST.geo ||
+            Math.abs(ctx.DEST.geo.lat - destLat) > 1e-7 || Math.abs(ctx.DEST.geo.lon - destLon) > 1e-7) return;
           if (status === 'OK' && result.routes && result.routes[0]) {
             const route = result.routes[0];
             const stepPath = [];
@@ -2412,10 +2412,10 @@ export function createEngine({ canvas, ui, emit }) {
             const src = stepPath.length ? stepPath : route.overview_path;
             const pts = src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
             if (pts.length > 1) {
-              ROUTE = laneOffsetRoute(pts, LANE_OFFSET); routeIdx = 0;   // ride the correct lane, not the divider
-              snapDestinationToRouteEnd(ROUTE);
-              if (autoDrive && Math.abs(ctx.car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
-              if (!_quietRoute) ctx.toast('🗺️ Route ready — follow the line', 1500);
+              ctx.ROUTE = laneOffsetRoute(pts, LANE_OFFSET); ctx.routeIdx = 0;   // ride the correct lane, not the divider
+              snapDestinationToRouteEnd(ctx.ROUTE);
+              if (ctx.autoDrive && Math.abs(ctx.car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
+              if (!ctx._quietRoute) ctx.toast('🗺️ Route ready — follow the line', 1500);
             }
           } else console.warn('[directions] no route:', status);
         }
@@ -2423,17 +2423,17 @@ export function createEngine({ canvas, ui, emit }) {
     }).catch(e => console.warn('[maps sdk] route unavailable, using straight line —', e && e.message));
   }
   function snapDestinationToRouteEnd(pts) {
-    if (!DEST || !pts || pts.length < 2) return;
+    if (!ctx.DEST || !pts || pts.length < 2) return;
     const end = pts[pts.length - 1];
-    const rawX = DEST.rawX == null ? DEST.x : DEST.rawX;
-    const rawZ = DEST.rawZ == null ? DEST.z : DEST.rawZ;
+    const rawX = ctx.DEST.rawX == null ? ctx.DEST.x : ctx.DEST.rawX;
+    const rawZ = ctx.DEST.rawZ == null ? ctx.DEST.z : ctx.DEST.rawZ;
     // Google geocodes addresses to parcels/rooftops, but cars need to arrive at
     // the drivable road endpoint. Keep the raw geo for retries; move the in-world
     // pin/arrival target to the route's curb-side finish when it is plausibly close.
-    const maxSnap = DEST.celebrate ? 450 : 240;
+    const maxSnap = ctx.DEST.celebrate ? 450 : 240;
     if (Math.hypot(end.x - rawX, end.z - rawZ) > maxSnap) return;
-    DEST.rawX = rawX; DEST.rawZ = rawZ;
-    DEST.x = end.x; DEST.z = end.z;
+    ctx.DEST.rawX = rawX; ctx.DEST.rawZ = rawZ;
+    ctx.DEST.x = end.x; ctx.DEST.z = end.z;
     destPin.userData.groundY = null;
   }
   // fromSearch = the player explicitly chose this place from the GO address search;
@@ -2449,22 +2449,22 @@ export function createEngine({ canvas, ui, emit }) {
         if (np && np.d < 90) seedRoute = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z);
       }
     }
-    DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: (!!fromSearch || !!opts.celebrate) && !opts.quiet };   // geo kept so a failed route can self-retry
-    ROUTE = seedRoute || null; routeIdx = 0;
-    if (ROUTE) snapDestinationToRouteEnd(ROUTE);
+    ctx.DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: (!!fromSearch || !!opts.celebrate) && !opts.quiet };   // geo kept so a failed route can self-retry
+    ctx.ROUTE = seedRoute || null; ctx.routeIdx = 0;
+    if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
     destPin.userData.groundY = null;
-    emit('dest', { label: DEST.label });
-    _quietRoute = !!opts.quiet;   // suppress the follow-up "Route ready" toast on quiet (follow-mode) re-routes
-    if (!isChain && !opts.quiet) { const km = (Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z) / 1000).toFixed(1); ctx.toast('📍 ' + ctx.esc(DEST.label) + ' · ' + km + ' km — routing…', 2200); }
+    emit('dest', { label: ctx.DEST.label });
+    ctx._quietRoute = !!opts.quiet;   // suppress the follow-up "Route ready" toast on quiet (follow-mode) re-routes
+    if (!isChain && !opts.quiet) { const km = (Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) / 1000).toFixed(1); ctx.toast('📍 ' + ctx.esc(ctx.DEST.label) + ' · ' + km + ' km — routing…', 2200); }
     fetchRoute(lat, lon);
     if (opts.drive) {
-      autoDrive = true; inp2.navActive = false;
+      ctx.autoDrive = true; ctx.inp2.navActive = false;
       emit('autodrive', true);
       faceRouteStart();
     }
   }
   function clearDestination() {
-    routeReqId++; DEST = null; ROUTE = null; routeIdx = 0; autoDrive = false; inp2.navActive = false;
+    ctx.routeReqId++; ctx.DEST = null; ctx.ROUTE = null; ctx.routeIdx = 0; ctx.autoDrive = false; ctx.inp2.navActive = false;
     clearRouteRail(); clearRouteCaches();
     guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null;
     emit('dest', null); emit('autodrive', false);
@@ -2518,56 +2518,56 @@ export function createEngine({ canvas, ui, emit }) {
     { featureType: 'poi', stylers: [{ visibility: 'off' }] },
     { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#222831' }] },
   ];
-  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapClick = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0, _gmapHeading = 0, _gmapRot = 0, _gmapScale = 1;
+  ctx._gmap = null, ctx._gmapCar = null, ctx._gmapRoute = null, ctx._gmapClick = null, ctx._gmapT = 0, ctx._gmapDiv = null, ctx._gmapRouteFor = null, ctx._gmaps = null, ctx._gmapOverviewUntil = 0, ctx._gmapHeading = 0, ctx._gmapRot = 0, ctx._gmapScale = 1;
   function disposeMiniMap() {
-    if (_gmapDiv) _gmapDiv.style.transform = '';   // drop any heading-up rotation so a re-mount starts clean
-    if (_gmapClick) { _gmapClick.remove(); _gmapClick = null; }
-    if (_gmapCar) { _gmapCar.setMap(null); _gmapCar = null; }
-    if (_gmapRoute) { _gmapRoute.setMap(null); _gmapRoute = null; }
-    if (_gmaps && _gmap) _gmaps.event.clearInstanceListeners(_gmap);
-    _gmap = null; _gmapDiv = null; _gmapRouteFor = null; _gmapOverviewUntil = 0;
+    if (ctx._gmapDiv) ctx._gmapDiv.style.transform = '';   // drop any heading-up rotation so a re-mount starts clean
+    if (ctx._gmapClick) { ctx._gmapClick.remove(); ctx._gmapClick = null; }
+    if (ctx._gmapCar) { ctx._gmapCar.setMap(null); ctx._gmapCar = null; }
+    if (ctx._gmapRoute) { ctx._gmapRoute.setMap(null); ctx._gmapRoute = null; }
+    if (ctx._gmaps && ctx._gmap) ctx._gmaps.event.clearInstanceListeners(ctx._gmap);
+    ctx._gmap = null; ctx._gmapDiv = null; ctx._gmapRouteFor = null; ctx._gmapOverviewUntil = 0;
   }
   function initMiniMap(div) {
-    if (!div || _gmapDiv === div) return;
+    if (!div || ctx._gmapDiv === div) return;
     disposeMiniMap();
-    _gmapDiv = div;
+    ctx._gmapDiv = div;
     div.style.transformOrigin = '50% 50%'; div.style.willChange = 'transform';   // spin the heading-up map about its centre (the car)
     loadMapsSDK().then(maps => {
-      if (disposed || _gmapDiv !== div) return;
-      _gmaps = maps;
+      if (ctx.disposed || ctx._gmapDiv !== div) return;
+      ctx._gmaps = maps;
       const o = worldToGeo(ctx.car.x, ctx.car.z);
-      _gmap = new maps.Map(div, {
+      ctx._gmap = new maps.Map(div, {
         center: { lat: o.lat, lng: o.lon }, zoom: 12, disableDefaultUI: true,   // zoomed-out district view (~10 km across) so fast cross-town drives stay on the map
         gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
         styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
       });
-      _gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: _gmap, zIndex: 5,
+      ctx._gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: ctx._gmap, zIndex: 5,
         icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5, scale: 1.05, rotation: 0, anchor: new maps.Point(0, 0) } });
-      _gmapRoute = new maps.Polyline({ map: _gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
+      ctx._gmapRoute = new maps.Polyline({ map: ctx._gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
       // TAP-TO-DRIVE on the heading-up map: Google's own click→latLng is computed from the click's
       // offset within the container, which a CSS rotate()+scale() DISTORTS (taps land in the wrong
       // place). So handle the tap ourselves: undo the scale + rotation we applied, then convert the
       // map-local pixel offset to a world point via the live metres-per-pixel. Capture phase so it
       // beats any inner Google handler.
       const onTap = (e) => {
-        if (!_gmap) return;
+        if (!ctx._gmap) return;
         const r = div.getBoundingClientRect();
         const fcx = r.left + r.width / 2, fcy = r.top + r.height / 2;   // rotate/scale are about centre → bbox centre stays on the car
-        const ox = (e.clientX - fcx) / _gmapScale, oy = (e.clientY - fcy) / _gmapScale;   // undo fill scale → layout px from centre
-        const ar = _gmapRot * Math.PI / 180, c = Math.cos(ar), s = Math.sin(ar);          // undo the heading-up rotation
+        const ox = (e.clientX - fcx) / ctx._gmapScale, oy = (e.clientY - fcy) / ctx._gmapScale;   // undo fill scale → layout px from centre
+        const ar = ctx._gmapRot * Math.PI / 180, c = Math.cos(ar), s = Math.sin(ar);          // undo the heading-up rotation
         const mx = ox * c - oy * s, my = ox * s + oy * c;
-        const ctr = _gmap.getCenter(), lat = ctr.lat(), z = _gmap.getZoom();
+        const ctr = ctx._gmap.getCenter(), lat = ctr.lat(), z = ctx._gmap.getZoom();
         const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);        // Web-Mercator metres per layout px
         const cw = geoToWorld(lat, ctr.lng());   // anchor to the map's ACTUAL centre, not the car — during a route overview the view is fitBounds-centred, not on the car
         setDriveTarget(cw[0] + mx * mpp, cw[1] + my * mpp);   // screen x→east(+x), screen y(down)→south(+z)
       };
       div.addEventListener('click', onTap, true);
-      _gmapClick = { remove: () => div.removeEventListener('click', onTap, true) };   // disposeMiniMap calls _gmapClick.remove()
+      ctx._gmapClick = { remove: () => div.removeEventListener('click', onTap, true) };   // disposeMiniMap calls _gmapClick.remove()
     }).catch(() => { });
   }
   function updateMiniMap(now) {
-    if (!_gmap || now - _gmapT < 200) return;   // ~5 Hz pan
-    _gmapT = now;
+    if (!ctx._gmap || now - ctx._gmapT < 200) return;   // ~5 Hz pan
+    ctx._gmapT = now;
     const o = worldToGeo(ctx.car.x, ctx.car.z);
     // HEADING-UP: spin the whole map so the car's heading points UP — oriented like the driver/user,
     // the way a phone GPS does. World is x=east, z=-north and car.yaw=atan2(east,-north), so the
@@ -2575,25 +2575,25 @@ export function createEngine({ canvas, ui, emit }) {
     // scale up to fill the corners the rotation exposes), then point the car marker the same way so it
     // sits pointing straight up. During a route OVERVIEW the map isn't car-centred, so stay north-up.
     const bearing = 180 - viewHeading() * 180 / Math.PI;   // viewHeading = COMPASS while following (map turns like the user), else the car heading
-    const overview = now < _gmapOverviewUntil;
-    if (!overview) { const d = ((bearing - _gmapHeading + 180) % 360 + 360) % 360 - 180; _gmapHeading += d * 0.35; }   // smoothed, unwrapped → no shimmer / no 360° spin
-    _gmapRot = overview ? 0 : _gmapHeading; _gmapScale = overview ? 1 : 1.62;   // kept in sync with the transform below so the tap handler can invert it exactly
-    if (_gmapDiv) _gmapDiv.style.transform = overview ? 'none' : `rotate(${(-_gmapHeading).toFixed(2)}deg) scale(${_gmapScale})`;
-    if (_gmapCar) {
-      _gmapCar.setPosition({ lat: o.lat, lng: o.lon });
-      const ic = _gmapCar.getIcon(); ic.rotation = overview ? bearing : _gmapHeading; _gmapCar.setIcon(ic);   // north-up: along bearing; heading-up: same as the div's counter-rotation → points UP
+    const overview = now < ctx._gmapOverviewUntil;
+    if (!overview) { const d = ((bearing - ctx._gmapHeading + 180) % 360 + 360) % 360 - 180; ctx._gmapHeading += d * 0.35; }   // smoothed, unwrapped → no shimmer / no 360° spin
+    ctx._gmapRot = overview ? 0 : ctx._gmapHeading; ctx._gmapScale = overview ? 1 : 1.62;   // kept in sync with the transform below so the tap handler can invert it exactly
+    if (ctx._gmapDiv) ctx._gmapDiv.style.transform = overview ? 'none' : `rotate(${(-ctx._gmapHeading).toFixed(2)}deg) scale(${ctx._gmapScale})`;
+    if (ctx._gmapCar) {
+      ctx._gmapCar.setPosition({ lat: o.lat, lng: o.lon });
+      const ic = ctx._gmapCar.getIcon(); ic.rotation = overview ? bearing : ctx._gmapHeading; ctx._gmapCar.setIcon(ic);   // north-up: along bearing; heading-up: same as the div's counter-rotation → points UP
     }
-    if (_gmapRoute) {
-      if (ROUTE && ROUTE.length && _gmapRouteFor !== ROUTE) {
-        _gmapRouteFor = ROUTE;
-        const pts = ROUTE.map(p => { const g = worldToGeo(p.x, p.z); return { lat: g.lat, lng: g.lon }; });
-        _gmapRoute.setPath(pts);
+    if (ctx._gmapRoute) {
+      if (ctx.ROUTE && ctx.ROUTE.length && ctx._gmapRouteFor !== ctx.ROUTE) {
+        ctx._gmapRouteFor = ctx.ROUTE;
+        const pts = ctx.ROUTE.map(p => { const g = worldToGeo(p.x, p.z); return { lat: g.lat, lng: g.lon }; });
+        ctx._gmapRoute.setPath(pts);
         // ROUTE OVERVIEW: fit the whole start→finish into view for a few seconds when a new
         // route is set, then resume following the car (the user asked to see the full route).
-        if (_gmaps) { const b = new _gmaps.LatLngBounds(); b.extend({ lat: o.lat, lng: o.lon }); for (const p of pts) b.extend(p); _gmap.fitBounds(b, 12); _gmapOverviewUntil = now + 3500; }
-      } else if (!ROUTE && _gmapRouteFor) { _gmapRouteFor = null; _gmapRoute.setPath([]); }
+        if (ctx._gmaps) { const b = new ctx._gmaps.LatLngBounds(); b.extend({ lat: o.lat, lng: o.lon }); for (const p of pts) b.extend(p); ctx._gmap.fitBounds(b, 12); ctx._gmapOverviewUntil = now + 3500; }
+      } else if (!ctx.ROUTE && ctx._gmapRouteFor) { ctx._gmapRouteFor = null; ctx._gmapRoute.setPath([]); }
     }
-    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() !== 12) _gmap.setZoom(12); }   // follow the car zoomed out (~10 km across); settle back to 12 after any route overview
+    if (now >= ctx._gmapOverviewUntil) { ctx._gmap.setCenter({ lat: o.lat, lng: o.lon }); if (ctx._gmap.getZoom() !== 12) ctx._gmap.setZoom(12); }   // follow the car zoomed out (~10 km across); settle back to 12 after any route overview
   }
   function geocodePlaceId(placeId, fallbackLabel) {
     return loadMapsSDK().then(maps => new Promise((res, rej) => {
@@ -2625,14 +2625,14 @@ export function createEngine({ canvas, ui, emit }) {
   // Relocate the START: teleport the car to an address, land it on a ROAD (so it matches
   // where Drive-to arrives — Google geocodes to a rooftop/parcel, not the curb), clear any
   // destination, re-settle the camera. Lets you start anywhere on the map.
-  let jumpReqId = 0, _jumpSnap = null;   // after a FAR jump: { x, z, until } — snap onto the road once OSM/Google for the NEW area lands; time+position scoped so it self-expires and can't leak into a later drive
+  ctx.jumpReqId = 0, ctx._jumpSnap = null;   // after a FAR jump: { x, z, until } — snap onto the road once OSM/Google for the NEW area lands; time+position scoped so it self-expires and can't leak into a later drive
   // Full post-teleport reset in ONE place: zero the car's motion, force a fresh ground
   // sample, and RE-SEAT every camera reference (camGroundRef/camFloorRef were the ones the
   // old jump paths forgot — leaving the orbit cam floating at the OLD altitude for seconds,
   // which read as "we lost the car"). Short cooldown so a bad landing still recovers fast.
   function settleAfterTeleport() {
     ctx.car.speed = 0; ctx.car.vlat = 0; ctx.car.steer = 0; ctx.car.assistRate = 0; ctx.car.revArmT = 0; ctx.car.groundY = null;
-    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6; _viewYaw = viewHeading(); _miniYaw = viewHeading(); _gmapHeading = ((180 - viewHeading() * 180 / Math.PI) % 360 + 360) % 360;   // snap the overhead/aerial framing + BOTH minimaps to the new heading (no rotate-in after a jump/teleport)
+    ctx.camInit = false; ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.inp2.navActive = false; ctx.recoverCooldown = 0.6; ctx._viewYaw = viewHeading(); ctx._miniYaw = viewHeading(); ctx._gmapHeading = ((180 - viewHeading() * 180 / Math.PI) % 360 + 360) % 360;   // snap the overhead/aerial framing + BOTH minimaps to the new heading (no rotate-in after a jump/teleport)
   }
   function jumpTo(lat, lon, label) {
     stopFollow();   // a teleport OWNS the car — end any live GPS follow (else its glide springs the car back). Mirrors setDestination/setDriveTarget/driveToMyLocation/exitDrive.
@@ -2656,7 +2656,7 @@ export function createEngine({ canvas, ui, emit }) {
     // first snaps the car onto the road — see the _jumpSnap handler in updateAreaRoads + snapJumpToRoad).
     // The stamp (target + 8 s deadline) makes it single-use and self-expiring so it can never teleport the
     // car at some unrelated later moment if both fetches fail.
-    if (!onLocalRoad) { _jumpSnap = { x: ctx.car.x, z: ctx.car.z, until: performance.now() + 8000 }; updateAreaRoads(performance.now(), true); snapJumpToRoad(ox, oz, lat, lon, ++jumpReqId); }
+    if (!onLocalRoad) { ctx._jumpSnap = { x: ctx.car.x, z: ctx.car.z, until: performance.now() + 8000 }; updateAreaRoads(performance.now(), true); snapJumpToRoad(ox, oz, lat, lon, ++ctx.jumpReqId); }
   }
   // One-shot road-snap for a FAR jump: route origin→destination and move the car to the
   // route's final point — the same curb Drive-to arrives at. Bails if a newer jump fired or
@@ -2667,7 +2667,7 @@ export function createEngine({ canvas, ui, emit }) {
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat, lng: lon }, travelMode: 'DRIVING' },
         (result, status) => {
-          if (reqId !== jumpReqId || DEST || !_jumpSnap || Math.abs(ctx.car.speed) >= 4) return;   // a newer jump/destination fired, OSM already snapped (flag consumed), or the user drove off — don't double-snap or yank a moving car
+          if (reqId !== ctx.jumpReqId || ctx.DEST || !ctx._jumpSnap || Math.abs(ctx.car.speed) >= 4) return;   // a newer jump/destination fired, OSM already snapped (flag consumed), or the user drove off — don't double-snap or yank a moving car
           if (status !== 'OK' || !result.routes || !result.routes[0]) return;
           const path = [];
           for (const leg of result.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) path.push(p);
@@ -2678,7 +2678,7 @@ export function createEngine({ canvas, ui, emit }) {
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
           const np = nearestRoadPoint(ctx.car.x, ctx.car.z);
           if (np && (np.d < 90 || insideBuilding(ctx.car.x, ctx.car.z))) { ctx.car.x = np.x; ctx.car.z = np.z; }
-          _jumpSnap = null;   // Google curb landed first — consume the stamp so the OSM-fetch snap won't double-fire
+          ctx._jumpSnap = null;   // Google curb landed first — consume the stamp so the OSM-fetch snap won't double-fire
           settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
         }
       );
@@ -2706,34 +2706,34 @@ export function createEngine({ canvas, ui, emit }) {
   // FOLLOW = track the user's real GPS position EXACTLY: glide straight to the live point (NO Google
   // routing — that snapped to the "wrong street" and overshot short hops) and orient the car to the
   // phone's compass heading. "Drive to me" (non-follow) still routes there once for the scenic drive.
-  let _geoWatch = null, followMode = false, _followGeo = null, _followHeading = null, _followSeeded = false;
-  let _followVx = 0, _followVz = 0;   // spring VELOCITY for the follow glide — momentum so a new GPS fix accelerates smoothly instead of darting/stopping (no stop-and-go between sparse updates)
-  let _headingOn = false, _headingOff = null, _headingGen = 0;
+  ctx._geoWatch = null, ctx.followMode = false, ctx._followGeo = null, ctx._followHeading = null, ctx._followSeeded = false;
+  ctx._followVx = 0, ctx._followVz = 0;   // spring VELOCITY for the follow glide — momentum so a new GPS fix accelerates smoothly instead of darting/stopping (no stop-and-go between sparse updates)
+  ctx._headingOn = false, ctx._headingOff = null, ctx._headingGen = 0;
   function startHeading() {
-    if (_headingOn) return;
-    _headingOn = true;   // claim SYNCHRONOUSLY so a stopHeading()/dispose() during the async iOS permission prompt makes a late grant a no-op (else attach() would orphan window listeners)
-    const myGen = ++_headingGen;   // a stop→restart while a permission prompt is still pending must not let the OLD grant attach a second, unremovable listener pair
+    if (ctx._headingOn) return;
+    ctx._headingOn = true;   // claim SYNCHRONOUSLY so a stopHeading()/dispose() during the async iOS permission prompt makes a late grant a no-op (else attach() would orphan window listeners)
+    const myGen = ++ctx._headingGen;   // a stop→restart while a permission prompt is still pending must not let the OLD grant attach a second, unremovable listener pair
     const onOrient = (e) => {
       let h = null;
       if (typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading;   // iOS: degrees clockwise from true north
       else if (e.absolute && typeof e.alpha === 'number') h = (360 - e.alpha) % 360;                                          // others: alpha rises counter-clockwise from north
-      if (h != null) _followHeading = Math.PI - h * Math.PI / 180;   // → world yaw (x=E, z=-N, forward=(sin,cos)): yaw = π − heading
+      if (h != null) ctx._followHeading = Math.PI - h * Math.PI / 180;   // → world yaw (x=E, z=-N, forward=(sin,cos)): yaw = π − heading
     };
     const attach = () => {
-      if (!_headingOn || disposed || myGen !== _headingGen) return;   // follow ended/restarted or engine torn down while the permission dialog was open → don't attach orphan listeners
+      if (!ctx._headingOn || ctx.disposed || myGen !== ctx._headingGen) return;   // follow ended/restarted or engine torn down while the permission dialog was open → don't attach orphan listeners
       window.addEventListener('deviceorientationabsolute', onOrient, true);
       window.addEventListener('deviceorientation', onOrient, true);
-      _headingOff = () => { window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true); };
+      ctx._headingOff = () => { window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true); };
     };
     const DOE = window.DeviceOrientationEvent;
     if (DOE && typeof DOE.requestPermission === 'function') DOE.requestPermission().then(s => { if (s === 'granted') attach(); }).catch(() => { });   // iOS 13+: gesture-gated permission
     else attach();
   }
-  function stopHeading() { if (_headingOff) { try { _headingOff(); } catch (e) { } } _headingOff = null; _headingOn = false; _followHeading = null; }
+  function stopHeading() { if (ctx._headingOff) { try { ctx._headingOff(); } catch (e) { } } ctx._headingOff = null; ctx._headingOn = false; ctx._followHeading = null; }
   function stopFollow() {
-    const was = followMode || _geoWatch != null;
-    if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; }
-    followMode = false; _followGeo = null; _followSeeded = false; _followVx = 0; _followVz = 0; _jumpSnap = null; stopHeading();
+    const was = ctx.followMode || ctx._geoWatch != null;
+    if (ctx._geoWatch != null) { try { navigator.geolocation.clearWatch(ctx._geoWatch); } catch (e) { } ctx._geoWatch = null; }
+    ctx.followMode = false; ctx._followGeo = null; ctx._followSeeded = false; ctx._followVx = 0; ctx._followVz = 0; ctx._jumpSnap = null; stopHeading();
     if (was) emit('follow', false);
   }
   // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
@@ -2742,16 +2742,16 @@ export function createEngine({ canvas, ui, emit }) {
   function setFollowGeo(lat, lon) {
     const w = geoToWorld(lat, lon); let wx = w[0], wz = w[1];
     const r = Math.hypot(wx, wz); if (r > 30000) { const s = 30000 / r; wx *= s; wz *= s; }
-    if (!_followSeeded) { _followSeeded = true; ctx.car.x = wx; ctx.car.z = wz; _followVx = 0; _followVz = 0; settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
-    _followGeo = { x: wx, z: wz };
+    if (!ctx._followSeeded) { ctx._followSeeded = true; ctx.car.x = wx; ctx.car.z = wz; ctx._followVx = 0; ctx._followVz = 0; settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
+    ctx._followGeo = { x: wx, z: wz };
   }
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { ctx.toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
     stopFollow();
-    if (mode !== 'drive') enterDrive();
+    if (ctx.mode !== 'drive') enterDrive();
     if (follow) {
       startHeading();                                                  // request the compass NOW, inside the button-tap gesture (iOS requires that)
-      followMode = true; autoDrive = false; clearRouteRail(); clearDestination();   // exact-follow OWNS the car — kill any rail/route
+      ctx.followMode = true; ctx.autoDrive = false; clearRouteRail(); clearDestination();   // exact-follow OWNS the car — kill any rail/route
       emit('autodrive', false); emit('follow', true);
       ctx.toast('📍 Following you — the car tracks your location', 1700);
     }
@@ -2760,7 +2760,7 @@ export function createEngine({ canvas, ui, emit }) {
       navigator.geolocation.getCurrentPosition(
         pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
-          if (Number.isFinite(lat) && Number.isFinite(lon) && mode === 'drive') {
+          if (Number.isFinite(lat) && Number.isFinite(lon) && ctx.mode === 'drive') {
             if (follow) { if (pos.coords.accuracy == null || pos.coords.accuracy <= 60) setFollowGeo(lat, lon); }   // gate the SEED too — a junk/stale first fix is exactly what put the car on the wrong street; the watcher supplies a good one if this is dropped
             else { driveToLatLon(lat, lon, '📍 Your location'); ctx.toast('📍 Driving to you', 1500); }
           }
@@ -2775,9 +2775,9 @@ export function createEngine({ canvas, ui, emit }) {
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 1000 });   // fresh-ish seed (the 2 s cache could hand back a stale low-accuracy fix)
       if (follow) {
-        _geoWatch = navigator.geolocation.watchPosition(pos => {
+        ctx._geoWatch = navigator.geolocation.watchPosition(pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
-          if (!followMode || mode !== 'drive' || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          if (!ctx.followMode || ctx.mode !== 'drive' || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
           if (pos.coords.accuracy != null && pos.coords.accuracy > 60) return;   // drop junk fixes — those caused the "wrong street" jumps
           setFollowGeo(lat, lon);                                       // just move the (ring-clamped) target; the glide in updateDrive smooths jitter + can't overshoot
         }, (werr) => { if (werr && werr.code === werr.PERMISSION_DENIED) { stopFollow(); ctx.toast('📍 Location access needed to follow you', 2200); } }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 });   // end follow only on a REAL permission failure, not a transient timeout (the watch keeps retrying)
@@ -2785,12 +2785,12 @@ export function createEngine({ canvas, ui, emit }) {
     });
   }
   // Autodrive max-speed cap (mph; 0 = uncapped). Persisted; applied in autoDriveTargetSpeed.
-  let autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
-  function setAutoMaxMph(mph) { autoMaxMph = Math.max(0, mph | 0); try { localStorage.setItem('dahill.automax', String(autoMaxMph)); } catch (e) { } emit('automax', autoMaxMph); }
+  ctx.autoMaxMph = (() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } })();
+  function setAutoMaxMph(mph) { ctx.autoMaxMph = Math.max(0, mph | 0); try { localStorage.setItem('dahill.automax', String(ctx.autoMaxMph)); } catch (e) { } emit('automax', ctx.autoMaxMph); }
   // Global driving-speed/accel multiplier (settings slider). Scales top speed AND accel so the
   // whole envelope slows together — a parent can dial it down for little kids on tight streets.
-  let speedMul = (() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } })();
-  function setSpeedMul(v) { speedMul = clamp(+v || 1, 0.3, 2); try { localStorage.setItem('dahill.speedmul', String(speedMul)); } catch (e) { } }
+  ctx.speedMul = (() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } })();
+  function setSpeedMul(v) { ctx.speedMul = clamp(+v || 1, 0.3, 2); try { localStorage.setItem('dahill.speedmul', String(ctx.speedMul)); } catch (e) { } }
   // Tap-to-drive from the minimap: set a raw world point as the destination and let
   // the robot drive there (no Google route needed for a nearby local point). Reuses
   // DEST + auto-drive, so the guide ribbon, pin, ETA and arrival all just work.
@@ -2800,14 +2800,14 @@ export function createEngine({ canvas, ui, emit }) {
   // metres out (or the destination if a route isn't ready yet).
   function faceRouteStart() {
     let tx = null, tz = null;
-    if (ROUTE && ROUTE.length) {
-      let i = Math.max(0, routeIdx);
-      while (i < ROUTE.length - 1 && Math.hypot(ROUTE[i].x - ctx.car.x, ROUTE[i].z - ctx.car.z) < 6) i++;
-      tx = ROUTE[i].x; tz = ROUTE[i].z;
-    } else if (DEST) { tx = DEST.x; tz = DEST.z; }
+    if (ctx.ROUTE && ctx.ROUTE.length) {
+      let i = Math.max(0, ctx.routeIdx);
+      while (i < ctx.ROUTE.length - 1 && Math.hypot(ctx.ROUTE[i].x - ctx.car.x, ctx.ROUTE[i].z - ctx.car.z) < 6) i++;
+      tx = ctx.ROUTE[i].x; tz = ctx.ROUTE[i].z;
+    } else if (ctx.DEST) { tx = ctx.DEST.x; tz = ctx.DEST.z; }
     if (tx == null || Math.hypot(tx - ctx.car.x, tz - ctx.car.z) < 1) return;
     ctx.car.yaw = Math.atan2(tx - ctx.car.x, tz - ctx.car.z);
-    ctx.car.steer = 0; ctx.car.vlat = 0; ctx.car.assistRate = 0; camInit = false;   // re-settle the chase cam behind the new heading
+    ctx.car.steer = 0; ctx.car.vlat = 0; ctx.car.assistRate = 0; ctx.camInit = false;   // re-settle the chase cam behind the new heading
   }
   function setDriveTarget(wx, wz) {
     stopFollow();   // tapping the map to drive ENDS follow — else followMode stays true and its glide branch shadows the new route (tap looked dead). Covers both the canvas tap and the Google onTap.
@@ -2819,11 +2819,11 @@ export function createEngine({ canvas, ui, emit }) {
     const g = worldToGeo(wx, wz);
     let route = localRoadRoute(ctx.car.x, ctx.car.z, wx, wz);
     if (!route) { const np = nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z); }
-    DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ROUTE = route || null; routeIdx = 0; destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
-    if (ROUTE) snapDestinationToRouteEnd(ROUTE);
+    ctx.DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ctx.ROUTE = route || null; ctx.routeIdx = 0; destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
+    if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
     fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
-    autoDrive = true; inp2.navActive = false;
-    emit('dest', { label: DEST.label }); emit('autodrive', true);
+    ctx.autoDrive = true; ctx.inp2.navActive = false;
+    emit('dest', { label: ctx.DEST.label }); emit('autodrive', true);
     faceRouteStart();
     ctx.toast(route ? '🤖 Cruising the streets' : '🗺️ Finding a road route…', 1200);
   }
@@ -2831,40 +2831,40 @@ export function createEngine({ canvas, ui, emit }) {
   // guide ribbon + auto-drive follow the road smoothly instead of snapping between
   // dense waypoints). Falls back to the destination (straight line) with no route.
   function navTarget() {
-    if (!ROUTE || routeIdx >= ROUTE.length) return DEST;
+    if (!ctx.ROUTE || ctx.routeIdx >= ctx.ROUTE.length) return ctx.DEST;
     // SPEED-SCALED look-ahead: tight at low speed so the car HUGS the route (sticks to
     // the road through turns), longer at speed for a smooth line. A fixed 32 m look-ahead
     // cut every corner.
     const look = clamp(Math.abs(ctx.car.speed) * 0.42, 11, 42);   // tight at low speed (HUGS corners), longer at speed so the chauffeur can anticipate the next bend far from home
     let acc = 0, px = ctx.car.x, pz = ctx.car.z;
-    for (let i = routeIdx; i < ROUTE.length; i++) {
-      acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
+    for (let i = ctx.routeIdx; i < ctx.ROUTE.length; i++) {
+      acc += Math.hypot(ctx.ROUTE[i].x - px, ctx.ROUTE[i].z - pz); px = ctx.ROUTE[i].x; pz = ctx.ROUTE[i].z;
       if (acc >= look) return laneOffset(i);
     }
-    return DEST;
+    return ctx.DEST;
   }
   // LANE: aim ~1.7 m to the RIGHT of the route centreline so the car drives IN A LANE
   // instead of straddling the middle of the road (it follows the right perpendicular of the
   // local route direction). Only kicks in on faster/wider roads where lane-keeping reads.
   function laneOffset(i) {
-    const a = ROUTE[Math.max(0, i - 1)], b = ROUTE[Math.min(ROUTE.length - 1, i + 1)];
+    const a = ctx.ROUTE[Math.max(0, i - 1)], b = ctx.ROUTE[Math.min(ctx.ROUTE.length - 1, i + 1)];
     let dx = b.x - a.x, dz = b.z - a.z; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
     // Lane offset only at highway speed, and SMALLER on the tight procedural
     // neighbourhood streets (onRoad mask, or within the ~340 m home block) so it
     // hugs the lane out on the wide real roads without scraping the curb in town.
-    const narrow = ctx.onRoad(ROUTE[i].x, ROUTE[i].z) || Math.hypot(ROUTE[i].x, ROUTE[i].z) < 340;
+    const narrow = ctx.onRoad(ctx.ROUTE[i].x, ctx.ROUTE[i].z) || Math.hypot(ctx.ROUTE[i].x, ctx.ROUTE[i].z) < 340;
     const off = clamp((Math.abs(ctx.car.speed) - 22) / 30, 0, 1) * (narrow ? 0.45 : 1.1);
-    return { x: ROUTE[i].x + dz * off, z: ROUTE[i].z - dx * off };   // right perpendicular = (dz, -dx)
+    return { x: ctx.ROUTE[i].x + dz * off, z: ctx.ROUTE[i].z - dx * off };   // right perpendicular = (dz, -dx)
   }
   // distance along the route to the next real TURN (>~25° heading change) — lets the
   // chauffeur run FAST on long straights and only slow for corners/arrival.
   function distToNextTurn() {
-    if (!ROUTE || routeIdx >= ROUTE.length - 1) return 40;
+    if (!ctx.ROUTE || ctx.routeIdx >= ctx.ROUTE.length - 1) return 40;
     let acc = 0, px = ctx.car.x, pz = ctx.car.z;
-    let hx = ROUTE[routeIdx].x - px, hz = ROUTE[routeIdx].z - pz; let hl = Math.hypot(hx, hz) || 1; hx /= hl; hz /= hl;
-    for (let i = routeIdx; i < ROUTE.length - 1 && acc < 500; i++) {
-      acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); px = ROUTE[i].x; pz = ROUTE[i].z;
-      let nx = ROUTE[i + 1].x - px, nz = ROUTE[i + 1].z - pz; const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
+    let hx = ctx.ROUTE[ctx.routeIdx].x - px, hz = ctx.ROUTE[ctx.routeIdx].z - pz; let hl = Math.hypot(hx, hz) || 1; hx /= hl; hz /= hl;
+    for (let i = ctx.routeIdx; i < ctx.ROUTE.length - 1 && acc < 500; i++) {
+      acc += Math.hypot(ctx.ROUTE[i].x - px, ctx.ROUTE[i].z - pz); px = ctx.ROUTE[i].x; pz = ctx.ROUTE[i].z;
+      let nx = ctx.ROUTE[i + 1].x - px, nz = ctx.ROUTE[i + 1].z - pz; const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
       if (hx * nx + hz * nz < 0.9) break;   // ~25°+ bend ahead
       hx = nx; hz = nz;
     }
@@ -2875,16 +2875,16 @@ export function createEngine({ canvas, ui, emit }) {
   // overshoot a bend or ping-pong off the route, no matter the speed. (Supernatural traction by design.)
   let _routeLenFor = null, _routeLen = 0;
   function routeTotalLen() {
-    if (!ROUTE) return 0;
-    if (_routeLenFor === ROUTE) return _routeLen;
-    _routeLenFor = ROUTE; _routeLen = 0;
-    for (let i = 0; i < ROUTE.length - 1; i++) _routeLen += Math.hypot(ROUTE[i + 1].x - ROUTE[i].x, ROUTE[i + 1].z - ROUTE[i].z);
+    if (!ctx.ROUTE) return 0;
+    if (_routeLenFor === ctx.ROUTE) return _routeLen;
+    _routeLenFor = ctx.ROUTE; _routeLen = 0;
+    for (let i = 0; i < ctx.ROUTE.length - 1; i++) _routeLen += Math.hypot(ctx.ROUTE[i + 1].x - ctx.ROUTE[i].x, ctx.ROUTE[i + 1].z - ctx.ROUTE[i].z);
     return _routeLen;
   }
   function railArcAt(x, z) {   // arc-length (m from ROUTE[0]) of the nearest point on the route to (x,z)
     let bestS = 0, bd = 1e18, acc = 0;
-    for (let i = 0; i < ROUTE.length - 1; i++) {
-      const ax = ROUTE[i].x, az = ROUTE[i].z, vx = ROUTE[i + 1].x - ax, vz = ROUTE[i + 1].z - az, L = Math.hypot(vx, vz) || 1;
+    for (let i = 0; i < ctx.ROUTE.length - 1; i++) {
+      const ax = ctx.ROUTE[i].x, az = ctx.ROUTE[i].z, vx = ctx.ROUTE[i + 1].x - ax, vz = ctx.ROUTE[i + 1].z - az, L = Math.hypot(vx, vz) || 1;
       let t = ((x - ax) * vx + (z - az) * vz) / (L * L); t = t < 0 ? 0 : t > 1 ? 1 : t;
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; bestS = acc + t * L; }
@@ -2894,16 +2894,16 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function railPointAt(s) {   // { x, z, yaw, i } at arc-length s along the route
     let acc = 0;
-    for (let i = 0; i < ROUTE.length - 1; i++) {
-      const ax = ROUTE[i].x, az = ROUTE[i].z, vx = ROUTE[i + 1].x - ax, vz = ROUTE[i + 1].z - az, L = Math.hypot(vx, vz) || 1;
-      if (acc + L >= s || i === ROUTE.length - 2) {
+    for (let i = 0; i < ctx.ROUTE.length - 1; i++) {
+      const ax = ctx.ROUTE[i].x, az = ctx.ROUTE[i].z, vx = ctx.ROUTE[i + 1].x - ax, vz = ctx.ROUTE[i + 1].z - az, L = Math.hypot(vx, vz) || 1;
+      if (acc + L >= s || i === ctx.ROUTE.length - 2) {
         const t = clamp((s - acc) / L, 0, 1);
         return { x: ax + vx * t, z: az + vz * t, yaw: Math.atan2(vx, vz), i };
       }
       acc += L;
     }
-    const last = ROUTE[ROUTE.length - 1], prev = ROUTE[ROUTE.length - 2];
-    return { x: last.x, z: last.z, yaw: Math.atan2(last.x - prev.x, last.z - prev.z), i: ROUTE.length - 2 };
+    const last = ctx.ROUTE[ctx.ROUTE.length - 1], prev = ctx.ROUTE[ctx.ROUTE.length - 2];
+    return { x: last.x, z: last.z, yaw: Math.atan2(last.x - prev.x, last.z - prev.z), i: ctx.ROUTE.length - 2 };
   }
   function autoDriveTargetSpeed(dDest) {
     const turn = distToNextTurn();
@@ -2916,10 +2916,10 @@ export function createEngine({ canvas, ui, emit }) {
     // by distance to it. Without this the chauffeur blasts a highway at 450 mph and overshoots
     // the onramp/exit, looping the interchange. ~40 u/s near a turn → ~400 on a long straight.
     s = Math.min(s, 16 + turn * 1.25);   // reuse the `turn` computed above — don't walk the route twice
-    if (autoMaxMph) s = Math.min(s, autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
+    if (ctx.autoMaxMph) s = Math.min(s, ctx.autoMaxMph / 2.237);   // user's autodrive speed-limit slider (mph → world u/s)
     return s;
   }
-  function toggleAutoDrive() { if (!DEST) return; autoDrive = !autoDrive; clearRouteRail(); if (!autoDrive) inp2.navActive = false; else faceRouteStart(); emit('autodrive', autoDrive); ctx.toast(autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
+  function toggleAutoDrive() { if (!ctx.DEST) return; ctx.autoDrive = !ctx.autoDrive; clearRouteRail(); if (!ctx.autoDrive) ctx.inp2.navActive = false; else faceRouteStart(); emit('autodrive', ctx.autoDrive); ctx.toast(ctx.autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
   // nearest road-segment direction (oriented to the car's heading) for the lane-keep
   // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
   // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
@@ -2930,7 +2930,7 @@ export function createEngine({ canvas, ui, emit }) {
   // when you run wide, and it needs no wide-angle gate to survive a 90° street corner.
   // Returns null when the car is >10 m off any road (don't tug you around a lawn).
   function roadTargetAhead(x, z, yaw, speed) {
-    const segs = (x * x + z * z < 330 * 330) ? roadSegs : osmRoadSegs;   // hood graph near home, the fetched OSM graph everywhere else
+    const segs = (x * x + z * z < 330 * 330) ? ctx.roadSegs : ctx.osmRoadSegs;   // hood graph near home, the fetched OSM graph everywhere else
     let carD = 1e18;                                 // how far the car is from the road right now
     for (const s of segs) {
       const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
@@ -2966,9 +2966,9 @@ export function createEngine({ canvas, ui, emit }) {
     // Live Google route first (real roads), then the OSM road network fetched around the car (works
     // far from the procedural hood), then EVERY mapped neighbourhood road. So the steer-back + soft
     // wall + reset always have a real road to aim at, anywhere on the map.
-    if (ROUTE && ROUTE.length > 1) for (let i = 0; i < ROUTE.length - 1; i++) tryAB(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
-    for (const s of osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
+    if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
+    for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
+    for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return { x: bx, z: bz, d: Math.sqrt(bd) };
   }
   // Unit tangent {tx,tz} of the nearest mapped road segment (so a followed car can face ALONG the street),
@@ -2981,21 +2981,21 @@ export function createEngine({ canvas, ui, emit }) {
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; const L = Math.sqrt(L2); tx = vx / L; tz = vz / L; found = true; }
     };
-    if (ROUTE && ROUTE.length > 1) for (let i = 0; i < ROUTE.length - 1; i++) tryAB(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
-    for (const s of osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    for (const s of allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
+    if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
+    for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
+    for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
     return found ? { tx, tz, d: Math.sqrt(bd) } : null;
   }
   // The heading the MAP views (overhead/aerial main view + both minimaps) orient to: the live COMPASS
   // heading while following (so the map turns like the user/phone), else the car's own heading.
-  function viewHeading() { return (followMode && _followHeading != null) ? _followHeading : ctx.car.yaw; }
+  function viewHeading() { return (ctx.followMode && ctx._followHeading != null) ? ctx._followHeading : ctx.car.yaw; }
   // Live "where am I" readout: reverse-geocode the car's position to a rough STREET · CITY, ST and push
   // it to the subline. Throttled hard (every ~4 s, and only after moving ~140 m) to stay well within the
   // geocoder quota; falls back silently on any error.
   let _geoT = 0, _geoBusy = false, _geoLabel = '', _geoLast = null;
   function updateLocationLabel(now) {
     if (_geoBusy && now - _geoT > 12000) _geoBusy = false;   // watchdog: a Geocoder callback that never fires must not wedge the readout dead for the session
-    if (mode !== 'drive' || _geoBusy || now - _geoT < 4000) return;
+    if (ctx.mode !== 'drive' || _geoBusy || now - _geoT < 4000) return;
     if (_geoLast && Math.hypot(ctx.car.x - _geoLast.x, ctx.car.z - _geoLast.z) < 140) return;
     _geoT = now; _geoLast = { x: ctx.car.x, z: ctx.car.z };
     const g = worldToGeo(ctx.car.x, ctx.car.z);
@@ -3024,7 +3024,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Self-throttled (one request at a time, ≥4 s apart, only when the car leaves the last box), and
   // fully graceful: if Overpass is unreachable it just keeps whatever roads it had (or none).
   function updateAreaRoads(now, force) {
-    if (mode !== 'drive') return;
+    if (ctx.mode !== 'drive') return;
     if (Math.hypot(ctx.car.x, ctx.car.z) < 300) return;                                  // the hood's own roadSegs already cover here
     if (_osmFetching) return;                                                    // one fetch at a time
     if (!force) {
@@ -3056,14 +3056,14 @@ export function createEngine({ canvas, ui, emit }) {
             }
           }
           if (segs.length) {
-            osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length;   // stick with the mirror that worked
+            ctx.osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length;   // stick with the mirror that worked
             // A far jump left the car off-road; now that we have THIS area's roads, snap it on — but ONLY if
             // it's still the SAME stopped, hands-off car the jump dropped (not following, no destination, still
             // near the jump target, within the deadline). Consume the stamp on the FIRST OSM landing either way
             // so it can never leak into a later drive.
-            if (_jumpSnap) {
-              const j = _jumpSnap; _jumpSnap = null;
-              if (!followMode && !DEST && Math.abs(ctx.car.speed) < 4 && performance.now() < j.until && Math.hypot(ctx.car.x - j.x, ctx.car.z - j.z) < 60) {
+            if (ctx._jumpSnap) {
+              const j = ctx._jumpSnap; ctx._jumpSnap = null;
+              if (!ctx.followMode && !ctx.DEST && Math.abs(ctx.car.speed) < 4 && performance.now() < j.until && Math.hypot(ctx.car.x - j.x, ctx.car.z - j.z) < 60) {
                 const np = nearestRoadPoint(ctx.car.x, ctx.car.z); if (np && np.d < 250) { ctx.car.x = np.x; ctx.car.z = np.z; settleAfterTeleport(); ctx.toast('🛣️ On the road', 900); }
               }
             }
@@ -3078,9 +3078,9 @@ export function createEngine({ canvas, ui, emit }) {
   // address trips; this keeps nearby "drive there" pins on neighborhood roads instead
   // of aiming a straight line across yards.
   function localRoadRoute(sx, sz, dx, dz) {
-    if (!roadSegs.length) return null;
+    if (!ctx.roadSegs.length) return null;
     const nodes = [], byKey = new Map(), edges = [];
-    const segPts = roadSegs.map(() => []);
+    const segPts = ctx.roadSegs.map(() => []);
     const keyOf = (x, z) => Math.round(x * 10) / 10 + ',' + Math.round(z * 10) / 10;
     const addNode = (x, z) => {
       const key = keyOf(x, z);
@@ -3090,8 +3090,8 @@ export function createEngine({ canvas, ui, emit }) {
     };
     const project = (x, z) => {
       let best = null, bd = 1e18;
-      for (let i = 0; i < roadSegs.length; i++) {
-        const s = roadSegs[i], ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
+      for (let i = 0; i < ctx.roadSegs.length; i++) {
+        const s = ctx.roadSegs[i], ax = s[0][0], az = s[0][1], bx = s[1][0], bz = s[1][1];
         const vx = bx - ax, vz = bz - az, L2 = vx * vx + vz * vz || 1;
         let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
         const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
@@ -3101,8 +3101,8 @@ export function createEngine({ canvas, ui, emit }) {
     };
     const start = project(sx, sz), finish = project(dx, dz);
     if (!start || !finish || start.d > 90 || finish.d > 90) return null;   // generous snap so taps near a road still route
-    for (let i = 0; i < roadSegs.length; i++) {
-      const s = roadSegs[i];
+    for (let i = 0; i < ctx.roadSegs.length; i++) {
+      const s = ctx.roadSegs[i];
       segPts[i].push({ id: addNode(s[0][0], s[0][1]), t: 0 });
       segPts[i].push({ id: addNode(s[1][0], s[1][1]), t: 1 });
     }
@@ -3144,8 +3144,8 @@ export function createEngine({ canvas, ui, emit }) {
     _routeYFor = null; _routeY = [];
   }
   function guideHeightAt(i) {
-    if (_routeYFor !== ROUTE) { _routeYFor = ROUTE; _routeY = []; }
-    const p = ROUTE[i], tA = terrainAt(p.x, p.z), nowMs = performance.now();
+    if (_routeYFor !== ctx.ROUTE) { _routeYFor = ctx.ROUTE; _routeY = []; }
+    const p = ctx.ROUTE[i], tA = terrainAt(p.x, p.z), nowMs = performance.now();
     let rec = _routeY[i];
     if (!rec || (!rec.confirmed && nowMs >= (rec.retryAt || 0))) {
       const base = rec ? rec.y : tA;
@@ -3167,9 +3167,9 @@ export function createEngine({ canvas, ui, emit }) {
     // frame is just interpolation + a tiny 540-float VBO upload — no per-frame raycasts.
     // start the ribbon ~6 m AHEAD of the car so the line never tints the car itself.
     const raw = [[ctx.car.x + Math.sin(ctx.car.yaw) * 6, ctx.car.z + Math.cos(ctx.car.yaw) * 6, yC]];
-    if (ROUTE && routeIdx < ROUTE.length) {
+    if (ctx.ROUTE && ctx.routeIdx < ctx.ROUTE.length) {
       let acc = 0, px = ctx.car.x, pz = ctx.car.z;
-      for (let i = routeIdx; i < ROUTE.length && acc < 170; i++) { acc += Math.hypot(ROUTE[i].x - px, ROUTE[i].z - pz); raw.push([ROUTE[i].x, ROUTE[i].z, guideHeightAt(i)]); px = ROUTE[i].x; pz = ROUTE[i].z; }
+      for (let i = ctx.routeIdx; i < ctx.ROUTE.length && acc < 170; i++) { acc += Math.hypot(ctx.ROUTE[i].x - px, ctx.ROUTE[i].z - pz); raw.push([ctx.ROUTE[i].x, ctx.ROUTE[i].z, guideHeightAt(i)]); px = ctx.ROUTE[i].x; pz = ctx.ROUTE[i].z; }
     } else { guideLine.visible = false; return; }   // ONLY ever follow a real road ROUTE — never a straight line across the land
     // resample to ~5 m steps, carrying the draped height through so each cross-section sits
     // on the road surface (interpolated between cached route-point heights).
@@ -3199,12 +3199,12 @@ export function createEngine({ canvas, ui, emit }) {
   function drawMinimap(ctx, w, h) {
     ctx.clearRect(0, 0, w, h);
     const cx = w / 2, cy = h / 2, range = 620, scale = (w / 2) / range;   // wider view to match the live map zoom-out
-    let _d = viewHeading() - _miniYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI;
-    _miniYaw += _d * 0.2;                                                  // ease the map's rotation (viewHeading = compass while following) so jitter doesn't shimmer the whole map
-    const ca = Math.cos(_miniYaw), sa = Math.sin(_miniYaw);
+    let _d = viewHeading() - ctx._miniYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI;
+    ctx._miniYaw += _d * 0.2;                                                  // ease the map's rotation (viewHeading = compass while following) so jitter doesn't shimmer the whole map
+    const ca = Math.cos(ctx._miniYaw), sa = Math.sin(ctx._miniYaw);
     const toPx = (wx, wz) => { const dx = wx - ctx.car.x, dz = wz - ctx.car.z; return [cx + (-dx * ca + dz * sa) * scale, cy + (-dx * sa - dz * ca) * scale]; };   // heading-up rotation: forward → screen-up
     ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath();
-    for (const s of roadSegs) {
+    for (const s of ctx.roadSegs) {
       const a = toPx(s[0][0], s[0][1]), b = toPx(s[1][0], s[1][1]);
       if ((a[0] < -10 && b[0] < -10) || (a[0] > w + 10 && b[0] > w + 10) || (a[1] < -10 && b[1] < -10) || (a[1] > h + 10 && b[1] > h + 10)) continue;
       ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
@@ -3212,7 +3212,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.stroke();
     const hp = toPx(0, 0); ctx.fillStyle = '#4ea1ff'; ctx.beginPath(); ctx.arc(hp[0], hp[1], 3, 0, 7); ctx.fill();
     ctx.fillStyle = '#ffcb2e';                            // uncollected coins
-    for (const c of coins) { if (c.got) continue; const p = toPx(c.x, c.z); if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) { ctx.beginPath(); ctx.arc(p[0], p[1], 2, 0, 7); ctx.fill(); } }
+    for (const c of ctx.coins) { if (c.got) continue; const p = toPx(c.x, c.z); if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) { ctx.beginPath(); ctx.arc(p[0], p[1], 2, 0, 7); ctx.fill(); } }
     // neighbourhood landmarks — your 5 real places. On-map = dot; off-map = clamped to
     // the edge as a "that way" hint. Pink = still to find, green = found.
     for (const poi of POIS) {
@@ -3224,15 +3224,15 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.beginPath(); ctx.arc(px, py, edge ? 2.6 : 3.4, 0, 7); ctx.fill();
       if (!found && !edge) { ctx.strokeStyle = 'rgba(255,90,208,0.8)'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(px, py, 5.4, 0, 7); ctx.stroke(); }
     }
-    if (DEST) {
+    if (ctx.DEST) {
       // draw the route from the CAR forward (not from ROUTE[0]) so the already-driven
       // part doesn't whip around the car-centred map during auto-drive.
       ctx.strokeStyle = '#2f8bff'; ctx.lineWidth = 2.6; ctx.lineJoin = 'round'; ctx.beginPath();
       ctx.moveTo(cx, cy);
-      if (ROUTE && ROUTE.length > 1) for (let i = Math.max(0, routeIdx); i < ROUTE.length; i++) { const p = toPx(ROUTE[i].x, ROUTE[i].z); ctx.lineTo(p[0], p[1]); }
-      else { const dp = toPx(DEST.x, DEST.z); ctx.lineTo(dp[0], dp[1]); }
+      if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = Math.max(0, ctx.routeIdx); i < ctx.ROUTE.length; i++) { const p = toPx(ctx.ROUTE[i].x, ctx.ROUTE[i].z); ctx.lineTo(p[0], p[1]); }
+      else { const dp = toPx(ctx.DEST.x, ctx.DEST.z); ctx.lineTo(dp[0], dp[1]); }
       ctx.stroke();
-      const dp = toPx(DEST.x, DEST.z);
+      const dp = toPx(ctx.DEST.x, ctx.DEST.z);
       ctx.fillStyle = '#ffc21e'; ctx.beginPath(); ctx.arc(Math.max(5, Math.min(w - 5, dp[0])), Math.max(5, Math.min(h - 5, dp[1])), 4, 0, 7); ctx.fill();
     }
     // CAR: on a heading-up map the car always points straight UP (forward).
@@ -3248,27 +3248,27 @@ export function createEngine({ canvas, ui, emit }) {
 
   // collision feedback: a thunk, a kick of camera shake, and a haptic buzz, scaled
   // by impact speed — so hits read as intentional, not a silent invisible-wall ping.
-  let shakeMag = 0, lastHitT = -1e9, timeScale = 1, slowmoHold = 0;
+  ctx.shakeMag = 0, ctx.lastHitT = -1e9, ctx.timeScale = 1, ctx.slowmoHold = 0;
   // Returns true only when a FRESH hit registers (past the 200ms cooldown). The
   // caller gates its speed-scrub on that so a car overlapping geometry for several
   // frames isn't scrubbed to a dead stop every frame — the position push-out ejects
   // it while it keeps most of its momentum.
   function carHit(impact, kind) {
     const tnow = performance.now();
-    if (impact < 4 || tnow - lastHitT < 200) return false;
-    lastHitT = tnow;
-    shakeMag = Math.max(shakeMag, clamp(impact * 0.05, 0.15, 1.4));
+    if (impact < 4 || tnow - ctx.lastHitT < 200) return false;
+    ctx.lastHitT = tnow;
+    ctx.shakeMag = Math.max(ctx.shakeMag, clamp(impact * 0.05, 0.15, 1.4));
     if (ctx.audio.sfxThunk) ctx.audio.sfxThunk(clamp(impact / 60, 0.2, 1));
     if (navigator.vibrate) { try { navigator.vibrate(Math.round(clamp(impact * 1.4, 10, 55))); } catch (e) { } }
     if (kind === 'animal') ctx.toast('🦆 Watch the critters!', 900);
     // BIG hit → a celebrated moment: a beat of slow-mo, a white flash, a CRUNCH. It also
     // BREAKS your combo — that's the risk that makes near-misses worth the reward.
     else if (impact > 40) {
-      if (!ctx.reduceMotion) { timeScale = 0.32; if (ui.fx) { ui.fx.classList.add('crash'); setTimeout(() => ui.fx && ui.fx.classList.remove('crash'), 320); } }
+      if (!ctx.reduceMotion) { ctx.timeScale = 0.32; if (ui.fx) { ui.fx.classList.add('crash'); setTimeout(() => ui.fx && ui.fx.classList.remove('crash'), 320); } }
       // halve the combo (not a full wipe) — a hard knock on an invisible footprint
       // shouldn't erase a whole chain, but it should sting.
-      const lost = combo > 2 ? '  ·  combo halved' : '';
-      if (combo > 2) { combo = Math.floor(combo / 2); comboExpired = false; comboExpire = tnow + 4000; emitScore({}); }
+      const lost = ctx.combo > 2 ? '  ·  combo halved' : '';
+      if (ctx.combo > 2) { ctx.combo = Math.floor(ctx.combo / 2); ctx.comboExpired = false; ctx.comboExpire = tnow + 4000; emitScore({}); }
       ctx.toast('💥 CRUNCH! ' + Math.round(impact * 2.237) + ' mph' + lost, 1200);
     }
     return true;
@@ -3279,12 +3279,12 @@ export function createEngine({ canvas, ui, emit }) {
   const _lookT = new THREE.Vector3();     // desired chase look point (scratch)
   let _lookV = null;                       // smoothed chase look point — lags so the car whips toward frame edge
   let _lookYS = null;                      // low-passed look-point height — kills the per-bump vertical pitch on photoreal ground
-  let camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
-  let camFloorRef = null;                   // low-passed anti-clip floor so per-bump groundAt spikes don't POP the cam
+  ctx.camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
+  ctx.camFloorRef = null;                   // low-passed anti-clip floor so per-bump groundAt spikes don't POP the cam
   let _camFloorT = 0, _camFloorRaw = 0;     // throttle the floor raycast (~14 Hz) — its output is low-passed to ~3 Hz anyway
-  let camMode = 0;
-  let camInit = false;
-  let driveCamUserPicked = false;
+  ctx.camMode = 0;
+  ctx.camInit = false;
+  ctx.driveCamUserPicked = false;
   // Drive cameras. Default "Cruise" is the high chase the user likes: well above
   // the melty ground-level photogrammetry, a little behind the car, looking DOWN
   // THE ROAD AHEAD (ahead = metres in front to aim at). "Close" is the low
@@ -3302,29 +3302,29 @@ export function createEngine({ canvas, ui, emit }) {
     { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
   ];
   function cycleCamera() {
-    driveCamUserPicked = true;
-    camMode = (camMode + 1) % DRIVE_CAMS.length; camInit = false;
-    czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; _viewYaw = viewHeading();   // fresh framing per view (pinch-zoom/look don't leak)
-    const dd = DRIVE_CAMS[camMode].dragdrive;
-    if (!DRIVE_CAMS[camMode].topdown) ctx.camera.up.set(0, 1, 0);   // only top-down is heading-up
-    if (!dd) { inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
-    emit('driveCam', DRIVE_CAMS[camMode].name); emitDriveZoom();
-    ctx.toast('Camera: ' + DRIVE_CAMS[camMode].name + (dd ? ' · drag to drive 🪄' : ''), dd ? 1700 : 1100);
+    ctx.driveCamUserPicked = true;
+    ctx.camMode = (ctx.camMode + 1) % DRIVE_CAMS.length; ctx.camInit = false;
+    ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();   // fresh framing per view (pinch-zoom/look don't leak)
+    const dd = DRIVE_CAMS[ctx.camMode].dragdrive;
+    if (!DRIVE_CAMS[ctx.camMode].topdown) ctx.camera.up.set(0, 1, 0);   // only top-down is heading-up
+    if (!dd) { ctx.inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
+    emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();
+    ctx.toast('Camera: ' + DRIVE_CAMS[ctx.camMode].name + (dd ? ' · drag to drive 🪄' : ''), dd ? 1700 : 1100);
   }
   // Jump straight to the one-finger draw-to-drive (top-down) view — the most phone-native
   // control, otherwise buried behind the 🎥 cycle.
   function traceDrive() {
-    driveCamUserPicked = true;
+    ctx.driveCamUserPicked = true;
     const i = DRIVE_CAMS.findIndex(c => c.topdown);
     if (i < 0) return;
-    if (camMode === i) {
-      camMode = 0; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; _viewYaw = viewHeading();
-      inp2.navActive = false; navPtr = null; ctx.camera.up.set(0, 1, 0);
-      emit('driveCam', DRIVE_CAMS[camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
-      ctx.toast('Camera: ' + DRIVE_CAMS[camMode].name, 1100);
+    if (ctx.camMode === i) {
+      ctx.camMode = 0; ctx.camInit = false; ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();
+      ctx.inp2.navActive = false; navPtr = null; ctx.camera.up.set(0, 1, 0);
+      emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
+      ctx.toast('Camera: ' + DRIVE_CAMS[ctx.camMode].name, 1100);
       return;
     }
-    camMode = i; camInit = false; czoom = 1; camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; _viewYaw = viewHeading();
+    ctx.camMode = i; ctx.camInit = false; ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();
     emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
     ctx.toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
@@ -3340,10 +3340,10 @@ export function createEngine({ canvas, ui, emit }) {
     { name: 'Angled', dist: 14, h: 15 },     // ~47° down: tilts past the melty horizon to the yard
     { name: 'Overhead', dist: 10, h: 19 }    // ~62° down: near top-down for precise scooping
   ];
-  let scCam = 0;
+  ctx.scCam = 0;
   function cycleScoopCamera() {
-    scCam = (scCam + 1) % SCOOP_CAMS.length; camInit = false;
-    ctx.toast('Camera: ' + SCOOP_CAMS[scCam].name, 1100);
+    ctx.scCam = (ctx.scCam + 1) % SCOOP_CAMS.length; ctx.camInit = false;
+    ctx.toast('Camera: ' + SCOOP_CAMS[ctx.scCam].name, 1100);
   }
   // March the subject->camera segment and pull the camera in before it would
   // enter a building below that building's roofline.
@@ -3366,7 +3366,7 @@ export function createEngine({ canvas, ui, emit }) {
     // photoreal tiles: raycast the same segment against the real (tall, dense)
     // tile geometry — the procedural bldBoxes are hidden, so this is what keeps
     // the chase/follow cam from burying itself in real trees & houses.
-    if (p3dtiles && p3dtiles.holder.visible) {
+    if (ctx.p3dtiles && ctx.p3dtiles.holder.visible) {
       _camRayD.set(px - tx, py - ty, pz - tz);
       const dist = _camRayD.length();
       if (dist > 0.05) {
@@ -3377,7 +3377,7 @@ export function createEngine({ canvas, ui, emit }) {
         // first hit — far cheaper than intersectObject(group, true), which tested
         // every triangle of every loaded tile each frame.
         _camHits.length = 0;
-        p3dtiles.raycast(camRay, _camHits);
+        ctx.p3dtiles.raycast(camRay, _camHits);
         const hit = _camHits[0];
         if (hit) g = Math.min(g, Math.max(0.12, (hit.distance - 0.6) / dist));
       }
@@ -3409,7 +3409,7 @@ export function createEngine({ canvas, ui, emit }) {
   const _clipBox = [new THREE.Plane(), new THREE.Plane(), new THREE.Plane(), new THREE.Plane()];   // overhead column walls (±x, ±z)
   const _clipN = new THREE.Vector3(), _clipP = new THREE.Vector3();
   function updateTileClip(carX, carY, carZ, view) {
-    const planes = p3dtiles && p3dtiles.clipPlanes;
+    const planes = ctx.p3dtiles && ctx.p3dtiles.clipPlanes;
     if (!planes) return;
     // eye→car vector d; dist = |d|, dh = its horizontal extent (how horizontal the view is).
     const ex = ctx.camera.position.x, ey = ctx.camera.position.y, ez = ctx.camera.position.z;
@@ -3466,26 +3466,26 @@ export function createEngine({ canvas, ui, emit }) {
     // brake/reverse. Just steering gently auto-accelerates so kids still cruise.
     // keyboard arrows are binary ±1 — ramp them over ~0.15 s so desktop steering eases
     // in like the touch stick instead of snapping (kSteer feeds jx; touch jx stays direct).
-    ctx.car.kSteer = (ctx.car.kSteer || 0) + (inp2.kx - (ctx.car.kSteer || 0)) * Math.min(1, dt * 7);
-    let jx = clamp(inp2.jx + ctx.car.kSteer + inp2.steer, -1, 1);
+    ctx.car.kSteer = (ctx.car.kSteer || 0) + (ctx.inp2.kx - (ctx.car.kSteer || 0)) * Math.min(1, dt * 7);
+    let jx = clamp(ctx.inp2.jx + ctx.car.kSteer + ctx.inp2.steer, -1, 1);
     let throttleTarget = 0, brake = 0, reverse = false;
     // TWIN-STICK MOVE: the left stick's vertical axis IS the throttle/brake now.
     //   jy < 0 (push up)   → gas, proportional to how far up
     //   jy > 0 (pull down) → brake / reverse
     // (setGasAmount/setBrake still feed inp2.gas/inp2.brake for back-compat.)
-    const jyGas = inp2.jy < -MOVE_DEADZONE ? clamp((-inp2.jy - MOVE_DEADZONE) / (1 - MOVE_DEADZONE), 0, 1) : 0;
-    const jyBrake = inp2.jy > MOVE_DEADZONE;
+    const jyGas = ctx.inp2.jy < -MOVE_DEADZONE ? clamp((-ctx.inp2.jy - MOVE_DEADZONE) / (1 - MOVE_DEADZONE), 0, 1) : 0;
+    const jyBrake = ctx.inp2.jy > MOVE_DEADZONE;
     // BRAKE vs REVERSE — the fix for "too easy to end up backwards": a light/partial down-pull only
     // BRAKES (stop + hold at 0). Reverse needs a DELIBERATE near-full pull-down (or full brake button /
     // held down-arrow) AND the car already stopped for a moment, so steering with a little downward
     // drift — or a hard brake-to-stop — can no longer fling the car into reverse.
-    const wantReverse = (inp2.jy > 0.62 || inp2.brake > 0.85 || inp2.ky > 0);
+    const wantReverse = (ctx.inp2.jy > 0.62 || ctx.inp2.brake > 0.85 || ctx.inp2.ky > 0);
     if (wantReverse && Math.abs(ctx.car.speed) < 1.4) ctx.car.revArmT = (ctx.car.revArmT || 0) + dt; else if (!wantReverse) ctx.car.revArmT = 0;
     reverse = wantReverse && (ctx.car.revArmT || 0) > 0.32;
-    if (inp2.brake || inp2.ky > 0 || jyBrake) brake = 1;
-    else if (inp2.ky < 0) throttleTarget = 1;                  // keyboard = full
+    if (ctx.inp2.brake || ctx.inp2.ky > 0 || jyBrake) brake = 1;
+    else if (ctx.inp2.ky < 0) throttleTarget = 1;                  // keyboard = full
     else if (jyGas > 0) throttleTarget = jyGas;                // left stick up = analog gas
-    else if (inp2.gas > 0) throttleTarget = inp2.gas;          // touch gas (analog 0..1)
+    else if (ctx.inp2.gas > 0) throttleTarget = ctx.inp2.gas;          // touch gas (analog 0..1)
     // Stick-only "auto-creep": cruise GENTLY toward ~18 u/s (≈40 mph) instead of
     // flooring it — a kid who only steers should roll at a corner-able pace, never
     // pin to the 220 mph top end. Push up for the real speed.
@@ -3498,59 +3498,59 @@ export function createEngine({ canvas, ui, emit }) {
     let throttle = ctx.car.throttle;
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
-    const _userInput = Math.abs(inp2.jx + inp2.kx + inp2.steer) > 0.2 || Math.abs(inp2.jy) > MOVE_DEADZONE || inp2.gas || inp2.brake || inp2.ky;
-    if (autoDrive && _userInput) {
-      autoDrive = false; inp2.navActive = false; clearRouteRail(); stopFollow(); emit('autodrive', false); ctx.toast('🕹️ You took the wheel!', 900);
+    const _userInput = Math.abs(ctx.inp2.jx + ctx.inp2.kx + ctx.inp2.steer) > 0.2 || Math.abs(ctx.inp2.jy) > MOVE_DEADZONE || ctx.inp2.gas || ctx.inp2.brake || ctx.inp2.ky;
+    if (ctx.autoDrive && _userInput) {
+      ctx.autoDrive = false; ctx.inp2.navActive = false; clearRouteRail(); stopFollow(); emit('autodrive', false); ctx.toast('🕹️ You took the wheel!', 900);
     }
     // FOLLOW runs with autoDrive OFF, so the grab-wheel check above won't catch it — let real input end it too.
-    if (followMode && _userInput) { stopFollow(); ctx.toast('🕹️ You took the wheel!', 900); }
+    if (ctx.followMode && _userInput) { stopFollow(); ctx.toast('🕹️ You took the wheel!', 900); }
     // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
     // has travelled along the current segment), not just proximity — at high speed the car
     // overshoots a 16 m radius without ever entering it, so routeIdx would stick and the car
     // would circle the same point. The while-loop clears several waypoints in one fast frame.
-    while (ROUTE && routeIdx < ROUTE.length - 1) {
-      const a = ROUTE[routeIdx], b = ROUTE[routeIdx + 1];
+    while (ctx.ROUTE && ctx.routeIdx < ctx.ROUTE.length - 1) {
+      const a = ctx.ROUTE[ctx.routeIdx], b = ctx.ROUTE[ctx.routeIdx + 1];
       const vx = b.x - a.x, vz = b.z - a.z, L2 = vx * vx + vz * vz || 1;
       const t = ((ctx.car.x - a.x) * vx + (ctx.car.z - a.z) * vz) / L2;
-      if (t > 0.8 || Math.hypot(a.x - ctx.car.x, a.z - ctx.car.z) < 16) routeIdx++; else break;
+      if (t > 0.8 || Math.hypot(a.x - ctx.car.x, a.z - ctx.car.z) < 16) ctx.routeIdx++; else break;
     }
     // auto-drive: follow the road ROUTE. Arrival is reaching the END OF THE ROUTE (the road
     // point nearest the target) — NOT the raw target, so a tap that lands off-road doesn't
     // make the car circle forever trying to reach a point with no road. While no route is
     // ready it simply HOLDS (idles) rather than cutting straight across the land.
-    if (autoDrive && DEST) {
-      const end = ROUTE && ROUTE.length ? ROUTE[ROUTE.length - 1] : null;
+    if (ctx.autoDrive && ctx.DEST) {
+      const end = ctx.ROUTE && ctx.ROUTE.length ? ctx.ROUTE[ctx.ROUTE.length - 1] : null;
       // When the RAIL is active (ROUTE has ≥2 pts) it OWNS the approach and the precise braked stop. Do NOT
       // let this physics check "arrive" early: at 12 m out the rail can still be doing ~79 m/s (its √(2·a·d)
       // cap), and clearing the destination there drops the car at speed with NO rail → it coasts straight
       // PAST the target. That was the "autodrive overshoot when it goes fast". Defer to the rail's own stop.
-      const railActive = !!(ROUTE && ROUTE.length > 1);
-      const atEnd = !railActive && end && (routeIdx >= ROUTE.length || Math.hypot(end.x - ctx.car.x, end.z - ctx.car.z) < 12);
-      if (!ROUTE) { inp2.navActive = false; if (DEST.geo && now - (DEST._retryT || 0) > 4000) { DEST._retryT = now; fetchRoute(DEST.geo.lat, DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
+      const railActive = !!(ctx.ROUTE && ctx.ROUTE.length > 1);
+      const atEnd = !railActive && end && (ctx.routeIdx >= ctx.ROUTE.length || Math.hypot(end.x - ctx.car.x, end.z - ctx.car.z) < 12);
+      if (!ctx.ROUTE) { ctx.inp2.navActive = false; if (ctx.DEST.geo && now - (ctx.DEST._retryT || 0) > 4000) { ctx.DEST._retryT = now; fetchRoute(ctx.DEST.geo.lat, ctx.DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
       else if (atEnd) {
-        if (!DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
+        if (!ctx.DEST.reached) { ctx.DEST.reached = true; if (ctx.DEST.celebrate && !POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now); }
         clearDestination();   // arrived — drop the nav card + route line (was sticking on "arriving…") and end auto-drive
-      } else { const t = navTarget(); inp2.navActive = true; inp2.navX = t.x; inp2.navZ = t.z; }
+      } else { const t = navTarget(); ctx.inp2.navActive = true; ctx.inp2.navX = t.x; ctx.inp2.navZ = t.z; }
     }
     // Reached a self-driven destination: clear the route either way, but only show the
     // ARRIVAL banner for a place chosen from the GO address search (DEST.celebrate). A
     // casual tap-to-trace is not an "arrival" worth a banner (the user: only show it if
     // you pick an address from GO). POIs run their own richer celebration via checkPOIs.
-    else if (DEST && !DEST.reached && Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z) < 14) {
-      DEST.reached = true;
-      if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now);
+    else if (ctx.DEST && !ctx.DEST.reached && Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) < 14) {
+      ctx.DEST.reached = true;
+      if (ctx.DEST.celebrate && !POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now);
       clearDestination();
     }
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
     // ground point. Speed scales with DISTANCE (drag far = floor it, near = creep),
     // and if the target is BEHIND the car it reverses toward it instead of looping.
     let autoTurnLimit = Infinity;   // robot's heading-error speed governor; also feeds the autoCap below
-    if (inp2.navActive) {
-      const dx = inp2.navX - ctx.car.x, dz = inp2.navZ - ctx.car.z, dd = Math.hypot(dx, dz);
+    if (ctx.inp2.navActive) {
+      const dx = ctx.inp2.navX - ctx.car.x, dz = ctx.inp2.navZ - ctx.car.z, dd = Math.hypot(dx, dz);
       let dyaw = Math.atan2(dx, dz) - ctx.car.yaw;
       while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-      const farT = clamp(dd / (autoDrive ? 52 : 40), 0, 1); // 0 near → 1 far; robot looks further ahead
-      const robot = autoDrive && DEST;
+      const farT = clamp(dd / (ctx.autoDrive ? 52 : 40), 0, 1); // 0 near → 1 far; robot looks further ahead
+      const robot = ctx.autoDrive && ctx.DEST;
       if (dd < 2.5) { jx = 0; throttle = 0; brake = Math.abs(ctx.car.speed) > 2 ? 0.7 : 0; }
       else if (Math.abs(dyaw) > 1.95 && (!robot || dd < 13)) {   // behind & (manual, or robot at close range) → reverse to it
         const rdyaw = dyaw > 0 ? dyaw - Math.PI : dyaw + Math.PI;
@@ -3562,7 +3562,7 @@ export function createEngine({ canvas, ui, emit }) {
         jx = clamp(-dyaw * (robot ? 1.6 : 2.0), -1, 1);   // gentler robot gain → no overshoot/wobble on angled (non-90°) turns
         const align = clamp(1 - Math.abs(dyaw) / 1.7, robot ? 0.42 : 0.22, 1); // robot keeps pace through bends
         if (robot) {
-          const dDest = Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z);
+          const dDest = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
           // HEADING-ERROR GOVERNOR: the sharper the angle to the aim point, the slower the car
           // must be to actually make the turn. Without this the chauffeur blasts straight
           // through bends at top speed and leaves the route — "autodrive breaks when fast".
@@ -3583,7 +3583,7 @@ export function createEngine({ canvas, ui, emit }) {
         }
       }
     }
-    if (throttle > 0.1 || brake > 0.1) showT = 0;
+    if (throttle > 0.1 || brake > 0.1) ctx.showT = 0;
     if (throttle > 0.1) startRun(now);                 // first gas starts the coin-rally clock
     const road = ctx.onRoad(ctx.car.x, ctx.car.z);
     // "Open road" = on a procedural street OR out past the neighbourhood block
@@ -3602,12 +3602,12 @@ export function createEngine({ canvas, ui, emit }) {
     // routes the skill economy into raw speed, the addictive part of an arcade loop.
     // auto-fire: flooring the throttle (or the Shift/🚀 input) with charge dumps nitro —
     // no spare thumb is free for a manual button (left=steer, right=pedals).
-    const boosting = (inp2.boost || throttle > 0.92) && boost > 0.02 && Math.abs(ctx.car.speed) > 1.5;
-    if (boosting) { boost = Math.max(0, boost - dt * 0.4); if (!boostWas) { if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(1); ctx.toast('🚀 NITRO!', 700); if (!ctx.reduceMotion) { shakeMag = Math.max(shakeMag, 0.6); if (ui.fx) { ui.fx.classList.add('boost'); setTimeout(() => ui.fx && ui.fx.classList.remove('boost'), 160); } } } }   // hard-earned nitro gets a real punch: camera kick + a brief flash
-    boostWas = boosting;
+    const boosting = (ctx.inp2.boost || throttle > 0.92) && ctx.boost > 0.02 && Math.abs(ctx.car.speed) > 1.5;
+    if (boosting) { ctx.boost = Math.max(0, ctx.boost - dt * 0.4); if (!ctx.boostWas) { if (ctx.audio.sfxWhoosh) ctx.audio.sfxWhoosh(1); ctx.toast('🚀 NITRO!', 700); if (!ctx.reduceMotion) { ctx.shakeMag = Math.max(ctx.shakeMag, 0.6); if (ui.fx) { ui.fx.classList.add('boost'); setTimeout(() => ui.fx && ui.fx.classList.remove('boost'), 160); } } } }   // hard-earned nitro gets a real punch: camera kick + a brief flash
+    ctx.boostWas = boosting;
     const boostMul = boosting ? 1.34 : 1;
-    let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
-    if (autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 440 * boostMul * speedMul);   // let the chauffeur RIP — it follows the route on rails (see the rail block), so it can't overshoot; a cross-town trip should take ~30-90 s
+    let maxF = (highway ? 250 : openRoad ? 115 : 38) * prof.top * boostMul * ctx.speedMul; const maxR = -11;   // highway = supersonic; lawns crawl
+    if (ctx.autoDrive && (highway || openRoad)) maxF = Math.max(maxF, 440 * boostMul * ctx.speedMul);   // let the chauffeur RIP — it follows the route on rails (see the rail block), so it can't overshoot; a cross-town trip should take ~30-90 s
     // SENSE-OF-SPEED reference — deliberately MUCH lower than the real top (maxF
     // 100·top). All the rush (FOV kick, speed-lines, gauge fill, engine rev) saturates
     // around ~60 mph so normal neighbourhood driving FEELS fast, while you can still
@@ -3623,7 +3623,7 @@ export function createEngine({ canvas, ui, emit }) {
     // hold on a residential street) and a softer accel cap, so building speed takes longer and
     // is controllable; flooring it still reaches the same top. Auto-drive keeps the snappier
     // numbers so the chauffeur still makes good time.
-    const manual = !autoDrive;
+    const manual = !ctx.autoDrive;
     // FINE-CONTROL low band: by hand, the first ~18% of pedal maps to a gentle linear crawl
     // (up to ~7 u/s ≈ 15 mph) you can HOLD for precise manoeuvring, instead of the cube curve's
     // near-zero-then-lunge bottom. Above that the cube curve takes over toward the top; floored
@@ -3631,7 +3631,7 @@ export function createEngine({ canvas, ui, emit }) {
     const fine = manual ? Math.min(throttle, 0.18) / 0.18 * Math.min(7, maxF * 0.5) : 0;   // cap the crawl band under maxF so a tiny lawn/slow-car maxF doesn't flat-line the upper pedal
     const pedalTgt = Math.max(fine, Math.pow(throttle, manual ? 3.4 : 2.4) * maxF);  // curved pedal → target speed; steeper manual = easier SLOW crawl at the bottom
     const aGap = pedalTgt - ctx.car.speed;
-    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul * speedMul * (manual ? 0.50 : 1);   // peak engine pull (cap); manual builds speed more gradually (gentler off the line)
+    const aMax = (highway ? 62 : openRoad ? 32 : 13) * prof.accel * boostMul * ctx.speedMul * (manual ? 0.50 : 1);   // peak engine pull (cap); manual builds speed more gradually (gentler off the line)
     let acc = clamp(aGap * (aGap > 0 ? (manual ? 1.25 : 2.6) : 0.9), -aMax, aMax);     // chase target; softer manual pull eases toward target (precision) + lift-off coast
     if (aGap > 0) acc *= 0.75 + 0.25 * clamp(Math.abs(ctx.car.speed) / 6, 0, 1);   // gentle off-the-line ramp — keeps a floored stab feeling punchy, not sluggish
     // PROGRESSIVE brake: ramp the brake force in over ~0.25 s so a quick tap trail-brakes
@@ -3649,8 +3649,8 @@ export function createEngine({ canvas, ui, emit }) {
     // straight legs of a cross-town route run fast (up to maxF), only corners and the
     // final approach slow the chauffeur down, so the trip isn't a crawl.
     let autoCap = 200;
-    if (autoDrive) {
-      const dDest = DEST ? Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z) : 1e9;
+    if (ctx.autoDrive) {
+      const dDest = ctx.DEST ? Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) : 1e9;
       // FAST on the straights, still turn-aware. The throttle controller above aims at this
       // pace; this cap is the guardrail. The old +70 highway bonus let the cap stay high right
       // at a bend (so it blew the turn) — keep it modest, and ALSO respect the heading-error
@@ -3660,7 +3660,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.car.speed += acc * dt;
     ctx.car.speed -= ctx.car.speed * (highway ? 0.06 : openRoad ? 0.1 : 0.28) * dt;   // highway = slippery-fast, lawns drag
     ctx.car.speed = clamp(ctx.car.speed, maxR, maxF);
-    if (autoDrive && ctx.car.speed > autoCap) ctx.car.speed += (autoCap - ctx.car.speed) * Math.min(1, dt * 7);   // brake to the cap FAST so a fast leg can still slow for the next turn (was dt*3.2 → too slow, overshot)
+    if (ctx.autoDrive && ctx.car.speed > autoCap) ctx.car.speed += (autoCap - ctx.car.speed) * Math.min(1, dt * 7);   // brake to the cap FAST so a fast leg can still slow for the next turn (was dt*3.2 → too slow, overshot)
     if (throttle < 0.1 && brake < 0.1 && Math.abs(ctx.car.speed) < 0.4) ctx.car.speed = 0;
     // tighter turns at speed (makes corners) but softened up high so the open-road blast
     // the design invites stays pointable instead of going numb.
@@ -3668,7 +3668,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.car.steer += (steerTarget - ctx.car.steer) * Math.min(1, dt * 12);   // snappier wheel — less lag between thumb and tyres
     // brake-to-drift: stab the brake while turning fast (or the Space handbrake) and
     // the tail steps out; a handbrake yaw kick helps rotate through tight corners.
-    const hb = (inp2.hbrake || (brake > 0.1 && Math.abs(ctx.car.speed) > 8)) ? 1 : 0;
+    const hb = (ctx.inp2.hbrake || (brake > 0.1 && Math.abs(ctx.car.speed) > 8)) ? 1 : 0;
     // High-speed yaw DAMPER: without this the speed/2.7 term overwhelms the steer-angle
     // falloff and net yaw rate climbs all the way up, making the flat-out blast twitchier
     // the faster you go. Authority now peaks ~mid-speed (~35 mph) and tapers above so a
@@ -3689,8 +3689,8 @@ export function createEngine({ canvas, ui, emit }) {
     // tarmac from any angle, strongly, so it actively steers you home. Your steering always
     // overrides the corner/track assist (fades to 0 as you push the stick).
     let assistTargetRate = 0;
-    if (!followMode && autoSteer && !inp2.navActive && !hb && Math.abs(ctx.car.speed) > 4) {   // follow OWNS the heading (street-tangent ease below) — don't let the steer-assist fight it
-      let dir = null, recover = false; const onRoute = !!(ROUTE && routeIdx < ROUTE.length);
+    if (!ctx.followMode && ctx.autoSteer && !ctx.inp2.navActive && !hb && Math.abs(ctx.car.speed) > 4) {   // follow OWNS the heading (street-tangent ease below) — don't let the steer-assist fight it
+      let dir = null, recover = false; const onRoute = !!(ctx.ROUTE && ctx.routeIdx < ctx.ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - ctx.car.x, t.z - ctx.car.z]; }
       else if (offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - ctx.car.x, nrp.z - ctx.car.z]; recover = true; }   // drifted off → steer straight back to the nearest road (hood OR the fetched OSM graph)
       else { const tp = roadTargetAhead(ctx.car.x, ctx.car.z, ctx.car.yaw, ctx.car.speed); if (tp) dir = [tp[0] - ctx.car.x, tp[1] - ctx.car.z]; }   // hug the road ahead (roadTargetAhead uses the OSM graph far from home)
@@ -3724,25 +3724,25 @@ export function createEngine({ canvas, ui, emit }) {
     // distance against roadSegs would ping-pong the reset (snap to route → "off roadSegs" →
     // snap again) and the camera never settles — that was the "crash hides the car". The
     // route-autosteer handles staying on a route; a cooldown blocks any immediate re-fire.
-    recoverCooldown = Math.max(0, recoverCooldown - dt);
-    const onRouteNow = !!(ROUTE && routeIdx < ROUTE.length);
-    if (!followMode && autoSteer && inHood && !onRouteNow && recoverCooldown <= 0) {
-      if (offRoadDist > 14) offRoadT += dt; else offRoadT = 0;
+    ctx.recoverCooldown = Math.max(0, ctx.recoverCooldown - dt);
+    const onRouteNow = !!(ctx.ROUTE && ctx.routeIdx < ctx.ROUTE.length);
+    if (!ctx.followMode && ctx.autoSteer && inHood && !onRouteNow && ctx.recoverCooldown <= 0) {
+      if (offRoadDist > 14) ctx.offRoadT += dt; else ctx.offRoadT = 0;
       const stuck = Math.abs(ctx.car.speed) < 3;
-      if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
-    } else if (autoDrive && onRouteNow && recoverCooldown <= 0) {
+      if (offRoadDist > 42 || (ctx.offRoadT > 1.5 && offRoadDist > 22) || (ctx.offRoadT > 2.2 && stuck)) { ctx.offRoadT = 0; resetToRoad(); }
+    } else if (ctx.autoDrive && onRouteNow && ctx.recoverCooldown <= 0) {
       // The chauffeur wandered off the ROUTE line — snap back so it re-syncs. Require PERSISTENCE
       // (off for a beat, or way off) so a single momentary overshoot on a bend doesn't teleport-loop.
-      if (offRoadDist > 30) offRoadT += dt; else offRoadT = 0;
-      if (offRoadDist > 80 || (offRoadT > 1.2 && offRoadDist > 45)) { offRoadT = 0; resetToRoad(); }
-    } else offRoadT = 0;
+      if (offRoadDist > 30) ctx.offRoadT += dt; else ctx.offRoadT = 0;
+      if (offRoadDist > 80 || (ctx.offRoadT > 1.2 && offRoadDist > 45)) { ctx.offRoadT = 0; resetToRoad(); }
+    } else ctx.offRoadT = 0;
     // HARD UNSTICK: a bad teleport/landing can bury the car inside a building footprint, where
     // the collision below collapses every move candidate to its own spot (can't budge in any
     // gear). If we're already inside one, snap back to the road now (resetToRoad uses the live
     // route far from home); the heading is re-derived from the corrected state just below.
     // Gate on recoverCooldown so it can't 60 Hz-spam (blip/toast/reset) if a snap point ever
     // lands back inside a footprint — it retries at most every ~1.8 s instead.
-    if (!followMode && recoverCooldown <= 0 && insideBuilding(ctx.car.x, ctx.car.z)) resetToRoad();   // follow's glide phases through buildings and OWNS position — don't let recovery yank/fight it
+    if (!ctx.followMode && ctx.recoverCooldown <= 0 && insideBuilding(ctx.car.x, ctx.car.z)) resetToRoad();   // follow's glide phases through buildings and OWNS position — don't let recovery yank/fight it
     const fx = Math.sin(ctx.car.yaw), fz = Math.cos(ctx.car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -3767,7 +3767,7 @@ export function createEngine({ canvas, ui, emit }) {
     // can't. Ramps in over a few metres (soft edge), clamps under driving speed (never yanks), and
     // fades as you steer, so it reads like an invisible berm on the shoulder. Only where a road
     // graph exists (the hood or a live route) so it never tugs you back into town from the open road.
-    if (autoSteer && !hb && (inHood || onRouteNow || osmRoadSegs.length) && offRoadDist > LANE_HALF && offRoadDist < 120) {
+    if (ctx.autoSteer && !hb && (inHood || onRouteNow || ctx.osmRoadSegs.length) && offRoadDist > LANE_HALF && offRoadDist < 120) {
       const over = offRoadDist - LANE_HALF;
       const ramp = clamp(over / 6, 0, 1);                       // ease in over the first 6 m
       const yours = clamp(Math.abs(jx) * 1.5, 0, 1);            // fade out as the player steers hard
@@ -3807,7 +3807,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     // TRAFFIC: weave past it for a near-miss combo, clip it for a soft deflect (it yields
     // + keeps its lane, so a tap is a glancing bump you keep rolling through, not a wall).
-    if (roadLifeOn) {
+    if (ctx.roadLifeOn) {
       for (const c of traffic) {
         if (c.x === undefined) continue;
         const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 1.9 + rad;
@@ -3825,23 +3825,23 @@ export function createEngine({ canvas, ui, emit }) {
     // sanity ring at the metro scale where the flat-earth frame stays accurate.
     const lim = 30000;   // 30 km: reach the East Bay address presets (Oakland ≈ 22 km) across the streamed tiles
     if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; ctx.car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
-    if (!followMode) { ctx.car.x = nx; ctx.car.z = nz; }   // in follow the glide below OWNS position — don't let the physics step creep the car forward each frame (it caused a ~1.5 m steady-state drift past the target)
+    if (!ctx.followMode) { ctx.car.x = nx; ctx.car.z = nz; }   // in follow the glide below OWNS position — don't let the physics step creep the car forward each frame (it caused a ~1.5 m steady-state drift past the target)
     // AUTO-DRIVE RAIL: when the chauffeur has a route, ignore the physics result and glide the car
     // ALONG the route by arc-length at a fast cruise — so it follows the road EXACTLY (no overshoot,
     // no ping-pong) and a cross-town trip takes ~30-90 s. Position is overridden here (after the
     // collision step), so it phases through obstacles on the route — that's the point.
-    if (followMode && _followGeo) {
+    if (ctx.followMode && ctx._followGeo) {
       // EXACT FOLLOW via a CRITICALLY-DAMPED SPRING toward the live GPS point. A raw lerp has no momentum,
       // so each new (sparse) fix made the car DART then stop — stop-and-go jerk. The spring carries velocity:
       // a fix-jump accelerates the car smoothly and it eases in with no overshoot (critical damping), so
       // motion stays continuous between updates. No routing/rail here (those snapped to the wrong street).
-      const dx = _followGeo.x - ctx.car.x, dz = _followGeo.z - ctx.car.z;
+      const dx = ctx._followGeo.x - ctx.car.x, dz = ctx._followGeo.z - ctx.car.z;
       const K = 12, C = 2 * Math.sqrt(K);   // critical → no overshoot, ~1.2 s to close a gap, smooth speed-ups/downs
-      _followVx += (dx * K - _followVx * C) * dt;
-      _followVz += (dz * K - _followVz * C) * dt;
-      let mx = _followVx * dt, mz = _followVz * dt;
-      const step = Math.hypot(mx, mz), MAXSTEP = 520 * speedMul * dt;   // safety cap (a far/garbage target can't fling the car)
-      if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; _followVx *= s; _followVz *= s; }
+      ctx._followVx += (dx * K - ctx._followVx * C) * dt;
+      ctx._followVz += (dz * K - ctx._followVz * C) * dt;
+      let mx = ctx._followVx * dt, mz = ctx._followVz * dt;
+      const step = Math.hypot(mx, mz), MAXSTEP = 520 * ctx.speedMul * dt;   // safety cap (a far/garbage target can't fling the car)
+      if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; ctx._followVx *= s; ctx._followVz *= s; }
       ctx.car.x += mx; ctx.car.z += mz; ctx.car.groundY = null; ctx.car.vlat = 0; ctx.car.steer = 0; ctx.car.assistRate = 0;   // assistRate=0 so a residual steer-assist rate can't keep rotating yaw under the street-tangent ease
       ctx.car.speed = Math.hypot(mx, mz) / Math.max(dt, 1e-3);   // for cam framing / wheel spin
       ctx.car.railS = null; ctx.car.railSpeed = null;
@@ -3854,15 +3854,15 @@ export function createEngine({ canvas, ui, emit }) {
       else tgtYaw = Math.hypot(dx, dz) > 0.5 ? Math.atan2(dx, dz) : ctx.car.yaw;   // off any known road → just face the way we're gliding
       let _fd = tgtYaw - ctx.car.yaw; while (_fd > Math.PI) _fd -= 2 * Math.PI; while (_fd < -Math.PI) _fd += 2 * Math.PI;
       ctx.car.yaw += _fd * (1 - Math.exp(-dt * 5));
-    } else if (autoDrive && ROUTE && ROUTE.length > 1) {
-      if (ctx.car.railS == null || _railRoute !== ROUTE) { ctx.car.railS = railArcAt(ctx.car.x, ctx.car.z); _railRoute = ROUTE; ctx.car.railSpeed = Math.abs(ctx.car.speed); }
+    } else if (ctx.autoDrive && ctx.ROUTE && ctx.ROUTE.length > 1) {
+      if (ctx.car.railS == null || ctx._railRoute !== ctx.ROUTE) { ctx.car.railS = railArcAt(ctx.car.x, ctx.car.z); ctx._railRoute = ctx.ROUTE; ctx.car.railSpeed = Math.abs(ctx.car.speed); }
       const total = routeTotalLen(), remain = total - ctx.car.railS;
       // MUCH FASTER on the way: scale hard with the open road ahead (up to ~520 m/s), easing only for
       // real bends. distToNextTurn looks ~500 m ahead, so long straights peg the cap. The rail OWNS the
       // speed via its own railSpeed (and overwrites car.speed) so the physics autodrive governor (autoCap,
       // pulled hard at dt*7 above) can't clamp it down — safe because the rail glues the car to the
       // polyline by arc-length, so it can't leave the route at ANY speed.
-      const _cruise = clamp(150 + distToNextTurn() * 3.4, 150, 520 * speedMul);
+      const _cruise = clamp(150 + distToNextTurn() * 3.4, 150, 520 * ctx.speedMul);
       ctx.car.railSpeed += (_cruise - ctx.car.railSpeed) * Math.min(1, dt * 3);           // smooth ACCEL toward the cruise
       // GUARANTEED STOP AT THE DESTINATION: HARD-cap the speed to the fastest you could still brake to 0
       // within the distance left (v = √(2·a·d)) — a hard clamp, NOT a lagged ease. With the old ease the
@@ -3880,19 +3880,19 @@ export function createEngine({ canvas, ui, emit }) {
       // the route end and let the rail re-acquire when the longer route arrives — give up after ~6 s so a
       // route that never comes can't soft-lock the car.
       if (remain <= 1.5) ctx.car.railEndT = (ctx.car.railEndT || 0) + dt; else ctx.car.railEndT = 0;
-      const farFromDest = DEST && Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z) > 150;
+      const farFromDest = ctx.DEST && Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) > 150;
       if (remain <= 1.5 && ctx.car.speed < 6 && (!farFromDest || ctx.car.railEndT > 6)) {  // braked to a near-stop AT the destination → arrive
-        if (DEST) { const bx = DEST.rawX != null ? DEST.rawX : DEST.x, bz = DEST.rawZ != null ? DEST.rawZ : DEST.z; if (Math.hypot(bx - ctx.car.x, bz - ctx.car.z) > 1) ctx.car.yaw = Math.atan2(bx - ctx.car.x, bz - ctx.car.z); }   // PARK facing the actual BUILDING (rawX/rawZ), not the snapped curb point (≈ the car)
+        if (ctx.DEST) { const bx = ctx.DEST.rawX != null ? ctx.DEST.rawX : ctx.DEST.x, bz = ctx.DEST.rawZ != null ? ctx.DEST.rawZ : ctx.DEST.z; if (Math.hypot(bx - ctx.car.x, bz - ctx.car.z) > 1) ctx.car.yaw = Math.atan2(bx - ctx.car.x, bz - ctx.car.z); }   // PARK facing the actual BUILDING (rawX/rawZ), not the snapped curb point (≈ the car)
         ctx.car.speed = 0; ctx.car.railS = null; ctx.car.railSpeed = null; ctx.car.railEndT = 0;
-        if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
+        if (ctx.DEST && !ctx.DEST.reached) { ctx.DEST.reached = true; if (ctx.DEST.celebrate && !POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now); }
         clearDestination();
       } else {
         const rp = railPointAt(ctx.car.railS);
-        ctx.car.x = rp.x; ctx.car.z = rp.z; routeIdx = rp.i;
+        ctx.car.x = rp.x; ctx.car.z = rp.z; ctx.routeIdx = rp.i;
         // PARK IN FRONT: over the last few metres, turn from the route tangent to FACE the actual
         // address so the car pulls up looking at the building instead of stopping mid-lane.
         let aimYaw = rp.yaw;
-        if (DEST && remain < 9) { const bx = DEST.rawX != null ? DEST.rawX : DEST.x, bz = DEST.rawZ != null ? DEST.rawZ : DEST.z; if (Math.hypot(bx - ctx.car.x, bz - ctx.car.z) > 1.5) { const fy = Math.atan2(bx - ctx.car.x, bz - ctx.car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); } }   // turn to face the actual BUILDING (rawX/rawZ) on the final approach; the >1.5 m guard avoids atan2 noise
+        if (ctx.DEST && remain < 9) { const bx = ctx.DEST.rawX != null ? ctx.DEST.rawX : ctx.DEST.x, bz = ctx.DEST.rawZ != null ? ctx.DEST.rawZ : ctx.DEST.z; if (Math.hypot(bx - ctx.car.x, bz - ctx.car.z) > 1.5) { const fy = Math.atan2(bx - ctx.car.x, bz - ctx.car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); } }   // turn to face the actual BUILDING (rawX/rawZ) on the final approach; the >1.5 m guard avoids atan2 noise
         let _dy = aimYaw - ctx.car.yaw; while (_dy > Math.PI) _dy -= 2 * Math.PI; while (_dy < -Math.PI) _dy += 2 * Math.PI;
         ctx.car.yaw += _dy * Math.min(1, dt * 12);                                    // ease the heading onto the route tangent / toward the address on arrival
         ctx.car.vlat = 0; ctx.car.steer = 0;                                             // no physics slide while on rails
@@ -3930,15 +3930,15 @@ export function createEngine({ canvas, ui, emit }) {
     // AERIAL / OVERHEAD: blow the car up so it's easy to spot from way up high and more fun
     // — roughly street-sized on the map. Purely cosmetic: collision uses fixed radii, never
     // this scale. Lerp so cycling views doesn't pop; aerial floats highest so it gets biggest.
-    const _camV = DRIVE_CAMS[camMode] || {};
-    const _zoomGrow = clamp(Math.sqrt(Math.max(0.05, czoom)), 0.85, 2.2);   // car GROWS (within limits) as you zoom OUT so it stays findable from way up, and shrinks a touch up close
+    const _camV = DRIVE_CAMS[ctx.camMode] || {};
+    const _zoomGrow = clamp(Math.sqrt(Math.max(0.05, ctx.czoom)), 0.85, 2.2);   // car GROWS (within limits) as you zoom OUT so it stays findable from way up, and shrinks a touch up close
     const dispTarget = (_camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.3) * _zoomGrow;
     ctx.car.dispScale = ctx.car.dispScale == null ? dispTarget : ctx.car.dispScale + (dispTarget - ctx.car.dispScale) * (1 - Math.exp(-dt * 6));
     ctx.car.group.scale.setScalar(ctx.car.dispScale);
     const overhead = _camV.aerial || _camV.topdown;
     // On arrival, briefly ease the camera's look-ahead to 0 so the car frames DEAD-CENTRE
     // (the constant look-ahead otherwise leaves it offset toward the bottom even when stopped).
-    const aheadScale = 1 - (arriveCenterT && now < arriveCenterT ? clamp((arriveCenterT - now) / 1400, 0, 1) : 0);
+    const aheadScale = 1 - (ctx.arriveCenterT && now < ctx.arriveCenterT ? clamp((ctx.arriveCenterT - now) / 1400, 0, 1) : 0);
     carLocator.visible = overhead;
     if (overhead) {
       carLocator.position.set(ctx.car.x, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, ctx.car.z);
@@ -3947,35 +3947,35 @@ export function createEngine({ canvas, ui, emit }) {
       if (carLocator.children[1]) carLocator.children[1].material.opacity = _camV.aerial ? 0.5 : 0.34;
     }
     // collectible coins: spin + bob, picked up by driving over them
-    coinGroundCursor = coins.length ? (coinGroundCursor + 1) % coins.length : 0;
-    for (let i = 0; i < coins.length; i++) {
-      const c = coins[i];
+    ctx.coinGroundCursor = ctx.coins.length ? (ctx.coinGroundCursor + 1) % ctx.coins.length : 0;
+    for (let i = 0; i < ctx.coins.length; i++) {
+      const c = ctx.coins[i];
       c.mesh.visible = !c.got;
       if (c.got) continue;
       c.mesh.rotation.y += dt * 3.2;
-      if (c.groundY == null || i === coinGroundCursor) c.groundY = actorGroundY(c.x, c.z, c.groundY);
+      if (c.groundY == null || i === ctx.coinGroundCursor) c.groundY = actorGroundY(c.x, c.z, c.groundY);
       const coinY = c.groundY != null ? c.groundY : terrainAt(c.x, c.z);
       c.mesh.position.y = coinY + 1.15 + Math.abs(Math.sin(now * 0.004 + c.x)) * 0.35;
       if (Math.hypot(ctx.car.x - c.x, ctx.car.z - c.z) < 3.4) {
-        c.got = true; coinsGot++;
+        c.got = true; ctx.coinsGot++;
         spawnCoinBurst(c.x, c.z, coinY, now);
-        const wasBest = !bestMs || (now - runStart) <= bestMs;
+        const wasBest = !ctx.bestMs || (now - ctx.runStart) <= ctx.bestMs;
         collectCoin(now);
-        if (coinsGot === coins.length) {
-          ctx.toast('💛 All ' + coins.length + ' coins in ' + fmtTime(lastRunMs) + '! ' + (wasBest ? '🏆 New best!' : 'Best ' + fmtTime(bestMs)), 3600);
+        if (ctx.coinsGot === ctx.coins.length) {
+          ctx.toast('💛 All ' + ctx.coins.length + ' coins in ' + fmtTime(ctx.lastRunMs) + '! ' + (wasBest ? '🏆 New best!' : 'Best ' + fmtTime(ctx.bestMs)), 3600);
           if (ui.fx && !ctx.reduceMotion) { ui.fx.classList.add('arrive'); setTimeout(() => ui.fx && ui.fx.classList.remove('arrive'), 650); }
         }
       }
     }
     // tyre marks + smoke + screech while the tail is out (drift or handbrake) and moving
     const slipping = (Math.abs(ctx.car.vlat) > 6 || hb) && Math.abs(ctx.car.speed) > 5;
-    if (slipping && now - lastSkidT > 26) {
-      lastSkidT = now;
+    if (slipping && now - ctx.lastSkidT > 26) {
+      ctx.lastSkidT = now;
       const bx = ctx.car.x - fx * 1.5, bz = ctx.car.z - fz * 1.5;           // rear axle
       const rpx2 = Math.cos(ctx.car.yaw), rpz2 = -Math.sin(ctx.car.yaw);    // right vector
       spawnSkid(bx - rpx2 * 0.7, bz - rpz2 * 0.7, yC, ctx.car.yaw, now);
       spawnSkid(bx + rpx2 * 0.7, bz + rpz2 * 0.7, yC, ctx.car.yaw, now);
-      if (FX.si % 2 === 0) spawnSmoke(bx, bz, yC, now, openRoad);
+      if (ctx.FX.si % 2 === 0) spawnSmoke(bx, bz, yC, now, openRoad);
     }
     // ride the tyre-screech: louder the more the tail is out (and on the handbrake)
     if (ctx.audio.screech) ctx.audio.screech(slipping ? clamp((Math.abs(ctx.car.vlat) - 3) / 13, 0.18, 1) * (hb ? 1.1 : 1) : 0);
@@ -3984,21 +3984,21 @@ export function createEngine({ canvas, ui, emit }) {
     // DRIFT reward: a held slide glows the ✋ button + a 'DRIFT' chip, and every ~0.9 s of
     // sustained drift ticks the combo + trip score — the best mechanic finally pays out.
     const drifting = Math.abs(ctx.car.vlat) > 6 && Math.abs(ctx.car.speed) > 9;
-    if (drifting !== driftState) { driftState = drifting; emit('drift', drifting); }
+    if (drifting !== ctx.driftState) { ctx.driftState = drifting; emit('drift', drifting); }
     if (drifting) {
-      driftAccum += dt;
-      if (driftAccum > 0.9) {
-        driftAccum = 0;
-        combo = (!comboExpired && now < comboExpire) ? combo + 1 : 1; comboExpire = now + 4000; comboExpired = false;
-        tripScore += 30 + combo * 15; addBoost(0.09); comboFx(now); emitScore({});
+      ctx.driftAccum += dt;
+      if (ctx.driftAccum > 0.9) {
+        ctx.driftAccum = 0;
+        ctx.combo = (!ctx.comboExpired && now < ctx.comboExpire) ? ctx.combo + 1 : 1; ctx.comboExpire = now + 4000; ctx.comboExpired = false;
+        ctx.tripScore += 30 + ctx.combo * 15; addBoost(0.09); comboFx(now); emitScore({});
       }
-    } else driftAccum = 0;
+    } else ctx.driftAccum = 0;
     tickParticles(now, dt);
     checkPOIs(now);
     updateBeacons(now);
     // live rally clock (direct DOM, no React churn) + combo expiry
-    if (ui.runTime) ui.runTime.textContent = fmtTime(runActive ? now - runStart : lastRunMs);
-    if (!comboExpired && now > comboExpire) { comboExpired = true; combo = 0; emitScore({}); }
+    if (ui.runTime) ui.runTime.textContent = fmtTime(ctx.runActive ? now - ctx.runStart : ctx.lastRunMs);
+    if (!ctx.comboExpired && now > ctx.comboExpire) { ctx.comboExpired = true; ctx.combo = 0; emitScore({}); }
     // reverse tell-tales: 'R' in the speedo + the STOP pedal flips to REV
     const reversing = ctx.car.speed < -0.4;
     if (ui.rev) ui.rev.style.opacity = reversing ? '1' : '0';
@@ -4009,35 +4009,35 @@ export function createEngine({ canvas, ui, emit }) {
       if (ui.gear.textContent !== g) { ui.gear.textContent = g; ui.gear.dataset.gear = g; }
     }
     if (ui.eta) {
-      if (DEST) {
-        const dd = Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z);
+      if (ctx.DEST) {
+        const dd = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
         const etaMs = dd / Math.max(9, Math.abs(ctx.car.speed)) * 1000;
         ui.eta.textContent = dd < 18 ? 'arriving…'
           : (dd > 950 ? (dd / 1000).toFixed(1) + ' km' : Math.round(dd) + ' m') + ' · ~' + fmtTime(etaMs);
       } else ui.eta.textContent = '';
     }
     if (navMarker) {
-      navMarker.visible = inp2.navActive && !autoDrive;   // hide the finger ring during auto-drive
+      navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
       if (navMarker.visible) {
-        navMarker.userData.groundY = actorGroundY(inp2.navX, inp2.navZ, navMarker.userData.groundY);
-        navMarker.position.set(inp2.navX, navMarker.userData.groundY + 0.16, inp2.navZ);
+        navMarker.userData.groundY = actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, navMarker.userData.groundY);
+        navMarker.position.set(ctx.inp2.navX, navMarker.userData.groundY + 0.16, ctx.inp2.navZ);
       } else navMarker.userData.groundY = null;
     }
     // address guide: a continuous line along the actual ROUTE (every turn), draped on
     // the road just ahead of the car; + a pin at the destination when near.
-    if (DEST) {
+    if (ctx.DEST) {
       updateGuide(yC);
-      const ddDest = Math.hypot(DEST.x - ctx.car.x, DEST.z - ctx.car.z);
+      const ddDest = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
       destPin.visible = ddDest < 700;
       if (destPin.visible) {
-        destPin.userData.groundY = actorGroundY(DEST.x, DEST.z, destPin.userData.groundY);
-        destPin.position.set(DEST.x, destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, DEST.z);
+        destPin.userData.groundY = actorGroundY(ctx.DEST.x, ctx.DEST.z, destPin.userData.groundY);
+        destPin.position.set(ctx.DEST.x, destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, ctx.DEST.z);
       }
     } else { guideLine.visible = false; destPin.visible = false; }
     // The flat aerial patch under the car read as an ugly disc (a different, lower-res
     // texture than the Google tiles). Keep the car riding the same sampled road
     // HEIGHT (actorGroundY), but leave the patch hidden so only the photoreal shows.
-    if (groundPatch) groundPatch.visible = false;
+    if (ctx.groundPatch) ctx.groundPatch.visible = false;
     const spin = ctx.car.speed * dt / 0.37;
     const active = ctx.car.models[ctx.car.modelIdx];
     if (active) {
@@ -4051,21 +4051,21 @@ export function createEngine({ canvas, ui, emit }) {
     // Smoothed MAP-view heading (compass while following, car heading otherwise) for the overhead/aerial
     // framing + a gentle "race day" cinematic sweep that runs during autodrive/follow until the user
     // grabs the camera. Eased so it never shimmers and bows out smoothly when the user takes over.
-    { let _d = viewHeading() - _viewYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI; _viewYaw += _d * (1 - Math.exp(-dt * 3)); }
-    const _cineWant = (!_orbitUserSet && (autoDrive || followMode)) ? 1 : 0;
-    _cineAmt += (_cineWant - _cineAmt) * (1 - Math.exp(-dt * 1.5));
-    const _cineYaw = _cineAmt * Math.sin(now * 0.00012) * 0.6;     // slow ±0.6 rad hero orbit
-    const _cinePit = _cineAmt * Math.sin(now * 0.00009) * 0.12;    // subtle crane
-    if (showT > 0) {
+    { let _d = viewHeading() - ctx._viewYaw; while (_d > Math.PI) _d -= 2 * Math.PI; while (_d < -Math.PI) _d += 2 * Math.PI; ctx._viewYaw += _d * (1 - Math.exp(-dt * 3)); }
+    const _cineWant = (!ctx._orbitUserSet && (ctx.autoDrive || ctx.followMode)) ? 1 : 0;
+    ctx._cineAmt += (_cineWant - ctx._cineAmt) * (1 - Math.exp(-dt * 1.5));
+    const _cineYaw = ctx._cineAmt * Math.sin(now * 0.00012) * 0.6;     // slow ±0.6 rad hero orbit
+    const _cinePit = ctx._cineAmt * Math.sin(now * 0.00009) * 0.12;    // subtle crane
+    if (ctx.showT > 0) {
       // showcase orbit on entry; any input skips it
-      showT -= dt;
-      const a = ctx.car.yaw + 2.4 + (2.8 - showT) * 1.35;
+      ctx.showT -= dt;
+      const a = ctx.car.yaw + 2.4 + (2.8 - ctx.showT) * 1.35;
       let cx2 = ctx.car.x + Math.sin(a) * 6.6, cy2 = Math.max(yC + 1.7, groundAt(cx2, ctx.car.z) + 1.2), cz2 = ctx.car.z + Math.cos(a) * 6.6;
       const g = resolveCam(ctx.car.x, yC + 1.0, ctx.car.z, cx2, cy2, cz2); // don't orbit into real tiles
       cx2 = ctx.car.x + (cx2 - ctx.car.x) * g; cy2 = yC + 1.0 + (cy2 - yC - 1.0) * g; cz2 = ctx.car.z + (cz2 - ctx.car.z) * g;
       ctx.camera.position.set(cx2, cy2, cz2);
       ctx.camera.lookAt(ctx.car.x, yC + 0.7, ctx.car.z);
-    } else if (DRIVE_CAMS[camMode].aerial) {
+    } else if (DRIVE_CAMS[ctx.camMode].aerial) {
       // Explore's look while driving: the same high orbit framing (az/polar/range as
       // the page-load Explore view), just centred on the car. Drag orbits it, pinch
       // zooms, and the altitude is slow-smoothed so it floats like the aerial view.
@@ -4074,12 +4074,12 @@ export function createEngine({ canvas, ui, emit }) {
       // HEADING-UP + FOLLOWS TURNS: orbit BEHIND the (smoothed) heading so the car's forward points away/up
       // — matches the heading-up minimap. camOrbit.yaw is the user's offset, kept RELATIVE to the car so it
       // holds as the car turns; the cinematic sweep runs until the user grabs the camera.
-      const a = _viewYaw + Math.PI + camOrbit.yaw + _cineYaw;
-      const po = clamp(0.92 - (camOrbit.pitch + _cinePit) * 0.45, 0.18, 1.4);
-      const r = (185 + sp * 38) * czoom;                             // float higher/further as you wind it out
-      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * Math.min(1, dt * 1.0);
-      const camT = _camT.set(ctx.car.x + r * Math.sin(po) * Math.sin(a), camGroundRef + r * Math.cos(po), ctx.car.z + r * Math.sin(po) * Math.cos(a));
-      if (!camInit) { camV.copy(camT); camInit = true; }
+      const a = ctx._viewYaw + Math.PI + ctx.camOrbit.yaw + _cineYaw;
+      const po = clamp(0.92 - (ctx.camOrbit.pitch + _cinePit) * 0.45, 0.18, 1.4);
+      const r = (185 + sp * 38) * ctx.czoom;                             // float higher/further as you wind it out
+      ctx.camGroundRef = ctx.camGroundRef == null ? yC : ctx.camGroundRef + (yC - ctx.camGroundRef) * Math.min(1, dt * 1.0);
+      const camT = _camT.set(ctx.car.x + r * Math.sin(po) * Math.sin(a), ctx.camGroundRef + r * Math.cos(po), ctx.car.z + r * Math.sin(po) * Math.cos(a));
+      if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
       // track TIGHTER the faster you go so a 700 mph autodrive never outruns the orbit cam
       camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));
       // hard backstop: never let the camera trail the orbit target by more than ~45% of the
@@ -4087,20 +4087,20 @@ export function createEngine({ canvas, ui, emit }) {
       const lagMax = r * 0.45, dxc = camV.x - camT.x, dzc = camV.z - camT.z, lc = Math.hypot(dxc, dzc);
       if (lc > lagMax) { const f = lagMax / lc; camV.x = camT.x + dxc * f; camV.z = camT.z + dzc * f; }
       ctx.camera.position.copy(camV);
-      ctx.camera.lookAt(ctx.car.x + fx * sp * 26 * aheadScale, camGroundRef + 1, ctx.car.z + fz * sp * 26 * aheadScale);   // bias the gaze where you're heading (→ centred on arrival)
+      ctx.camera.lookAt(ctx.car.x + fx * sp * 26 * aheadScale, ctx.camGroundRef + 1, ctx.car.z + fz * sp * 26 * aheadScale);   // bias the gaze where you're heading (→ centred on arrival)
       const fovT = 46 + 5 * sp;
       ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix();
-    } else if (DRIVE_CAMS[camMode].topdown) {
-      const CAM = DRIVE_CAMS[camMode];
+    } else if (DRIVE_CAMS[ctx.camMode].topdown) {
+      const CAM = DRIVE_CAMS[ctx.camMode];
       const sp = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);          // sense of speed even from overhead
       // almost directly overhead, but offset a little behind and aimed a touch
       // forward so you can read the road ahead (not perfectly straight down).
       // At speed: float a touch higher, ease back, and push the look-ahead WAY
       // forward so the car slides toward the bottom of frame and you see the road
       // rushing up — the overhead read of velocity.
-      const vfx = Math.sin(_viewYaw), vfz = Math.cos(_viewYaw);   // map-view forward (compass while following) — keeps this overhead view oriented like the minimap
-      const camT = _camT.set(ctx.car.x - vfx * (CAM.dist + sp * 4), yC + CAM.h * czoom + sp * 9, ctx.car.z - vfz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
-      if (!camInit) { camV.copy(camT); camInit = true; }
+      const vfx = Math.sin(ctx._viewYaw), vfz = Math.cos(ctx._viewYaw);   // map-view forward (compass while following) — keeps this overhead view oriented like the minimap
+      const camT = _camT.set(ctx.car.x - vfx * (CAM.dist + sp * 4), yC + CAM.h * ctx.czoom + sp * 9, ctx.car.z - vfz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
+      if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
       camV.lerp(camT, 1 - Math.exp(-(5 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));   // keep up at top speed
       ctx.camera.position.copy(camV);
       ctx.camera.up.set(vfx, 0, vfz); // heading-up = same orientation as the minimap
@@ -4111,7 +4111,7 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix();
       if (!ctx.reduceMotion && spHiT > 0.1) { const r = spHiT * 0.04; ctx.camera.position.x += (Math.random() - 0.5) * r; ctx.camera.position.z += (Math.random() - 0.5) * r; }
     } else {
-      const CAM = DRIVE_CAMS[camMode];
+      const CAM = DRIVE_CAMS[ctx.camMode];
       ctx.camera.up.set(0, 1, 0);
       // free look: hold wherever you dragged, then auto-recenter behind the car shortly
       // after you let go — but HOLD the view for a while first so you can actually look
@@ -4120,21 +4120,21 @@ export function createEngine({ canvas, ui, emit }) {
       // Free-look HOLDS far longer, then eases only YAW back behind the car (re-frame forward)
       // while PITCH stays where you set it — look up at the skyline / down at the road and it
       // sticks. The longer idle delay means a resting finger studying the view doesn't snap back.
-      if (now - camOrbit.t > 2600) {
-        camOrbit.yaw *= Math.exp(-dt * 0.9);                                       // slow yaw recentre
-        camOrbit.pitch += (0.1 - camOrbit.pitch) * (1 - Math.exp(-dt * 0.35));     // drift pitch to a gentle rest, very slowly
+      if (now - ctx.camOrbit.t > 2600) {
+        ctx.camOrbit.yaw *= Math.exp(-dt * 0.9);                                       // slow yaw recentre
+        ctx.camOrbit.pitch += (0.1 - ctx.camOrbit.pitch) * (1 - Math.exp(-dt * 0.35));     // drift pitch to a gentle rest, very slowly
       }
       const sp = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);          // 0..1 of the FEEL range (~60 mph)
       // spHi keeps building ABOVE the feel range up to the real top (~180-220), so the
       // open-road blast the design invites actually reads as faster than a 40 mph cruise.
       const spHi = clamp((Math.abs(ctx.car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
-      const a = ctx.car.yaw + Math.PI + camOrbit.yaw - ctx.car.steer * 0.6 + (CAM.side || 0) + _cineYaw * 0.5;   // lead the camera into corners; CAM.side = a 3/4 above-and-to-the-side hero angle (Cruise); cine = gentle race-day sway during autodrive/follow
-      const dist = (CAM.dist + sp * sp * 9 + spHi * 6) * czoom;       // sink the car back further when truly flying
-      const h = (CAM.h + camOrbit.pitch * 4.5 + sp * 3) * Math.max(0.7, czoom);
+      const a = ctx.car.yaw + Math.PI + ctx.camOrbit.yaw - ctx.car.steer * 0.6 + (CAM.side || 0) + _cineYaw * 0.5;   // lead the camera into corners; CAM.side = a 3/4 above-and-to-the-side hero angle (Cruise); cine = gentle race-day sway during autodrive/follow
+      const dist = (CAM.dist + sp * sp * 9 + spHi * 6) * ctx.czoom;       // sink the car back further when truly flying
+      const h = (CAM.h + ctx.camOrbit.pitch * 4.5 + sp * 3) * Math.max(0.7, ctx.czoom);
       // hold a STATIC altitude (drone cams): slow-smooth the ground ref so terrain
       // rolls don't bob the high cam; the low Close cam snaps to the ground.
-      camGroundRef = camGroundRef == null ? yC : camGroundRef + (yC - camGroundRef) * (1 - Math.exp(-dt * (CAM.drone ? 1.2 : 6)));
-      const camT = _camT.set(ctx.car.x + Math.sin(a) * dist, camGroundRef + h, ctx.car.z + Math.cos(a) * dist);
+      ctx.camGroundRef = ctx.camGroundRef == null ? yC : ctx.camGroundRef + (yC - ctx.camGroundRef) * (1 - Math.exp(-dt * (CAM.drone ? 1.2 : 6)));
+      const camT = _camT.set(ctx.car.x + Math.sin(a) * dist, ctx.camGroundRef + h, ctx.car.z + Math.cos(a) * dist);
       if (!CAM.drone) {
         const g = resolveCam(ctx.car.x, yC + 1.2, ctx.car.z, camT.x, camT.y, camT.z);
         // Boxed in by buildings (e.g. arriving on a tight residential street): pull the
@@ -4142,7 +4142,7 @@ export function createEngine({ canvas, ui, emit }) {
         // above instead of burying into the wall / staring at the car's own roof.
         if (g < 1) { const lift = (1 - g) * 7; camT.set(ctx.car.x + (camT.x - ctx.car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g + lift, ctx.car.z + (camT.z - ctx.car.z) * g); }
       }
-      if (!camInit) { camV.copy(camT); camInit = true; _lookV = null; _lookYS = null; camFloorRef = null; }
+      if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; _lookV = null; _lookYS = null; ctx.camFloorRef = null; }
       camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed
       // Anti-clip floor based on the CAR's road level (yC = actorGroundY, which is
       // overpass/canopy-skipped). A high groundAt() raycast at the camera's xz used to hit an
@@ -4150,8 +4150,8 @@ export function createEngine({ canvas, ui, emit }) {
       // underpass / when changing levels. Tracking the car's own level fixes that (and the
       // low-pass keeps photogrammetry bumps from popping the cam).
       _camFloorRaw = yC + 1.3;
-      camFloorRef = camFloorRef == null ? _camFloorRaw : camFloorRef + (_camFloorRaw - camFloorRef) * (1 - Math.exp(-dt * 2.2));   // softer low-pass → fewer cam pops on photoreal bumps
-      if (camV.y < camFloorRef) camV.y = camFloorRef;
+      ctx.camFloorRef = ctx.camFloorRef == null ? _camFloorRaw : ctx.camFloorRef + (_camFloorRaw - ctx.camFloorRef) * (1 - Math.exp(-dt * 2.2));   // softer low-pass → fewer cam pops on photoreal bumps
+      if (camV.y < ctx.camFloorRef) camV.y = ctx.camFloorRef;
       ctx.camera.position.copy(camV);
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
       // lead from the drift/steer, so on a hard corner the car slides toward the edge of
@@ -4181,19 +4181,19 @@ export function createEngine({ canvas, ui, emit }) {
         if (rumble > 0.001) { ctx.camera.position.x += (Math.random() - 0.5) * rumble; ctx.camera.position.y += (Math.random() - 0.5) * rumble; }
       }
     }
-    if (shakeMag > 0.01 && !ctx.reduceMotion) {                          // decaying collision shake
-      ctx.camera.position.x += (Math.random() - 0.5) * shakeMag;
-      ctx.camera.position.y += (Math.random() - 0.5) * shakeMag;
-      ctx.camera.position.z += (Math.random() - 0.5) * shakeMag;
-      shakeMag *= Math.exp(-dt * 9);
-    } else shakeMag = 0;
+    if (ctx.shakeMag > 0.01 && !ctx.reduceMotion) {                          // decaying collision shake
+      ctx.camera.position.x += (Math.random() - 0.5) * ctx.shakeMag;
+      ctx.camera.position.y += (Math.random() - 0.5) * ctx.shakeMag;
+      ctx.camera.position.z += (Math.random() - 0.5) * ctx.shakeMag;
+      ctx.shakeMag *= Math.exp(-dt * 9);
+    } else ctx.shakeMag = 0;
     if (ctx.vehicleFill.visible) {
       ctx.vehicleFill.position.copy(ctx.camera.position);
       ctx.vehicleFill.position.y += 8;
       ctx.vehicleFillTarget.position.set(ctx.car.x, yC + 1.1, ctx.car.z);
       ctx.vehicleFillTarget.updateMatrixWorld();
     }
-    updateTileClip(ctx.car.x, yC, ctx.car.z, DRIVE_CAMS[camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
+    updateTileClip(ctx.car.x, yC, ctx.car.z, DRIVE_CAMS[ctx.camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
     if (ui.mph) ui.mph.textContent = Math.round(Math.abs(ctx.car.speed) * 2.237);
     {
       const f = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);
@@ -4202,15 +4202,15 @@ export function createEngine({ canvas, ui, emit }) {
         ui.speedBar.style.background = f < 0.45 ? '#3ad17a' : f < 0.78 ? '#ffc21e' : '#ff5a3c';
       }
       if (ui.boostBar) {                                 // nitro meter (direct DOM, no React churn)
-        ui.boostBar.style.width = (boost * 100).toFixed(0) + '%';
-        ui.boostBar.parentElement.classList.toggle('ready', boost > 0.25 && !boosting);
+        ui.boostBar.style.width = (ctx.boost * 100).toFixed(0) + '%';
+        ui.boostBar.parentElement.classList.toggle('ready', ctx.boost > 0.25 && !boosting);
         ui.boostBar.parentElement.classList.toggle('firing', boosting);
       }
       if (ui.fx && !ctx.reduceMotion) {                      // speed streaks + vignette: build from ~18%, keep growing flat out
         const fHi = clamp((Math.abs(ctx.car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
         const v = clamp((f - 0.18) / 0.62, 0, 1) * 0.82 + fHi * 0.18;
         ui.fx.style.setProperty('--spd', v.toFixed(2));
-        ui.fx.style.setProperty('--ox', (50 - (ctx.car.steer + camOrbit.yaw * 0.4) * 16).toFixed(1) + '%');  // streaks flow from where you're heading
+        ui.fx.style.setProperty('--ox', (50 - (ctx.car.steer + ctx.camOrbit.yaw * 0.4) * 16).toFixed(1) + '%');  // streaks flow from where you're heading
         ui.fx.classList.toggle('on', v > 0.01);
         ui.fx.classList.toggle('fast', v > 0.6);         // motion-blur the streaks only when truly flying
       }
@@ -4237,7 +4237,7 @@ export function createEngine({ canvas, ui, emit }) {
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
     if (ui.box) { ui.box.style.width = w + 'px'; ui.box.style.height = h + 'px'; }
     ctx.camera.aspect = w / h; ctx.camera.updateProjectionMatrix();
-    if (p3dtiles) p3dtiles.setResolutionFromRenderer(ctx.camera, ctx.renderer);
+    if (ctx.p3dtiles) ctx.p3dtiles.setResolutionFromRenderer(ctx.camera, ctx.renderer);
   }
   // rAF-coalesced resize for the event listeners. On iOS, visualViewport 'scroll' fires
   // continuously during the URL-bar show/hide, and a raw resize() per event churns the GL
@@ -4259,65 +4259,65 @@ export function createEngine({ canvas, ui, emit }) {
 
   // ---------- loop ----------
   const dirV = new THREE.Vector3();
-  let prev = performance.now();
-  let raf = 0, paused = false, ctxLost = false, _miniT = 0, _miniCtx = null, _miniEl = null, _shadowT = 0, _miniYaw = 0;
+  ctx.prev = performance.now();
+  ctx.raf = 0, ctx.paused = false, ctx.ctxLost = false, ctx._miniT = 0, ctx._miniCtx = null, ctx._miniEl = null, ctx._shadowT = 0, ctx._miniYaw = 0;
   // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
   // in view whenever the photoreal world is shown. Throttled; emits only on change.
   const _attrTarget = []; let _attrStr = '', _attrT = 0;
   function updateAttribution(now) {
     if (now - _attrT < 500) return;
     _attrT = now; _attrTarget.length = 0;
-    try { p3dtiles.getAttributions(_attrTarget); } catch (e) { return; }
+    try { ctx.p3dtiles.getAttributions(_attrTarget); } catch (e) { return; }
     const s = _attrTarget.filter(a => a && a.type === 'string').map(a => a.value).filter(Boolean).join(' · ');
     if (s !== _attrStr) { _attrStr = s; emit('attribution', s); }
   }
   function loop(now) {
-    if (disposed || paused || ctxLost) return;
-    const rawDt = Math.min(0.05, (now - prev) / 1000); prev = now;
-    if (slowmoHold > 0) { slowmoHold -= rawDt; }              // hold the arrival slow-mo before recovering
-    else timeScale += (1 - timeScale) * Math.min(1, rawDt * 4.5);   // recover from slow-mo back to real time
-    const dt = rawDt * timeScale;
+    if (ctx.disposed || ctx.paused || ctx.ctxLost) return;
+    const rawDt = Math.min(0.05, (now - ctx.prev) / 1000); ctx.prev = now;
+    if (ctx.slowmoHold > 0) { ctx.slowmoHold -= rawDt; }              // hold the arrival slow-mo before recovering
+    else ctx.timeScale += (1 - ctx.timeScale) * Math.min(1, rawDt * 4.5);   // recover from slow-mo back to real time
+    const dt = rawDt * ctx.timeScale;
     if (ctx.waterMat) ctx.waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
-    updateAnimals(dt, now, (mode === 'scoop' && scoopScene === 'yard') ? ctx.CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
+    updateAnimals(dt, now, (ctx.mode === 'scoop' && ctx.scoopScene === 'yard') ? ctx.CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
     updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch
-    if (mode === 'drive') {
+    if (ctx.mode === 'drive') {
       updateDrive(dt, now);
-    } else if (mode === 'scoop') {
+    } else if (ctx.mode === 'scoop') {
       updateScoop(dt, now);
     } else {
       // frame-rate-INDEPENDENT blend (was a fixed 0.16/frame → converged twice as fast on a
       // 120 Hz phone and micro-stuttered under variable dt — the "aerial orbit isn't smooth").
       const k = ctx.reduceMotion ? 1 : (1 - Math.exp(-rawDt * 10.6));
-      if (!ctx.reduceMotion && !ptrs.size && (Math.abs(azVel) > 1e-4 || Math.abs(poVel) > 1e-4)) {
-        ctl.gaz += azVel * rawDt * 60; ctl.gpo = clamp(ctl.gpo + poVel * rawDt * 60, 0.14, 1.46);
-        const decay = Math.exp(-dt * 4); azVel *= decay; poVel *= decay; // flick momentum
+      if (!ctx.reduceMotion && !ptrs.size && (Math.abs(ctx.azVel) > 1e-4 || Math.abs(ctx.poVel) > 1e-4)) {
+        ctl.gaz += ctx.azVel * rawDt * 60; ctl.gpo = clamp(ctl.gpo + ctx.poVel * rawDt * 60, 0.14, 1.46);
+        const decay = Math.exp(-dt * 4); ctx.azVel *= decay; ctx.poVel *= decay; // flick momentum
       }
       ctl.tx += (ctl.gtx - ctl.tx) * k; ctl.ty += (ctl.gty - ctl.ty) * k; ctl.tz += (ctl.gtz - ctl.tz) * k;
       ctl.az += (ctl.gaz - ctl.az) * k; ctl.po += (ctl.gpo - ctl.po) * k; ctl.r += (ctl.gr - ctl.r) * k;
       applyCam();
-      camInit = false;
+      ctx.camInit = false;
     }
     if (!ctx.reduceMotion) {
       const s = 1 + 0.04 * Math.sin(now * 0.0023);
       ctx.ring.scale.set(s, s, 1);
       ctx.ring.material.opacity = 0.5 + 0.22 * Math.sin(now * 0.0023);
     }
-    if (ctx.sun.castShadow && now - _shadowT > 140) { ctx.renderer.shadowMap.needsUpdate = true; _shadowT = now; }
+    if (ctx.sun.castShadow && now - ctx._shadowT > 140) { ctx.renderer.shadowMap.needsUpdate = true; ctx._shadowT = now; }
     ctx.camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
-    if (p3dtiles && photoModes(mode)) { ctx.camera.updateMatrixWorld(); if (now - _tilesUpdT > 55) { p3dtiles.update(); _tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
+    if (ctx.p3dtiles && photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (_attrStr) { _attrStr = ''; emit('attribution', ''); }   // no tiles shown → no credit
-    if (mode === 'drive') {
+    if (ctx.mode === 'drive') {
       updateMiniMap(now);                                            // live Google minimap (when up)
-      if (!_gmap && ui.minimap && now - _miniT > 80) {              // procedural fallback until/unless it loads
-        _miniT = now;
-        if (_miniEl !== ui.minimap) { _miniEl = ui.minimap; _miniCtx = ui.minimap.getContext('2d'); }
-        if (_miniCtx) drawMinimap(_miniCtx, ui.minimap.width, ui.minimap.height);
+      if (!ctx._gmap && ui.minimap && now - ctx._miniT > 80) {              // procedural fallback until/unless it loads
+        ctx._miniT = now;
+        if (ctx._miniEl !== ui.minimap) { ctx._miniEl = ui.minimap; ctx._miniCtx = ui.minimap.getContext('2d'); }
+        if (ctx._miniCtx) drawMinimap(ctx._miniCtx, ui.minimap.width, ui.minimap.height);
       }
     }
     ctx.renderer.render(ctx.scene, ctx.camera);
-    raf = requestAnimationFrame(loop);
+    ctx.raf = requestAnimationFrame(loop);
   }
   // iOS robustness: don't burn GPU/memory streaming tiles to a backgrounded tab,
   // and survive a WebGL context loss instead of freezing on a black canvas.
@@ -4325,11 +4325,11 @@ export function createEngine({ canvas, ui, emit }) {
   // minimap + FX) AND suspend audio (no engine drone / music) → a hidden tab draws ~no
   // power. iOS phone-lock / app-switch often fires pagehide/freeze WITHOUT a reliable
   // visibilitychange (and Low Power Mode can suppress it), so we listen to all of them.
-  function suspend() { clearLiveInput(); _clearKbd(); if (!paused) { paused = true; cancelAnimationFrame(raf); if (ctx.audio.suspendAudio) ctx.audio.suspendAudio(); } }
-  function resume() { if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); if (ctx.audio.resumeAudio) ctx.audio.resumeAudio(); else ctx.audio.ensure(); raf = requestAnimationFrame(loop); } }
+  function suspend() { clearLiveInput(); _clearKbd(); if (!ctx.paused) { ctx.paused = true; cancelAnimationFrame(ctx.raf); if (ctx.audio.suspendAudio) ctx.audio.suspendAudio(); } }
+  function resume() { if (ctx.paused && !ctx.disposed && !ctx.ctxLost) { ctx.paused = false; ctx.prev = performance.now(); if (ctx.audio.resumeAudio) ctx.audio.resumeAudio(); else ctx.audio.ensure(); ctx.raf = requestAnimationFrame(loop); } }
   function onVisibility() { if (document.hidden) suspend(); else resume(); }
-  function onContextLost(e) { e.preventDefault(); ctxLost = true; cancelAnimationFrame(raf); }
-  function onContextRestored() { if (!disposed) location.reload(); }   // rebuild streamed GPU state via reload
+  function onContextLost(e) { e.preventDefault(); ctx.ctxLost = true; cancelAnimationFrame(ctx.raf); }
+  function onContextRestored() { if (!ctx.disposed) location.reload(); }   // rebuild streamed GPU state via reload
 
   // ---------- wire up ----------
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -4375,17 +4375,17 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.renderer.render(ctx.scene, ctx.camera);
   emit('ready');
   emitPOIs();                 // seed the start-card "places found" badge from saved progress
-  if (ctx.audio.setMuted) ctx.audio.setMuted(!soundOn);   // sync the master mute with the saved pref
-  emit('sound', soundOn);   // seed the 🔊 toggle state
-  emit('autosteer', autoSteer);
-  emit('roadlife', roadLifeOn);
+  if (ctx.audio.setMuted) ctx.audio.setMuted(!ctx.soundOn);   // sync the master mute with the saved pref
+  emit('sound', ctx.soundOn);   // seed the 🔊 toggle state
+  emit('autosteer', ctx.autoSteer);
+  emit('roadlife', ctx.roadLifeOn);
   checkFerrariUnlock();       // reconcile a prior 5/5 completion → keep the Ferrari unlocked
-  if (document.hidden) paused = true;   // born in a background tab → don't render/stream until shown
-  else raf = requestAnimationFrame(loop);
+  if (document.hidden) ctx.paused = true;   // born in a background tab → don't render/stream until shown
+  else ctx.raf = requestAnimationFrame(loop);
 
   function dispose() {
-    disposed = true;
-    cancelAnimationFrame(raf);
+    ctx.disposed = true;
+    cancelAnimationFrame(ctx.raf);
     clearTimeout(t1); clearTimeout(t2); clearTimeout(_crowdReplaceT);
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
@@ -4419,13 +4419,13 @@ export function createEngine({ canvas, ui, emit }) {
     if (cancelCarLoad) cancelCarLoad();          // late car load/timeout can't touch a dead scene
     for (const cancel of modelLoadCancels) if (cancel) cancel();
     disposeMiniMap();
-    if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
-    if (drewCrowd) drewCrowd.dispose();
-    if (dadCrowd) dadCrowd.dispose();
-    if (momCrowd) momCrowd.dispose();
-    for (const npc of npcs) { if (npc.ctrl.reset) npc.ctrl.reset(); if (npc.group.parent) npc.group.parent.remove(npc.group); }   // tear down the house NPCs
+    if (ctx.ceceCrowd) ctx.ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
+    if (ctx.drewCrowd) ctx.drewCrowd.dispose();
+    if (ctx.dadCrowd) ctx.dadCrowd.dispose();
+    if (ctx.momCrowd) ctx.momCrowd.dispose();
+    for (const npc of ctx.npcs) { if (npc.ctrl.reset) npc.ctrl.reset(); if (npc.group.parent) npc.group.parent.remove(npc.group); }   // tear down the house NPCs
     setScout(false);                             // unregister the prefetch scout camera
-    if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
+    if (ctx.p3dtiles && ctx.p3dtiles.disposeAll) ctx.p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
     ctx.scene.traverse(o => {
       if (o.geometry) o.geometry.dispose();
@@ -4443,18 +4443,18 @@ export function createEngine({ canvas, ui, emit }) {
 
   const api = {
     enterDrive, exitDrive, enterScoop, exitScoop,
-    toggleShiftLock: () => { shiftLock = !shiftLock; emit('shiftLock', shiftLock); },
+    toggleShiftLock: () => { ctx.shiftLock = !ctx.shiftLock; emit('shiftLock', ctx.shiftLock); },
     // hop: only from the ground; a keyboard Space also jumps (wired in onKeyDown)
-    jump: () => { if (mode === 'scoop' && ctx.CHAR.airY <= 0 && ctx.CHAR.vy === 0) { ctx.CHAR.vy = 8.5; if (ctx.audio.blip) ctx.audio.blip(); } },
+    jump: () => { if (ctx.mode === 'scoop' && ctx.CHAR.airY <= 0 && ctx.CHAR.vy === 0) { ctx.CHAR.vy = 8.5; if (ctx.audio.blip) ctx.audio.blip(); } },
     // random celebration from the active avatar's emote set
     dance: () => {
-      if (mode !== 'scoop' || !ctx.CHAR.drew) return;
+      if (ctx.mode !== 'scoop' || !ctx.CHAR.drew) return;
       const a = ctx.CHAR.getActions();
       ctx.CHAR.drew.react(a.length ? a[Math.floor(Math.random() * a.length)].key : 'dance');
       if (ctx.audio.blip) ctx.audio.blip();
     },
     // play one specific emote (the side-menu action buttons)
-    playAction: (key) => { if (mode === 'scoop' && ctx.CHAR.drew) { ctx.CHAR.drew.react(key); if (ctx.audio.blip) ctx.audio.blip(); } },
+    playAction: (key) => { if (ctx.mode === 'scoop' && ctx.CHAR.drew) { ctx.CHAR.drew.react(key); if (ctx.audio.blip) ctx.audio.blip(); } },
     // Drew <-> CeCe avatar swap (avatar only — the side-menu switch). Emits 'avatar' optimistically
     // (the toggle flips at once) and again once the new rig + its action list are ready.
     setAvatar: (name) => {
@@ -4466,8 +4466,8 @@ export function createEngine({ canvas, ui, emit }) {
     getAvatar: () => ctx.CHAR.avatar,
     getScoopActions: () => ctx.CHAR.getActions(),
     // Go inside / leave the house from a HUD button (proximity-free — the auto-walk door pad still works too)
-    enterHouse: () => { if (mode === 'scoop' && interior && scoopScene === 'yard') enterHouse(performance.now()); },
-    leaveHouse: () => { if (mode === 'scoop' && scoopScene === 'interior') leaveHouse(performance.now()); },
+    enterHouse: () => { if (ctx.mode === 'scoop' && ctx.interior && ctx.scoopScene === 'yard') enterHouse(performance.now()); },
+    leaveHouse: () => { if (ctx.mode === 'scoop' && ctx.scoopScene === 'interior') leaveHouse(performance.now()); },
     focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
     setDestination, clearDestination, toggleAutoDrive, driveHome, jumpHome, driveToMyLocation, stopFollow,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
@@ -4478,64 +4478,64 @@ export function createEngine({ canvas, ui, emit }) {
     driveToText: (text) => setDestinationByText(text, true),
     driveToPlace: (placeId, label) => setDestinationByPlace(placeId, label, true),
     driveToLatLon,
-    setAutoMaxMph, getAutoMaxMph: () => autoMaxMph,
-    setSpeedMul, getSpeedMul: () => speedMul, setDriveZoom,
+    setAutoMaxMph, getAutoMaxMph: () => ctx.autoMaxMph,
+    setSpeedMul, getSpeedMul: () => ctx.speedMul, setDriveZoom,
     setCrowdDensity, getCrowdDensity: () => CROWD_DENSITY,
     setTrafficDensity: (d) => {
-      trafficDensity = clamp(+d || 0, 0, 2);
-      try { localStorage.setItem('dahill.trafficdensity', String(trafficDensity)); } catch (e) { }
+      ctx.trafficDensity = clamp(+d || 0, 0, 2);
+      try { localStorage.setItem('dahill.trafficdensity', String(ctx.trafficDensity)); } catch (e) { }
       const active = trafficActiveCount();
       for (let i = active; i < traffic.length; i++) traffic[i].group.visible = false;   // park any now-over-cap cars at once
-      return trafficDensity;
+      return ctx.trafficDensity;
     },
-    getTrafficDensity: () => trafficDensity,
+    getTrafficDensity: () => ctx.trafficDensity,
     preloadMaps: () => loadMapsSDK().catch(() => {}),   // warm the SDK so the first keystroke in the address box doesn't jank
     initMiniMap,                                         // mount the live Google minimap into a div
-    setHandbrake: (on) => { inp2.hbrake = !!on; },
+    setHandbrake: (on) => { ctx.inp2.hbrake = !!on; },
     // LOOK stick (right thumb): orbit the drive camera. dx/dy are screen-pixel deltas,
     // same convention as a look-drag on the canvas, so it feeds the existing camOrbit.
     nudgeLook: (dx, dy) => {
       const ld = lookDelta(dx, dy);
-      camOrbit.yaw = clamp(camOrbit.yaw - ld.yaw, -2.4, 2.4);
-      camOrbit.pitch = clamp(camOrbit.pitch + ld.pitch, -0.45, 0.8);
-      camOrbit.t = performance.now();
-      showT = 0;
+      ctx.camOrbit.yaw = clamp(ctx.camOrbit.yaw - ld.yaw, -2.4, 2.4);
+      ctx.camOrbit.pitch = clamp(ctx.camOrbit.pitch + ld.pitch, -0.45, 0.8);
+      ctx.camOrbit.t = performance.now();
+      ctx.showT = 0;
     },
-    setGas: (on) => { inp2.gas = on ? 1 : 0; if (on) showT = 0; },   // gas pedal (hold)
-    setGasAmount: (v) => { inp2.gas = clamp(v, 0, 1); if (v > 0.05) showT = 0; },   // analog gas (touch drag)
-    setBoost: (on) => { inp2.boost = !!on; },                        // nitro (hold while charged)
-    setBrake: (on) => { inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
+    setGas: (on) => { ctx.inp2.gas = on ? 1 : 0; if (on) ctx.showT = 0; },   // gas pedal (hold)
+    setGasAmount: (v) => { ctx.inp2.gas = clamp(v, 0, 1); if (v > 0.05) ctx.showT = 0; },   // analog gas (touch drag)
+    setBoost: (on) => { ctx.inp2.boost = !!on; },                        // nitro (hold while charged)
+    setBrake: (on) => { ctx.inp2.brake = on ? 1 : 0; },                  // brake pedal (hold)
     // "Sound" toggle = master mute over EVERYTHING (engine drone + sfx + music), not just the soundtrack.
-    toggleSound: () => { soundOn = !soundOn; try { localStorage.setItem('dahill.sound', soundOn ? '1' : '0'); } catch (e) { } if (ctx.audio.ensure) ctx.audio.ensure(); if (ctx.audio.setMuted) ctx.audio.setMuted(!soundOn); if (mode === 'drive' && ctx.audio.setMusic) ctx.audio.setMusic(soundOn); emit('sound', soundOn); return soundOn; },
-    toggleAutoSteer: () => { autoSteer = !autoSteer; try { localStorage.setItem('dahill.autosteer', autoSteer ? '1' : '0'); } catch (e) { } emit('autosteer', autoSteer); ctx.toast(autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return autoSteer; },
+    toggleSound: () => { ctx.soundOn = !ctx.soundOn; try { localStorage.setItem('dahill.sound', ctx.soundOn ? '1' : '0'); } catch (e) { } if (ctx.audio.ensure) ctx.audio.ensure(); if (ctx.audio.setMuted) ctx.audio.setMuted(!ctx.soundOn); if (ctx.mode === 'drive' && ctx.audio.setMusic) ctx.audio.setMusic(ctx.soundOn); emit('sound', ctx.soundOn); return ctx.soundOn; },
+    toggleAutoSteer: () => { ctx.autoSteer = !ctx.autoSteer; try { localStorage.setItem('dahill.autosteer', ctx.autoSteer ? '1' : '0'); } catch (e) { } emit('autosteer', ctx.autoSteer); ctx.toast(ctx.autoSteer ? '🛟 Auto-steer ON — it helps you hug the road' : 'Auto-steer off', 1400); return ctx.autoSteer; },
     toggleRoadLife: () => {
-      roadLifeOn = !roadLifeOn;
-      try { localStorage.setItem('dahill.roadlife', roadLifeOn ? '1' : '0'); } catch (e) { }
-      emit('roadlife', roadLifeOn);
-      if (!roadLifeOn) { hideTraffic(); hideCrowd(); }
-      ctx.toast(roadLifeOn ? 'People + traffic ON' : 'People + traffic off', 1300);
-      return roadLifeOn;
+      ctx.roadLifeOn = !ctx.roadLifeOn;
+      try { localStorage.setItem('dahill.roadlife', ctx.roadLifeOn ? '1' : '0'); } catch (e) { }
+      emit('roadlife', ctx.roadLifeOn);
+      if (!ctx.roadLifeOn) { hideTraffic(); hideCrowd(); }
+      ctx.toast(ctx.roadLifeOn ? 'People + traffic ON' : 'People + traffic off', 1300);
+      return ctx.roadLifeOn;
     },
     // tap-to-drive: convert a minimap pixel (HEADING-UP, car-centred) to a world point and let the
     // robot drive there. Inverts the SAME rotation drawMinimap drew with (via _miniYaw) so a tap lands
     // where the user pointed. range/scale mirror drawMinimap exactly.
     tapMinimap: (px, py, w, h) => {
-      const range = 620, scale = (w / 2) / range, ca = Math.cos(_miniYaw), sa = Math.sin(_miniYaw);
+      const range = 620, scale = (w / 2) / range, ca = Math.cos(ctx._miniYaw), sa = Math.sin(ctx._miniYaw);
       const ox = px - w / 2, oy = py - h / 2;
       setDriveTarget(ctx.car.x + (-ca * ox - sa * oy) / scale, ctx.car.z + (sa * ox - ca * oy) / scale);
     },
     dispose,
-    get mode() { return mode; }
+    get mode() { return ctx.mode; }
   };
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
-    scoop: () => ({ scene: scoopScene, ready: !!interior, avatar: ctx.CHAR.avatar, entry: entryPt && entryPt.map(v => +v.toFixed(1)), char: [+ctx.CHAR.x.toFixed(1), +ctx.CHAR.z.toFixed(1)], dDoor: entryPt ? +Math.hypot(ctx.CHAR.x - entryPt[0], ctx.CHAR.z - entryPt[1]).toFixed(1) : null, occ: interior ? interior.occluders.length : 0, hiddenOcc: interior ? interior.occluders.filter(o => !o.visible).length : 0 }),
-    crowd: () => ({ on: roadLifeOn, cece: !!ceceCrowd, drew: !!drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - ctx.car.x, s.rec.z - ctx.car.z)) })) }),
-    traffic: () => ({ on: roadLifeOn, total: traffic.length, visible: traffic.filter(c => c.group.visible).length, cars: traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
+    scoop: () => ({ scene: ctx.scoopScene, ready: !!ctx.interior, avatar: ctx.CHAR.avatar, entry: entryPt && entryPt.map(v => +v.toFixed(1)), char: [+ctx.CHAR.x.toFixed(1), +ctx.CHAR.z.toFixed(1)], dDoor: entryPt ? +Math.hypot(ctx.CHAR.x - entryPt[0], ctx.CHAR.z - entryPt[1]).toFixed(1) : null, occ: ctx.interior ? ctx.interior.occluders.length : 0, hiddenOcc: ctx.interior ? ctx.interior.occluders.filter(o => !o.visible).length : 0 }),
+    crowd: () => ({ on: ctx.roadLifeOn, cece: !!ctx.ceceCrowd, drew: !!ctx.drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - ctx.car.x, s.rec.z - ctx.car.z)) })) }),
+    traffic: () => ({ on: ctx.roadLifeOn, total: traffic.length, visible: traffic.filter(c => c.group.visible).length, cars: traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
     p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
     nudge: applyP3DT,
-    tiles: () => p3dtiles,
+    tiles: () => ctx.p3dtiles,
     setProcedural: (on) => { ctx.staticGroup.visible = on; },
     beacons: () => poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +b.mat.opacity.toFixed(2), d: Math.round(Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z)) })),
     // sweep spin; score = avg tile height at building centroids − at road points
@@ -4565,9 +4565,9 @@ export function createEngine({ canvas, ui, emit }) {
       return { bestSpin: best, bestScore: bestv, scores: out, roadPts: road.length, bldPts: bld.length };
     },
     state: () => ({
-      mode, buildings: S.buildings.length, photoreal: !!p3dtiles && !ctx.staticGroup.visible,
+      mode: ctx.mode, buildings: S.buildings.length, photoreal: !!ctx.p3dtiles && !ctx.staticGroup.visible,
       poops: POOPS.length, car: { x: +ctx.car.x.toFixed(1), z: +ctx.car.z.toFixed(1), speed: +ctx.car.speed.toFixed(1), yaw: +ctx.car.yaw.toFixed(2), glb: !!ctx.car.glb },
-      dest: DEST ? { x: +DEST.x.toFixed(1), z: +DEST.z.toFixed(1) } : null,
+      dest: ctx.DEST ? { x: +ctx.DEST.x.toFixed(1), z: +ctx.DEST.z.toFixed(1) } : null,
       char: { x: +ctx.CHAR.x.toFixed(1), z: +ctx.CHAR.z.toFixed(1), bag: ctx.CHAR.bag, total: ctx.CHAR.total, lvl: ctx.CHAR.lvl }
     })
   };
