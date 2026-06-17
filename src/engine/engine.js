@@ -3351,8 +3351,14 @@ export function createEngine({ canvas, ui, emit }) {
       if (car.railSpeed < 0) car.railSpeed = 0;
       car.speed = car.railSpeed;
       car.railS = Math.min(total, car.railS + car.speed * dt);                    // never roll past the destination
-      if (remain <= 1.5 && car.speed < 6) {                                       // braked to a near-stop at the destination → arrive
-        car.speed = 0; car.railS = null; car.railSpeed = null;
+      // Don't mistake the end of a still-loading route for ARRIVAL: if the real destination is still far
+      // away (the full Directions route lands a beat after the seed/local route we set off on), hold at
+      // the route end and let the rail re-acquire when the longer route arrives — give up after ~6 s so a
+      // route that never comes can't soft-lock the car.
+      if (remain <= 1.5) car.railEndT = (car.railEndT || 0) + dt; else car.railEndT = 0;
+      const farFromDest = DEST && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 150;
+      if (remain <= 1.5 && car.speed < 6 && (!farFromDest || car.railEndT > 6)) {  // braked to a near-stop AT the destination → arrive
+        car.speed = 0; car.railS = null; car.railSpeed = null; car.railEndT = 0;
         if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
         clearDestination();
       } else {
