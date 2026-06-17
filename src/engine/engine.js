@@ -48,6 +48,7 @@ export function createEngine({ canvas, ui, emit }) {
   // `ctx.car`/`ctx.CHAR`/`ctx.inp2` stay the existing aggregate bags. See plans/plan-engine-decomposition-*.
   const ctx = {};
   ctx.canvas = canvas; ctx.ui = ui; ctx.emit = emit;
+  ctx.fn = {};   // back-edge registry: cross-cutting functions modules call (setMode, enterDrive, …); each owning module registers itself into ctx.fn
   ctx.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   ctx.toast = (html, ms) => ctx.emit('toast', { html, ms: ms || 1800 });
   // The toast is rendered via dangerouslySetInnerHTML, so any dynamic value that can carry
@@ -834,7 +835,7 @@ export function createEngine({ canvas, ui, emit }) {
     const adjust = terrainAt(0, 0) - ys[ys.length >> 1];
     if (Math.abs(adjust) > 18) return false;  // garbage (rays hit roofs/voids/coarse tiles) — retry
     ctx.P3DT.yOffset = clamp(ctx.P3DT.yOffset + adjust, 8, 56);
-    applyP3DT();
+    ctx.fn.applyP3DT();
     ctx.alignDone = true;
     return true;
   }
@@ -859,8 +860,8 @@ export function createEngine({ canvas, ui, emit }) {
   // the house) and pristine tiles in Explore/Drive.
   const photoModes = mode => mode === 'explore' || mode === 'drive';
   function applyModeVisuals() {
-    const photoOn = photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
-    if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = photoModes(ctx.mode);
+    const photoOn = ctx.fn.photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
+    if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = ctx.fn.photoModes(ctx.mode);
     if (ctx.p3dtiles && ctx.p3dtiles.clipPlanes && ctx.mode !== 'drive') ctx.p3dtiles.clipPlanes.length = 0;   // R8 cutaway is Drive-only; never slice the Explore high-orbit / Scoop
     ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     ctx.carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
@@ -874,7 +875,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.sun.castShadow) ctx.renderer.shadowMap.needsUpdate = true;
   }
   function delayedTileFallbackToast(msg) {
-    setTimeout(() => { if (!ctx.disposed && photoModes(ctx.mode) && !ctx.tilesReady) ctx.toast(msg, 2600); }, 6100);
+    setTimeout(() => { if (!ctx.disposed && ctx.fn.photoModes(ctx.mode) && !ctx.tilesReady) ctx.toast(msg, 2600); }, 6100);
   }
   if (!ctx.flags.has('flat')) {
     if (!import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map key missing — showing the built world');
@@ -890,14 +891,14 @@ export function createEngine({ canvas, ui, emit }) {
       });
       if (!ctx.p3dtiles) { if (import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); return; }
       if (ctx.disposed) { if (ctx.p3dtiles.disposeAll) ctx.p3dtiles.disposeAll(); ctx.p3dtiles = null; return; }
-      applyP3DT();
+      ctx.fn.applyP3DT();
       let tries = 0;
       ctx.p3dtiles.addEventListener('load-model', () => {
         if (!ctx.tilesReady) { ctx.tilesReady = true; ctx.emit('photoreal', true); }
         // Vertically align the photoreal ground to the procedural terrain as the
         // street tiles stream (Explore/Drive only — Scoop never shows tiles).
-        if (tries < 24) { tries++; alignP3DT(); }
-        applyModeVisuals();          // hide procedural once tiles are up (Explore/Drive)
+        if (tries < 24) { tries++; ctx.fn.alignP3DT(); }
+        ctx.fn.applyModeVisuals();          // hide procedural once tiles are up (Explore/Drive)
       });
       // surface auth/quota/referrer failures instead of silently falling back to
       // the procedural world (a baked, referrer-blocked or over-quota key 403s here).
@@ -981,9 +982,9 @@ export function createEngine({ canvas, ui, emit }) {
     // wall (the house/garage), walk it OUTWARD from the yard centre until it's on open
     // ground (CeCe was spawning inside the houses).
     const clearYard = (x, z) => {
-      if (!insideScoopBuilding(x, z)) return [x, z];
+      if (!ctx.fn.insideScoopBuilding(x, z)) return [x, z];
       let dx = x - hx, dz = z - hz; const d = Math.hypot(dx, dz) || 1; dx /= d; dz /= d;
-      for (let r = d + 2; r < d + 22; r += 1.5) { const nx = hx + dx * r, nz = hz + dz * r; if (!insideScoopBuilding(nx, nz)) return [nx, nz]; }
+      for (let r = d + 2; r < d + 22; r += 1.5) { const nx = hx + dx * r, nz = hz + dz * r; if (!ctx.fn.insideScoopBuilding(nx, nz)) return [nx, nz]; }
       return [x, z];
     };
     // YARD (Scoop): a few CeCes + Drews dancing around the front yard (clear of the walls)
@@ -1017,7 +1018,7 @@ export function createEngine({ canvas, ui, emit }) {
           const side = Math.random() < 0.5 ? 1 : -1;                 // random side each time
           const off = ctx.SIDEWALK_OFF + Math.random() * 1.4;
           const px = cx + nx * side * off, pz = cz + nz * side * off;
-          if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
+          if (ctx.fn.insideBuilding(px, pz) || ctx.fn.insideScoopBuilding(px, pz)) continue;
           const crowd = pickPed(placed);
           put(crowd, px, pz, 'street', true, { yaw: Math.atan2(-nx * side, -nz * side) });   // face the road
           placed++;
@@ -1028,7 +1029,7 @@ export function createEngine({ canvas, ui, emit }) {
       for (let i = 0; placed < POOL && i < POOL * 3; i++) {
         const px = (Math.random() - 0.5) * 600, pz = (Math.random() - 0.5) * 600;   // ≤ ±300 = the flat field
         if (Math.hypot(px, pz) < 28) continue;                       // not on top of the house
-        if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
+        if (ctx.fn.insideBuilding(px, pz) || ctx.fn.insideScoopBuilding(px, pz)) continue;
         put(pickPed(placed), px, pz, 'street', false);
         placed++;
       }
@@ -1607,7 +1608,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (m === 'scoop') { ctx.scene.fog.near = 38; ctx.scene.fog.far = 92; }
       else { ctx.scene.fog.near = 460; ctx.scene.fog.far = 1200; }
     }
-    ctx.emit('mode', m); applyModeVisuals();
+    ctx.emit('mode', m); ctx.fn.applyModeVisuals();
   };
   ctx.ptrs = new Map(); ctx.lastPinch = 0, ctx.lastMid = null, ctx.moved = 0;
   ctx.lookPtrs = new Map();
@@ -1859,7 +1860,7 @@ export function createEngine({ canvas, ui, emit }) {
         ctx.shiftLock = !ctx.shiftLock; ctx.emit('shiftLock', ctx.shiftLock);
         ctx.toast(ctx.shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
       }
-      if (ctx.mode === 'scoop' && (e.key === 'e' || e.key === 'E') && ctx.nearCar) { driveFromScoop(); e.preventDefault(); return; }
+      if (ctx.mode === 'scoop' && (e.key === 'e' || e.key === 'E') && ctx.nearCar) { ctx.fn.driveFromScoop(); e.preventDefault(); return; }
       if (ctx.mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
       if (ctx.mode === 'drive' && e.key === ' ') { ctx.inp2.hbrake = true; e.preventDefault(); return; }        // Space = handbrake
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
@@ -1868,7 +1869,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (e.key === 'ArrowDown' || e.key === 's') ctx.inp2.ky = 1;
       if (e.key === 'ArrowLeft' || e.key === 'a') ctx.inp2.kx = -1;
       if (e.key === 'ArrowRight' || e.key === 'd') ctx.inp2.kx = 1;
-      if (e.key === 'Escape') (ctx.mode === 'drive' ? exitDrive : exitScoop)();
+      if (e.key === 'Escape') (ctx.mode === 'drive' ? ctx.fn.exitDrive : ctx.fn.exitScoop)();
       e.preventDefault(); return;
     }
     const step = 0.12;
@@ -1908,7 +1909,7 @@ export function createEngine({ canvas, ui, emit }) {
     pushScoopHud();
   }
   function enterScoop() {
-    setMode('scoop'); ctx.camInit = false; ctx.szoom = 1; ctx.camGroundRef = null; ctx.CHAR.groundY = null;   // fresh framing per scoop entry (pinch-zoom shouldn't leak in)
+    ctx.fn.setMode('scoop'); ctx.camInit = false; ctx.szoom = 1; ctx.camGroundRef = null; ctx.CHAR.groundY = null;   // fresh framing per scoop entry (pinch-zoom shouldn't leak in)
     setInside(false);
     for (const s of ctx.labelSprites) s.visible = false;
     ctx.CHAR.group.visible = true;
@@ -1925,7 +1926,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.toast('Scoop the sanctuary poop! 💩<br><small>Empty at the green compost bin · the 🚪 pad takes you inside the house</small>', 3200);
   }
   function exitScoop() {
-    setMode('explore');
+    ctx.fn.setMode('explore');
     ctx.camera.up.set(0, 1, 0);                 // symmetry with exitDrive; never leak a tilted up-vector
     setInside(false);                       // back to the yard scene (hide the interior if we left from inside)
     if (ctx.groundPatch) ctx.groundPatch.visible = false;
@@ -1982,9 +1983,9 @@ export function createEngine({ canvas, ui, emit }) {
         // collide against real building/structure footprints (not the oversized
         // AABBs) and slide along the wall — otherwise the house's AABB walls off
         // half the open lawn around the keeper's spawn.
-        if (insideScoopBuilding(nx, nz)) {
-          if (!insideScoopBuilding(nx, ctx.CHAR.z)) nz = ctx.CHAR.z;
-          else if (!insideScoopBuilding(ctx.CHAR.x, nz)) nx = ctx.CHAR.x;
+        if (ctx.fn.insideScoopBuilding(nx, nz)) {
+          if (!ctx.fn.insideScoopBuilding(nx, ctx.CHAR.z)) nz = ctx.CHAR.z;
+          else if (!ctx.fn.insideScoopBuilding(ctx.CHAR.x, nz)) nx = ctx.CHAR.x;
           else { nx = ctx.CHAR.x; nz = ctx.CHAR.z; }
         }
         for (const t of ctx.scoopTrees) {
@@ -2150,12 +2151,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.mode !== 'scoop' || !ctx.nearCar) return;
     ctx.nearCar = false; ctx.emit('nearCar', false);
     ctx.audio.blip();
-    enterDrive();
+    ctx.fn.enterDrive();
   }
 
   // ---------- drive mode ----------
   function enterDrive() {
-    setMode('drive'); ctx.camInit = false;
+    ctx.fn.setMode('drive'); ctx.camInit = false;
     setInside(false);
     clearDestination();
     if (ctx.navMarker) ctx.navMarker.visible = false;
@@ -2200,7 +2201,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.poiFound.size >= ctx.POIS.length) ctx.toast('🏆 All places found — free roam, beat your times!', 2400);
   }
   function exitDrive() {
-    setMode('explore');
+    ctx.fn.setMode('explore');
     stopFollow();
     ctx.camera.up.set(0, 1, 0);
     hideJoy();
@@ -2273,6 +2274,10 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.audio.blip && ctx.audio.blip();
     ctx.toast('Back on the road 🛣️', 1000);
   }
+  // Register the cross-cutting core back-edges so extracted domain modules can call them via ctx.fn.
+  // (mode machine, mode transitions, building hit-tests, tile align — these stay in engine.js / core for now.)
+  Object.assign(ctx.fn, { setMode, applyModeVisuals, photoModes, enterDrive, exitDrive, enterScoop, exitScoop, driveFromScoop, resetToRoad, insideBuilding, insideScoopBuilding, alignP3DT, applyP3DT });
+
   // ---- destination / routing / auto-drive ----
   // Real road route from Google Directions (via the Maps JS SDK, which works in the
   // browser — the Directions web service is CORS-blocked). Falls back to a straight
@@ -2561,7 +2566,7 @@ export function createEngine({ canvas, ui, emit }) {
     const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
     const onLocalRoad = np && np.d < 90;
     if (onLocalRoad) { ctx.car.x = np.x; ctx.car.z = np.z; }
-    else if (np && insideBuilding(ctx.car.x, ctx.car.z)) { ctx.car.x = np.x; ctx.car.z = np.z; }
+    else if (np && ctx.fn.insideBuilding(ctx.car.x, ctx.car.z)) { ctx.car.x = np.x; ctx.car.z = np.z; }
     clearDestination();
     settleAfterTeleport();
     ctx.toast('📍 Jumped to ' + ctx.esc(label || 'there'), 1500);
@@ -2592,7 +2597,7 @@ export function createEngine({ canvas, ui, emit }) {
           ctx.car.x = e[0]; ctx.car.z = e[1];
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
           const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
-          if (np && (np.d < 90 || insideBuilding(ctx.car.x, ctx.car.z))) { ctx.car.x = np.x; ctx.car.z = np.z; }
+          if (np && (np.d < 90 || ctx.fn.insideBuilding(ctx.car.x, ctx.car.z))) { ctx.car.x = np.x; ctx.car.z = np.z; }
           ctx._jumpSnap = null;   // Google curb landed first — consume the stamp so the OSM-fetch snap won't double-fire
           settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
         }
@@ -2663,7 +2668,7 @@ export function createEngine({ canvas, ui, emit }) {
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { ctx.toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
     stopFollow();
-    if (ctx.mode !== 'drive') enterDrive();
+    if (ctx.mode !== 'drive') ctx.fn.enterDrive();
     if (follow) {
       startHeading();                                                  // request the compass NOW, inside the button-tap gesture (iOS requires that)
       ctx.followMode = true; ctx.autoDrive = false; clearRouteRail(); clearDestination();   // exact-follow OWNS the car — kill any rail/route
@@ -3503,12 +3508,12 @@ export function createEngine({ canvas, ui, emit }) {
     if (!ctx.followMode && ctx.autoSteer && inHood && !onRouteNow && ctx.recoverCooldown <= 0) {
       if (offRoadDist > 14) ctx.offRoadT += dt; else ctx.offRoadT = 0;
       const stuck = Math.abs(ctx.car.speed) < 3;
-      if (offRoadDist > 42 || (ctx.offRoadT > 1.5 && offRoadDist > 22) || (ctx.offRoadT > 2.2 && stuck)) { ctx.offRoadT = 0; resetToRoad(); }
+      if (offRoadDist > 42 || (ctx.offRoadT > 1.5 && offRoadDist > 22) || (ctx.offRoadT > 2.2 && stuck)) { ctx.offRoadT = 0; ctx.fn.resetToRoad(); }
     } else if (ctx.autoDrive && onRouteNow && ctx.recoverCooldown <= 0) {
       // The chauffeur wandered off the ROUTE line — snap back so it re-syncs. Require PERSISTENCE
       // (off for a beat, or way off) so a single momentary overshoot on a bend doesn't teleport-loop.
       if (offRoadDist > 30) ctx.offRoadT += dt; else ctx.offRoadT = 0;
-      if (offRoadDist > 80 || (ctx.offRoadT > 1.2 && offRoadDist > 45)) { ctx.offRoadT = 0; resetToRoad(); }
+      if (offRoadDist > 80 || (ctx.offRoadT > 1.2 && offRoadDist > 45)) { ctx.offRoadT = 0; ctx.fn.resetToRoad(); }
     } else ctx.offRoadT = 0;
     // HARD UNSTICK: a bad teleport/landing can bury the car inside a building footprint, where
     // the collision below collapses every move candidate to its own spot (can't budge in any
@@ -3516,7 +3521,7 @@ export function createEngine({ canvas, ui, emit }) {
     // route far from home); the heading is re-derived from the corrected state just below.
     // Gate on recoverCooldown so it can't 60 Hz-spam (blip/toast/reset) if a snap point ever
     // lands back inside a footprint — it retries at most every ~1.8 s instead.
-    if (!ctx.followMode && ctx.recoverCooldown <= 0 && insideBuilding(ctx.car.x, ctx.car.z)) resetToRoad();   // follow's glide phases through buildings and OWNS position — don't let recovery yank/fight it
+    if (!ctx.followMode && ctx.recoverCooldown <= 0 && ctx.fn.insideBuilding(ctx.car.x, ctx.car.z)) ctx.fn.resetToRoad();   // follow's glide phases through buildings and OWNS position — don't let recovery yank/fight it
     const fx = Math.sin(ctx.car.yaw), fz = Math.cos(ctx.car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
@@ -3555,9 +3560,9 @@ export function createEngine({ canvas, ui, emit }) {
     const fast = Math.abs(ctx.car.speed) > 14;
     // buildings are solid only at their real footprint; slide along the wall
     // instead of stopping dead so you can scrape past a corner.
-    if (insideBuilding(nx, nz)) {
-      if (!insideBuilding(nx, ctx.car.z)) nz = ctx.car.z;
-      else if (!insideBuilding(ctx.car.x, nz)) nx = ctx.car.x;
+    if (ctx.fn.insideBuilding(nx, nz)) {
+      if (!ctx.fn.insideBuilding(nx, ctx.car.z)) nz = ctx.car.z;
+      else if (!ctx.fn.insideBuilding(ctx.car.x, nz)) nx = ctx.car.x;
       else { nx = ctx.car.x; nz = ctx.car.z; }
       if (carHit(Math.abs(ctx.car.speed), 'wall')) ctx.car.speed *= 0.38;   // scrub only on a fresh hit (else position push-out frees you)
       hitThisFrame = true;
@@ -4080,7 +4085,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.camera.getWorldDirection(ctx.dirV);
     if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(ctx.dirV.x, ctx.dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     ctx.prefetch.updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
-    if (ctx.p3dtiles && photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
+    if (ctx.p3dtiles && ctx.fn.photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (ctx._attrStr) { ctx._attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
     if (ctx.mode === 'drive') {
       updateMiniMap(now);                                            // live Google minimap (when up)
@@ -4216,7 +4221,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   const api = {
-    enterDrive, exitDrive, enterScoop, exitScoop,
+    enterDrive: ctx.fn.enterDrive, exitDrive: ctx.fn.exitDrive, enterScoop: ctx.fn.enterScoop, exitScoop: ctx.fn.exitScoop,
     toggleShiftLock: () => { ctx.shiftLock = !ctx.shiftLock; ctx.emit('shiftLock', ctx.shiftLock); },
     // hop: only from the ground; a keyboard Space also jumps (wired in onKeyDown)
     jump: () => { if (ctx.mode === 'scoop' && ctx.CHAR.airY <= 0 && ctx.CHAR.vy === 0) { ctx.CHAR.vy = 8.5; if (ctx.audio.blip) ctx.audio.blip(); } },
@@ -4242,7 +4247,7 @@ export function createEngine({ canvas, ui, emit }) {
     // Go inside / leave the house from a HUD button (proximity-free — the auto-walk door pad still works too)
     enterHouse: () => { if (ctx.mode === 'scoop' && ctx.interior && ctx.scoopScene === 'yard') enterHouse(performance.now()); },
     leaveHouse: () => { if (ctx.mode === 'scoop' && ctx.scoopScene === 'interior') leaveHouse(performance.now()); },
-    focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop, resetToRoad, resize,
+    focusHouse, cycleCamera, traceDrive, cycleCar, getCars, pickCar, cycleScoopCamera, driveFromScoop: ctx.fn.driveFromScoop, resetToRoad: ctx.fn.resetToRoad, resize,
     setDestination, clearDestination, toggleAutoDrive, driveHome, jumpHome, driveToMyLocation, stopFollow,
     // address search + jump-to + autodrive speed cap (Google JS SDK, in-browser)
     placeSuggest, geocodeAddress, geocodePlaceId,
@@ -4308,7 +4313,7 @@ export function createEngine({ canvas, ui, emit }) {
     crowd: () => ({ on: ctx.roadLifeOn, cece: !!ctx.ceceCrowd, drew: !!ctx.drewCrowd, spots: ctx.crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - ctx.car.x, s.rec.z - ctx.car.z)) })) }),
     traffic: () => ({ on: ctx.roadLifeOn, total: ctx.traffic.length, visible: ctx.traffic.filter(c => c.group.visible).length, cars: ctx.traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
     p3dt: ctx.P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
-    nudge: applyP3DT,
+    nudge: ctx.fn.applyP3DT,
     tiles: () => ctx.p3dtiles,
     setProcedural: (on) => { ctx.staticGroup.visible = on; },
     beacons: () => ctx.poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +b.mat.opacity.toFixed(2), d: Math.round(Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z)) })),
