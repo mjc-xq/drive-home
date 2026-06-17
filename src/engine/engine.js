@@ -723,7 +723,20 @@ export function createEngine({ canvas, ui, emit }) {
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPy = (modelMatrix * vec4(transformed,1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWPy; uniform vec2 uYC; uniform float uYR;')
-        .replace('#include <dithering_fragment>', 'gl_FragColor.a *= 1.0 - smoothstep(uYR * 0.72, uYR * 0.98, distance(vWPy.xz, uYC));\n#include <dithering_fragment>');
+        .replace('#include <dithering_fragment>',
+          // De-wash JUST the yard ground (the bright aerial photo reads blown-out under the
+          // game's un-managed linear pipeline). Scoped to the yard mesh — drive/tiles untouched:
+          //   1) pull exposure down so the whole ground stops glowing
+          //   2) soft knee that compresses ONLY the bright (>0.7) region — tames the blown-white
+          //      driveway/concrete patches that a plain gamma curve leaves near-white
+          //   3) gamma for midtone contrast, then a saturation lift so grass reads green not grey
+          'vec3 yc = clamp(gl_FragColor.rgb, 0.0, 8.0);\n' +
+          'yc *= 0.80;\n' +
+          'yc = yc / (1.0 + max(yc - 0.70, 0.0) * 1.7);\n' +
+          'yc = pow(clamp(yc, 0.0, 1.0), vec3(1.18));\n' +
+          'yc = mix(vec3(dot(yc, vec3(0.299, 0.587, 0.114))), yc, 1.18);\n' +
+          'gl_FragColor.rgb = yc;\n' +
+          'gl_FragColor.a *= 1.0 - smoothstep(uYR * 0.72, uYR * 0.98, distance(vWPy.xz, uYC));\n#include <dithering_fragment>');
     };
     yardMat.customProgramCacheKey = () => 'scoopYard';
     scoopGrass = new THREE.Mesh(geo, yardMat);
@@ -3443,7 +3456,12 @@ export function createEngine({ canvas, ui, emit }) {
     // ready it simply HOLDS (idles) rather than cutting straight across the land.
     if (autoDrive && DEST) {
       const end = ROUTE && ROUTE.length ? ROUTE[ROUTE.length - 1] : null;
-      const atEnd = end && (routeIdx >= ROUTE.length || Math.hypot(end.x - car.x, end.z - car.z) < 12);
+      // When the RAIL is active (ROUTE has ≥2 pts) it OWNS the approach and the precise braked stop. Do NOT
+      // let this physics check "arrive" early: at 12 m out the rail can still be doing ~79 m/s (its √(2·a·d)
+      // cap), and clearing the destination there drops the car at speed with NO rail → it coasts straight
+      // PAST the target. That was the "autodrive overshoot when it goes fast". Defer to the rail's own stop.
+      const railActive = !!(ROUTE && ROUTE.length > 1);
+      const atEnd = !railActive && end && (routeIdx >= ROUTE.length || Math.hypot(end.x - car.x, end.z - car.z) < 12);
       if (!ROUTE) { inp2.navActive = false; if (DEST.geo && now - (DEST._retryT || 0) > 4000) { DEST._retryT = now; fetchRoute(DEST.geo.lat, DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
       else if (atEnd) {
         if (!DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
