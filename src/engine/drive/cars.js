@@ -1,5 +1,6 @@
 import { VEHICLES, cycleVehicle, loadDrivableCar, loadRealCar, setVehicle, vehicleList } from '../car.js';
 import { installDracoDecoder } from '../draco-install.js';
+import carGlbUrl from '../../assets/ferrari.glb';
 export function createCars(ctx) {
   function ensureVehicle(slot) {
     if (ctx.flags.has('nocar') || ctx.disposed) return;

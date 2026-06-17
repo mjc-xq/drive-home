@@ -224,7 +224,7 @@ export function createControls(ctx) {
         ctx.toast(ctx.shiftLock ? 'Shift-lock ON 🔒' : 'Shift-lock off', 900); e.preventDefault(); return;
       }
       if (ctx.mode === 'scoop' && (e.key === 'e' || e.key === 'E') && ctx.nearCar) { ctx.fn.driveFromScoop(); e.preventDefault(); return; }
-      if (ctx.mode === 'scoop' && e.key === ' ' && !e.repeat) { api.jump(); e.preventDefault(); return; }   // Space = hop
+      if (ctx.mode === 'scoop' && e.key === ' ' && !e.repeat) { ctx.api.jump(); e.preventDefault(); return; }   // Space = hop
       if (ctx.mode === 'drive' && e.key === ' ') { ctx.inp2.hbrake = true; e.preventDefault(); return; }        // Space = handbrake
       const dk = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'Escape'];
       if (dk.indexOf(e.key) < 0) return;

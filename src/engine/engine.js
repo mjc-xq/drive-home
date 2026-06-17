@@ -1511,6 +1511,7 @@ export function createEngine({ canvas, ui, emit }) {
     dispose,
     get mode() { return ctx.mode; }
   };
+  ctx.api = api;   // a couple of modules (controls Space=jump) reach the public api via ctx.api
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
