@@ -526,6 +526,17 @@ export default function App() {
               </div>
               {scoopMenuOpen && (
                 <div className="segMenuPanel scoopMenuPanel">
+                  {/* go inside / leave the house (in the menu, not floating on screen) */}
+                  {house.ready && !house.inside && (
+                    <button className="menuItem accent" onClick={() => { eng().enterHouse(); setScoopMenuOpen(false); }}>
+                      <span className="miIcon go">🏠</span><span className="miTxt"><b>Go inside</b><i className="go">Enter the house</i></span>
+                    </button>
+                  )}
+                  {house.inside && (
+                    <button className="menuItem accent" onClick={() => { eng().leaveHouse(); setScoopMenuOpen(false); }}>
+                      <span className="miIcon go">🚪</span><span className="miTxt"><b>Leave house</b><i className="go">Back outside</i></span>
+                    </button>
+                  )}
                   {/* who you control */}
                   <div className="charSwitch" role="radiogroup" aria-label="Who you control">
                     <button className={'charOpt' + (scoopChar === 'drew' ? ' on' : '')} role="radio" aria-checked={scoopChar === 'drew'} onClick={() => eng().setAvatar('drew')}>🧒 Drew</button>
@@ -556,8 +567,6 @@ export default function App() {
             </div>
             <button id="jumpBtn" className="btn primary icon" aria-label="Jump" onClick={() => eng().jump()}>🦘</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
-            {house.ready && !house.inside && !nearCar && <button id="goInside" className="btn primary" onClick={() => eng().enterHouse()}>Go inside 🏠</button>}
-            {house.inside && <button id="goInside" className="btn primary" onClick={() => eng().leaveHouse()}>Leave house 🚪</button>}
             <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · ☰ menu: characters, actions &amp; exit</div>
           </div>
         )}

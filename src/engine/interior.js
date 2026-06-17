@@ -102,12 +102,16 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     for (const w of wallColliders) { roomAABB[0] = Math.min(roomAABB[0], w[0]); roomAABB[1] = Math.max(roomAABB[1], w[1]); roomAABB[2] = Math.min(roomAABB[2], w[2]); roomAABB[3] = Math.max(roomAABB[3], w[3]); }
     if (!isFinite(roomAABB[0])) { roomAABB[0] = cx - 4.5; roomAABB[1] = cx + 4.5; roomAABB[2] = cz - 7; roomAABB[3] = cz + 7; }
 
-    // Collision predicate — defined BEFORE spawn so spawn-clearance uses the SAME inflated test.
-    const RAD = 0.34;   // player indoor collision half-width (must match engine's interior.collide(...) call)
-    const inPortal = (x, z, rad) => { for (const d of doorPortals) if (x > d[0] - rad && x < d[1] + rad && z > d[2] - rad && z < d[3] + rad) return true; return false; };
+    // Collision predicate — defined BEFORE spawn so spawn-clearance uses the SAME test.
+    // FOOTPRINT model: you can walk anywhere there's FLOOR (continuous through doorways), blocked only
+    // by the big furniture. Per-wall AABBs are NOT used for movement — in this denser scan some wall
+    // meshes' bounding boxes span the open doorways and sealed rooms (the "invisible barrier"). The
+    // floor footprint already has the openings, so it's the robust boundary.
+    const RAD = 0.34;
+    const floorAABBs = floors.map(f => boxXZ(tmp.setFromObject(f), 0.25));   // padded so you can reach the wall faces
+    const onFloor = (x, z) => { for (const f of floorAABBs) if (x > f[0] && x < f[1] && z > f[2] && z < f[3]) return true; return false; };
     const blocked = (x, z, rad) => {
-      if (inPortal(x, z, rad)) return false;                 // doorways pass straight through
-      for (const w of wallColliders) if (x > w[0] - rad && x < w[1] + rad && z > w[2] - rad && z < w[3] + rad) return true;
+      if (!onFloor(x, z)) return true;   // off the floor footprint = into a wall / outside the house
       for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;
       return false;
     };
