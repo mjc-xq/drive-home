@@ -60,9 +60,10 @@ cam = bpy.data.objects.new("cam", cam_d); scene.collection.objects.link(cam)
 scene.camera = cam
 
 
-def shoot(loc, suffix, ortho=None):
+def shoot(loc, suffix, ortho=None, aim=None):
+    a = aim if aim is not None else ctr
     cam.location = loc
-    d = ctr - cam.location
+    d = a - cam.location
     cam.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
     if ortho:
         cam_d.type = "ORTHO"; cam_d.ortho_scale = ortho
@@ -73,5 +74,8 @@ def shoot(loc, suffix, ortho=None):
     print("[render] wrote", scene.render.filepath, flush=True)
 
 
+# the house sits at glTF origin -> Blender (0, 0, elevation)
+house = Vector((0, 0, ctr.z))
 shoot(ctr + Vector((span * 0.62, -span * 0.62, span * 0.5)), "_3q.png")
 shoot(ctr + Vector((0, 0.001, span)), "_top.png", ortho=span * 1.05)
+shoot(house + Vector((0, 0.001, span)), "_lots.png", ortho=130, aim=house)
