@@ -8,7 +8,7 @@ import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
 import { createInterior } from './interior.js';
 import { loadDadController } from './dad.js';
 import { DREW_HEIGHT_M, CECE_HEIGHT_M } from './drew.js';
-import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
+import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES, setCarAniso } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
@@ -73,6 +73,7 @@ export function createEngine({ canvas, ui, emit }) {
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   renderer.localClippingEnabled = true;   // Drive-mode tile cutaway: only the photoreal tile materials carry clip planes, so the car/HUD/guide stay unclipped (see updateTileClip + tiles3d.clipPlanes)
   const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles
+  setCarAniso(Math.min(8, MAX_ANISO));   // give the car textures the same anisotropic filtering as the tiles (de-grains the models)
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xc8d6da);
   scene.fog = new THREE.Fog(0xd2dcd6, 460, 1200);
