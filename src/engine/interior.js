@@ -57,6 +57,17 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       else if (/^chair/.test(n)) { /* chairs stay walk-through (see-through only) — a table's 4 chairs would otherwise cluster into an impassable ring */ }
       else { furniture.push(o); if (/^sofa/.test(n)) sofas.push(o); else if (/^storage_cabinet/.test(n)) cabinets.push(o); else if (/^storage_shelf/.test(n)) shelves.push(o); }   // EVERYTHING else (tables, cabinets, appliances, sofas, beds, …) is solid
     });
+    // Couches a touch smaller (user request): scale each sofa 0.9 about its own footprint centre, base
+    // kept on the floor. Done BEFORE colliders/couch-swap so collision + the dog-couch fit track the new
+    // size. The scan is axis-aligned, so a parent-space position fix-up keeps the centre put.
+    for (const s of sofas) {
+      s.updateWorldMatrix(true, true);
+      const b = new THREE.Box3().setFromObject(s), cx0 = (b.min.x + b.max.x) / 2, cz0 = (b.min.z + b.max.z) / 2, minY = b.min.y;
+      s.scale.multiplyScalar(0.9); s.updateWorldMatrix(true, true);
+      const b2 = new THREE.Box3().setFromObject(s);
+      s.position.x += cx0 - (b2.min.x + b2.max.x) / 2; s.position.z += cz0 - (b2.min.z + b2.max.z) / 2; s.position.y += minY - b2.min.y;
+      s.updateWorldMatrix(true, true);
+    }
     // Double-side the walls so inward-facing faces aren't black, and lift any near-black scan
     // material a touch so rooms read (the scan's albedo can be very dark).
     model.traverse(o => {
@@ -151,9 +162,23 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     const RAD = 0.34;
     const floorAABBs = floors.map(f => boxXZ(tmp.setFromObject(f), 0.25));   // padded so you can reach the wall faces
     const onFloor = (x, z) => { for (const f of floorAABBs) if (x > f[0] && x < f[1] && z > f[2] && z < f[3]) return true; return false; };
-    const blocked = (x, z, rad) => {
+    // STRICT (NPC-only) wall test: every wall mesh here is a thin slab, so per-wall AABBs are safe —
+    // they no longer "seal rooms". Block inside a wall UNLESS we're passing through a doorway (the
+    // door_* portals carve the openings back open). The PLAYER keeps the lenient floor-only model
+    // (strict=false), which is why room floors abut; NPCs path straight, so they need real walls.
+    const inWall = (x, z, rad) => {
+      for (const w of wallColliders) {
+        if (x <= w[0] - rad || x >= w[1] + rad || z <= w[2] - rad || z >= w[3] + rad) continue;
+        let through = false;
+        for (const d of doorPortals) if (x > d[0] - 0.25 && x < d[1] + 0.25 && z > d[2] - 0.25 && z < d[3] + 0.25) { through = true; break; }
+        if (!through) return true;
+      }
+      return false;
+    };
+    const blocked = (x, z, rad, strict) => {
       if (!onFloor(x, z)) return true;   // off the floor footprint = into a wall / outside the house
       for (const f of furnitureColliders) if (x > f[0] - rad && x < f[1] + rad && z > f[2] - rad && z < f[3] + rad) return true;
+      if (strict && inWall(x, z, rad)) return true;   // NPCs respect interior walls (player doesn't)
       return false;
     };
 
@@ -197,13 +222,13 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       group, floorY, ceilingY, roomAABB, spawn, walls, occluders, rooms, seats, doorways,
       // Resolve a move from (px,pz)->(nx,nz): per-wall/furniture pushout with axis slide, plus the
       // outer shell clamp. Doorways are passable so per-wall collision doesn't seal the rooms.
-      collide(px, pz, nx, nz, rad) {
+      collide(px, pz, nx, nz, rad, strict) {
         // Depenetration: if we're somehow already embedded, never freeze — let the move out through.
-        if (blocked(px, pz, rad)) return { x: clamp(nx, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(nz, roomAABB[2] + rad, roomAABB[3] - rad) };
+        if (blocked(px, pz, rad, strict)) return { x: clamp(nx, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(nz, roomAABB[2] + rad, roomAABB[3] - rad) };
         let x = nx, z = nz;
-        if (blocked(x, z, rad)) {
-          if (!blocked(x, pz, rad)) z = pz;
-          else if (!blocked(px, z, rad)) x = px;
+        if (blocked(x, z, rad, strict)) {
+          if (!blocked(x, pz, rad, strict)) z = pz;
+          else if (!blocked(px, z, rad, strict)) x = px;
           else { x = px; z = pz; }
         }
         x = clamp(x, roomAABB[0] + rad, roomAABB[1] - rad);
@@ -215,17 +240,17 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         return { x: clamp(x, roomAABB[0] + m, roomAABB[1] - m), y: Math.min(y, ceilingY - 0.25), z: clamp(z, roomAABB[2] + m, roomAABB[3] - m) };
       },
       // Nearest open floor to (x,z) — used to keep NPCs/companions out of furniture & walls.
-      clearAt(x, z, rad = 0.34) {
+      clearAt(x, z, rad = 0.34, strict) {
         const inside = (px, pz) => px > roomAABB[0] + rad && px < roomAABB[1] - rad && pz > roomAABB[2] + rad && pz < roomAABB[3] - rad;
-        if (!blocked(x, z, rad) && inside(x, z)) return { x, z };
+        if (!blocked(x, z, rad, strict) && inside(x, z)) return { x, z };
         for (let r = 0.5; r <= 6; r += 0.5) for (let a = 0; a < 12; a++) {
           const nx = x + Math.cos(a / 12 * 6.283) * r, nz = z + Math.sin(a / 12 * 6.283) * r;
-          if (!blocked(nx, nz, rad) && inside(nx, nz)) return { x: nx, z: nz };
+          if (!blocked(nx, nz, rad, strict) && inside(nx, nz)) return { x: nx, z: nz };
         }
-        // Last resort: the clamped point may still sit in furniture — fall back to the spawn, which is
-        // guaranteed open, so a caller never gets handed a blocked spot.
+        // Last resort: the clamped point may still sit in furniture/a wall — fall back to the spawn,
+        // which is guaranteed open, so a caller never gets handed a blocked spot.
         const cl = { x: clamp(x, roomAABB[0] + rad, roomAABB[1] - rad), z: clamp(z, roomAABB[2] + rad, roomAABB[3] - rad) };
-        return blocked(cl.x, cl.z, rad) ? { x: sx, z: sz } : cl;
+        return blocked(cl.x, cl.z, rad, strict) ? { x: sx, z: sz } : cl;
       },
     });
 
