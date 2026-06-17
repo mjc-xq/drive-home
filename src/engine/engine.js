@@ -509,9 +509,11 @@ export function createEngine({ canvas, ui, emit }) {
       // raycast entirely (these 8 unthrottled casts were the biggest per-frame CPU chunk).
       if ((car.x - x) * (car.x - x) + (car.z - z) * (car.z - z) > 200 * 200) { c.group.visible = false; continue; }
       c.group.visible = true;
-      // STAGGER the ground raycast (≤2 cars/frame) and low-pass it so streamed-in tiles don't
-      // pop the car vertically — same look, a fraction of the cost.
-      if (c.gy === undefined || (trafficTick + c.ti) % 4 === 0) c.gyT = groundAt(x, z) + 0.05;
+      // Use the SAME height authority as the player car. Raw groundAt follows the
+      // bumpy photogrammetry mesh near home while the player rides the smooth
+      // terrain road, which made traffic visibly float/sink on a different surface.
+      // Keep the staggered refresh so only a few traffic cars sample tiles per frame.
+      if (c.gy === undefined || (trafficTick + c.ti) % 4 === 0) c.gyT = actorGroundY(x, z, c.gy) + 0.05;
       c.gy = c.gy === undefined ? c.gyT : c.gy + (c.gyT - c.gy) * Math.min(1, dt * 6);
       c.group.position.set(x, c.gy, z);
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);
@@ -3317,7 +3319,7 @@ export function createEngine({ canvas, ui, emit }) {
     // no ping-pong) and a cross-town trip takes ~30-90 s. Position is overridden here (after the
     // collision step), so it phases through obstacles on the route — that's the point.
     if (autoDrive && ROUTE && ROUTE.length > 1) {
-      if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; }
+      if (car.railS == null || _railRoute !== ROUTE) { car.railS = railArcAt(car.x, car.z); _railRoute = ROUTE; car.railSpeed = Math.abs(car.speed); }
       const total = routeTotalLen(), remain = total - car.railS;
       // BRAKE TO A STOP AT THE DESTINATION: cap the speed by the fastest we could still stop from in
       // the distance that's left (v = √(2·a·d)). As `remain`→0 this cap →0, so the car decelerates
@@ -3328,12 +3330,17 @@ export function createEngine({ canvas, ui, emit }) {
       // real bends. distToNextTurn looks ~500 m ahead, so long straights peg the cap.
       const _cruise = clamp(150 + distToNextTurn() * 3.4, 150, 520 * speedMul);
       const target = Math.min(_cruise, stopCap);
-      const rate = target < car.speed ? dt * 4.5 : dt * 3;                        // brake a touch more eagerly than it accelerates
-      car.speed += (target - car.speed) * Math.min(1, rate);
-      if (car.speed < 0) car.speed = 0;
+      // The rail OWNS the speed on a routed trip via its own railSpeed state and overwrites car.speed:
+      // the physics autodrive governor (autoCap, pulled hard at dt*7 above) would otherwise clamp this
+      // cruise/brake back down. Safe because the rail glues the car to the polyline by arc-length, so
+      // it can't leave the route at ANY speed.
+      const rate = target < car.railSpeed ? dt * 4.5 : dt * 3;                    // brake a touch more eagerly than it accelerates
+      car.railSpeed += (target - car.railSpeed) * Math.min(1, rate);
+      if (car.railSpeed < 0) car.railSpeed = 0;
+      car.speed = car.railSpeed;
       car.railS = Math.min(total, car.railS + car.speed * dt);                    // never roll past the destination
       if (remain <= 1.5 && car.speed < 6) {                                       // braked to a near-stop at the destination → arrive
-        car.speed = 0; car.railS = null;
+        car.speed = 0; car.railS = null; car.railSpeed = null;
         if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
         clearDestination();
       } else {
