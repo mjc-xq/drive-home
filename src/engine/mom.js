@@ -36,6 +36,7 @@ export function loadMomController(onReady, onFail) {
     const mixer = new THREE.AnimationMixer(model);
     const actions = {};
     for (const c of g.animations) actions[c.name] = mixer.clipAction(c);
-    onReady(makeController(inner, mixer, actions, { kind: 'mom', nameMap: MOM_NAME_MAP, actionList: [] }));
+    onReady(makeController(inner, mixer, actions, { kind: 'mom', nameMap: MOM_NAME_MAP, actionList: [],
+      dances: ['Shake_It_Off_Dance', 'You_Groove', 'All_Night_Dance'] }));   // upright moves the NPC cycler rotates through
   }, undefined, e => { console.warn('[mom] load failed', e); onFail && onFail(e); });
 }

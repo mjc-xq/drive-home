@@ -5,6 +5,8 @@ import interiorUrl from '../assets/house-interior.glb';
 import { USDLoader } from 'three/examples/jsm/loaders/USDLoader.js';
 import couchyUrl from '../assets/couchy.usdz';
 import cageUrl from '../assets/stash.glb';
+import guineasUrl from '../assets/guineas.glb';
+import phebUrl from '../assets/pheb.glb';
 
 // The house interior is a furniture-segmented room scan (PLAIN GLB — no Draco, no animations,
 // no extensions, so the stock GLTFLoader loads it). Names live on NODES (every mesh.name is
@@ -196,30 +198,31 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       }, undefined, e => console.warn('[interior] couch (usdz) failed, keeping the original sofa', e));
     }
 
-    // Bearded-dragon cage: replace the cabinet NEAREST a bookshelf (the one across from the couch).
-    // Plain GLB (quantized) → stock loader. Scene-parented + sized to the cabinet footprint, dropped
-    // on its spot; the cabinet is hidden but its collider stays so the cage blocks. Non-blocking, fail-soft.
-    if (cabinets.length && shelves.length) {
-      const shCtr = shelves.map(s => tmp.setFromObject(s).getCenter(new THREE.Vector3()));
-      let target = null, tBox = null, bd = Infinity;
-      for (const c of cabinets) {
-        const b = new THREE.Box3().setFromObject(c), ctr = b.getCenter(new THREE.Vector3());
-        for (const s of shCtr) { const d = (ctr.x - s.x) ** 2 + (ctr.z - s.z) ** 2; if (d < bd) { bd = d; target = c; tBox = b; } }
-      }
-      if (target) new GLTFLoader().load(cageUrl, gg => {
+    // Critter cages: swap each GLB onto a SPECIFIC cabinet (node names picked from the 6/16 map's
+    // geometry — see docs/house-interior.md). The cage is scene-parented, scaled UNIFORMLY to the
+    // cabinet's footprint (keeps the model's own aspect ratio), dropped on its spot, and the cabinet
+    // is hidden but its collider stays so the cage blocks. Non-blocking + fail-soft per cage.
+    const placeOnCabinet = (cabName, url) => {
+      const target = cabinets.find(c => nameOf(c) === cabName);
+      if (!target) { console.warn('[interior] cage target cabinet not found:', cabName); return; }
+      const tBox = new THREE.Box3().setFromObject(target);
+      new GLTFLoader().load(url, gg => {
         if (cancelled || !gg.scene) return;
-        gg.scene.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
+        gg.scene.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
         const grp = new THREE.Group(); grp.add(gg.scene); scene.add(grp); grp.updateMatrixWorld(true);
         const ds = new THREE.Box3().setFromObject(grp).getSize(new THREE.Vector3());
         const ts = tBox.getSize(new THREE.Vector3());
-        grp.scale.setScalar(Math.max(ts.x, ts.z) / (Math.max(ds.x, ds.z) || 1));   // match the cabinet's footprint
+        grp.scale.setScalar(Math.max(ts.x, ts.z) / (Math.max(ds.x, ds.z) || 1));   // match footprint, keep aspect ratio
         grp.updateMatrixWorld(true);
         const gb = new THREE.Box3().setFromObject(grp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
         grp.position.set(tc.x - gc.x, tBox.min.y - gb.min.y, tc.z - gc.z);   // on the cabinet's spot, on the floor
         grp.traverse(o => { if (o.isMesh) occluders.push(o); });
         target.userData.permaHidden = true; target.visible = false;   // hide the cabinet (collider stays, so the cage blocks)
-      }, undefined, e => console.warn('[interior] dragon cage failed, keeping the cabinet', e));
-    }
+      }, undefined, e => console.warn('[interior] cage swap failed for ' + cabName + ', keeping the cabinet', e));
+    };
+    placeOnCabinet('storage_cabinet_mid27', cageUrl);     // bearded-dragon — couchy couch's room, across the table the couch faces
+    placeOnCabinet('storage_cabinet_mid25', guineasUrl);  // guinea-pig — TV wall, behind the overstuffed chair, by the dining table
+    placeOnCabinet('storage_cabinet_tall20', phebUrl);    // chinchilla — the tall cabinet across from the guinea one, by the dining table
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
   return () => { cancelled = true; };
 }

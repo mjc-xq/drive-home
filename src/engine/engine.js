@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
 import { clamp, makeGeoENU } from './coords.js';
 import { merge } from './geom.js';
@@ -73,6 +74,7 @@ export function createEngine({ canvas, ui, emit }) {
   renderer.setPixelRatio(renderPixelRatio());   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
   renderer.shadowMap.enabled = !LITE;
   renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
   renderer.localClippingEnabled = true;   // Drive-mode tile cutaway: only the photoreal tile materials carry clip planes, so the car/HUD/guide stay unclipped (see updateTileClip + tiles3d.clipPlanes)
   const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles
   setCarAniso(Math.min(8, MAX_ANISO));   // give the car textures the same anisotropic filtering as the tiles (de-grains the models)
@@ -94,6 +96,19 @@ export function createEngine({ canvas, ui, emit }) {
   sc2.left = -170; sc2.right = 170; sc2.top = 170; sc2.bottom = -170; sc2.far = 900;
   sun.shadow.bias = -0.0009;
   scene.add(sun);
+  // Image-based lighting so the cars stop looking flat/"poopy": a metallic body (metalness ~0.45)
+  // has NOTHING to reflect without an environment, so it renders near-black. A cheap procedural
+  // studio (RoomEnvironment, baked once via PMREM) gives the paint + glass soft reflections and a
+  // clear key/fill falloff that reads as a real sun direction. Tiles are MeshBasic (toneMapped:false,
+  // no env) so the photoreal world is untouched; only the PBR actors (cars, characters) pick it up.
+  // Intensity is dialled back for this legacy linear (ColorManagement-off) pipeline so it adds gloss
+  // without washing out the body colour.
+  {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    if ('environmentIntensity' in scene) scene.environmentIntensity = 0.42;
+    pmrem.dispose();
+  }
 
   const world = buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GRID_ANG, aerialUrl });
   const { onRoad, house, bldBoxes, bldPolys, treePts, frontPt, frontDir, COMPOST, ring, interiorGroup, labelSprites, waterMat, staticGroup, aerialMat } = world;
@@ -908,8 +923,13 @@ export function createEngine({ canvas, ui, emit }) {
     // frame would render onto nothing. Gate the whole shadow pass off there.
     sun.castShadow = (mode === 'scoop') && !LITE;
     renderer.shadowMap.enabled = sun.castShadow;
+    if (sun.castShadow) renderer.shadowMap.needsUpdate = true;
+  }
+  function delayedTileFallbackToast(msg) {
+    setTimeout(() => { if (!disposed && photoModes(mode) && !tilesReady) toast(msg, 2600); }, 6100);
   }
   if (!flags.has('flat')) {
+    if (!import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map key missing — showing the built world');
     const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
     const houseLat = (LAT0 + C[1] / 110540) * DEG;
     const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
@@ -920,7 +940,7 @@ export function createEngine({ canvas, ui, emit }) {
         // is the dominant iOS memory cost, and Drive can now roam far and stream more.
         lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: MOBILE ? 16 : 10, mobile: MOBILE
       });
-      if (!p3dtiles) return;
+      if (!p3dtiles) { if (import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); return; }
       if (disposed) { if (p3dtiles.disposeAll) p3dtiles.disposeAll(); p3dtiles = null; return; }
       applyP3DT();
       let tries = 0;
@@ -939,7 +959,7 @@ export function createEngine({ canvas, ui, emit }) {
         console.warn('[tiles3d] tile load error (check VITE_GOOGLE_MAPS_KEY restrictions/quota)', e && e.error);
         if (!tilesReady) toast('Photoreal map unavailable — showing the built world', 2600);
       });
-    }).catch(e => console.warn('[tiles3d] import failed; staying procedural', e));
+    }).catch(e => { console.warn('[tiles3d] import failed; staying procedural', e); delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); });
   }
 
   // ?debug: tall coloured poles at the procedural reference points (in the scene,
@@ -1069,6 +1089,29 @@ export function createEngine({ canvas, ui, emit }) {
         });
       }
     });
+    // FEATURE CLUSTERS: CeCe takes over Stanton, Drew takes over Canyon — TONS of them spread
+    // ALL OVER each school: actorGroundY rides whatever photoreal surface is under each spot, so a
+    // tight spawn lands them up ON THE ROOF, a mid radius fills the PARKING LOT / grounds, and the
+    // wide edge reaches the ROAD nearby. They auto-cycle their dance pool once visible.
+    const scatterCluster = (crowd, p, n, clip) => {
+      if (!crowd || !p) return;
+      for (let i = 0; i < n; i++) {
+        const onRoof = i % 4 === 0;                                       // ~1 in 4 lands on the building itself → up on the roof
+        const r = onRoof ? Math.random() * 8 : 12 + Math.random() * 42;   // roof cluster ↔ lot / grounds / nearby road
+        const a = i * 2.39996323 + (Math.random() - 0.5) * 0.7;           // golden-angle spread so they ring the whole site
+        put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, { yaw: a + Math.PI, clip });
+      }
+    };
+    scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), 16, 'All_Night_Dance');   // CeCe all over Stanton Elementary
+    scatterCluster(drewCrowd, POIS.find(q => q.key === 'canyon'), 16, 'dance');               // Drew all over Canyon Middle
+    // MEEMAW: a CeCe + Drew pair dancing together right out front of the house.
+    const meemaw = POIS.find(q => q.key === 'meemaw');
+    if (meemaw) {
+      const a = Math.PI / 2, r = 7;   // out the front, side by side, facing back toward the house
+      const fx = meemaw.x + Math.cos(a) * r, fz = meemaw.z + Math.sin(a) * r;
+      put(ceceCrowd, fx - 1.2, fz, 'meemaw', true, { yaw: a + Math.PI, clip: 'All_Night_Dance' });
+      put(drewCrowd, fx + 1.2, fz, 'meemaw', true, { yaw: a + Math.PI, clip: 'dance' });
+    }
     placeInteriorDancers();   // the decorative Drew + CeCe inside the house (survives a density re-pool)
   }
   // Remove every placed pedestrian (stop mixers, detach groups, drop the clone pool) so a
@@ -1323,14 +1366,18 @@ export function createEngine({ canvas, ui, emit }) {
       npc.arrived = false; npc.group.visible = true;
     });
   }
-  function updateNpcs(dt) {
+  function updateNpcs(dt, now) {
     for (const npc of npcs) {
       npc.group.visible = true;
       let speed = 0;
       if (npc.to && !npc.arrived) {
         const dx = npc.to[0] - npc.x, dz = npc.to[1] - npc.z, d = Math.hypot(dx, dz);
         if (d > 0.5) { speed = 1.4; const ux = dx / d, uz = dz / d; npc.x += ux * speed * dt; npc.z += uz * speed * dt; npc.yaw = Math.atan2(ux, uz); }
-        else { npc.arrived = true; if (npc.ctrl.react) npc.ctrl.react('dance'); }   // arrives -> a little dance
+        else { npc.arrived = true; npc.nextDance = now + 300; }   // arrived -> start the dance cycle
+      } else if (now > (npc.nextDance || 0)) {
+        const pool = npc.ctrl.dances;   // keep her moving: rotate through a pool of UPRIGHT dances (each resets to rest on finish)
+        if (pool && pool.length && npc.ctrl.react) npc.ctrl.react(pool[(Math.random() * pool.length) | 0]);
+        npc.nextDance = now + 4000 + Math.random() * 2500;
       }
       npc.group.position.set(npc.x, interior.floorY, npc.z);
       npc.group.rotation.y = npc.yaw - Math.PI / 2;
@@ -1857,7 +1904,7 @@ export function createEngine({ canvas, ui, emit }) {
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
     exitMarker.visible = false; exitRing.visible = false;   // no blue indicators inside — exit via the "Leave house" button
-    updateNpcs(dt);
+    updateNpcs(dt, now);
     // small indoor follow cam: pull IN before it pokes a wall (but never collapse onto the avatar),
     // and rise toward overhead when forced close; clamp under the ceiling.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
@@ -2179,7 +2226,7 @@ export function createEngine({ canvas, ui, emit }) {
       _gmaps = maps;
       const o = worldToGeo(car.x, car.z);
       _gmap = new maps.Map(div, {
-        center: { lat: o.lat, lng: o.lon }, zoom: 14, disableDefaultUI: true,   // wider neighbourhood context, not a tight street view
+        center: { lat: o.lat, lng: o.lon }, zoom: 12, disableDefaultUI: true,   // zoomed-out district view (~10 km across) so fast cross-town drives stay on the map
         gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
         styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
       });
@@ -2210,7 +2257,7 @@ export function createEngine({ canvas, ui, emit }) {
         if (_gmaps) { const b = new _gmaps.LatLngBounds(); b.extend({ lat: o.lat, lng: o.lon }); for (const p of pts) b.extend(p); _gmap.fitBounds(b, 12); _gmapOverviewUntil = now + 3500; }
       } else if (!ROUTE && _gmapRouteFor) { _gmapRouteFor = null; _gmapRoute.setPath([]); }
     }
-    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() < 13) _gmap.setZoom(14); }   // follow the car at a wider neighbourhood zoom (after the overview)
+    if (now >= _gmapOverviewUntil) { _gmap.setCenter({ lat: o.lat, lng: o.lon }); if (_gmap.getZoom() !== 12) _gmap.setZoom(12); }   // follow the car zoomed out (~10 km across); settle back to 12 after any route overview
   }
   function geocodePlaceId(placeId, fallbackLabel) {
     return loadMapsSDK().then(maps => new Promise((res, rej) => {
@@ -3591,7 +3638,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- loop ----------
   const dirV = new THREE.Vector3();
   let prev = performance.now();
-  let raf = 0, paused = false, ctxLost = false, _miniT = 0, _miniCtx = null, _miniEl = null;
+  let raf = 0, paused = false, ctxLost = false, _miniT = 0, _miniCtx = null, _miniEl = null, _shadowT = 0;
   // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
   // in view whenever the photoreal world is shown. Throttled; emits only on change.
   const _attrTarget = []; let _attrStr = '', _attrT = 0;
@@ -3633,6 +3680,7 @@ export function createEngine({ canvas, ui, emit }) {
       ring.scale.set(s, s, 1);
       ring.material.opacity = 0.5 + 0.22 * Math.sin(now * 0.0023);
     }
+    if (sun.castShadow && now - _shadowT > 140) { renderer.shadowMap.needsUpdate = true; _shadowT = now; }
     camera.getWorldDirection(dirV);
     if (ui.needle) ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
@@ -3743,6 +3791,7 @@ export function createEngine({ canvas, ui, emit }) {
         m.dispose();
       }
     });
+    if (scene.environment && scene.environment.dispose) { scene.environment.dispose(); scene.environment = null; }
     renderer.dispose();
     document.documentElement.classList.remove('lite3d');
     delete window.__dahill;
