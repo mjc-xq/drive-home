@@ -4,6 +4,7 @@ import { clamp } from './coords.js';
 import interiorUrl from '../assets/house-interior.glb';
 import { USDLoader } from 'three/examples/jsm/loaders/USDLoader.js';
 import couchyUrl from '../assets/couchy.usdz';
+import cageUrl from '../assets/stash.glb';
 
 // The house interior is a furniture-segmented room scan (PLAIN GLB — no Draco, no animations,
 // no extensions, so the stock GLTFLoader loads it). Names live on NODES (every mesh.name is
@@ -35,7 +36,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     if (cancelled) return;
     const model = g.scene;
     model.updateMatrixWorld(true);
-    const floors = [], walls = [], doors = [], furniture = [], sofas = [], windows = [];
+    const floors = [], walls = [], doors = [], furniture = [], sofas = [], windows = [], cabinets = [], shelves = [];
     model.traverse(o => {
       if (!o.isMesh) return;
       o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false;
@@ -45,7 +46,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       else if (DOOR_RE.test(n)) doors.push(o);
       else if (/^window/.test(n)) windows.push(o);
       else if (/^chair/.test(n)) { /* chairs stay walk-through (see-through only) — a table's 4 chairs would otherwise cluster into an impassable ring */ }
-      else { furniture.push(o); if (/^sofa/.test(n)) sofas.push(o); }   // EVERYTHING else (tables, cabinets, appliances, sofas, beds, …) is solid
+      else { furniture.push(o); if (/^sofa/.test(n)) sofas.push(o); else if (/^storage_cabinet/.test(n)) cabinets.push(o); else if (/^storage_shelf/.test(n)) shelves.push(o); }   // EVERYTHING else (tables, cabinets, appliances, sofas, beds, …) is solid
     });
     // Double-side the walls so inward-facing faces aren't black, and lift any near-black scan
     // material a touch so rooms read (the scan's albedo can be very dark).
@@ -193,6 +194,31 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         dgrp.traverse(o => { if (o.isMesh) occluders.push(o); });   // the couch is a see-through occluder too
         target.userData.permaHidden = true; target.visible = false;   // hide the original couch for good (collider stays); the see-through reset must skip permaHidden meshes
       }, undefined, e => console.warn('[interior] couch (usdz) failed, keeping the original sofa', e));
+    }
+
+    // Bearded-dragon cage: replace the cabinet NEAREST a bookshelf (the one across from the couch).
+    // Plain GLB (quantized) → stock loader. Scene-parented + sized to the cabinet footprint, dropped
+    // on its spot; the cabinet is hidden but its collider stays so the cage blocks. Non-blocking, fail-soft.
+    if (cabinets.length && shelves.length) {
+      const shCtr = shelves.map(s => tmp.setFromObject(s).getCenter(new THREE.Vector3()));
+      let target = null, tBox = null, bd = Infinity;
+      for (const c of cabinets) {
+        const b = new THREE.Box3().setFromObject(c), ctr = b.getCenter(new THREE.Vector3());
+        for (const s of shCtr) { const d = (ctr.x - s.x) ** 2 + (ctr.z - s.z) ** 2; if (d < bd) { bd = d; target = c; tBox = b; } }
+      }
+      if (target) new GLTFLoader().load(cageUrl, gg => {
+        if (cancelled || !gg.scene) return;
+        gg.scene.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });
+        const grp = new THREE.Group(); grp.add(gg.scene); scene.add(grp); grp.updateMatrixWorld(true);
+        const ds = new THREE.Box3().setFromObject(grp).getSize(new THREE.Vector3());
+        const ts = tBox.getSize(new THREE.Vector3());
+        grp.scale.setScalar(Math.max(ts.x, ts.z) / (Math.max(ds.x, ds.z) || 1));   // match the cabinet's footprint
+        grp.updateMatrixWorld(true);
+        const gb = new THREE.Box3().setFromObject(grp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
+        grp.position.set(tc.x - gc.x, tBox.min.y - gb.min.y, tc.z - gc.z);   // on the cabinet's spot, on the floor
+        grp.traverse(o => { if (o.isMesh) occluders.push(o); });
+        target.userData.permaHidden = true; target.visible = false;   // hide the cabinet (collider stays, so the cage blocks)
+      }, undefined, e => console.warn('[interior] dragon cage failed, keeping the cabinet', e));
     }
   }, undefined, e => { if (!cancelled) { console.warn('[interior] house GLB failed, door is inert', e); onFail && onFail(e); } });
   return () => { cancelled = true; };
