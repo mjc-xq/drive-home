@@ -68,19 +68,15 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       s.position.x += cx0 - (b2.min.x + b2.max.x) / 2; s.position.z += cz0 - (b2.min.z + b2.max.z) / 2; s.position.y += minY - b2.min.y;
       s.updateWorldMatrix(true, true);
     }
-    // Double-side the walls so inward-facing faces aren't black, and lift any near-black scan
-    // material a touch so rooms read (the scan's albedo can be very dark).
+    // The albedo correction (×0.7), roughness/metalness clamps and wall double-siding are now
+    // BAKED into the asset by scripts/bake_interior.py (walls are solidified, so inward faces are
+    // real geometry — no DoubleSide needed; baked vertex-AO gives the rooms depth). The one thing
+    // the GLB can't encode is that the matte scan must NOT pick up the car IBL (scene.environment),
+    // which re-washes the house — so that's all this loop still does.
     model.traverse(o => {
       if (!o.isMesh || !o.material) return;
-      const wall = WALL_RE.test(nameOf(o));
-      for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
-        if (!m) continue;
-        if (wall) m.side = THREE.DoubleSide;
-        if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3);
-        if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.9);   // less shiny -> less blown out
-        if (m.color) m.color.multiplyScalar(0.7);                                  // tame the bright scan albedo (was washed out)
-        if (m.envMapIntensity !== undefined) m.envMapIntensity = 0;                // the matte scan must NOT pick up the car IBL (scene.environment) — that re-washed the house
-      }
+      for (const m of (Array.isArray(o.material) ? o.material : [o.material]))
+        if (m && m.envMapIntensity !== undefined) m.envMapIntensity = 0;
     });
 
     // Recolour furniture by type. Clone each material first (never touch a shared floor/wall material)
