@@ -19,7 +19,10 @@ const WALL_RE = /^(wall_|joint_)/;
 const DOOR_RE = /^door_/;
 // Only the big floor-standing pieces a walking kid can bump into get colliders. Chairs and the
 // wall-hugging mid/low cabinets are skipped — they're already covered by the wall colliders.
-const FURN_RE = /^(sofa|table_|refrigerator|oven|stove|dishwasher|sink|washer_dryer|storage_)/;   // includes ALL cabinets/shelves so they block
+// What BLOCKS movement: cabinets/shelves (storage_) + big appliances + sofas. Tables, chairs and the
+// sink are deliberately walk-through — a central dining table's inflated AABB otherwise walls off the
+// room and you can't cross to the couch. (All furniture still goes see-through; that's a separate set.)
+const FURN_RE = /^(sofa|refrigerator|oven|stove|dishwasher|washer_dryer|storage_)/;
 
 const nameOf = o => o.name || (o.parent && o.parent.name) || '';
 const boxXZ = (b, pad = 0) => [b.min.x - pad, b.max.x + pad, b.min.z - pad, b.max.z + pad];
@@ -178,7 +181,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
         dgrp.updateMatrixWorld(true);                     // house scale doesn't double-apply and overshoot the placement
         const ds = new THREE.Box3().setFromObject(dgrp).getSize(new THREE.Vector3());   // native couch size
         const ss = tBox.getSize(new THREE.Vector3());     // tBox = the already-house-scaled sofa, in world space
-        if ((ss.z > ss.x) !== (ds.z > ds.x)) dgrp.rotation.y = Math.PI / 2;   // align the long axis with the couch
+        dgrp.rotation.y = ((ss.z > ss.x) !== (ds.z > ds.x) ? Math.PI / 2 : 0) + Math.PI;   // align long axis, then face INTO the room (the dogs were looking out the window)
         dgrp.scale.setScalar(Math.max(ss.x, ss.z) / (Math.max(ds.x, ds.z) || 1));   // match the couch's length
         dgrp.updateMatrixWorld(true);
         const gb = new THREE.Box3().setFromObject(dgrp), gc = gb.getCenter(new THREE.Vector3()), tc = tBox.getCenter(new THREE.Vector3());
