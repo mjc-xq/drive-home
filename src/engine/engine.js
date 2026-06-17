@@ -7,6 +7,7 @@ import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP 
 import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
 import { createInterior } from './interior.js';
 import { loadDadController } from './dad.js';
+import { loadMomController } from './mom.js';
 import { DREW_HEIGHT_M, CECE_HEIGHT_M } from './drew.js';
 import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES, setCarAniso } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
@@ -606,7 +607,8 @@ export function createEngine({ canvas, ui, emit }) {
   // (near 38 / far 92) hides the distant yard so the indoor camera only ever frames the room —
   // no per-object yard hide needed. scoopScene forks updateScoop between 'yard' and 'interior'.
   let scoopScene = 'yard', interior = null, doorT = 0, entryArmed = true, exitArmed = false;
-  let dad = null, dadLoadStarted = false;   // non-playable "dad" NPC who walks out of a back room (lazy-loaded)
+  let npcs = [], npcsLoadStarted = false;   // non-playable house NPCs (dad, mom) — walk out of rooms + dance, never playable
+  const NPC_LOADERS = [loadDadController, loadMomController];
   const INT_CX = 0, INT_CZ = 3000, INT_FLOOR = 0;
   // Blue glowing pads: the front-yard "enter" pad and the indoor "exit" pad (drawn through walls).
   const doorMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
@@ -1286,7 +1288,7 @@ export function createEngine({ canvas, ui, emit }) {
     scoopScene = on ? 'interior' : 'yard';
     if (interior) interior.group.visible = on;
     if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (nearCar) { nearCar = false; emit('nearCar', false); } }
-    else { exitMarker.visible = false; exitRing.visible = false; if (dad) dad.group.visible = false; }
+    else { exitMarker.visible = false; exitRing.visible = false; for (const npc of npcs) npc.group.visible = false; }
     emit('house', { inside: on, ready: !!interior });
   }
   function enterHouse(now) {
@@ -1296,39 +1298,44 @@ export function createEngine({ canvas, ui, emit }) {
     CHAR.x = sp.x; CHAR.z = sp.z; CHAR.yaw = sp.yaw; camYawS = sp.yaw;
     CHAR.airY = 0; CHAR.vy = 0; camInit = false; szoom = 1; scPitch = 0.2; camGroundRef = null;   // reset tilt so indoor entry framing is consistent (not pinned to the ceiling)
     doorT = now + 1200; exitArmed = false;
-    // Dad NPC: lazy-load on first entry (~7MB), then have him walk out of a back room on each visit.
-    if (!dadLoadStarted) {
-      dadLoadStarted = true;
-      loadDadController(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; scene.add(g); dad = { ctrl, group: g, x: 0, z: 0, yaw: 0, to: null, arrived: true }; resetDad(); }, () => {});
-    } else resetDad();
+    // House NPCs (dad, mom): lazy-load on first entry, then have each walk out of a room and dance.
+    if (!npcsLoadStarted) {
+      npcsLoadStarted = true;
+      for (const load of NPC_LOADERS) load(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; scene.add(g); npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, to: null, arrived: true }); resetNpcs(); }, () => {});
+    } else resetNpcs();
     if (audio.blip) audio.blip();
     toast('🏠 Inside the house! Open the ☰ menu (top-right) for characters &amp; actions · tap "Leave house 🚪" to head back out', 3600);
   }
-  // Dad emerges from the back room (farthest from the player spawn) and walks into the main room.
-  function resetDad() {
-    if (!dad || !interior || !interior.rooms || !interior.rooms.length) return;
-    if (dad.ctrl.reset) dad.ctrl.reset();   // clear any clamped mid-dance pose from last visit (else he slides in frozen)
-    const main = interior.spawn; let back = interior.rooms[0], bd = -1;
-    for (const r of interior.rooms) { const d = (r.x - main.x) ** 2 + (r.z - main.z) ** 2; if (d > bd) { bd = d; back = r; } }
-    const from = interior.clearAt(back.x, back.z), to = interior.clearAt(main.x - 1.6, main.z - 1.6);   // start/end on open floor, not inside furniture
-    dad.x = from.x; dad.z = from.z;
-    dad.to = [to.x, to.z];
-    dad.yaw = Math.atan2(dad.to[0] - dad.x, dad.to[1] - dad.z);
-    dad.arrived = false; dad.group.visible = true;
+  // Each NPC emerges from a distinct far room and walks to a spread-out spot near the main room.
+  function resetNpcs() {
+    if (!interior || !interior.rooms || !interior.rooms.length || !npcs.length) return;
+    const main = interior.spawn;
+    const byFar = [...interior.rooms].sort((a, b) => ((b.x - main.x) ** 2 + (b.z - main.z) ** 2) - ((a.x - main.x) ** 2 + (a.z - main.z) ** 2));
+    npcs.forEach((npc, i) => {
+      if (npc.ctrl.reset) npc.ctrl.reset();   // clear any clamped mid-dance pose from last visit
+      const back = byFar[i % byFar.length];
+      const from = interior.clearAt(back.x, back.z);
+      const ang = (i / npcs.length) * Math.PI * 2;
+      const to = interior.clearAt(main.x + Math.cos(ang) * 1.8, main.z + Math.sin(ang) * 1.8);
+      npc.x = from.x; npc.z = from.z; npc.to = [to.x, to.z];
+      npc.yaw = Math.atan2(npc.to[0] - npc.x, npc.to[1] - npc.z);
+      npc.arrived = false; npc.group.visible = true;
+    });
   }
-  function updateDad(dt) {
-    if (!dad) return;
-    dad.group.visible = true;
-    let speed = 0;
-    if (dad.to && !dad.arrived) {
-      const dx = dad.to[0] - dad.x, dz = dad.to[1] - dad.z, d = Math.hypot(dx, dz);
-      if (d > 0.5) { speed = 1.4; const ux = dx / d, uz = dz / d; dad.x += ux * speed * dt; dad.z += uz * speed * dt; dad.yaw = Math.atan2(ux, uz); }
-      else { dad.arrived = true; if (dad.ctrl.react) dad.ctrl.react('dance'); }   // arrives -> a little dance
+  function updateNpcs(dt) {
+    for (const npc of npcs) {
+      npc.group.visible = true;
+      let speed = 0;
+      if (npc.to && !npc.arrived) {
+        const dx = npc.to[0] - npc.x, dz = npc.to[1] - npc.z, d = Math.hypot(dx, dz);
+        if (d > 0.5) { speed = 1.4; const ux = dx / d, uz = dz / d; npc.x += ux * speed * dt; npc.z += uz * speed * dt; npc.yaw = Math.atan2(ux, uz); }
+        else { npc.arrived = true; if (npc.ctrl.react) npc.ctrl.react('dance'); }   // arrives -> a little dance
+      }
+      npc.group.position.set(npc.x, interior.floorY, npc.z);
+      npc.group.rotation.y = npc.yaw - Math.PI / 2;
+      npc.ctrl.locomotion(speed);
+      npc.ctrl.tick(dt);
     }
-    dad.group.position.set(dad.x, interior.floorY, dad.z);
-    dad.group.rotation.y = dad.yaw - Math.PI / 2;
-    dad.ctrl.locomotion(speed);
-    dad.ctrl.tick(dt);
   }
   function leaveHouse(now) {
     setInside(false);
@@ -1821,7 +1828,7 @@ export function createEngine({ canvas, ui, emit }) {
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
     exitMarker.visible = false; exitRing.visible = false;   // no blue indicators inside — exit via the "Leave house" button
-    updateDad(dt);
+    updateNpcs(dt);
     // small indoor follow cam: pull IN before it pokes a wall (but never collapse onto the avatar),
     // and rise toward overhead when forced close; clamp under the ceiling.
     const fx = Math.sin(camYawS), fz = Math.cos(camYawS);
@@ -3692,7 +3699,7 @@ export function createEngine({ canvas, ui, emit }) {
     disposeMiniMap();
     if (ceceCrowd) ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
     if (drewCrowd) drewCrowd.dispose();
-    if (dad) { if (dad.ctrl.reset) dad.ctrl.reset(); if (dad.group.parent) dad.group.parent.remove(dad.group); }   // tear down the dad NPC
+    for (const npc of npcs) { if (npc.ctrl.reset) npc.ctrl.reset(); if (npc.group.parent) npc.group.parent.remove(npc.group); }   // tear down the house NPCs
     setScout(false);                             // unregister the prefetch scout camera
     if (p3dtiles && p3dtiles.disposeAll) p3dtiles.disposeAll();
     // free GPU resources the renderer.dispose() alone doesn't reclaim
