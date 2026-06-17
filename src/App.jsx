@@ -72,6 +72,8 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);        // address picker open
   const [menuOpen, setMenuOpen] = useState(false);      // top-right ☰ menu expanded
   const [navErr, setNavErr] = useState('');
+  const [selDest, setSelDest] = useState(null);         // a chosen destination, pending Drive-or-Jump
+  const [following, setFollowing] = useState(false);    // "Follow me" GPS-chase active
   const [autoMax, setAutoMax] = useState(() => { try { return parseInt(localStorage.getItem('dahill.automax') || '0', 10) || 0; } catch (e) { return 0; } });   // auto-drive top-speed cap (mph; 0 = unlimited)
   const [speedMul, setSpeedMul] = useState(() => { try { const v = parseFloat(localStorage.getItem('dahill.speedmul')); return v >= 0.3 && v <= 2 ? v : 1; } catch (e) { return 1; } });   // global driving-speed multiplier
   const [pedDensity, setPedDensity] = useState(() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return v >= 0 && v <= 2 ? v : 1; } catch (e) { return 1; } });   // pedestrian density
@@ -99,6 +101,7 @@ export default function App() {
         case 'photoreal': setPhotoreal(true); break;
         case 'mode': setMode(p); if (p === 'explore') setPicking(true); break;   // explore is no longer a playable mode — drop back to the Drive/Scoop menu
         case 'subline': setSubline(p); break;
+        case 'follow': setFollowing(p); break;
         case 'shiftLock': setShiftLock(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'avatar': setScoopChar(p.name); if (p.actions) setScoopActions(p.actions); break;
@@ -316,7 +319,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <button className="searchBar" onClick={() => { setNavErr(''); setNavOpen(true); setMenuOpen(false); }}>
+              <button className="searchBar" onClick={() => { setNavErr(''); setSelDest(null); setNavOpen(true); setMenuOpen(false); }}>
                 <span className="sbIcon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg></span>
                 <span className="sbText">Where to? Search or tap the map</span>
                 <span className="sbGo">GO</span>
@@ -440,39 +443,60 @@ export default function App() {
             {/* ── Navigate panel: Drive-to (green) vs Jump-to (violet) ── */}
             {navOpen && (
               <div id="navPanel">
-                <div className="navHead"><h3>Navigate</h3><button className="navX" aria-label="Close" onClick={() => setNavOpen(false)}>
+                <div className="navHead"><h3>Go somewhere</h3><button className="navX" aria-label="Close" onClick={() => { setSelDest(null); setNavOpen(false); }}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
                 </button></div>
 
-                <label className="navLbl drive"><span className="navDot go" /> Drive to <i>route &amp; chauffeur there</i></label>
-                <div className="navTool drive">
-                  <AddressSearch placeholder="Search an address or place" actionLabel="Go"
+                {/* 1 — pick a destination (search or a preset); it just SELECTS, doesn't go yet */}
+                <label className="navLbl"><span className="navDot go" /> Where to?</label>
+                <div className="navTool">
+                  <AddressSearch placeholder="Search an address or place" actionLabel="Set"
                     suggest={t => eng().placeSuggest(t)}
-                    onPick={s => eng().driveToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
-                    onText={t => eng().driveToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+                    onPick={s => { setNavErr(''); setSelDest({ placeId: s.placeId, label: s.description }); }}
+                    onText={t => { setNavErr(''); setSelDest({ q: t, label: t }); }} />
                   <div className="navPresets">
                     {PRESETS.map(p => (
-                      <button key={p.label} className="navChip" onClick={() => {
-                        setNavErr('');
-                        const run = p.home
-                          ? eng().driveHome()
-                          : eng().driveToText(p.q).catch(() => eng().driveToLatLon(p.ll[0], p.ll[1], p.label));
-                        Promise.resolve(run).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that destination"));
-                      }}>{p.label}</button>
+                      <button key={p.label} className={'navChip' + (selDest && selDest.label === p.label ? ' sel' : '')}
+                        onClick={() => { setNavErr(''); setSelDest({ home: p.home, q: p.q, ll: p.ll, label: p.label }); }}>{p.label}</button>
                     ))}
-                  </div>
-                  <div className="navPresets">
-                    <button className="navChip" onClick={() => { setNavErr(''); Promise.resolve(eng().driveToMyLocation(false)).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't get your location — allow access?")); }}>📍 Drive to me</button>
-                    <button className="navChip" onClick={() => { setNavErr(''); Promise.resolve(eng().driveToMyLocation(true)).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't get your location — allow access?")); }}>📍 Follow me</button>
                   </div>
                 </div>
 
-                <label className="navLbl jump"><span className="navDot jump" /> Jump to <i>teleport &amp; start over</i></label>
-                <div className="navTool jump">
-                  <AddressSearch placeholder="Teleport to an address…" actionLabel="Jump"
-                    suggest={t => eng().placeSuggest(t)}
-                    onPick={s => eng().jumpToPlace(s.placeId, s.description).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that place"))}
-                    onText={t => eng().jumpToText(t).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't find that address"))} />
+                {/* 2 — chosen destination → Drive (chauffeur) or Jump (teleport) */}
+                {selDest && (
+                  <div className="navGo">
+                    <div className="navGoLabel">📍 {selDest.label}</div>
+                    <div className="navGoBtns">
+                      <button className="navGoBtn drive" onClick={() => {
+                        setNavErr('');
+                        const run = selDest.home ? eng().driveHome()
+                          : selDest.placeId ? eng().driveToPlace(selDest.placeId, selDest.label)
+                            : eng().driveToText(selDest.q).catch(() => selDest.ll ? eng().driveToLatLon(selDest.ll[0], selDest.ll[1], selDest.label) : Promise.reject());
+                        Promise.resolve(run).then(() => { setSelDest(null); setNavOpen(false); }).catch(() => setNavErr("Couldn't find that destination"));
+                      }}>🚗 Drive there</button>
+                      <button className="navGoBtn jump" onClick={() => {
+                        setNavErr('');
+                        const run = selDest.home ? eng().driveHome()
+                          : selDest.placeId ? eng().jumpToPlace(selDest.placeId, selDest.label)
+                            : eng().jumpToText(selDest.q).catch(() => selDest.ll ? eng().jumpToAddress(selDest.ll[0], selDest.ll[1], selDest.label) : Promise.reject());
+                        Promise.resolve(run).then(() => { setSelDest(null); setNavOpen(false); }).catch(() => setNavErr("Couldn't find that destination"));
+                      }}>⚡ Jump there</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3 — your live GPS location (separate; Follow keeps the car coming to you) */}
+                <label className="navLbl"><span className="navDot jump" /> Your location</label>
+                <div className="navTool">
+                  <div className="navPresets">
+                    <button className="navChip" onClick={() => { setNavErr(''); Promise.resolve(eng().driveToMyLocation(false)).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't get your location — allow access?")); }}>🚗 Drive to me</button>
+                    <button className={'navChip' + (following ? ' on' : '')} onClick={() => {
+                      setNavErr('');
+                      if (following) { eng().stopFollow(); }
+                      else { Promise.resolve(eng().driveToMyLocation(true)).then(() => setNavOpen(false)).catch(() => setNavErr("Couldn't get your location — allow access?")); }
+                    }}>{following ? '⏹ Stop following' : '📡 Follow me'}</button>
+                  </div>
+                  <div className="navHintSm">{following ? 'The car is chasing your live GPS location.' : '“Follow me” keeps the car coming to wherever you are — it tracks you as you move.'}</div>
                 </div>
 
                 <div className="navSlider">
