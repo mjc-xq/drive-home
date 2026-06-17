@@ -77,7 +77,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     // computed here so the OTHER main-room sofas can go army green) is hidden + replaced by couchy.usdz.
     let couchSofa = null;
     if (sofas.length && windows.length) {
-      const wc = windows.map(w => tmp.setFromObject(w).getCenter(new THREE.Vector3()));
+      const wc = windows.map(w => new THREE.Box3().setFromObject(w).getCenter(new THREE.Vector3()));   // NB: `tmp` isn't declared until the recenter block below — use a local box here
       let bd = Infinity;
       for (const s of sofas) { const c = new THREE.Box3().setFromObject(s).getCenter(new THREE.Vector3()); for (const w of wc) { const d = (c.x - w.x) ** 2 + (c.z - w.z) ** 2; if (d < bd) { bd = d; couchSofa = s; } } }
     }
