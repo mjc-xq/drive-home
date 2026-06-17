@@ -3786,10 +3786,15 @@ export function createEngine({ canvas, ui, emit }) {
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
       // lead from the drift/steer, so on a hard corner the car slides toward the edge of
       // frame then snaps back. Sells corners far more than a rigid lookAt.
-      const lookAhead = (CAM.ahead + sp * 6) * aheadScale;   // → centred on arrival
+      // Scale the look-ahead with SPEED: parked/slow → look almost AT the car so it sits centred
+      // (a fixed forward look-ahead dropped the car to the bottom of the steep cruise frame — "falling
+      // behind the camera"); at speed it pushes forward so you read the road. Also lift the look point
+      // toward the car's roof when slow so the car frames higher, not at its wheels.
+      const lookAhead = (CAM.ahead * (0.32 + 0.68 * sp) + sp * 6) * aheadScale;
+      const lookY = yC + 1.0 + (1 - sp) * 0.9;
       const rpxL = Math.cos(car.yaw), rpzL = -Math.sin(car.yaw);
       const latLead = (car.vlat * 0.05 + car.steer * 2.0) * (1 - 0.3 * sp) * aheadScale;
-      _lookT.set(car.x + fx * lookAhead + rpxL * latLead, yC + 1.0, car.z + fz * lookAhead + rpzL * latLead);
+      _lookT.set(car.x + fx * lookAhead + rpxL * latLead, lookY, car.z + fz * lookAhead + rpzL * latLead);
       if (!_lookV) _lookV = _lookT.clone(); else _lookV.lerp(_lookT, 1 - Math.exp(-7 * dt));
       camera.up.set(0, 1, 0);
       camera.lookAt(_lookV);
