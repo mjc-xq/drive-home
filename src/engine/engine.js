@@ -2250,18 +2250,25 @@ export function createEngine({ canvas, ui, emit }) {
       const d = (px - car.x) * (px - car.x) + (pz - car.z) * (pz - car.z);
       if (d < bd) { bd = d; bx = px; bz = pz; const L = Math.sqrt(len2); dirX = vx / L; dirZ = vz / L; found = true; }
     };
+    const far = Math.hypot(car.x, car.z) > 320;
     if (ROUTE && ROUTE.length > 1) {
       for (let i = 0; i < ROUTE.length - 1; i++) consider(ROUTE[i].x, ROUTE[i].z, ROUTE[i + 1].x, ROUTE[i + 1].z);
-    } else if (osmRoadSegs.length && Math.hypot(car.x, car.z) > 320) {
-      // far from home: snap to the fetched OSM road network, NOT the hood graph (which would
-      // teleport the car all the way back to the neighbourhood).
+    } else if (far) {
+      // far from home: snap ONLY to the fetched OSM (Google-map) road network — NEVER the hood graph,
+      // which would teleport the car all the way back to the neighbourhood (the reported bug).
       for (const s of osmRoadSegs) consider(s[0][0], s[0][1], s[1][0], s[1][1]);
     } else {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
     if (!found) {
-      // Last resort: nearestRoadPoint also consults the live ROUTE + every mapped road, so it
-      // returns SOMETHING (worst case the car's own spot) — never silently strand the car.
+      if (far) {
+        // No local road data yet (the OSM fetch hasn't landed). Force a fetch now and LEAVE THE CAR PUT
+        // rather than flinging it home; the next tap snaps onto the real nearest road once it arrives.
+        updateAreaRoads(performance.now(), true);
+        toast('Finding the nearest road… try again in a sec 🛰️', 1600);
+        return;
+      }
+      // Near home: nearestRoadPoint consults the ROUTE + every mapped road, so it returns SOMETHING.
       const p = nearestRoadPoint(car.x, car.z);
       bx = p.x; bz = p.z; found = true;
     }
@@ -2770,11 +2777,14 @@ export function createEngine({ canvas, ui, emit }) {
   // not just the procedural hood — so road-hugging works far from home exactly like it does at home.
   // Self-throttled (one request at a time, ≥4 s apart, only when the car leaves the last box), and
   // fully graceful: if Overpass is unreachable it just keeps whatever roads it had (or none).
-  function updateAreaRoads(now) {
+  function updateAreaRoads(now, force) {
     if (mode !== 'drive') return;
     if (Math.hypot(car.x, car.z) < 300) return;                                  // the hood's own roadSegs already cover here
-    if (_osmFetching || now - _osmT < 4000) return;                              // one fetch at a time, min 4 s apart
-    if (_osmCenter && Math.hypot(car.x - _osmCenter.x, car.z - _osmCenter.z) < 850) return;   // the current box still covers us
+    if (_osmFetching) return;                                                    // one fetch at a time
+    if (!force) {
+      if (now - _osmT < 4000) return;                                            // min 4 s apart (unless forced, e.g. by Return-to-road)
+      if (_osmCenter && Math.hypot(car.x - _osmCenter.x, car.z - _osmCenter.z) < 850) return;   // the current box still covers us
+    }
     _osmFetching = true; _osmT = now;
     const fx = car.x, fz = car.z, R = 1300;                                      // ~2.6 km box around the car
     const cs = [worldToGeo(fx - R, fz - R), worldToGeo(fx + R, fz - R), worldToGeo(fx - R, fz + R), worldToGeo(fx + R, fz + R)];
