@@ -6,6 +6,7 @@ import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
 import { loadCeceCrowd, loadDrewCrowd } from './crowd.js';
 import { createInterior } from './interior.js';
+import { loadDadController } from './dad.js';
 import { DREW_HEIGHT_M, CECE_HEIGHT_M } from './drew.js';
 import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, cycleVehicle, setVehicle, vehicleList, VEHICLES } from './car.js';
 import { installDracoDecoder } from './draco-install.js';
@@ -594,6 +595,7 @@ export function createEngine({ canvas, ui, emit }) {
   // (near 38 / far 92) hides the distant yard so the indoor camera only ever frames the room —
   // no per-object yard hide needed. scoopScene forks updateScoop between 'yard' and 'interior'.
   let scoopScene = 'yard', interior = null, doorT = 0, entryArmed = true, exitArmed = false;
+  let dad = null, dadLoadStarted = false;   // non-playable "dad" NPC who walks out of a back room (lazy-loaded)
   const INT_CX = 0, INT_CZ = 3000, INT_FLOOR = 0;
   // Blue glowing pads: the front-yard "enter" pad and the indoor "exit" pad (drawn through walls).
   const doorMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
@@ -1145,9 +1147,9 @@ export function createEngine({ canvas, ui, emit }) {
     8: { url: battistaUrl, length: 4.8 },
     9: { url: murcielagoUrl, length: 4.7 },
     10: { url: caspitaUrl, length: 4.6 },
-    11: { url: mustang65Url, length: 4.8, flip: false },   // verified by render: these 3 GLBs already run nose-forward, so NO extra 180°
-    12: { url: mini65Url, length: 3.4, flip: false },
-    13: { url: hotrodUrl, length: 4.5, flip: false },
+    11: { url: mustang65Url, length: 4.8 },                          // nose -Z like the rest → default flip
+    12: { url: mini65Url, length: 3.4 },
+    13: { url: hotrodUrl, length: 4.5, flip: false, extraYaw: -Math.PI / 2 },   // this GLB's length runs on X, not Z → a quarter-turn (not a flip) aligns it (verified vs a known-good car in a chase-cam render)
     14: { url: ratrodUrl, length: 4.6 },
   };
   const vehLoading = new Set();
@@ -1166,7 +1168,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (!def) return;
     vehLoading.add(slot);
     modelLoadCancels.push(loadDrivableCar(car, def.url, slot, {
-      length: def.length, flip: def.flip !== false, black: false, meta: VEHICLES[slot],   // default nose -Z (flip:true); a few verified GLBs set flip:false
+      length: def.length, flip: def.flip !== false, black: false, extraYaw: def.extraYaw || 0, meta: VEHICLES[slot],   // default nose -Z (flip:true); extraYaw is a per-car quarter-turn for odd model axes
       onReady: (s) => { vehLoading.delete(s); emit('cars', getCars()); if (car.modelIdx === s) showCarCard(); }
     }));
   }
@@ -1261,7 +1263,7 @@ export function createEngine({ canvas, ui, emit }) {
     scoopScene = on ? 'interior' : 'yard';
     if (interior) interior.group.visible = on;
     if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (nearCar) { nearCar = false; emit('nearCar', false); } }
-    else exitMarker.visible = false;
+    else { exitMarker.visible = false; if (dad) dad.group.visible = false; }
     emit('house', { inside: on, ready: !!interior });
   }
   function enterHouse(now) {
@@ -1271,8 +1273,37 @@ export function createEngine({ canvas, ui, emit }) {
     CHAR.x = sp.x; CHAR.z = sp.z; CHAR.yaw = sp.yaw; camYawS = sp.yaw;
     CHAR.airY = 0; CHAR.vy = 0; camInit = false; szoom = 1; camGroundRef = null;
     doorT = now + 1200; exitArmed = false;
+    // Dad NPC: lazy-load on first entry (~7MB), then have him walk out of a back room on each visit.
+    if (!dadLoadStarted) {
+      dadLoadStarted = true;
+      loadDadController(ctrl => { if (disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; scene.add(g); dad = { ctrl, group: g, x: 0, z: 0, yaw: 0, to: null, arrived: true }; resetDad(); }, () => {});
+    } else resetDad();
     if (audio.blip) audio.blip();
     toast('🏠 Inside the house! Open the side menu 🎭 to play actions · stand on the 🚪 pad to head back out', 3400);
+  }
+  // Dad emerges from the back room (farthest from the player spawn) and walks into the main room.
+  function resetDad() {
+    if (!dad || !interior || !interior.rooms || !interior.rooms.length) return;
+    const main = interior.spawn; let back = interior.rooms[0], bd = -1;
+    for (const r of interior.rooms) { const d = (r.x - main.x) ** 2 + (r.z - main.z) ** 2; if (d > bd) { bd = d; back = r; } }
+    dad.x = back.x; dad.z = back.z;
+    dad.to = [main.x - 1.6, main.z - 1.6];
+    dad.yaw = Math.atan2(dad.to[0] - dad.x, dad.to[1] - dad.z);
+    dad.arrived = false; dad.group.visible = true;
+  }
+  function updateDad(dt) {
+    if (!dad) return;
+    dad.group.visible = true;
+    let speed = 0;
+    if (dad.to && !dad.arrived) {
+      const dx = dad.to[0] - dad.x, dz = dad.to[1] - dad.z, d = Math.hypot(dx, dz);
+      if (d > 0.5) { speed = 1.4; const ux = dx / d, uz = dz / d; dad.x += ux * speed * dt; dad.z += uz * speed * dt; dad.yaw = Math.atan2(ux, uz); }
+      else { dad.arrived = true; if (dad.ctrl.react) dad.ctrl.react('dance'); }   // arrives -> a little dance
+    }
+    dad.group.position.set(dad.x, interior.floorY, dad.z);
+    dad.group.rotation.y = dad.yaw - Math.PI / 2;
+    dad.ctrl.locomotion(speed);
+    dad.ctrl.tick(dt);
   }
   function leaveHouse(now) {
     setInside(false);
@@ -1763,6 +1794,7 @@ export function createEngine({ canvas, ui, emit }) {
   const _wallRay = new THREE.Raycaster();
   function updateScoopInterior(dt, now) {
     marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
+    updateDad(dt);
     // EXIT pad: stand where you came in to head back out (hysteresis so arrival doesn't re-trigger)
     const sp = interior.spawn;
     exitMarker.visible = true;
