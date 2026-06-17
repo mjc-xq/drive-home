@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { S, C, W, uvAt, terrainAt, SREC, GRID_ANG } from './data.js';
-import { clamp, makeGeoENU } from './coords.js';
+import { clamp } from './coords.js';
 import { asNonIndexed, merge } from './geom.js';
 import { buildWorld } from './world.js';
 import { createAnimals, createCharacter, TOOLS, toolAfterScoop, POOP_ACTIVE_CAP } from './animals.js';
@@ -15,6 +15,8 @@ import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import { createGround } from './occlusion/ground-height.js';
 import { createTileClip } from './occlusion/tile-clip.js';
+import { createGeo } from './nav/geo.js';
+import { DRIVE_CAMS, SCOOP_CAMS } from './camera/presets.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
 import rav4Url from '../assets/rav4.glb';
@@ -147,15 +149,8 @@ export function createEngine({ canvas, ui, emit }) {
   // the old flat-tangent version drifted ~d²/2R from the (curved-earth) tiles (~a lane at 5 km,
   // ~30 m at 20 km). Identical to the flat math within a millimetre near home, so nothing local
   // changes. Axis convention unchanged: world x = East, world z = -North, centred on C.
-  const GEO0 = { lat: 37.6835313, lon: -122.0686199 };
-  const _enu = makeGeoENU(GEO0.lat, GEO0.lon);
-  function geoToWorld(lat, lon) {
-    const en = _enu.toEN(lat, lon);
-    return [en[0] - C[0], -(en[1] - C[1])];
-  }
-  function worldToGeo(x, z) {
-    return _enu.toGeo(x + C[0], C[1] - z);
-  }
+  // geo <-> world (ENU anchored at 1840 Dahill Lane) — see nav/geo.js
+  ctx.geo = createGeo();   // ctx.geo.{geoToWorld, worldToGeo}
   ctx.DEST = null;        // { x, z, label }
   ctx.soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
   ctx.autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
@@ -337,13 +332,13 @@ export function createEngine({ canvas, ui, emit }) {
   const poiSeen = new Set();   // per-session (suppress repeat toasts)
   const POI_KEY = 'dahill.drive.poisFound';
   const poiFound = new Set((() => { try { return JSON.parse(localStorage.getItem(POI_KEY) || '[]'); } catch (e) { return []; } })());
-  const homeGeo = worldToGeo(ctx.house.c[0], ctx.house.c[1]);
+  const homeGeo = ctx.geo.worldToGeo(ctx.house.c[0], ctx.house.c[1]);
   const POIS = [{ key: 'home', x: ctx.house.c[0], z: ctx.house.c[1], lat: homeGeo.lat, lon: homeGeo.lon, icon: '🏠', label: 'your house', msg: "👋 That's YOUR house — welcome home!" }].concat(
     [['meemaw', 37.6995618, -122.0639216, '🏡', "Meemaw's", "🏡 Meemaw's house!"],
      ['canyon', 37.7046462, -122.0524363, '🏫', 'Canyon Middle', '🏫 Canyon Middle School!'],
      ['stanton', 37.7005734, -122.0940411, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
      ['dad', 37.8004778, -122.2739559, '💼', 'XQ', "💼 XQ — Mike's work!"]
-    ].map(([key, lat, lon, icon, label, msg]) => { const w = geoToWorld(lat, lon); return { key, x: w[0], z: w[1], lat, lon, icon, label, msg }; }));
+    ].map(([key, lat, lon, icon, label, msg]) => { const w = ctx.geo.geoToWorld(lat, lon); return { key, x: w[0], z: w[1], lat, lon, icon, label, msg }; }));
   ctx.tripScore = 0;
   ctx.boost = 0, ctx.boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
   function addBoost(amt) { ctx.boost = clamp(ctx.boost + amt, 0, 1); }
@@ -2347,7 +2342,7 @@ export function createEngine({ canvas, ui, emit }) {
   function fetchRoute(destLat, destLon) {
     const reqId = ++ctx.routeReqId;
     loadMapsSDK().then(maps => {
-      const o = worldToGeo(ctx.car.x, ctx.car.z);
+      const o = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat: destLat, lng: destLon }, travelMode: 'DRIVING' },
         (result, status) => {
@@ -2358,7 +2353,7 @@ export function createEngine({ canvas, ui, emit }) {
             const stepPath = [];
             for (const leg of route.legs || []) for (const step of leg.steps || []) for (const p of step.path || []) stepPath.push(p);
             const src = stepPath.length ? stepPath : route.overview_path;
-            const pts = src.map(p => { const w = geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
+            const pts = src.map(p => { const w = ctx.geo.geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
             if (pts.length > 1) {
               ctx.ROUTE = laneOffsetRoute(pts, LANE_OFFSET); ctx.routeIdx = 0;   // ride the correct lane, not the divider
               snapDestinationToRouteEnd(ctx.ROUTE);
@@ -2388,7 +2383,7 @@ export function createEngine({ canvas, ui, emit }) {
   // only THOSE arrivals earn the "Arrived" banner (a casual map tap does not).
   function setDestination(lat, lon, label, isChain, fromSearch, opts = {}) {
     stopFollow();   // picking a new destination ends an active "follow me"
-    const w = geoToWorld(lat, lon);
+    const w = ctx.geo.geoToWorld(lat, lon);
     let seedRoute = null;
     if (opts.drive) {
       seedRoute = localRoadRoute(ctx.car.x, ctx.car.z, w[0], w[1]);
@@ -2441,7 +2436,7 @@ export function createEngine({ canvas, ui, emit }) {
       const addr = POI_ADDR[p.key];
       if (!addr) continue;
       geocodeAddress(addr).then(g => {
-        const w = geoToWorld(g.lat, g.lon), ox = p.x, oz = p.z;
+        const w = ctx.geo.geoToWorld(g.lat, g.lon), ox = p.x, oz = p.z;
         p.x = w[0]; p.z = w[1]; p.lat = g.lat; p.lon = g.lon;
         const b = poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
         const lb = poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
@@ -2483,7 +2478,7 @@ export function createEngine({ canvas, ui, emit }) {
     loadMapsSDK().then(maps => {
       if (ctx.disposed || ctx._gmapDiv !== div) return;
       ctx._gmaps = maps;
-      const o = worldToGeo(ctx.car.x, ctx.car.z);
+      const o = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
       ctx._gmap = new maps.Map(div, {
         center: { lat: o.lat, lng: o.lon }, zoom: 12, disableDefaultUI: true,   // zoomed-out district view (~10 km across) so fast cross-town drives stay on the map
         gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
@@ -2506,7 +2501,7 @@ export function createEngine({ canvas, ui, emit }) {
         const mx = ox * c - oy * s, my = ox * s + oy * c;
         const ctr = ctx._gmap.getCenter(), lat = ctr.lat(), z = ctx._gmap.getZoom();
         const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);        // Web-Mercator metres per layout px
-        const cw = geoToWorld(lat, ctr.lng());   // anchor to the map's ACTUAL centre, not the car — during a route overview the view is fitBounds-centred, not on the car
+        const cw = ctx.geo.geoToWorld(lat, ctr.lng());   // anchor to the map's ACTUAL centre, not the car — during a route overview the view is fitBounds-centred, not on the car
         setDriveTarget(cw[0] + mx * mpp, cw[1] + my * mpp);   // screen x→east(+x), screen y(down)→south(+z)
       };
       div.addEventListener('click', onTap, true);
@@ -2516,7 +2511,7 @@ export function createEngine({ canvas, ui, emit }) {
   function updateMiniMap(now) {
     if (!ctx._gmap || now - ctx._gmapT < 200) return;   // ~5 Hz pan
     ctx._gmapT = now;
-    const o = worldToGeo(ctx.car.x, ctx.car.z);
+    const o = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
     // HEADING-UP: spin the whole map so the car's heading points UP — oriented like the driver/user,
     // the way a phone GPS does. World is x=east, z=-north and car.yaw=atan2(east,-north), so the
     // compass bearing (cw from north) = 180°−yaw. We counter-rotate the map div by that bearing (and
@@ -2534,7 +2529,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx._gmapRoute) {
       if (ctx.ROUTE && ctx.ROUTE.length && ctx._gmapRouteFor !== ctx.ROUTE) {
         ctx._gmapRouteFor = ctx.ROUTE;
-        const pts = ctx.ROUTE.map(p => { const g = worldToGeo(p.x, p.z); return { lat: g.lat, lng: g.lon }; });
+        const pts = ctx.ROUTE.map(p => { const g = ctx.geo.worldToGeo(p.x, p.z); return { lat: g.lat, lng: g.lon }; });
         ctx._gmapRoute.setPath(pts);
         // ROUTE OVERVIEW: fit the whole start→finish into view for a few seconds when a new
         // route is set, then resume following the car (the user asked to see the full route).
@@ -2585,7 +2580,7 @@ export function createEngine({ canvas, ui, emit }) {
   function jumpTo(lat, lon, label) {
     stopFollow();   // a teleport OWNS the car — end any live GPS follow (else its glide springs the car back). Mirrors setDestination/setDriveTarget/driveToMyLocation/exitDrive.
     const ox = ctx.car.x, oz = ctx.car.z;                         // origin for the road-end query (captured before we teleport)
-    const w = geoToWorld(lat, lon);
+    const w = ctx.geo.geoToWorld(lat, lon);
     ctx.car.x = w[0]; ctx.car.z = w[1];
     // Snap onto the local street graph when one is near (the generous radius matches the
     // tap-to-drive snap, so jumps inside the neighborhood land in the street like a drive).
@@ -2611,7 +2606,7 @@ export function createEngine({ canvas, ui, emit }) {
   // the player has since set a destination, so it never yanks the car out from under them.
   function snapJumpToRoad(ox, oz, lat, lon, reqId) {
     loadMapsSDK().then(maps => {
-      const o = worldToGeo(ox, oz);
+      const o = ctx.geo.worldToGeo(ox, oz);
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat, lng: lon }, travelMode: 'DRIVING' },
         (result, status) => {
@@ -2621,7 +2616,7 @@ export function createEngine({ canvas, ui, emit }) {
           for (const leg of result.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) path.push(p);
           const src = path.length ? path : result.routes[0].overview_path;
           if (!src || !src.length) return;
-          const end = src[src.length - 1], e = geoToWorld(end.lat(), end.lng());
+          const end = src[src.length - 1], e = ctx.geo.geoToWorld(end.lat(), end.lng());
           ctx.car.x = e[0]; ctx.car.z = e[1];
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
           const np = nearestRoadPoint(ctx.car.x, ctx.car.z);
@@ -2688,7 +2683,7 @@ export function createEngine({ canvas, ui, emit }) {
   // mapping + ground tiles break down, and the glide — which bypasses the physics ring clamp — would
   // otherwise march the car off into the void chasing a far/garbage fix).
   function setFollowGeo(lat, lon) {
-    const w = geoToWorld(lat, lon); let wx = w[0], wz = w[1];
+    const w = ctx.geo.geoToWorld(lat, lon); let wx = w[0], wz = w[1];
     const r = Math.hypot(wx, wz); if (r > 30000) { const s = 30000 / r; wx *= s; wz *= s; }
     if (!ctx._followSeeded) { ctx._followSeeded = true; ctx.car.x = wx; ctx.car.z = wz; ctx._followVx = 0; ctx._followVz = 0; settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
     ctx._followGeo = { x: wx, z: wz };
@@ -2764,7 +2759,7 @@ export function createEngine({ canvas, ui, emit }) {
     // and fetch the Google Directions path to refine/extend it. If neither is ready the car
     // simply HOLDS (idles) until a road route exists — it never cuts across the grass. Then
     // point the car down the route so it doesn't have to turn itself around.
-    const g = worldToGeo(wx, wz);
+    const g = ctx.geo.worldToGeo(wx, wz);
     let route = localRoadRoute(ctx.car.x, ctx.car.z, wx, wz);
     if (!route) { const np = nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z); }
     ctx.DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ctx.ROUTE = route || null; ctx.routeIdx = 0; destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
@@ -2946,7 +2941,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.mode !== 'drive' || _geoBusy || now - _geoT < 4000) return;
     if (_geoLast && Math.hypot(ctx.car.x - _geoLast.x, ctx.car.z - _geoLast.z) < 140) return;
     _geoT = now; _geoLast = { x: ctx.car.x, z: ctx.car.z };
-    const g = worldToGeo(ctx.car.x, ctx.car.z);
+    const g = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
     _geoBusy = true;
     loadMapsSDK().then(maps => {
       new maps.Geocoder().geocode({ location: { lat: g.lat, lng: g.lon } }, (res, status) => {
@@ -2981,7 +2976,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     _osmFetching = true; _osmT = now;
     const fx = ctx.car.x, fz = ctx.car.z, R = 1300;                                      // ~2.6 km box around the car
-    const cs = [worldToGeo(fx - R, fz - R), worldToGeo(fx + R, fz - R), worldToGeo(fx - R, fz + R), worldToGeo(fx + R, fz + R)];
+    const cs = [ctx.geo.worldToGeo(fx - R, fz - R), ctx.geo.worldToGeo(fx + R, fz - R), ctx.geo.worldToGeo(fx - R, fz + R), ctx.geo.worldToGeo(fx + R, fz + R)];
     const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
     const s = Math.min(...lats).toFixed(6), n = Math.max(...lats).toFixed(6), w = Math.min(...lons).toFixed(6), e = Math.max(...lons).toFixed(6);
     const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
@@ -2999,7 +2994,7 @@ export function createEngine({ canvas, ui, emit }) {
           for (const el of (data.elements || [])) {
             const g = el.geometry; if (el.type !== 'way' || !g || g.length < 2) continue;
             for (let i = 0; i < g.length - 1; i++) {
-              const a = geoToWorld(g[i].lat, g[i].lon), b = geoToWorld(g[i + 1].lat, g[i + 1].lon);
+              const a = ctx.geo.geoToWorld(g[i].lat, g[i].lon), b = ctx.geo.geoToWorld(g[i + 1].lat, g[i + 1].lon);
               segs.push([[a[0], a[1]], [b[0], b[1]]]);
             }
           }
@@ -3237,18 +3232,6 @@ export function createEngine({ canvas, ui, emit }) {
   // the melty ground-level photogrammetry, a little behind the car, looking DOWN
   // THE ROAD AHEAD (ahead = metres in front to aim at). "Close" is the low
   // cinematic chase; "Top-down" looks straight down, heading-up.
-  const DRIVE_CAMS = [
-    // order = 🎥 cycle order. Cruise (clean high chase) is the default; Close (low,
-    // cinematic, gets the full whip+roll) is now SECOND so the most speed-rich view is
-    // one tap away; Top-down (drag-to-drive) third; Aerial (Explore orbit) last.
-    // Cruise leans a little lower/more-forward than before for speed feel, but stays
-    // high enough to clear the melty ground-level photogrammetry (the user's preferred
-    // clean look — NOT the low 'eye-level horror' of Close).
-    { name: 'Cruise', dist: 14, h: 22, ahead: 6, drone: true, topdown: false, side: 0.42 },   // side = a 3/4 hero angle: above and to the SIDE/behind, not dead astern
-    { name: 'Close', dist: 19, h: 12.5, ahead: 12, drone: false, topdown: false },   // Roblox chase: sit back + look well down the road so you SEE where you're going (not just the roof of the car)
-    { name: 'Top-down', dist: 10, h: 122, ahead: 16, drone: true, topdown: true, dragdrive: true },   // higher overhead map view
-    { name: 'Aerial', aerial: true, dragdrive: true },   // the Explore look (high orbit), drag to drive there
-  ];
   function cycleCamera() {
     ctx.driveCamUserPicked = true;
     ctx.camMode = (ctx.camMode + 1) % DRIVE_CAMS.length; ctx.camInit = false;
@@ -3276,18 +3259,6 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.emit('driveCam', DRIVE_CAMS[i].name); emitDriveZoom();   // entering top-down → show the overhead zoom slider (mirrors cycleCamera)
     ctx.toast('🪄 Trace a path — drag your finger to drive!', 2000);
   }
-  // Scoop camera presets [dist, height] — cycled with the 🎥 button.
-  // Roblox-style follow cams, cycled with the 🎥 button. The DEFAULT (index 0) is a
-  // behind-the-shoulder angled view like Roblox's default camera — so a right-side
-  // swipe orbits AROUND the keeper and you actually see the world turn, instead of
-  // just spinning a top-down map. 'Overhead' is kept as an option for precise
-  // scooping (it reads the poops better from straight above). pitch (vertical look)
-  // raises/lowers the height; pinch (szoom) is the distance dolly.
-  const SCOOP_CAMS = [
-    { name: 'Follow', dist: 13, h: 8 },      // ~32° down: over-the-shoulder, the Roblox default
-    { name: 'Angled', dist: 14, h: 15 },     // ~47° down: tilts past the melty horizon to the yard
-    { name: 'Overhead', dist: 10, h: 19 }    // ~62° down: near top-down for precise scooping
-  ];
   ctx.scCam = 0;
   function cycleScoopCamera() {
     ctx.scCam = (ctx.scCam + 1) % SCOOP_CAMS.length; ctx.camInit = false;
