@@ -7,8 +7,9 @@ derive everything from geometry — nothing hard-codes a room).
 
 ## The GLB (`src/assets/house-interior.glb`)
 
-- **Plain GLB** (the 6/16 scan, ~1.9 MB): ~304 meshes, ~61k tris, 10 small textures (~1 MB),
-  **no Draco, no animations, no extensions** → the **stock `GLTFLoader`** loads it (NOT the
+- **Plain GLB** (the 6/16 scan, **baked** — see "Bake pipeline" below — ~1.55 MB): ~304 meshes,
+  ~40k tris, 31 materials, 10 small textures (~1 MB), **no Draco, no animations, no extensions,
+  position-only (no normals — three computes flat)** → the **stock `GLTFLoader`** loads it (NOT the
   DracoShim path the cars/CeCe use — don't mix them up). The scan is re-generated periodically,
   so nothing hard-codes counts — the loader is name-driven and `floorTop`/bounds are computed.
 - Bounds ≈ 8.5 × 3.42 (tall) × 17.9; floor **top** ≈ −1.30 (recenter is computed, not constant).
@@ -18,6 +19,29 @@ derive everything from geometry — nothing hard-codes a room).
   named furniture (cabinets, appliances, chairs, tables).
 - Re-run the structure check after a re-scan: `node scripts/verify_interior_node.mjs` (three.js-free;
   generic asserts so more/fewer rooms still pass, and it fails loudly if a scan ships with Draco).
+
+## Bake pipeline (`scripts/bake_interior.py`)
+
+The raw scan ships washed-out, zero-thickness-walled, and with **174 near-duplicate materials** —
+which `interior.js` used to patch at load. That's now baked **once, offline** into the asset by a
+repeatable headless Blender pass (Blender 5.1+), so the loader stays thin and a re-scan just re-runs it:
+
+```
+blender --background --python scripts/bake_interior.py -- \
+  src/assets/house-interior.glb src/assets/house-interior.glb        # in place; git is the undo
+```
+
+In order: **merge** duplicate materials (174 → ~31, fewer draw calls) · **bake the albedo fix**
+(`color*0.7`, `roughness≥0.9`, `metalness≤0.3`) into the materials · **solidify** the 102 thin/zero-
+thickness wall slabs (real back-faces → no runtime DoubleSide; colliders get true thickness) ·
+**decimate** the furniture (97 % of the tris) for phone perf. Node names are **preserved** (the loader
+categorises by name) and Draco stays **off** (`verify_interior_node.mjs` fails otherwise). Net: ~61k → ~40k
+tris, 1.9 → 1.55 MB. Always re-run `verify_interior_node.mjs` after.
+
+Optional `ao` arg bakes ambient occlusion into a per-vertex `COLOR_0` (three multiplies it in
+automatically). It's **off by default**: vertex-AO needs the flat walls subdivided to carry the gradient,
+which roughly doubles tris/size for a benefit that only shows in-app (the app has no GI; a Cycles preview
+hides it). `scripts/render_interior.py` renders a dollhouse preview (`FLAT=1` for flat-lit) to A/B it.
 
 ## Normalisation
 
@@ -29,8 +53,9 @@ derive everything from geometry — nothing hard-codes a room).
   the scene sun/hemi, or rooms render ~3× too dark): a gentle Ambient + Hemisphere + one
   soft Directional fill. The scan has **no ceiling**, so the scene sun reaches in too —
   the room is a roofless dollhouse under the sky.
-- Walls are `side: DoubleSide` (inward faces would otherwise be black); shadows off on all
-  interior meshes.
+- Walls are **solidified in the bake** (real thickness), so inward faces are genuine geometry —
+  the old runtime `side: DoubleSide` patch is gone. Shadows off on all interior meshes; the loader
+  only still forces `envMapIntensity = 0` (the matte scan must not pick up the car IBL).
 
 ## Collision (per-wall — NOT the union)
 
