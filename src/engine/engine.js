@@ -1120,8 +1120,8 @@ export function createEngine({ canvas, ui, emit }) {
     const scatterCluster = (crowd, p, n, clip) => {
       if (!crowd || !p) return;
       for (let i = 0; i < n; i++) {
-        const onRoof = i % 4 === 0;                                       // ~1 in 4 lands on the building itself → up on the roof
-        const r = onRoof ? Math.random() * 8 : 12 + Math.random() * 42;   // roof cluster ↔ lot / grounds / nearby road
+        const onRoof = i % 5 === 0;                                       // ~1 in 5 lands on the building itself → up on the roof
+        const r = onRoof ? Math.random() * 8 : 10 + Math.random() * 78;   // roof cluster ↔ grounds ↔ all the way out to the ROAD frontage (~80 m) where the car parks
         const a = i * 2.39996323 + (Math.random() - 0.5) * 0.7;           // golden-angle spread so they ring the whole site
         put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, { yaw: a + Math.PI, clip });
       }
@@ -1245,17 +1245,19 @@ export function createEngine({ canvas, ui, emit }) {
       if (now - _crowdVisT > 110) {
         _crowdVisT = now;
         const CULL2 = 240 * 240;
-        const cand = [];
-        let _reloc = 0;
+        const cand = [], prio = [];   // prio = POI-cluster dancers (Stanton/Canyon/XQ/Meemaw) near you — shown FIRST so the
+        let _reloc = 0;               // street peds that follow the car don't eat all the slots and hide the cluster you drove to.
         for (const sp of crowdSpots) {
           if (sp.zone === 'yard' || sp.zone === 'interior') { sp.rec.grp.visible = false; continue; }
           const d2 = (sp.rec.x - car.x) ** 2 + (sp.rec.z - car.z) ** 2;
-          if (d2 < CULL2) { cand.push({ sp, d2 }); continue; }
+          if (d2 < CULL2) { (sp.zone === 'street' ? cand : prio).push({ sp, d2 }); continue; }
           sp.rec.grp.visible = false;
           if (sp.zone === 'street' && _reloc < 8) { relocateStreetSpot(sp); _reloc++; }   // budgeted: a few culled street peds follow you onto local roads each scan
         }
-        cand.sort((a, b) => a.d2 - b.d2);
-        for (let i = 0; i < cand.length; i++) cand[i].sp.rec.grp.visible = i < CROWD_VIS_CAP;
+        prio.sort((a, b) => a.d2 - b.d2); cand.sort((a, b) => a.d2 - b.d2);
+        let _shown = 0;
+        for (const c of prio) { const v = _shown < CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // POI clusters first
+        for (const c of cand) { const v = _shown < CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // then the nearest street peds
       }
       for (const sp of crowdSpots) if (sp.rec.grp.visible) settleCrowdSpot(sp, dt);   // settle ground height each frame for the visible few
     } else {
@@ -3673,7 +3675,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (remain <= 1.5) car.railEndT = (car.railEndT || 0) + dt; else car.railEndT = 0;
       const farFromDest = DEST && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 150;
       if (remain <= 1.5 && car.speed < 6 && (!farFromDest || car.railEndT > 6)) {  // braked to a near-stop AT the destination → arrive
-        if (DEST && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 1) car.yaw = Math.atan2(DEST.x - car.x, DEST.z - car.z);   // PARK facing the address
+        if (DEST) { const bx = DEST.rawX != null ? DEST.rawX : DEST.x, bz = DEST.rawZ != null ? DEST.rawZ : DEST.z; if (Math.hypot(bx - car.x, bz - car.z) > 1) car.yaw = Math.atan2(bx - car.x, bz - car.z); }   // PARK facing the actual BUILDING (rawX/rawZ), not the snapped curb point (≈ the car)
         car.speed = 0; car.railS = null; car.railSpeed = null; car.railEndT = 0;
         if (DEST && !DEST.reached) { DEST.reached = true; if (DEST.celebrate && !POIS.some(p => Math.hypot(p.x - DEST.x, p.z - DEST.z) < 50)) arriveCelebrate(DEST.label, 0, now); }
         clearDestination();
@@ -3683,7 +3685,7 @@ export function createEngine({ canvas, ui, emit }) {
         // PARK IN FRONT: over the last few metres, turn from the route tangent to FACE the actual
         // address so the car pulls up looking at the building instead of stopping mid-lane.
         let aimYaw = rp.yaw;
-        if (DEST && remain < 9 && Math.hypot(DEST.x - car.x, DEST.z - car.z) > 1.5) { const fy = Math.atan2(DEST.x - car.x, DEST.z - car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); }   // guard: as the car glues onto the snapped route end, (DEST−car) collapses to float noise and atan2 jitters — below ~1.5 m fall back to the stable route tangent (rp.yaw)
+        if (DEST && remain < 9) { const bx = DEST.rawX != null ? DEST.rawX : DEST.x, bz = DEST.rawZ != null ? DEST.rawZ : DEST.z; if (Math.hypot(bx - car.x, bz - car.z) > 1.5) { const fy = Math.atan2(bx - car.x, bz - car.z); let d = fy - rp.yaw; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; aimYaw = rp.yaw + d * clamp(1 - remain / 9, 0, 1); } }   // turn to face the actual BUILDING (rawX/rawZ) on the final approach; the >1.5 m guard avoids atan2 noise
         let _dy = aimYaw - car.yaw; while (_dy > Math.PI) _dy -= 2 * Math.PI; while (_dy < -Math.PI) _dy += 2 * Math.PI;
         car.yaw += _dy * Math.min(1, dt * 12);                                    // ease the heading onto the route tangent / toward the address on arrival
         car.vlat = 0; car.steer = 0;                                             // no physics slide while on rails
