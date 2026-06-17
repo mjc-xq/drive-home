@@ -2695,6 +2695,7 @@ export function createEngine({ canvas, ui, emit }) {
   // routing — that snapped to the "wrong street" and overshot short hops) and orient the car to the
   // phone's compass heading. "Drive to me" (non-follow) still routes there once for the scenic drive.
   let _geoWatch = null, followMode = false, _followGeo = null, _followHeading = null, _followSeeded = false;
+  let _followVx = 0, _followVz = 0;   // spring VELOCITY for the follow glide — momentum so a new GPS fix accelerates smoothly instead of darting/stopping (no stop-and-go between sparse updates)
   let _headingOn = false, _headingOff = null;
   function startHeading() {
     if (_headingOn) return;
@@ -2719,7 +2720,7 @@ export function createEngine({ canvas, ui, emit }) {
   function stopFollow() {
     const was = followMode || _geoWatch != null;
     if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; }
-    followMode = false; _followGeo = null; _followSeeded = false; stopHeading();
+    followMode = false; _followGeo = null; _followSeeded = false; _followVx = 0; _followVz = 0; stopHeading();
     if (was) emit('follow', false);
   }
   // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
@@ -2728,7 +2729,7 @@ export function createEngine({ canvas, ui, emit }) {
   function setFollowGeo(lat, lon) {
     const w = geoToWorld(lat, lon); let wx = w[0], wz = w[1];
     const r = Math.hypot(wx, wz); if (r > 30000) { const s = 30000 / r; wx *= s; wz *= s; }
-    if (!_followSeeded) { _followSeeded = true; car.x = wx; car.z = wz; settleAfterTeleport(); }   // JUMP to the user at the START — don't drive/glide there. Subsequent fixes glide-track.
+    if (!_followSeeded) { _followSeeded = true; car.x = wx; car.z = wz; _followVx = 0; _followVz = 0; settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
     _followGeo = { x: wx, z: wz };
   }
   function driveToMyLocation(follow) {
@@ -3799,14 +3800,17 @@ export function createEngine({ canvas, ui, emit }) {
     // no ping-pong) and a cross-town trip takes ~30-90 s. Position is overridden here (after the
     // collision step), so it phases through obstacles on the route — that's the point.
     if (followMode && _followGeo) {
-      // EXACT FOLLOW: glide straight to the live GPS point. The exponential approach CAN'T overshoot;
-      // a per-frame cap turns a big initial gap into a quick straight glide instead of a teleport. No
-      // routing/rail here — those snapped to the "wrong street" and ran short hops in too hot.
+      // EXACT FOLLOW via a CRITICALLY-DAMPED SPRING toward the live GPS point. A raw lerp has no momentum,
+      // so each new (sparse) fix made the car DART then stop — stop-and-go jerk. The spring carries velocity:
+      // a fix-jump accelerates the car smoothly and it eases in with no overshoot (critical damping), so
+      // motion stays continuous between updates. No routing/rail here (those snapped to the wrong street).
       const dx = _followGeo.x - car.x, dz = _followGeo.z - car.z;
-      const k = 1 - Math.exp(-dt * 3);
-      let mx = dx * k, mz = dz * k;
-      const step = Math.hypot(mx, mz), MAXSTEP = 520 * speedMul * dt;
-      if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; }
+      const K = 12, C = 2 * Math.sqrt(K);   // critical → no overshoot, ~1.2 s to close a gap, smooth speed-ups/downs
+      _followVx += (dx * K - _followVx * C) * dt;
+      _followVz += (dz * K - _followVz * C) * dt;
+      let mx = _followVx * dt, mz = _followVz * dt;
+      const step = Math.hypot(mx, mz), MAXSTEP = 520 * speedMul * dt;   // safety cap (a far/garbage target can't fling the car)
+      if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; _followVx *= s; _followVz *= s; }
       car.x += mx; car.z += mz; car.groundY = null; car.vlat = 0; car.steer = 0; car.assistRate = 0;   // assistRate=0 so a residual steer-assist rate can't keep rotating yaw under the street-tangent ease
       car.speed = Math.hypot(mx, mz) / Math.max(dt, 1e-3);   // for cam framing / wheel spin
       car.railS = null; car.railSpeed = null;
