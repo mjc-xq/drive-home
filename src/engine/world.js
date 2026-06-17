@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { merge, gablePrism, footprintGeom, splitTops, makeRand } from './geom.js';
+import { asNonIndexed, merge, gablePrism, footprintGeom, splitTops, makeRand } from './geom.js';
 import { buildRoadMask } from './roadmask.js';
 import { loadVegetation } from './models.js';
 import vegUrl from '../assets/veg.glb';
@@ -209,19 +209,19 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
             if (Math.abs(d - L / 2) < 1.0) continue; // leave room for the door
             if (hasGarage && Math.abs(d - (L / 2 + garageOff)) < garageW / 2 + 0.55) continue;
           }
-          const g = new THREE.PlaneGeometry(0.95, 1.15).toNonIndexed();
+          const g = asNonIndexed(new THREE.PlaneGeometry(0.95, 1.15));
           g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw));
           g.translate(a[0] + dx * d + ox * 0.07, ry, a[1] + dz * d + oz * 0.07);
           FACADE.push({ g, color: WIN_C });
         }
       }
       if (i === bestEdge) {
-        const g = new THREE.PlaneGeometry(1.0, 2.05).toNonIndexed();
+        const g = asNonIndexed(new THREE.PlaneGeometry(1.0, 2.05));
         g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw));
         g.translate(mx + ox * 0.07, ground + 1.03, mz + oz * 0.07);
         FACADE.push({ g, color: isHouse ? HDOOR_C : DOOR_C });
         if (hasGarage) {
-          const gg = new THREE.PlaneGeometry(garageW, 2.0).toNonIndexed();
+          const gg = asNonIndexed(new THREE.PlaneGeometry(garageW, 2.0));
           gg.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw));
           gg.translate(a[0] + dx * (L / 2 + garageOff) + ox * 0.07, ground + 1.0, a[1] + dz * (L / 2 + garageOff) + oz * 0.07);
           FACADE.push({ g: gg, color: GARAGE_C });
@@ -264,7 +264,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     const wallH = (gabled ? Math.max(2.4, b.h * 0.8) : b.h) + 0.5;
     bldBoxes.push([minx - 0.4, maxx + 0.4, minz - 0.4, maxz + 0.4, base + wallH + 3]);
     bldPolys.push({ p: poly, bb: [minx, maxx, minz, maxz] });
-    const ex = footprintGeom(b.p, wallH, W).toNonIndexed(); ex.translate(0, base, 0);
+    const ex = asNonIndexed(footprintGeom(b.p, wallH, W)); ex.translate(0, base, 0);
     const parts = splitTops(ex);
     const roofGs = [];
     if (gabled) for (const r of b.r) {
@@ -385,11 +385,11 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       const px = mx + ox * setback, pz = mz + oz * setback;
       const my = terrainAt(px, pz);
       if (rand() < 0.5) {
-        const g = new THREE.BoxGeometry(span, 0.82, 0.55).toNonIndexed();
+        const g = asNonIndexed(new THREE.BoxGeometry(span, 0.82, 0.55));
         g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw)); g.translate(px, my + 0.41, pz);
         hedgeParts.push({ g, color: hedgeC.clone().offsetHSL(0, (rand() - 0.5) * 0.06, (rand() - 0.5) * 0.05) });
       } else {
-        const g = new THREE.BoxGeometry(span, 0.95, 0.07).toNonIndexed();
+        const g = asNonIndexed(new THREE.BoxGeometry(span, 0.95, 0.07));
         g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw)); g.translate(px, my + 0.47, pz);
         fenceParts.push({ g, color: woodC.clone().offsetHSL(0, 0, (rand() - 0.5) * 0.06) });
       }
@@ -413,14 +413,14 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   }
   const FURN = [];
   const boxAt = (xf, lx, ly, yaw, w, h, d, y, color) => {
-    const g = new THREE.BoxGeometry(w, h, d).toNonIndexed();
+    const g = asNonIndexed(new THREE.BoxGeometry(w, h, d));
     g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw + xf.ang));
     const [wx, wz] = xf.pt(lx, ly);
     g.translate(wx, y + h / 2, wz);
     FURN.push({ g, color: new THREE.Color(color) });
   };
   const cylAt = (xf, lx, ly, r, h, y, color, seg = 10) => {
-    const g = new THREE.CylinderGeometry(r, r, h, seg).toNonIndexed();
+    const g = asNonIndexed(new THREE.CylinderGeometry(r, r, h, seg));
     const [wx, wz] = xf.pt(lx, ly);
     g.translate(wx, y + h / 2, wz);
     FURN.push({ g, color: new THREE.Color(color) });
@@ -429,7 +429,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   const wallSeg = (xf, x0, y0, x1, y1) => {
     const [ax, az] = xf.pt(x0, y0), [bx, bz] = xf.pt(x1, y1);
     const L = Math.hypot(bx - ax, bz - az);
-    const g = new THREE.BoxGeometry(L, 2.3, 0.12).toNonIndexed();
+    const g = asNonIndexed(new THREE.BoxGeometry(L, 2.3, 0.12));
     g.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.atan2(-(bz - az), bx - ax)));
     g.translate((ax + bx) / 2, floorY + 1.15, (az + bz) / 2);
     PART.push({ g, color: new THREE.Color(0xf2ece0) });
@@ -439,7 +439,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
     R.sort((a, b) => b.w * b.d - a.w * a.d);
     const [big, mid, sm] = R; // big: living+kitchen | mid: 2 bedrooms | sm: bed/bath
     for (const xf of R) {
-      const g = new THREE.BoxGeometry(xf.w - 0.25, 0.1, xf.d - 0.25).toNonIndexed();
+      const g = asNonIndexed(new THREE.BoxGeometry(xf.w - 0.25, 0.1, xf.d - 0.25));
       g.applyMatrix4(new THREE.Matrix4().makeRotationY(xf.ang));
       const [wx, wz] = xf.pt(0, 0);
       g.translate(wx, floorY, wz);
@@ -530,15 +530,15 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       const yard = [];
       // mailbox at curb
       const mx = frontPt[0] + u[0] * 3.2, mz = frontPt[1] + u[1] * 3.2, my = terrainAt(mx, mz);
-      let g = new THREE.BoxGeometry(0.08, 1.05, 0.08).toNonIndexed(); g.translate(mx, my + 0.52, mz); yard.push({ g, color: new THREE.Color(0x6b5a48) });
-      g = new THREE.BoxGeometry(0.5, 0.26, 0.3).toNonIndexed(); g.translate(mx, my + 1.15, mz); yard.push({ g, color: new THREE.Color(0xd94f1e) });
+      let g = asNonIndexed(new THREE.BoxGeometry(0.08, 1.05, 0.08)); g.translate(mx, my + 0.52, mz); yard.push({ g, color: new THREE.Color(0x6b5a48) });
+      g = asNonIndexed(new THREE.BoxGeometry(0.5, 0.26, 0.3)); g.translate(mx, my + 1.15, mz); yard.push({ g, color: new THREE.Color(0xd94f1e) });
       // patio behind the house
       const px = house.c[0] + u[0] * ((house.bbox[1] - house.bbox[0]) / 2 + 3.4), pz = house.c[1] + u[1] * ((house.bbox[3] - house.bbox[2]) / 2 + 3.4);
-      g = new THREE.BoxGeometry(4.6, 0.12, 3.4).toNonIndexed();
+      g = asNonIndexed(new THREE.BoxGeometry(4.6, 0.12, 3.4));
       g.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.atan2(-u[1], u[0])));
       g.translate(px, terrainAt(px, pz) + 0.12, pz); yard.push({ g, color: new THREE.Color(0xb9b2a4) });
       // grey trash bin tucked by the house side
-      g = new THREE.BoxGeometry(0.55, 0.95, 0.55).toNonIndexed();
+      g = asNonIndexed(new THREE.BoxGeometry(0.55, 0.95, 0.55));
       const tbx = house.bbox[0] - 1.2, tbz = house.c[1] - 0.4;
       g.translate(tbx, terrainAt(tbx, tbz) + 0.48, tbz);
       yard.push({ g, color: new THREE.Color(0x44484e) });
@@ -548,9 +548,9 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
       const cbx = (SREC.shed[0] + SREC.coop[0]) / 2, cbz = (SREC.shed[1] + SREC.coop[1]) / 2;
       const cby = terrainAt(cbx, cbz);
       COMPOST = [cbx, cbz];
-      g = new THREE.BoxGeometry(0.72, 1.05, 0.72).toNonIndexed(); g.translate(cbx, cby + 0.53, cbz);
+      g = asNonIndexed(new THREE.BoxGeometry(0.72, 1.05, 0.72)); g.translate(cbx, cby + 0.53, cbz);
       yard.push({ g, color: new THREE.Color(0x3a7d44) });
-      g = new THREE.BoxGeometry(0.82, 0.12, 0.82).toNonIndexed(); g.translate(cbx, cby + 1.08, cbz);
+      g = asNonIndexed(new THREE.BoxGeometry(0.82, 0.12, 0.82)); g.translate(cbx, cby + 1.08, cbz);
       yard.push({ g, color: new THREE.Color(0x2f6437) });
       const ym = new THREE.Mesh(merge(yard), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }));
       ym.castShadow = true; sadd(ym);
@@ -561,7 +561,7 @@ export function buildWorld(scene, renderer, { S, C, W, uvAt, terrainAt, SREC, GR
   {
     const sanct = [];
     const addBox = (cx, cz, yaw, w, h, d, y, color) => {
-      const g = new THREE.BoxGeometry(w, h, d).toNonIndexed();
+      const g = asNonIndexed(new THREE.BoxGeometry(w, h, d));
       g.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw));
       g.translate(cx, y + h / 2, cz);
       sanct.push({ g, color: new THREE.Color(color) });
