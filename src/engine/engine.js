@@ -1445,7 +1445,7 @@ export function createEngine({ canvas, ui, emit }) {
     return best;
   }
   function startTravel(npc, tx, tz) {
-    npc.state = 'travel'; npc.target = [tx, tz]; npc.waypoint = nearestDoorBetween(npc.x, npc.z, tx, tz);
+    npc.state = 'travel'; npc.target = [tx, tz];   // door routing is recomputed each frame in updateNpcs
     npc.stuckT = 0;
   }
   function triggerMove(npc, now) {
@@ -1480,8 +1480,8 @@ export function createEngine({ canvas, ui, emit }) {
     }
     npc.wantSeat = wantSeat;
     let tx, tz;
-    if (wantSeat) { const ap = interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75); tx = ap.x; tz = ap.z; }
-    else { const p = interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2)); tx = p.x; tz = p.z; }
+    if (wantSeat) { const ap = interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75, NPC_RAD, true); tx = ap.x; tz = ap.z; }
+    else { const p = interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2), NPC_RAD, true); tx = p.x; tz = p.z; }
     startTravel(npc, tx, tz);
   }
   // Each NPC starts in a distinct far room and heads for the main room, then wanders.
@@ -1491,7 +1491,7 @@ export function createEngine({ canvas, ui, emit }) {
     const byFar = [...interior.rooms].sort((a, b) => ((b.x - main.x) ** 2 + (b.z - main.z) ** 2) - ((a.x - main.x) ** 2 + (a.z - main.z) ** 2));
     npcs.forEach((npc, i) => {
       if (npc.ctrl.reset) npc.ctrl.reset();
-      const from = interior.clearAt(byFar[i % byFar.length].x, byFar[i % byFar.length].z);
+      const from = interior.clearAt(byFar[i % byFar.length].x, byFar[i % byFar.length].z, NPC_RAD, true);
       npc.x = from.x; npc.z = from.z; npc.yaw = 0; npc.seat = null; npc.wantSeat = null; npc.act = null; npc.baseY = interior.floorY;
       startTravel(npc, main.x, main.z);
       npc.group.visible = true; npc.group.position.set(npc.x, npc.baseY, npc.z);
@@ -1502,13 +1502,16 @@ export function createEngine({ canvas, ui, emit }) {
       npc.group.visible = true;
       let speed = 0;
       if (npc.state === 'travel') {
-        let tx = npc.target[0], tz = npc.target[1];
-        if (npc.waypoint) { if (Math.hypot(npc.waypoint[0] - npc.x, npc.waypoint[1] - npc.z) < 1.0) npc.waypoint = null; else { tx = npc.waypoint[0]; tz = npc.waypoint[1]; } }
-        const finalD = Math.hypot(npc.target[0] - npc.x, npc.target[1] - npc.z);
+        const gx = npc.target[0], gz = npc.target[1], finalD = Math.hypot(gx - npc.x, gz - npc.z);
         if (finalD < 0.5) enterActivity(npc, now);
         else {
+          // Greedily route through the nearest doorway on the path — re-evaluated EVERY frame, so as
+          // the NPC clears one door the next door toward the goal takes over (multi-room paths work).
+          let tx = gx, tz = gz;
+          const wp = nearestDoorBetween(npc.x, npc.z, gx, gz);
+          if (wp && Math.hypot(wp[0] - npc.x, wp[1] - npc.z) > 0.6) { tx = wp[0]; tz = wp[1]; }
           const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = NPC_SPD * dt;
-          const r = interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD);
+          const r = interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD, true);
           const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
           npc.x = r.x; npc.z = r.z; npc.yaw = Math.atan2(ux, uz); speed = moved / Math.max(dt, 1e-3);
           // "stuck" = collision is eating the step (a wall-jam) — judged by ACTUAL displacement, NOT
