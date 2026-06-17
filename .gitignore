@@ -1,5 +1,6 @@
 node_modules/
 dist/
+exports/
 scripts/.venv/
 scripts/_cache/
 .DS_Store
