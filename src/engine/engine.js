@@ -2268,7 +2268,7 @@ export function createEngine({ canvas, ui, emit }) {
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
     car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; car.revArmT = 0; boost = 0; car.group.visible = true; car.groundY = null;
-    camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null; _viewYaw = viewHeading();
+    camOrbit.yaw = 0; camOrbit.pitch = 0; _orbitUserSet = false; camGroundRef = null; _viewYaw = viewHeading(); _miniYaw = viewHeading(); _gmapHeading = ((180 - viewHeading() * 180 / Math.PI) % 360 + 360) % 360;   // re-arm the cinematic sweep + snap BOTH minimaps to the heading (no rotate-in)
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
     audio.engineStart();
@@ -2306,6 +2306,7 @@ export function createEngine({ canvas, ui, emit }) {
   // along it, stopped. Projects onto each segment (not just vertices) for accuracy.
   function resetToRoad() {
     if (mode !== 'drive') return;
+    if (followMode) stopFollow();   // FIX·ROAD must OWN the snap — else the follow spring drags the car right back, so the button looks dead
     // Build the candidate segment list: the live Google route (real roads, works
     // even far from home) if we have one, else EVERY mapped road (any type) near the
     // neighbourhood — the old residential/tertiary-only filter missed the road the
@@ -2618,16 +2619,17 @@ export function createEngine({ canvas, ui, emit }) {
   // Relocate the START: teleport the car to an address, land it on a ROAD (so it matches
   // where Drive-to arrives — Google geocodes to a rooftop/parcel, not the curb), clear any
   // destination, re-settle the camera. Lets you start anywhere on the map.
-  let jumpReqId = 0, _jumpSnapPending = false;   // after a FAR jump, snap onto the road once the OSM fetch for the NEW area lands
+  let jumpReqId = 0, _jumpSnap = null;   // after a FAR jump: { x, z, until } — snap onto the road once OSM/Google for the NEW area lands; time+position scoped so it self-expires and can't leak into a later drive
   // Full post-teleport reset in ONE place: zero the car's motion, force a fresh ground
   // sample, and RE-SEAT every camera reference (camGroundRef/camFloorRef were the ones the
   // old jump paths forgot — leaving the orbit cam floating at the OLD altitude for seconds,
   // which read as "we lost the car"). Short cooldown so a bad landing still recovers fast.
   function settleAfterTeleport() {
     car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.revArmT = 0; car.groundY = null;
-    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6; _viewYaw = viewHeading();   // snap the overhead/aerial framing to the new heading (no rotate-in after a jump/teleport)
+    camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6; _viewYaw = viewHeading(); _miniYaw = viewHeading(); _gmapHeading = ((180 - viewHeading() * 180 / Math.PI) % 360 + 360) % 360;   // snap the overhead/aerial framing + BOTH minimaps to the new heading (no rotate-in after a jump/teleport)
   }
   function jumpTo(lat, lon, label) {
+    stopFollow();   // a teleport OWNS the car — end any live GPS follow (else its glide springs the car back). Mirrors setDestination/setDriveTarget/driveToMyLocation/exitDrive.
     const ox = car.x, oz = car.z;                         // origin for the road-end query (captured before we teleport)
     const w = geoToWorld(lat, lon);
     car.x = w[0]; car.z = w[1];
@@ -2645,8 +2647,10 @@ export function createEngine({ canvas, ui, emit }) {
     // Far from the neighborhood there's no local road graph (osmRoadSegs still covers the OLD area), so
     // the geocode rooftop strands the car off-road and "Back to road" can't find anything until OSM
     // re-fetches. So: force an OSM fetch for the NEW area now AND ask Google for the curb (whichever lands
-    // first snaps the car onto the road — see the _jumpSnapPending handler in updateAreaRoads).
-    if (!onLocalRoad) { _jumpSnapPending = true; updateAreaRoads(performance.now(), true); snapJumpToRoad(ox, oz, lat, lon, ++jumpReqId); }
+    // first snaps the car onto the road — see the _jumpSnap handler in updateAreaRoads + snapJumpToRoad).
+    // The stamp (target + 8 s deadline) makes it single-use and self-expiring so it can never teleport the
+    // car at some unrelated later moment if both fetches fail.
+    if (!onLocalRoad) { _jumpSnap = { x: car.x, z: car.z, until: performance.now() + 8000 }; updateAreaRoads(performance.now(), true); snapJumpToRoad(ox, oz, lat, lon, ++jumpReqId); }
   }
   // One-shot road-snap for a FAR jump: route origin→destination and move the car to the
   // route's final point — the same curb Drive-to arrives at. Bails if a newer jump fired or
@@ -2657,7 +2661,7 @@ export function createEngine({ canvas, ui, emit }) {
       new maps.DirectionsService().route(
         { origin: { lat: o.lat, lng: o.lon }, destination: { lat, lng: lon }, travelMode: 'DRIVING' },
         (result, status) => {
-          if (reqId !== jumpReqId || DEST) return;
+          if (reqId !== jumpReqId || DEST || !_jumpSnap || Math.abs(car.speed) >= 4) return;   // a newer jump/destination fired, OSM already snapped (flag consumed), or the user drove off — don't double-snap or yank a moving car
           if (status !== 'OK' || !result.routes || !result.routes[0]) return;
           const path = [];
           for (const leg of result.routes[0].legs || []) for (const step of leg.steps || []) for (const p of step.path || []) path.push(p);
@@ -2668,7 +2672,7 @@ export function createEngine({ canvas, ui, emit }) {
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
           const np = nearestRoadPoint(car.x, car.z);
           if (np && (np.d < 90 || insideBuilding(car.x, car.z))) { car.x = np.x; car.z = np.z; }
-          _jumpSnapPending = false;   // Google curb landed first — no need for the OSM-fetch snap
+          _jumpSnap = null;   // Google curb landed first — consume the stamp so the OSM-fetch snap won't double-fire
           settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
         }
       );
@@ -2698,10 +2702,11 @@ export function createEngine({ canvas, ui, emit }) {
   // phone's compass heading. "Drive to me" (non-follow) still routes there once for the scenic drive.
   let _geoWatch = null, followMode = false, _followGeo = null, _followHeading = null, _followSeeded = false;
   let _followVx = 0, _followVz = 0;   // spring VELOCITY for the follow glide — momentum so a new GPS fix accelerates smoothly instead of darting/stopping (no stop-and-go between sparse updates)
-  let _headingOn = false, _headingOff = null;
+  let _headingOn = false, _headingOff = null, _headingGen = 0;
   function startHeading() {
     if (_headingOn) return;
     _headingOn = true;   // claim SYNCHRONOUSLY so a stopHeading()/dispose() during the async iOS permission prompt makes a late grant a no-op (else attach() would orphan window listeners)
+    const myGen = ++_headingGen;   // a stop→restart while a permission prompt is still pending must not let the OLD grant attach a second, unremovable listener pair
     const onOrient = (e) => {
       let h = null;
       if (typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading;   // iOS: degrees clockwise from true north
@@ -2709,7 +2714,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (h != null) _followHeading = Math.PI - h * Math.PI / 180;   // → world yaw (x=E, z=-N, forward=(sin,cos)): yaw = π − heading
     };
     const attach = () => {
-      if (!_headingOn || disposed) return;   // follow ended or engine torn down while the permission dialog was open → don't attach orphan listeners
+      if (!_headingOn || disposed || myGen !== _headingGen) return;   // follow ended/restarted or engine torn down while the permission dialog was open → don't attach orphan listeners
       window.addEventListener('deviceorientationabsolute', onOrient, true);
       window.addEventListener('deviceorientation', onOrient, true);
       _headingOff = () => { window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true); };
@@ -2722,7 +2727,7 @@ export function createEngine({ canvas, ui, emit }) {
   function stopFollow() {
     const was = followMode || _geoWatch != null;
     if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; }
-    followMode = false; _followGeo = null; _followSeeded = false; _followVx = 0; _followVz = 0; stopHeading();
+    followMode = false; _followGeo = null; _followSeeded = false; _followVx = 0; _followVz = 0; _jumpSnap = null; stopHeading();
     if (was) emit('follow', false);
   }
   // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
@@ -2755,7 +2760,13 @@ export function createEngine({ canvas, ui, emit }) {
           }
           if (!done) { done = true; resolve({ lat, lon }); }
         },
-        err => { stopFollow(); toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
+        err => {
+          // In FOLLOW the long-lived watch (below) is the resilient source — a cold/indoor SEED timeout
+          // (10 s) routinely fires before the watch (15 s) delivers, so DON'T tear follow down here; let the
+          // watch carry it. Only the non-follow one-shot "drive to me" truly fails on a seed error.
+          if (!follow) { stopFollow(); toast('📍 Could not get your location (allow access?)', 2200); }
+          if (!done) { done = true; reject(err); }
+        },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 1000 });   // fresh-ish seed (the 2 s cache could hand back a stale low-accuracy fix)
       if (follow) {
         _geoWatch = navigator.geolocation.watchPosition(pos => {
@@ -2763,7 +2774,7 @@ export function createEngine({ canvas, ui, emit }) {
           if (!followMode || mode !== 'drive' || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
           if (pos.coords.accuracy != null && pos.coords.accuracy > 60) return;   // drop junk fixes — those caused the "wrong street" jumps
           setFollowGeo(lat, lon);                                       // just move the (ring-clamped) target; the glide in updateDrive smooths jitter + can't overshoot
-        }, () => { }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 });
+        }, (werr) => { if (werr && werr.code === werr.PERMISSION_DENIED) { stopFollow(); toast('📍 Location access needed to follow you', 2200); } }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 });   // end follow only on a REAL permission failure, not a transient timeout (the watch keeps retrying)
       }
     });
   }
@@ -3040,9 +3051,16 @@ export function createEngine({ canvas, ui, emit }) {
           }
           if (segs.length) {
             osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length;   // stick with the mirror that worked
-            // A far jump left the car off-road; now that we have THIS area's roads, snap it on (if it didn't
-            // already drive off or get a destination). Generous radius — a rooftop geocode can sit a bit off the street.
-            if (_jumpSnapPending && !DEST && Math.abs(car.speed) < 4) { const np = nearestRoadPoint(car.x, car.z); if (np && np.d < 250) { car.x = np.x; car.z = np.z; settleAfterTeleport(); toast('🛣️ On the road', 900); } _jumpSnapPending = false; }
+            // A far jump left the car off-road; now that we have THIS area's roads, snap it on — but ONLY if
+            // it's still the SAME stopped, hands-off car the jump dropped (not following, no destination, still
+            // near the jump target, within the deadline). Consume the stamp on the FIRST OSM landing either way
+            // so it can never leak into a later drive.
+            if (_jumpSnap) {
+              const j = _jumpSnap; _jumpSnap = null;
+              if (!followMode && !DEST && Math.abs(car.speed) < 4 && performance.now() < j.until && Math.hypot(car.x - j.x, car.z - j.z) < 60) {
+                const np = nearestRoadPoint(car.x, car.z); if (np && np.d < 250) { car.x = np.x; car.z = np.z; settleAfterTeleport(); toast('🛣️ On the road', 900); }
+              }
+            }
           }
           _osmFetching = false;
         })
