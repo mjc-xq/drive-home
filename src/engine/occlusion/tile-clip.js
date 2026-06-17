@@ -27,7 +27,7 @@ export function createTileClip(ctx) {
       // OVERHEAD COLUMN: cap the canopy just above the car and box it to ±W around the car so the
       // cut is a tight column over the road, never spreading to trees off to the sides.
       const W = 7, clearance = 2.5;                          // clearance ≥ tallest car roof (~2 m van) so the car never clips
-      _clipHoriz.normal.set(0, -1, 0); _clipHoriz.constant = carY + clearance;   // kept BELOW carY+clearance
+      _clipHoriz.constant = carY + clearance;   // kept BELOW carY+clearance (normal fixed at construction)
       // Box walls point INWARD so "behind EVERY plane" (clipIntersection) = inside the column. (Outward
       // normals made the four behind-halves mutually exclusive → empty cut → overhead clipped nothing.)
       _clipBox[0].normal.set(-1, 0, 0); _clipBox[0].constant = (carX - W);    // behind ⇔ x > carX−W
@@ -45,8 +45,7 @@ export function createTileClip(ctx) {
     // corridor (lens → car) is cleared. It can't gouge distant hills (the old "white middle") because the
     // ±W slab below bounds the cut to the road strip, which is ~flat; the car itself is kept by the depth
     // gate, not this cap, so the clearance only needs to tolerate the road's grade over the corridor.
-    _clipHoriz.normal.set(0, -1, 0);
-    _clipHoriz.constant = carY + clearance;                 // kept BELOW carY + clearance
+    _clipHoriz.constant = carY + clearance;                 // kept BELOW carY + clearance (normal fixed at construction)
     // (2) depth gate: keep everything at/beyond (car − 2.6 m) along the eye→car axis. 2.6 m (not less)
     // because the car's own tail sits ~2.25 m behind its centre along this axis in chase/cruise; a
     // tighter band would clip the car's rear.

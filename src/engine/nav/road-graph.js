@@ -12,7 +12,7 @@ export function createRoadGraph(ctx) {
     let carD = 1e18;                                 // how far the car is from the road right now
     for (const s of segs) {
       const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      let t = clamp(((x - ax) * vx + (z - az) * vz) / L2, 0, 1);
       const ex = ax + vx * t - x, ez = az + vz * t - z, d = ex * ex + ez * ez;
       if (d < carD) carD = d;
     }
@@ -25,7 +25,7 @@ export function createRoadGraph(ctx) {
       const mx = (ax + s[1][0]) / 2 - x, mz = (az + s[1][1]) / 2 - z;
       if (mx * mx + mz * mz > 900) continue;         // only roads within ~30 m (stay on THIS road)
       const vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((px - ax) * vx + (pz - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      let t = clamp(((px - ax) * vx + (pz - az) * vz) / L2, 0, 1);
       const cx = ax + vx * t, cz = az + vz * t, ex = cx - px, ez = cz - pz, d = ex * ex + ez * ez;
       if (d < bd) { bd = d; btx = cx; btz = cz; found = true; }
     }
@@ -37,7 +37,7 @@ export function createRoadGraph(ctx) {
     let bx = x, bz = z, bd = 1e18;
     const tryAB = (ax, az, b0, b1) => {
       const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      let t = clamp(((x - ax) * vx + (z - az) * vz) / L2, 0, 1);
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; bx = px; bz = pz; }
     };
@@ -55,7 +55,7 @@ export function createRoadGraph(ctx) {
     let bd = 1e18, tx = 0, tz = 0, found = false;
     const tryAB = (ax, az, b0, b1) => {
       const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz; if (L2 < 1) return;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      let t = clamp(((x - ax) * vx + (z - az) * vz) / L2, 0, 1);
       const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
       if (d < bd) { bd = d; const L = Math.sqrt(L2); tx = vx / L; tz = vz / L; found = true; }
     };

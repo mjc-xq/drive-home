@@ -151,7 +151,7 @@ let declCount = 0;
 if (!refsOnly) {
   // 1) hoisted function declarations
   for (const d of topDecls) if (names.has(d.name) && d.kind === 'function') {
-    ms.appendLeft(d.declNode.start, `ctx.${d.name} = `); declCount++;
+    ms.appendLeft(d.declNode.start, `${pfx(d.name)} = `); declCount++;
   }
   // 2) variable declarations — auto-include siblings, reject destructure patterns
   const varDecls = new Map(); // VariableDeclaration -> declarators[]
@@ -172,7 +172,7 @@ if (!refsOnly) {
     // strip the keyword
     ms.overwrite(decl.start, decl.declarations[0].start, '');
     // rewrite each declarator id
-    for (const dd of decl.declarations) { ms.overwrite(dd.id.start, dd.id.end, `ctx.${dd.id.name}`); declCount++; }
+    for (const dd of decl.declarations) { ms.overwrite(dd.id.start, dd.id.end, pfx(dd.id.name)); declCount++; }
   }
 }
 
