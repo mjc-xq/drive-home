@@ -2524,9 +2524,10 @@ export function createEngine({ canvas, ui, emit }) {
         const ox = (e.clientX - fcx) / _gmapScale, oy = (e.clientY - fcy) / _gmapScale;   // undo fill scale → layout px from centre
         const ar = _gmapRot * Math.PI / 180, c = Math.cos(ar), s = Math.sin(ar);          // undo the heading-up rotation
         const mx = ox * c - oy * s, my = ox * s + oy * c;
-        const lat = _gmap.getCenter().lat(), z = _gmap.getZoom();
+        const ctr = _gmap.getCenter(), lat = ctr.lat(), z = _gmap.getZoom();
         const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);        // Web-Mercator metres per layout px
-        setDriveTarget(car.x + mx * mpp, car.z + my * mpp);   // screen x→east(+x), screen y(down)→south(+z)
+        const cw = geoToWorld(lat, ctr.lng());   // anchor to the map's ACTUAL centre, not the car — during a route overview the view is fitBounds-centred, not on the car
+        setDriveTarget(cw[0] + mx * mpp, cw[1] + my * mpp);   // screen x→east(+x), screen y(down)→south(+z)
       };
       div.addEventListener('click', onTap, true);
       _gmapClick = { remove: () => div.removeEventListener('click', onTap, true) };   // disposeMiniMap calls _gmapClick.remove()
@@ -2672,6 +2673,7 @@ export function createEngine({ canvas, ui, emit }) {
   let _headingOn = false, _headingOff = null;
   function startHeading() {
     if (_headingOn) return;
+    _headingOn = true;   // claim SYNCHRONOUSLY so a stopHeading()/dispose() during the async iOS permission prompt makes a late grant a no-op (else attach() would orphan window listeners)
     const onOrient = (e) => {
       let h = null;
       if (typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading;   // iOS: degrees clockwise from true north
@@ -2679,7 +2681,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (h != null) _followHeading = Math.PI - h * Math.PI / 180;   // → world yaw (x=E, z=-N, forward=(sin,cos)): yaw = π − heading
     };
     const attach = () => {
-      _headingOn = true;
+      if (!_headingOn || disposed) return;   // follow ended or engine torn down while the permission dialog was open → don't attach orphan listeners
       window.addEventListener('deviceorientationabsolute', onOrient, true);
       window.addEventListener('deviceorientation', onOrient, true);
       _headingOff = () => { window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true); };
@@ -2694,6 +2696,14 @@ export function createEngine({ canvas, ui, emit }) {
     if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; }
     followMode = false; _followGeo = null; stopHeading();
     if (was) emit('follow', false);
+  }
+  // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
+  // mapping + ground tiles break down, and the glide — which bypasses the physics ring clamp — would
+  // otherwise march the car off into the void chasing a far/garbage fix).
+  function setFollowGeo(lat, lon) {
+    const w = geoToWorld(lat, lon); let wx = w[0], wz = w[1];
+    const r = Math.hypot(wx, wz); if (r > 30000) { const s = 30000 / r; wx *= s; wz *= s; }
+    _followGeo = { x: wx, z: wz };
   }
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
@@ -2711,21 +2721,19 @@ export function createEngine({ canvas, ui, emit }) {
         pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
           if (Number.isFinite(lat) && Number.isFinite(lon) && mode === 'drive') {
-            const w = geoToWorld(lat, lon);
-            if (follow) _followGeo = { x: w[0], z: w[1] };               // updateDrive glides the car here, overshoot-free
+            if (follow) { if (pos.coords.accuracy == null || pos.coords.accuracy <= 60) setFollowGeo(lat, lon); }   // gate the SEED too — a junk/stale first fix is exactly what put the car on the wrong street; the watcher supplies a good one if this is dropped
             else { driveToLatLon(lat, lon, '📍 Your location'); toast('📍 Driving to you', 1500); }
           }
           if (!done) { done = true; resolve({ lat, lon }); }
         },
         err => { stopFollow(); toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 });
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 1000 });   // fresh-ish seed (the 2 s cache could hand back a stale low-accuracy fix)
       if (follow) {
         _geoWatch = navigator.geolocation.watchPosition(pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
           if (!followMode || mode !== 'drive' || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
           if (pos.coords.accuracy != null && pos.coords.accuracy > 60) return;   // drop junk fixes — those caused the "wrong street" jumps
-          const w = geoToWorld(lat, lon);
-          _followGeo = { x: w[0], z: w[1] };                            // just move the target; the glide in updateDrive smooths jitter + can't overshoot
+          setFollowGeo(lat, lon);                                       // just move the (ring-clamped) target; the glide in updateDrive smooths jitter + can't overshoot
         }, () => { }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 });
       }
     });
@@ -2756,6 +2764,7 @@ export function createEngine({ canvas, ui, emit }) {
     car.steer = 0; car.vlat = 0; car.assistRate = 0; camInit = false;   // re-settle the chase cam behind the new heading
   }
   function setDriveTarget(wx, wz) {
+    stopFollow();   // tapping the map to drive ENDS follow — else followMode stays true and its glide branch shadows the new route (tap looked dead). Covers both the canvas tap and the Google onTap.
     // ALWAYS follow a real ROAD path to the point — NEVER a straight line across the land.
     // Seed an instant on-road route from the local street graph so the car sets off at once,
     // and fetch the Google Directions path to refine/extend it. If neither is ready the car
@@ -3635,7 +3644,7 @@ export function createEngine({ canvas, ui, emit }) {
     // route-autosteer handles staying on a route; a cooldown blocks any immediate re-fire.
     recoverCooldown = Math.max(0, recoverCooldown - dt);
     const onRouteNow = !!(ROUTE && routeIdx < ROUTE.length);
-    if (autoSteer && inHood && !onRouteNow && recoverCooldown <= 0) {
+    if (!followMode && autoSteer && inHood && !onRouteNow && recoverCooldown <= 0) {
       if (offRoadDist > 14) offRoadT += dt; else offRoadT = 0;
       const stuck = Math.abs(car.speed) < 3;
       if (offRoadDist > 42 || (offRoadT > 1.5 && offRoadDist > 22) || (offRoadT > 2.2 && stuck)) { offRoadT = 0; resetToRoad(); }
@@ -3651,7 +3660,7 @@ export function createEngine({ canvas, ui, emit }) {
     // route far from home); the heading is re-derived from the corrected state just below.
     // Gate on recoverCooldown so it can't 60 Hz-spam (blip/toast/reset) if a snap point ever
     // lands back inside a footprint — it retries at most every ~1.8 s instead.
-    if (recoverCooldown <= 0 && insideBuilding(car.x, car.z)) resetToRoad();
+    if (!followMode && recoverCooldown <= 0 && insideBuilding(car.x, car.z)) resetToRoad();   // follow's glide phases through buildings and OWNS position — don't let recovery yank/fight it
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
     // arcade drift: tail-out lateral slip — readable even WITHOUT the handbrake now;
     // grip recovers it. On THROTTLE the rear stays out (a power-slide you can hold on
