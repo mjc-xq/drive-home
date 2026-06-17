@@ -17,7 +17,7 @@ import sys
 import numpy as np
 import laspy
 from pyproj import Transformer
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.strtree import STRtree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +104,15 @@ def main():
         cxv = sum(p[0] for p in ring) / len(ring); czv = sum(p[1] for p in ring) / len(ring)
         if abs(cxv) <= HALF + 30 and abs(czv) <= HALF + 30:
             polys.append(Polygon(ring).buffer(1.0))
+    # mask road corridors too, so canopy overhanging the street isn't placed in it
+    for r in SCENE.get("roads", []):
+        pl = r.get("p") if isinstance(r, dict) else r
+        if not isinstance(pl, list) or len(pl) < 2:
+            continue
+        llat, llon = geo.flat_to_ll(np.array([e for e, n in pl]), np.array([n for e, n in pl]))
+        line = list(zip(*geo.to_world(llat, llon)))
+        if any(abs(x) <= HALF + 30 and abs(z) <= HALF + 30 for x, z in line):
+            polys.append(LineString(line).buffer(4.5))   # ~road half-width + curb
     tree_strtree = STRtree(polys) if polys else None
 
     cand = np.argwhere(chm >= HMIN)
