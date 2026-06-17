@@ -2617,7 +2617,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Drive the car to the USER's real GPS location, and (optionally) keep chasing them as they move.
   let _geoWatch = null, _followLast = null, _followT = 0;
-  function stopFollow() { if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; } _followLast = null; _followT = 0; }
+  function stopFollow() { const was = _geoWatch != null; if (_geoWatch != null) { try { navigator.geolocation.clearWatch(_geoWatch); } catch (e) { } _geoWatch = null; } _followLast = null; _followT = 0; if (was) emit('follow', false); }
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }
     stopFollow();
@@ -2637,6 +2637,7 @@ export function createEngine({ canvas, ui, emit }) {
         err => { stopFollow(); toast('📍 Could not get your location (allow access?)', 2200); if (!done) { done = true; reject(err); } },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 4000 });
       if (follow) {
+        emit('follow', true);
         _geoWatch = navigator.geolocation.watchPosition(pos => {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
           if (!Number.isFinite(lat) || !Number.isFinite(lon) || mode !== 'drive') return;

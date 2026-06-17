@@ -300,6 +300,17 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .navPresets .navChip{position:static;font-family:'Chakra Petch';font-size:12.5px;font-weight:600;padding:7px 13px;cursor:pointer;white-space:nowrap;
   min-height:40px;background:rgba(43,232,79,.1);border:1px solid rgba(43,232,79,.3);color:#fff}
 .navPresets .navChip:active{background:rgba(43,232,79,.24)}
+.navPresets .navChip.sel{background:rgba(45,140,255,.28);border-color:var(--nav);box-shadow:0 0 0 1px var(--nav)}
+.navPresets .navChip.on{background:rgba(155,123,255,.26);border-color:var(--jump);color:#fff;box-shadow:0 0 14px rgba(155,123,255,.35)}
+/* chosen destination → Drive or Jump */
+.navGo{margin:12px 0 2px;padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12)}
+.navGoLabel{font-size:13px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:9px}
+.navGoBtns{display:flex;gap:9px}
+.navGoBtn{flex:1;min-height:44px;border-radius:11px;font-family:'Chakra Petch';font-weight:700;font-size:14px;cursor:pointer;border:1px solid transparent}
+.navGoBtn.drive{background:var(--go);color:#08210f}
+.navGoBtn.jump{background:rgba(155,123,255,.16);border-color:rgba(155,123,255,.6);color:var(--jump)}
+.navGoBtn:active{transform:scale(.98)}
+.navHintSm{font-size:11.5px;line-height:1.35;color:rgba(255,255,255,.6);margin:8px 2px 0}
 .navSlider{margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.1)}
 .navSlider>label{display:block;font-family:'Chakra Petch';font-size:13px;font-weight:500;color:rgba(255,255,255,.8);margin-bottom:9px}
 .navSlider>label b{color:var(--nav);font-weight:700}
