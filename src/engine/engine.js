@@ -1217,7 +1217,7 @@ export function createEngine({ canvas, ui, emit }) {
     const rec = sp.rec;
     rec.x = nx; rec.z = nz; rec.baseX = nx; rec.baseZ = nz;
     rec.grp.position.x = nx; rec.grp.position.z = nz;
-    rec.baseY = (car.groundY ?? 0) + 0.02;                                  // rough; settle snaps to the real tile ground when visible
+    rec.baseY = (Number.isFinite(car.groundY) ? car.groundY : 0) + 0.02;    // rough; settle snaps to the real tile ground when visible. Number.isFinite guards a NaN groundY (?? lets NaN through → ped stuck underground forever)
     rec.grp.position.y = rec.baseY;
     rec.vel = null; rec.respawnAt = 0; sp.onRoadHt = true; sp.settleT = 0;
   }
@@ -1482,8 +1482,16 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function roomIndexAt(x, z) {
     const rooms = interior.rooms || [];
-    for (let i = 0; i < rooms.length; i++) { const r = rooms[i]; if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) return i; }
-    let best = -1, bd = Infinity; for (let i = 0; i < rooms.length; i++) { const r = rooms[i]; const d = (r.x - x) ** 2 + (r.z - z) ** 2; if (d < bd) { bd = d; best = i; } } return best;
+    // Prefer the CONTAINING room whose centroid is nearest — room AABBs can overlap in the scan, so the
+    // first container isn't necessarily the right one. Fall back to the nearest centroid if none contains it.
+    let best = -1, bd = Infinity, hit = false;
+    for (let i = 0; i < rooms.length; i++) {
+      const r = rooms[i], inside = x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ;
+      if (hit && !inside) continue;                       // once we've seen a container, only rank containers
+      if (inside && !hit) { hit = true; bd = Infinity; }  // first container found — reset best to rank among containers only
+      const d = (r.x - x) ** 2 + (r.z - z) ** 2; if (d < bd) { bd = d; best = i; }
+    }
+    return best;
   }
   // The doorway to head for FIRST on the shortest room-path from `from` to `to` (BFS), or null if same
   // room / unreachable. Recomputed each frame: as the NPC clears one door its room index advances and
@@ -2169,7 +2177,7 @@ export function createEngine({ canvas, ui, emit }) {
     // to the torso, head, and a ring around them, so a wall blocking ANY part of the kid (or right around
     // them) is cut — a clean cutout boundary. Collision still uses precomputed AABBs, so hidden walls block.
     const occ = interior.occluders;
-    if (occ && now - _wallCutT > 45) {
+    if (occ && now - _wallCutT > (MOBILE ? 75 : 45)) {
       _wallCutT = now;
       for (const w of occ) if (!w.userData.permaHidden) w.visible = true;
       const cp = camera.position, fy = interior.floorY;
@@ -2184,8 +2192,9 @@ export function createEngine({ canvas, ui, emit }) {
       // Ring boundary — clears walls right around the kid. SKIP ring points that fall outside the room
       // shell: when the kid hugs a perimeter wall the 0.85 radius overshoots PAST the outer wall, so a
       // camera->outside ray would punch through (hide) the exterior wall/window and expose the skybox.
-      for (let i = 0; i < 6; i++) {
-        const a = i / 6 * Math.PI * 2, rx = CHAR.x + Math.cos(a) * 0.85, rz = CHAR.z + Math.sin(a) * 0.85;
+      const RING = MOBILE ? 4 : 6;   // fewer perimeter rays on phones — intersectObjects has no BVH, so each cast is O(tris)
+      for (let i = 0; i < RING; i++) {
+        const a = i / RING * Math.PI * 2, rx = CHAR.x + Math.cos(a) * 0.85, rz = CHAR.z + Math.sin(a) * 0.85;
         if (rx > ra[0] + 0.2 && rx < ra[1] - 0.2 && rz > ra[2] + 0.2 && rz < ra[3] - 0.2) hideAlong(rx, fy + 0.9, rz);
       }
     }
@@ -2294,6 +2303,10 @@ export function createEngine({ canvas, ui, emit }) {
     } else {
       for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
     }
+    // Far from home with only sparse OSM coverage: if the nearest fetched road is still a long way off
+    // (≥120 m), don't fling the car all the way onto it — force a fresh fetch and leave it put (below).
+    const usedOSM = far && !(ROUTE && ROUTE.length > 1);
+    if (found && usedOSM && bd > 120 * 120) found = false;
     if (!found) {
       if (far) {
         // No local road data yet (the OSM fetch hasn't landed). Force a fetch now and LEAVE THE CAR PUT
@@ -2305,6 +2318,7 @@ export function createEngine({ canvas, ui, emit }) {
       // Near home: nearestRoadPoint consults the ROUTE + every mapped road, so it returns SOMETHING.
       const p = nearestRoadPoint(car.x, car.z);
       bx = p.x; bz = p.z; found = true;
+      dirX = Math.sin(car.yaw); dirZ = Math.cos(car.yaw);   // no segment tangent on this path — keep the car's current facing rather than snapping it to due-south
     }
     car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.revArmT = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
     clearRouteRail();   // if auto-drive is still on, reacquire rail arc from the snapped road point
@@ -4132,6 +4146,7 @@ export function createEngine({ canvas, ui, emit }) {
   addEventListener('keydown', onKeyDown);
   addEventListener('keyup', onKeyUp);
   addEventListener('resize', requestResize);
+  addEventListener('orientationchange', requestResize);   // iPad rotation doesn't always fire a 'resize' — re-fit the canvas on rotate too
   if (window.visualViewport) {
     visualViewport.addEventListener('resize', requestResize);
     visualViewport.addEventListener('scroll', requestResize);
@@ -4186,6 +4201,7 @@ export function createEngine({ canvas, ui, emit }) {
     removeEventListener('keydown', onKeyDown);
     removeEventListener('keyup', onKeyUp);
     removeEventListener('resize', requestResize);
+    removeEventListener('orientationchange', requestResize);
     removeEventListener('focusin', onFocusIn);
     removeEventListener('focusout', onFocusOut);
     removeEventListener('blur', _clearKbd);
