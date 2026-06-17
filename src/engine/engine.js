@@ -1028,7 +1028,7 @@ export function createEngine({ canvas, ui, emit }) {
   let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
   const CROWD_VIS_CAP = 20;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
   const SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
-  const CROWD_POOL_CAP = 120;     // total persistent clones at density 1 (×D). Spread EVENLY across the whole hood; the visibility cap keeps only the nearest 16 animating, so this stays cheap while looking populated everywhere. Bounds boot-time SkeletonUtils.clone cost.
+  const CROWD_POOL_CAP = 120;     // SINGLE hard cap on total persistent clones at density 1 (×D): sidewalk+scatter take POOL = cap − RESERVED, the POI/cluster/meemaw dancers take RESERVED. Visibility cap animates only the nearest 20. Bounds total boot-time SkeletonUtils.clone cost.
   let _crowdReplaceT = 0, _crowdVisT = 0;   // debounce the slider re-pool; throttle the nearest-N visibility scan
   function placeCrowd() {
     const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
@@ -1059,7 +1059,9 @@ export function createEngine({ canvas, ui, emit }) {
     // length, on randomized sidewalk offsets and either side — so they line the sidewalks
     // across the WHOLE neighbourhood, not just near home. Denser slider → smaller spacing.
     const D = CROWD_DENSITY;
-    const POOL = Math.round(CROWD_POOL_CAP * D);   // total persistent pedestrians this density (hard bound on clone count)
+    const cn = Math.min(20, Math.round(16 * D));                 // school-cluster size (also used below); hoisted so it counts against the cap
+    const RESERVED = (D > 0 ? 18 : 0) + cn * 2 + (D > 0 ? 2 : 0);   // POI dancers (18) + 2 school clusters + meemaw pair — reserved out of the single cap
+    const POOL = Math.max(0, Math.round(CROWD_POOL_CAP * D) - RESERVED);   // sidewalk+scatter share of ONE hard clone cap (keeps total boot clones ≈ CROWD_POOL_CAP×D)
     let placed = 0;
     if (D > 0 && POOL > 0) {
       // Spacing is derived from the TOTAL curb length so the sidewalk pass spreads its share
@@ -1124,8 +1126,7 @@ export function createEngine({ canvas, ui, emit }) {
         put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, { yaw: a + Math.PI, clip });
       }
     };
-    const cn = Math.min(20, Math.round(16 * D));   // cluster size scales with the density slider (0 → none); capped at the visibility cap so clones aren't wasted
-    scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary
+    scatterCluster(ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary (cn hoisted above, counted against the cap)
     scatterCluster(drewCrowd, POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
     // MEEMAW: a CeCe + Drew pair dancing together right out front of the house.
     const meemaw = D > 0 ? POIS.find(q => q.key === 'meemaw') : null;
@@ -1155,9 +1156,16 @@ export function createEngine({ canvas, ui, emit }) {
     _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
     return CROWD_DENSITY;
   }
-  let _crowdN = 0, _crowdPlaced = false;
-  const _doPlace = () => { if (disposed || _crowdPlaced || !(ceceCrowd && drewCrowd)) return; _crowdPlaced = true; placeCrowd(); geocodePOIs(); };
-  const _onCrowd = () => { if (disposed) return; if (++_crowdN >= 4) _doPlace(); };   // wait for all four rigs so Dad/Mom are mixed in from the FIRST placement (no slider needed)
+  let _crowdN = 0, _crowdPlaced = false, _placedNoAdults = false;
+  const _doPlace = () => { if (disposed || _crowdPlaced || !(ceceCrowd && drewCrowd)) return; _crowdPlaced = true; _placedNoAdults = !(dadCrowd && momCrowd); placeCrowd(); geocodePOIs(); };
+  const _onCrowd = () => {
+    if (disposed) return;
+    _crowdN++;
+    if (!_crowdPlaced) { if (_crowdN >= 4) _doPlace(); return; }   // wait for all four rigs so Dad/Mom are mixed in from the FIRST placement (no slider needed)
+    // If the 9 s fallback placed a kids-only crowd before the adult rigs loaded, re-pool ONCE (debounced,
+    // same path as the density slider) when both Dad + Mom finally arrive so they aren't absent all session.
+    if (_placedNoAdults && dadCrowd && momCrowd) { _placedNoAdults = false; clearTimeout(_crowdReplaceT); _crowdReplaceT = setTimeout(() => { if (!disposed && ceceCrowd && drewCrowd) { clearCrowd(); placeCrowd(); } }, 220); }
+  };
   if (!flags.has('nochar')) {
     loadCeceCrowd(c => { if (!disposed) ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
     loadDrewCrowd(c => { if (!disposed) drewCrowd = c; _onCrowd(); }, () => _onCrowd());
@@ -1172,7 +1180,7 @@ export function createEngine({ canvas, ui, emit }) {
   function settleCrowdSpot(sp, dt) {
     if (!sp.onRoadHt || sp.rec.vel) return;
     sp.settleT = (sp.settleT || 0) + dt;
-    if (sp.settleT < 0.08) return;
+    if (sp.settleT < 0.25) return;   // pedestrians barely move; re-raycast ground height ~4 Hz, not ~12 Hz — cuts the per-frame tile-raycast cost on mobile (the big snap on relocate/arrival is instant regardless)
     sp.settleT = 0;
     const y = actorGroundY(sp.rec.x, sp.rec.z, sp.rec.baseY) + 0.02;
     if (!Number.isFinite(y)) return;
@@ -1500,6 +1508,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Each NPC starts in a distinct far room and heads for the main room, then wanders.
   function resetNpcs() {
     if (!interior || !interior.rooms || !interior.rooms.length || !npcs.length) return;
+    _syncDance = false; _syncDanceNext = 0;   // re-arm the dance-party timer fresh on entry, so it doesn't fire instantly every time you step back inside
     const main = interior.spawn;
     const byFar = [...interior.rooms].sort((a, b) => ((b.x - main.x) ** 2 + (b.z - main.z) ** 2) - ((a.x - main.x) ** 2 + (a.z - main.z) ** 2));
     npcs.forEach((npc, i) => {
@@ -1531,6 +1540,7 @@ export function createEngine({ canvas, ui, emit }) {
         const dpx = CHAR.x - npc.x, dpz = CHAR.z - npc.z;
         if (dpx * dpx + dpz * dpz < 2.7 * 2.7) {
           npc.greetT = now + 6500;
+          if (npc.seat) { if (npc.ctrl.reset) npc.ctrl.reset(); npc.seat = null; npc.baseY = interior.floorY; }   // get up off the couch first, else she'd "stand" floating at seat height + hog the seat
           npc.yaw = Math.atan2(dpx, dpz);                                          // look at the player
           const pool = (npc.ctrl.emotes && npc.ctrl.emotes.length) ? npc.ctrl.emotes : npc.ctrl.dances;
           if (pool && pool.length && npc.ctrl.react) { npc.ctrl.react(pool[(Math.random() * pool.length) | 0]); npc.act = 'emote'; npc.nextMove = now + 2600; npc.actUntil = Math.max(npc.actUntil || 0, now + 2600); }
@@ -2165,7 +2175,7 @@ export function createEngine({ canvas, ui, emit }) {
       const sg = run(1) >= run(-1) ? 1 : -1;
       car.yaw = Math.atan2(frontDir[0] * sg, frontDir[1] * sg);
     } else car.yaw = 0;
-    car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; boost = 0; car.group.visible = true; car.groundY = null;
+    car.speed = 0; car.throttle = 0; car.brakeAmt = 0; car.pitchDyn = 0; car.kSteer = 0; car.revArmT = 0; boost = 0; car.group.visible = true; car.groundY = null;
     camOrbit.yaw = 0; camOrbit.pitch = 0; camGroundRef = null;
     showT = 0;                                   // skip the low cinematic orbit (melty up close)
     for (const s of labelSprites) s.visible = false;
@@ -2230,7 +2240,7 @@ export function createEngine({ canvas, ui, emit }) {
       const p = nearestRoadPoint(car.x, car.z);
       bx = p.x; bz = p.z; found = true;
     }
-    car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
+    car.x = bx; car.z = bz; car.speed = 0; car.steer = 0; car.vlat = 0; car.revArmT = 0; car.groundY = null; car.yaw = Math.atan2(dirX, dirZ);
     clearRouteRail();   // if auto-drive is still on, reacquire rail arc from the snapped road point
     camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 1.8;   // re-seat the chase/orbit cam at the new spot; grace so auto-recover can't immediately re-fire
     audio.blip && audio.blip();
@@ -2480,7 +2490,7 @@ export function createEngine({ canvas, ui, emit }) {
   // old jump paths forgot — leaving the orbit cam floating at the OLD altitude for seconds,
   // which read as "we lost the car"). Short cooldown so a bad landing still recovers fast.
   function settleAfterTeleport() {
-    car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.groundY = null;
+    car.speed = 0; car.vlat = 0; car.steer = 0; car.assistRate = 0; car.revArmT = 0; car.groundY = null;
     camInit = false; camGroundRef = null; camFloorRef = null; inp2.navActive = false; recoverCooldown = 0.6;
   }
   function jumpTo(lat, lon, label) {
@@ -3319,7 +3329,7 @@ export function createEngine({ canvas, ui, emit }) {
     const braking = brake > 0.1;
     const bcur = car.brakeAmt || 0;
     car.brakeAmt = bcur + ((braking ? 1 : 0) - bcur) * Math.min(1, dt * (braking ? 4 : 9));
-    if (braking) acc = car.speed > 0.5 ? -32 * car.brakeAmt : (reverse ? -13 : 0);   // moving → brake; stopped → only back up on a DELIBERATE reverse, else hold at rest (no accidental reverse)
+    if (braking) acc = car.speed > 0.5 ? -32 * car.brakeAmt : car.speed < -0.5 ? 32 * car.brakeAmt : (reverse ? -13 : 0);   // forward → brake; rolling backward → brake forward to a stop; stopped → back up only on a DELIBERATE reverse
     // (engine-braking is now implicit: lifting off drops the pedal target below your speed,
     // so the curve above coasts you down on its own.)
     // LOAD TRANSFER: the body dives forward under braking and squats back under power —
@@ -3886,6 +3896,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (_resizeRaf) return;
     _resizeRaf = requestAnimationFrame(() => {
       _resizeRaf = 0;
+      if (_kbdOpen) return;   // the keyboard may have opened AFTER this rAF was queued (focusin one frame later) — don't squish to the keyboard strip
       const [w, h] = viewportSize();
       if (w !== _rw || h !== _rh) resize();
     });
@@ -3959,7 +3970,7 @@ export function createEngine({ canvas, ui, emit }) {
   // minimap + FX) AND suspend audio (no engine drone / music) → a hidden tab draws ~no
   // power. iOS phone-lock / app-switch often fires pagehide/freeze WITHOUT a reliable
   // visibilitychange (and Low Power Mode can suppress it), so we listen to all of them.
-  function suspend() { clearLiveInput(); if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }
+  function suspend() { clearLiveInput(); _clearKbd(); if (!paused) { paused = true; cancelAnimationFrame(raf); if (audio.suspendAudio) audio.suspendAudio(); } }
   function resume() { if (paused && !disposed && !ctxLost) { paused = false; prev = performance.now(); if (audio.resumeAudio) audio.resumeAudio(); else audio.ensure(); raf = requestAnimationFrame(loop); } }
   function onVisibility() { if (document.hidden) suspend(); else resume(); }
   function onContextLost(e) { e.preventDefault(); ctxLost = true; cancelAnimationFrame(raf); }
@@ -3989,11 +4000,17 @@ export function createEngine({ canvas, ui, emit }) {
   // Keyboard-open detection: a focused text field (the address box) is what brings up the on-screen
   // keyboard. While it's focused we freeze the viewport size; on blur we resize once to restore + also
   // un-scroll the page (iOS scrolls the document to reveal the input, leaving the fixed UI offset).
-  const _isTextField = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(range|checkbox|radio|button|submit|color)$/.test(el.type || 'text')));
+  const _isTextField = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(range|checkbox|radio|button|submit|reset|color|file)$/.test(el.type || 'text')));
+  // Clear the freeze + restore size. Authoritative: only clears once focus has genuinely left every
+  // text field, so it self-heals even when iOS/WebKit DROPS focusout on a focused <input> that React
+  // unmounts on submit (the address box on Go/X/Escape) — which would otherwise stick _kbdOpen true and
+  // silently freeze EVERY later resize for the session.
+  const _clearKbd = () => { if (!_kbdOpen) return; _kbdOpen = false; try { window.scrollTo(0, 0); } catch (e) { } requestResize(); };
   const onFocusIn = e => { if (_isTextField(e.target)) _kbdOpen = true; };
-  const onFocusOut = e => { if (_isTextField(e.target)) { _kbdOpen = false; window.scrollTo(0, 0); requestResize(); } };
+  const onFocusOut = e => { if (_isTextField(e.target)) setTimeout(() => { if (!_isTextField(document.activeElement)) _clearKbd(); }, 0); };
   addEventListener('focusin', onFocusIn);
   addEventListener('focusout', onFocusOut);
+  addEventListener('blur', _clearKbd);   // belt-and-suspenders: app-switch / lock with the keyboard up never leaves it stuck
   resize();
   const t1 = setTimeout(resize, 400), t2 = setTimeout(resize, 1500);
 
@@ -4032,6 +4049,7 @@ export function createEngine({ canvas, ui, emit }) {
     removeEventListener('resize', requestResize);
     removeEventListener('focusin', onFocusIn);
     removeEventListener('focusout', onFocusOut);
+    removeEventListener('blur', _clearKbd);
     if (window.visualViewport) {
       visualViewport.removeEventListener('resize', requestResize);
       visualViewport.removeEventListener('scroll', requestResize);

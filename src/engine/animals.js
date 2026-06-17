@@ -200,7 +200,15 @@ export function createAnimals(scene, { terrainAt, SREC, bldBoxes = [], onPoopCha
       // and scurries (faster) for a beat, so the yard feels alive + reactive while you scoop.
       if (player) {
         const pdx = a.x - player.x, pdz = a.z - player.z, pd2 = pdx * pdx + pdz * pdz;
-        if (pd2 < 4) { const pd = Math.sqrt(pd2) || 1; a.tx = a.x + pdx / pd * (a.wanderR + 1.5); a.tz = a.z + pdz / pd * (a.wanderR + 1.5); a.wait = 0; a.spookT = (now || 0) + 1400; }
+        if (pd2 < 4) {
+          const pd = Math.sqrt(pd2) || 1, R = a.wanderR + 1.5;
+          let tx = a.x + pdx / pd * R, tz = a.z + pdz / pd * R;
+          // clamp the flee target to a yard radius around HOME so continuous pursuit can't ratchet it
+          // (and the critter) outward through the fence into the street.
+          const hdx = tx - a.hx, hdz = tz - a.hz, hd = Math.hypot(hdx, hdz);
+          if (hd > R) { tx = a.hx + hdx / hd * R; tz = a.hz + hdz / hd * R; }
+          a.tx = tx; a.tz = tz; a.wait = 0; a.spookT = (now || 0) + 1400;
+        }
       }
       const spooked = a.spookT && (now || 0) < a.spookT;
       if (a.wait > 0 && !spooked) { a.wait -= dt; }
