@@ -3156,13 +3156,20 @@ export function createEngine({ canvas, ui, emit }) {
     // in like the touch stick instead of snapping (kSteer feeds jx; touch jx stays direct).
     car.kSteer = (car.kSteer || 0) + (inp2.kx - (car.kSteer || 0)) * Math.min(1, dt * 7);
     let jx = clamp(inp2.jx + car.kSteer + inp2.steer, -1, 1);
-    let throttleTarget = 0, brake = 0;
+    let throttleTarget = 0, brake = 0, reverse = false;
     // TWIN-STICK MOVE: the left stick's vertical axis IS the throttle/brake now.
     //   jy < 0 (push up)   → gas, proportional to how far up
     //   jy > 0 (pull down) → brake / reverse
     // (setGasAmount/setBrake still feed inp2.gas/inp2.brake for back-compat.)
     const jyGas = inp2.jy < -MOVE_DEADZONE ? clamp((-inp2.jy - MOVE_DEADZONE) / (1 - MOVE_DEADZONE), 0, 1) : 0;
     const jyBrake = inp2.jy > MOVE_DEADZONE;
+    // BRAKE vs REVERSE — the fix for "too easy to end up backwards": a light/partial down-pull only
+    // BRAKES (stop + hold at 0). Reverse needs a DELIBERATE near-full pull-down (or full brake button /
+    // held down-arrow) AND the car already stopped for a moment, so steering with a little downward
+    // drift — or a hard brake-to-stop — can no longer fling the car into reverse.
+    const wantReverse = (inp2.jy > 0.62 || inp2.brake > 0.85 || inp2.ky > 0);
+    if (wantReverse && Math.abs(car.speed) < 1.4) car.revArmT = (car.revArmT || 0) + dt; else if (!wantReverse) car.revArmT = 0;
+    reverse = wantReverse && (car.revArmT || 0) > 0.32;
     if (inp2.brake || inp2.ky > 0 || jyBrake) brake = 1;
     else if (inp2.ky < 0) throttleTarget = 1;                  // keyboard = full
     else if (jyGas > 0) throttleTarget = jyGas;                // left stick up = analog gas
@@ -3228,7 +3235,7 @@ export function createEngine({ canvas, ui, emit }) {
       else if (Math.abs(dyaw) > 1.95 && (!robot || dd < 13)) {   // behind & (manual, or robot at close range) → reverse to it
         const rdyaw = dyaw > 0 ? dyaw - Math.PI : dyaw + Math.PI;
         jx = clamp(rdyaw * 2.0, -1, 1);
-        throttle = 0; brake = clamp(0.35 + farT * 0.45, 0, 0.85);   // brake reverses once stopped
+        throttle = 0; brake = clamp(0.35 + farT * 0.45, 0, 0.85); reverse = true;   // deliberately backing toward a behind-target → allow reverse past the stop gate
       } else {                                             // drive forward toward it — a robot with a FAR
         // target behind it arcs around (forward U-turn) at full steering lock instead of
         // reversing the whole way across lawns into whatever's behind it.
@@ -3312,7 +3319,7 @@ export function createEngine({ canvas, ui, emit }) {
     const braking = brake > 0.1;
     const bcur = car.brakeAmt || 0;
     car.brakeAmt = bcur + ((braking ? 1 : 0) - bcur) * Math.min(1, dt * (braking ? 4 : 9));
-    if (braking) acc = car.speed > 0.5 ? -32 * car.brakeAmt : -13 * brake;   // firm but not grabby; brakeAmt ramp keeps a tap a light trail-brake
+    if (braking) acc = car.speed > 0.5 ? -32 * car.brakeAmt : (reverse ? -13 : 0);   // moving → brake; stopped → only back up on a DELIBERATE reverse, else hold at rest (no accidental reverse)
     // (engine-braking is now implicit: lifting off drops the pedal target below your speed,
     // so the curve above coasts you down on its own.)
     // LOAD TRANSFER: the body dives forward under braking and squats back under power —
