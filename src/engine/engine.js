@@ -16,6 +16,7 @@ import { createAudio } from './audio.js';
 import { createGround } from './occlusion/ground-height.js';
 import { createTileClip } from './occlusion/tile-clip.js';
 import { createGeo } from './nav/geo.js';
+import { createRoadGraph } from './nav/road-graph.js';
 import { DRIVE_CAMS, SCOOP_CAMS } from './camera/presets.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
@@ -2291,7 +2292,7 @@ export function createEngine({ canvas, ui, emit }) {
         return;
       }
       // Near home: nearestRoadPoint consults the ROUTE + every mapped road, so it returns SOMETHING.
-      const p = nearestRoadPoint(ctx.car.x, ctx.car.z);
+      const p = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
       bx = p.x; bz = p.z; found = true;
       dirX = Math.sin(ctx.car.yaw); dirZ = Math.cos(ctx.car.yaw);   // no segment tangent on this path — keep the car's current facing rather than snapping it to due-south
     }
@@ -2388,7 +2389,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (opts.drive) {
       seedRoute = localRoadRoute(ctx.car.x, ctx.car.z, w[0], w[1]);
       if (!seedRoute) {
-        const np = nearestRoadPoint(w[0], w[1]);
+        const np = ctx.roads.nearestRoadPoint(w[0], w[1]);
         if (np && np.d < 90) seedRoute = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z);
       }
     }
@@ -2586,7 +2587,7 @@ export function createEngine({ canvas, ui, emit }) {
     // tap-to-drive snap, so jumps inside the neighborhood land in the street like a drive).
     // Even if no road is "near", if the rooftop geocode dropped us INSIDE a building, nudge
     // to the nearest road so the car never lands wedged (can't move in any gear).
-    const np = nearestRoadPoint(ctx.car.x, ctx.car.z);
+    const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
     const onLocalRoad = np && np.d < 90;
     if (onLocalRoad) { ctx.car.x = np.x; ctx.car.z = np.z; }
     else if (np && insideBuilding(ctx.car.x, ctx.car.z)) { ctx.car.x = np.x; ctx.car.z = np.z; }
@@ -2619,7 +2620,7 @@ export function createEngine({ canvas, ui, emit }) {
           const end = src[src.length - 1], e = ctx.geo.geoToWorld(end.lat(), end.lng());
           ctx.car.x = e[0]; ctx.car.z = e[1];
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
-          const np = nearestRoadPoint(ctx.car.x, ctx.car.z);
+          const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
           if (np && (np.d < 90 || insideBuilding(ctx.car.x, ctx.car.z))) { ctx.car.x = np.x; ctx.car.z = np.z; }
           ctx._jumpSnap = null;   // Google curb landed first — consume the stamp so the OSM-fetch snap won't double-fire
           settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
@@ -2761,7 +2762,7 @@ export function createEngine({ canvas, ui, emit }) {
     // point the car down the route so it doesn't have to turn itself around.
     const g = ctx.geo.worldToGeo(wx, wz);
     let route = localRoadRoute(ctx.car.x, ctx.car.z, wx, wz);
-    if (!route) { const np = nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z); }
+    if (!route) { const np = ctx.roads.nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z); }
     ctx.DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ctx.ROUTE = route || null; ctx.routeIdx = 0; destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
     if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
     fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
@@ -2863,72 +2864,8 @@ export function createEngine({ canvas, ui, emit }) {
     return s;
   }
   function toggleAutoDrive() { if (!ctx.DEST) return; ctx.autoDrive = !ctx.autoDrive; clearRouteRail(); if (!ctx.autoDrive) ctx.inp2.navActive = false; else faceRouteStart(); ctx.emit('autodrive', ctx.autoDrive); ctx.toast(ctx.autoDrive ? '🤖 Fast auto-drive ON' : 'Auto-drive off', 1100); }
-  // nearest road-segment direction (oriented to the car's heading) for the lane-keep
-  // assist — returns null when you're >9 m off any road (so it never drags you off a lawn).
-  // Free-roam auto-steer aim point. Instead of just aligning heading to the nearest road
-  // tangent (which gives up at sharp corners and never reels you back to the centre), we
-  // project a point LOOKAHEAD metres ahead of the car onto the road and return it as a
-  // target to steer toward. That single point does three jobs at once: it anticipates the
-  // bend (the probe lands on the post-corner segment), it pulls you back to the centreline
-  // when you run wide, and it needs no wide-angle gate to survive a 90° street corner.
-  // Returns null when the car is >10 m off any road (don't tug you around a lawn).
-  function roadTargetAhead(x, z, yaw, speed) {
-    const segs = (x * x + z * z < 330 * 330) ? ctx.roadSegs : ctx.osmRoadSegs;   // hood graph near home, the fetched OSM graph everywhere else
-    let carD = 1e18;                                 // how far the car is from the road right now
-    for (const s of segs) {
-      const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const ex = ax + vx * t - x, ez = az + vz * t - z, d = ex * ex + ez * ez;
-      if (d < carD) carD = d;
-    }
-    if (carD > 100) return null;                     // >10 m off any road → no assist
-    const La = clamp(Math.abs(speed) * 0.55, 7, 40); // look further ahead the faster you go
-    const px = x + Math.sin(yaw) * La, pz = z + Math.cos(yaw) * La;
-    let btx = 0, btz = 0, bd = 1e18; let found = false;
-    for (const s of segs) {
-      const ax = s[0][0], az = s[0][1];
-      const mx = (ax + s[1][0]) / 2 - x, mz = (az + s[1][1]) / 2 - z;
-      if (mx * mx + mz * mz > 900) continue;         // only roads within ~30 m (stay on THIS road)
-      const vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((px - ax) * vx + (pz - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const cx = ax + vx * t, cz = az + vz * t, ex = cx - px, ez = cz - pz, d = ex * ex + ez * ez;
-      if (d < bd) { bd = d; btx = cx; btz = cz; found = true; }
-    }
-    return found ? [btx, btz] : null;
-  }
-  // Nearest point on any neighbourhood road to (x,z), with its distance in metres. Drives
-  // both the off-road steer-back (aim straight at it) and the auto-recover snap.
-  function nearestRoadPoint(x, z) {
-    let bx = x, bz = z, bd = 1e18;
-    const tryAB = (ax, az, b0, b1) => {
-      const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz || 1;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d < bd) { bd = d; bx = px; bz = pz; }
-    };
-    // Live Google route first (real roads), then the OSM road network fetched around the car (works
-    // far from the procedural hood), then EVERY mapped neighbourhood road. So the steer-back + soft
-    // wall + reset always have a real road to aim at, anywhere on the map.
-    if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
-    for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    return { x: bx, z: bz, d: Math.sqrt(bd) };
-  }
-  // Unit tangent {tx,tz} of the nearest mapped road segment (so a followed car can face ALONG the street),
-  // or null if no road is known. Mirrors nearestRoadPoint's source order.
-  function nearestRoadSeg(x, z) {
-    let bd = 1e18, tx = 0, tz = 0, found = false;
-    const tryAB = (ax, az, b0, b1) => {
-      const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz; if (L2 < 1) return;
-      let t = ((x - ax) * vx + (z - az) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d < bd) { bd = d; const L = Math.sqrt(L2); tx = vx / L; tz = vz / L; found = true; }
-    };
-    if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
-    for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    return found ? { tx, tz, d: Math.sqrt(bd) } : null;
-  }
+  // ---- road-graph queries (lane-keep / steer-back / face-along-street) ---- (see nav/road-graph.js)
+  ctx.roads = createRoadGraph(ctx);   // ctx.roads.{roadTargetAhead, nearestRoadPoint, nearestRoadSeg}
   // The heading the MAP views (overhead/aerial main view + both minimaps) orient to: the live COMPASS
   // heading while following (so the map turns like the user/phone), else the car's own heading.
   function viewHeading() { return (ctx.followMode && ctx._followHeading != null) ? ctx._followHeading : ctx.car.yaw; }
@@ -3007,7 +2944,7 @@ export function createEngine({ canvas, ui, emit }) {
             if (ctx._jumpSnap) {
               const j = ctx._jumpSnap; ctx._jumpSnap = null;
               if (!ctx.followMode && !ctx.DEST && Math.abs(ctx.car.speed) < 4 && performance.now() < j.until && Math.hypot(ctx.car.x - j.x, ctx.car.z - j.z) < 60) {
-                const np = nearestRoadPoint(ctx.car.x, ctx.car.z); if (np && np.d < 250) { ctx.car.x = np.x; ctx.car.z = np.z; settleAfterTeleport(); ctx.toast('🛣️ On the road', 900); }
+                const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z); if (np && np.d < 250) { ctx.car.x = np.x; ctx.car.z = np.z; settleAfterTeleport(); ctx.toast('🛣️ On the road', 900); }
               }
             }
           }
@@ -3543,7 +3480,7 @@ export function createEngine({ canvas, ui, emit }) {
     // (nearestRoadPoint now consults the live ROUTE + free-roam snap + every mapped road, so it's
     // valid even far from the procedural hood). inHood still gates the discrete snap-back below.
     const inHood = Math.hypot(ctx.car.x, ctx.car.z) < 330;
-    const nrp = nearestRoadPoint(ctx.car.x, ctx.car.z);
+    const nrp = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
     const offRoadDist = nrp.d;
     updateAreaRoads(now);   // fetch/refresh the OSM road network around the car so the assist has real roads to hug far from home
     updateLocationLabel(now);   // live STREET · CITY, ST readout in the subline
@@ -3557,7 +3494,7 @@ export function createEngine({ canvas, ui, emit }) {
       let dir = null, recover = false; const onRoute = !!(ctx.ROUTE && ctx.routeIdx < ctx.ROUTE.length);
       if (onRoute) { const t = navTarget(); dir = [t.x - ctx.car.x, t.z - ctx.car.z]; }
       else if (offRoadDist > 8 && offRoadDist < 60) { dir = [nrp.x - ctx.car.x, nrp.z - ctx.car.z]; recover = true; }   // drifted off → steer straight back to the nearest road (hood OR the fetched OSM graph)
-      else { const tp = roadTargetAhead(ctx.car.x, ctx.car.z, ctx.car.yaw, ctx.car.speed); if (tp) dir = [tp[0] - ctx.car.x, tp[1] - ctx.car.z]; }   // hug the road ahead (roadTargetAhead uses the OSM graph far from home)
+      else { const tp = ctx.roads.roadTargetAhead(ctx.car.x, ctx.car.z, ctx.car.yaw, ctx.car.speed); if (tp) dir = [tp[0] - ctx.car.x, tp[1] - ctx.car.z]; }   // hug the road ahead (roadTargetAhead uses the OSM graph far from home)
       if (dir && (dir[0] || dir[1])) {
         let d = Math.atan2(dir[0], dir[1]) - ctx.car.yaw;
         while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
@@ -3713,7 +3650,7 @@ export function createEngine({ canvas, ui, emit }) {
       // The compass instead drives the MAP rotation (minimap + overhead/aerial view) via viewHeading().
       const mvx = Math.hypot(dx, dz) > 0.4 ? dx : Math.sin(ctx.car.yaw), mvz = Math.hypot(dx, dz) > 0.4 ? dz : Math.cos(ctx.car.yaw);
       let tgtYaw;
-      const seg = nearestRoadSeg(ctx.car.x, ctx.car.z);
+      const seg = ctx.roads.nearestRoadSeg(ctx.car.x, ctx.car.z);
       if (seg && seg.d < 60) { const dot = seg.tx * mvx + seg.tz * mvz, tx = dot < 0 ? -seg.tx : seg.tx, tz = dot < 0 ? -seg.tz : seg.tz; tgtYaw = Math.atan2(tx, tz); }   // align to the road, in the direction we're heading
       else tgtYaw = Math.hypot(dx, dz) > 0.5 ? Math.atan2(dx, dz) : ctx.car.yaw;   // off any known road → just face the way we're gliding
       let _fd = tgtYaw - ctx.car.yaw; while (_fd > Math.PI) _fd -= 2 * Math.PI; while (_fd < -Math.PI) _fd += 2 * Math.PI;
