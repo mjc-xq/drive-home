@@ -19,10 +19,9 @@ const WALL_RE = /^(wall_|joint_)/;
 const DOOR_RE = /^door_/;
 // Only the big floor-standing pieces a walking kid can bump into get colliders. Chairs and the
 // wall-hugging mid/low cabinets are skipped — they're already covered by the wall colliders.
-// What BLOCKS movement: cabinets/shelves (storage_) + big appliances + sofas. Tables, chairs and the
-// sink are deliberately walk-through — a central dining table's inflated AABB otherwise walls off the
-// room and you can't cross to the couch. (All furniture still goes see-through; that's a separate set.)
-const FURN_RE = /^(sofa|refrigerator|oven|stove|dishwasher|washer_dryer|storage_)/;
+// Movement is blocked by ALL furniture (everything that isn't floor/wall/door/window) EXCEPT chairs,
+// which stay walk-through so a dining table's 4 chairs don't cluster into an impassable ring. Doorways
+// stay open because movement uses the floor footprint, so solid furniture no longer traps you.
 
 const nameOf = o => o.name || (o.parent && o.parent.name) || '';
 const boxXZ = (b, pad = 0) => [b.min.x - pad, b.max.x + pad, b.min.z - pad, b.max.z + pad];
@@ -38,14 +37,15 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
     model.updateMatrixWorld(true);
     const floors = [], walls = [], doors = [], furniture = [], sofas = [], windows = [];
     model.traverse(o => {
-      if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; }
-      const n = o.name;
-      if (!n) return;
+      if (!o.isMesh) return;
+      o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false;
+      const n = nameOf(o);
       if (FLOOR_RE.test(n)) floors.push(o);
       else if (WALL_RE.test(n)) walls.push(o);
       else if (DOOR_RE.test(n)) doors.push(o);
-      else if (FURN_RE.test(n)) { furniture.push(o); if (/^sofa/.test(n)) sofas.push(o); }
       else if (/^window/.test(n)) windows.push(o);
+      else if (/^chair/.test(n)) { /* chairs stay walk-through (see-through only) — a table's 4 chairs would otherwise cluster into an impassable ring */ }
+      else { furniture.push(o); if (/^sofa/.test(n)) sofas.push(o); }   // EVERYTHING else (tables, cabinets, appliances, sofas, beds, …) is solid
     });
     // Double-side the walls so inward-facing faces aren't black, and lift any near-black scan
     // material a touch so rooms read (the scan's albedo can be very dark).
