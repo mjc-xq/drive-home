@@ -30,11 +30,25 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+const { makeGeoENU } = await import('../src/engine/coords.js');
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf8'));
-const C = S.center, A = S.aerial;                          // house centroid ENU, aerial bounds
-const wx = e => e - C[0], wz = n => C[1] - n;              // ENU -> three world (house at origin)
+const C = S.center, A = S.aerial;                          // house centroid (flat ENU), aerial bounds
+// Curvature-correct ENU, identical to the frame the app's Google photoreal tiles
+// use (coords.js makeGeoENU), origin = house lat/lon. Replaces the old flat approx
+// (0.4%-low latitude constant) that drifted metres from Google with distance.
+const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * Math.PI / 180), D2R = Math.PI / 180;
+const houseLat = LAT0 + C[1] / 110540, houseLon = LON0 + C[0] / (COSLAT * 111320);
+const ENU = makeGeoENU(houseLat, houseLon);
+const flatToLL = (e, n) => [LAT0 + n / 110540, LON0 + e / (COSLAT * 111320)];   // scene.json flat -> lat/lon
+const w2 = (e, n) => { const [lat, lon] = flatToLL(e, n); const [E, N] = ENU.toEN(lat, lon); return [E, -N]; };
+// aerial: world/lat-lon -> web-mercator fraction within the photo's lat/lon corners
+const mercY = lat => Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2));
+const aLatN = LAT0 + A.Nt / 110540, aLatS = LAT0 + A.Nb / 110540;
+const aLonW = LON0 + A.E0 / (COSLAT * 111320), aLonE = LON0 + A.E1 / (COSLAT * 111320);
+const aMyN = mercY(aLatN), aMyS = mercY(aLatS);
+const aerialUVll = (lat, lon) => [(lon - aLonW) / (aLonE - aLonW), (mercY(lat) - aMyS) / (aMyN - aMyS)];
 
 // ---- terrain: crisp 1 m DEM patch if present, else coarse Terrarium ------
 const DEMPATH = path.join(ROOT, 'exports/dem_1m.json');
@@ -56,15 +70,13 @@ function mkMesh(positions, indices, color, name, opts = {}) {
 if (existsSync(DEMPATH)) {
   const D = JSON.parse(readFileSync(DEMPATH, 'utf8'));
   const { cols, rows, h } = D;
-  const Emin = (D.lonW - D.LON0) * D.COSLAT * 111320, Emax = (D.lonE - D.LON0) * D.COSLAT * 111320;
-  const Nmin = (D.latS - D.LAT0) * 110540, Nmax = (D.latN - D.LAT0) * 110540;
-  const dE = Emax - Emin, dN = Nmax - Nmin;
-  cropHalf = Math.min(dE, dN) / 2 - 4;
+  const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
+  cropHalf = dLat * 110540 / 2 - 4;
   terrSrc = D.source;
-  // bilinear sample in DEM grid; world -> ENU -> fractional pixel (north = row 0)
+  // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon (curvature-correct).
   terrainAt = (X, Z) => {
-    const e = X + C[0], n = C[1] - Z;
-    let fi = (e - Emin) / dE * cols - 0.5, fj = (Nmax - n) / dN * rows - 0.5;
+    const g = ENU.toGeo(X, -Z);
+    let fi = (g.lon - D.lonW) / dLon * cols - 0.5, fj = (D.latN - g.lat) / dLat * rows - 0.5;
     fi = Math.max(0, Math.min(cols - 1.001, fi)); fj = Math.max(0, Math.min(rows - 1.001, fj));
     const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
     const a = h[j * cols + i], b = h[j * cols + i + 1], c = h[(j + 1) * cols + i], d = h[(j + 1) * cols + i + 1];
@@ -72,34 +84,16 @@ if (existsSync(DEMPATH)) {
   };
   const pos = [], uv = [], idx = [];
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
-    const e = Emin + (i + 0.5) / cols * dE, n = Nmax - (j + 0.5) / rows * dN;
-    pos.push(wx(e), h[j * cols + i], wz(n));
-    uv.push((e - A.E0) / (A.E1 - A.E0), (n - A.Nb) / (A.Nt - A.Nb));
+    const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
+    const [E, N] = ENU.toEN(lat, lon); pos.push(E, h[j * cols + i], -N);
+    const w = aerialUVll(lat, lon); uv.push(w[0], w[1]);
   }
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
     const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; idx.push(a, c, b, b, c, d);
   }
   terrainMesh = mkMesh(pos, idx, 0x8a9a5b, 'Terrain', { uvs: uv });
 } else {
-  const T = S.terrain, TN = T.n, TH = T.half, TSTEP = (2 * TH) / (TN - 1), H = T.h;
-  terrSrc = 'AWS Terrarium ~30 m DEM (coarse fallback — run fetch_dem.py for 1 m)';
-  cropHalf = 140;
-  terrainAt = (X, Z) => {
-    const e = X + C[0], n = -Z + C[1];
-    let fi = Math.max(0, Math.min(TN - 1.001, (e + TH) / TSTEP)), fj = Math.max(0, Math.min(TN - 1.001, (TH - n) / TSTEP));
-    const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
-    const a = H[j * TN + i], b = H[j * TN + i + 1], c = H[(j + 1) * TN + i], d = H[(j + 1) * TN + i + 1];
-    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
-  };
-  const pos = [], uv = [], idx = [];
-  for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) {
-    const e = -TH + i * TSTEP, n = TH - j * TSTEP; pos.push(wx(e), H[j * TN + i], wz(n));
-    uv.push((e - A.E0) / (A.E1 - A.E0), (n - A.Nb) / (A.Nt - A.Nb));
-  }
-  for (let j = 0; j < TN - 1; j++) for (let i = 0; i < TN - 1; i++) {
-    const a = j * TN + i, b = a + 1, c = a + TN, d = c + 1; idx.push(a, c, b, b, c, d);
-  }
-  terrainMesh = mkMesh(pos, idx, 0x8a9a5b, 'Terrain', { uvs: uv });
+  throw new Error('exports/dem_1m.json missing — run: scripts/.venv/bin/python scripts/fetch_dem.py 400');
 }
 
 const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
@@ -116,7 +110,7 @@ function gableTris(rect, base, wallH) {
   const ov = 0.45, hw = L / 2 + ov, hd = Sp / 2 + ov, y0 = wallH - 0.04, y1 = wallH - 0.04 + rise;
   const A = [-hw, y0, -hd], B = [hw, y0, -hd], Cc = [hw, y0, hd], D = [-hw, y0, hd], R1 = [-hw, y1, 0], R2 = [hw, y1, 0];
   const seq = [A, R1, R2, A, R2, B, Cc, R2, R1, Cc, R1, D, B, R2, Cc, A, D, R1];
-  const ca = Math.cos(ang), sa = Math.sin(ang), tx = wx(rcx), tz = wz(rcy), out = [];
+  const ca = Math.cos(ang), sa = Math.sin(ang), [tx, tz] = w2(rcx, rcy), out = [];
   for (const [x, y, z] of seq) out.push(x * ca + z * sa + tx, y + base, -x * sa + z * ca + tz);
   return out;
 }
@@ -124,7 +118,7 @@ function gableTris(rect, base, wallH) {
 // v = height / TILE -> tiled stucco+window texture) and ROOF triangles (cap +
 // gables, UV = nadir aerial projection -> real satellite roof imagery).
 const TILE = 3.0;
-const aerialUV = (X, Z) => [(X + C[0] - A.E0) / (A.E1 - A.E0), (C[1] - Z - A.Nb) / (A.Nt - A.Nb)];
+const aerialUV = (X, Z) => { const g = ENU.toGeo(X, -Z); return aerialUVll(g.lat, g.lon); };
 // push a roof triangle with upward-facing winding (so the sun lights it) + aerial UVs
 function pushUpTri(rPos, rUV, a, b, c) {
   const ux = b[0] - a[0], uz = b[2] - a[2], vx = c[0] - a[0], vz = c[2] - a[2];
@@ -132,7 +126,7 @@ function pushUpTri(rPos, rUV, a, b, c) {
   for (const v of tri) { rPos.push(v[0], v[1], v[2]); const uv = aerialUV(v[0], v[2]); rUV.push(uv[0], uv[1]); }
 }
 function emitBuilding(b, base, wallH, wPos, wUV, rPos, rUV) {
-  const ring = b.p.map(([e, n]) => [wx(e), wz(n)]);
+  const ring = b.p.map(([e, n]) => w2(e, n));
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
   let dist = 0;
@@ -163,7 +157,7 @@ const houseB = S.buildings.find(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
 const hwPos = [], hwUV = [], hrPos = [], hrUV = [];
 if (houseB) {
-  const hc = centroidEN(houseB.p), base = terrainAt(wx(hc[0]), wz(hc[1])) - 0.5;
+  const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
   buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB), hwPos, hwUV, hrPos, hrUV));
   scene.add(mkMesh(hwPos, null, 0xffffff, 'House_walls', { uvs: hwUV }));
   scene.add(mkMesh(hrPos, null, 0xffffff, 'House_roof', { uvs: hrUV }));
@@ -172,8 +166,8 @@ const bwPos = [], bwUV = [], brPos = [], brUV = [];
 let nBld = 0;
 for (const b of S.buildings) {
   if (b.house) continue;
-  const cen = centroidEN(b.p); if (!inPatch(wx(cen[0]), wz(cen[1]))) continue;
-  const base = terrainAt(wx(cen[0]), wz(cen[1])) - 0.5;
+  const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) continue;
+  const base = terrainAt(cw[0], cw[1]) - 0.5;
   buildingPolys.push(emitBuilding(b, base, wallHeight(b), bwPos, bwUV, brPos, brUV));
   nBld++;
 }
@@ -208,7 +202,7 @@ function ribbon(lineW, width, lift, posArr, idxArr) {
 }
 for (const r of S.roads || []) {
   const pl = (r.p || r); if (!Array.isArray(pl)) continue;
-  const lw = pl.map(([e, n]) => [wx(e), wz(n)]).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
+  const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (lw.length < 2) continue;
   roadLines.push(lw); ribbon(lw, 7, 0.04, rPos, rIdx);
 }
@@ -217,7 +211,7 @@ if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x555555, 'Roads'));
 // creek ribbon
 let creekW = null;
 if (S.creek && S.creek.p) {
-  creekW = S.creek.p.map(([e, n]) => [wx(e), wz(n)]).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
+  creekW = S.creek.p.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (creekW.length >= 2) {
     const cPos = [], cIdx = []; ribbon(creekW, 10, 0.05, cPos, cIdx);
     const cr = mkMesh(cPos, cIdx, 0x3a78c2, 'Creek_SanLorenzo'); cr.material.name = 'Creek_mat'; scene.add(cr);

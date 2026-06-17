@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """Extract REAL tree positions for 1840 Dahill Lane from the 2021 Alameda County
-LiDAR (USGS LPC tiles in scripts/_cache/lpc_*.laz).
+LiDAR (USGS LPC tiles in scripts/_cache/lpc_*.laz), in the curvature-correct ENU
+frame shared with the exporter/app (scripts/geo.py).
 
-The tiles are classified for ground/noise only (no vegetation class), so trees are
-found via a canopy-height model (CHM): LiDAR top surface (max Z per 1 m cell, noise
-removed) minus the bare-earth 3DEP DTM. Cells inside known building footprints are
-masked out; the remaining tall cells are vegetation, peak-picked into trees.
+Trees via a canopy-height model: LiDAR top surface (max Z per 1 m cell, noise
+removed) minus the bare-earth 3DEP DTM; building footprints masked out; the
+remaining tall cells peak-picked into trees.
 
 Writes exports/trees.json: {trees: [[worldX, worldZ, canopyR_m, height_m], ...]}
-in the GLB's Y-up world frame (house at origin, x=east, z=-north).
-
 Usage:  scripts/.venv/bin/python scripts/fetch_trees.py
 """
 import json
 import os
+import sys
 
 import numpy as np
 import laspy
@@ -21,40 +20,40 @@ from pyproj import Transformer
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import geo
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "scripts", "_cache")
 EXPORTS = os.path.join(ROOT, "exports")
 FT = 0.3048
-HMIN, HMAX, NMS_M = 3.0, 35.0, 4.0      # tree height window (m) and min spacing (m)
+HMIN, HMAX, NMS_M = 3.0, 35.0, 4.0
 
 SCENE = json.load(open(os.path.join(ROOT, "src", "assets", "scene.json")))
-CX, CY = SCENE["center"]
 DEM = json.load(open(os.path.join(EXPORTS, "dem_1m.json")))
-LAT0, LON0, COSLAT = DEM["LAT0"], DEM["LON0"], DEM["COSLAT"]
-HALF = (DEM["latN"] - DEM["latS"]) * 110540.0 / 2.0
+latN, latS, lonW, lonE = DEM["latN"], DEM["latS"], DEM["lonW"], DEM["lonE"]
+cols, rows, H = DEM["cols"], DEM["rows"], np.asarray(DEM["h"], dtype=np.float32)
+HALF = (latN - latS) * 110540.0 / 2.0
 CELL = 1.0
 G = int(round(2 * HALF / CELL))
 
-# bare-earth DTM bilinear sampler (world X,Z -> ground metres)
-_Emin = (DEM["lonW"] - LON0) * COSLAT * 111320; _Emax = (DEM["lonE"] - LON0) * COSLAT * 111320
-_Nmin = (DEM["latS"] - LAT0) * 110540; _Nmax = (DEM["latN"] - LAT0) * 110540
-_dE, _dN = _Emax - _Emin, _Nmax - _Nmin
-_cols, _rows, _h = DEM["cols"], DEM["rows"], np.asarray(DEM["h"], dtype=np.float32)
 
-
-def dtm(X, Z):
-    e = X + CX; n = CY - Z
-    fi = np.clip((e - _Emin) / _dE * _cols - 0.5, 0, _cols - 1.001)
-    fj = np.clip((_Nmax - n) / _dN * _rows - 0.5, 0, _rows - 1.001)
+def dtm_ll(lat, lon):
+    """bare-earth ground (m) sampled from the 1 m DEM at lat/lon (DEM grid is 4326-linear)."""
+    fi = np.clip((np.asarray(lon) - lonW) / (lonE - lonW) * cols - 0.5, 0, cols - 1.001)
+    fj = np.clip((latN - np.asarray(lat)) / (latN - latS) * rows - 0.5, 0, rows - 1.001)
     i = fi.astype(int); j = fj.astype(int); u = fi - i; v = fj - j
-    a = _h[j * _cols + i]; b = _h[j * _cols + i + 1]; c = _h[(j + 1) * _cols + i]; d = _h[(j + 1) * _cols + i + 1]
+    a = H[j * cols + i]; b = H[j * cols + i + 1]; c = H[(j + 1) * cols + i]; d = H[(j + 1) * cols + i + 1]
     return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v
 
 
 to_ft = Transformer.from_crs(4326, 2227, always_xy=True)   # lon/lat -> CA zone 3 ftUS
 to_ll = Transformer.from_crs(2227, 4326, always_xy=True)
-corners = [(LON0 + e / (COSLAT * 111320), LAT0 + n / 110540) for e in (-HALF, HALF) for n in (-HALF, HALF)]
-fx, fy = to_ft.transform([c[0] for c in corners], [c[1] for c in corners])
+# patch bbox in feet from the world corners (curvature-correct)
+cx = [x for x in (-HALF, HALF) for _ in (0, 1)]
+cz = [z for _ in (0, 1) for z in (-HALF, HALF)]
+clat, clon = geo.world_to_ll(np.array(cx), np.array(cz))
+fx, fy = to_ft.transform(clon, clat)
 FXMIN, FXMAX, FYMIN, FYMAX = min(fx) - 30, max(fx) + 30, min(fy) - 30, max(fy) + 30
 
 
@@ -82,8 +81,8 @@ def main():
     X, Y, Z = np.concatenate(X), np.concatenate(Y), np.concatenate(Z)
 
     lon, lat = to_ll.transform(X, Y)
-    e = (np.asarray(lon) - LON0) * COSLAT * 111320.0; n = (np.asarray(lat) - LAT0) * 110540.0
-    wX = e - CX; wZ = CY - n; zm = Z * FT
+    wX, wZ = geo.to_world(np.asarray(lat), np.asarray(lon))    # curvature-correct world
+    zm = Z * FT
 
     gi = np.floor((wX + HALF) / CELL).astype(int); gj = np.floor((wZ + HALF) / CELL).astype(int)
     ok = (gi >= 0) & (gi < G) & (gj >= 0) & (gj < G)
@@ -93,20 +92,20 @@ def main():
 
     cellX = (np.arange(G) + 0.5) * CELL - HALF
     XX, ZZ = np.meshgrid(cellX, cellX)
-    ground = dtm(XX.ravel(), ZZ.ravel())
-    chm = np.where(dsm > -1e8, dsm - ground, 0.0).reshape(G, G)   # [j, i]
+    glat, glon = geo.world_to_ll(XX.ravel(), ZZ.ravel())
+    ground = dtm_ll(glat, glon)
+    chm = np.where(dsm > -1e8, dsm - ground, 0.0).reshape(G, G)
     print(f"  CHM grid {G}x{G}; cells >= {HMIN} m: {(chm >= HMIN).sum():,}  max {chm.max():.1f} m")
 
-    # building footprints near the patch (world rings) for masking
     polys = []
     for b in SCENE["buildings"]:
-        ring = [(ee - CX, CY - nn) for ee, nn in b["p"]]
-        cx = sum(p[0] for p in ring) / len(ring); cz = sum(p[1] for p in ring) / len(ring)
-        if abs(cx) <= HALF + 30 and abs(cz) <= HALF + 30:
+        llat, llon = geo.flat_to_ll(np.array([e for e, n in b["p"]]), np.array([n for e, n in b["p"]]))
+        ring = list(zip(*geo.to_world(llat, llon)))
+        cxv = sum(p[0] for p in ring) / len(ring); czv = sum(p[1] for p in ring) / len(ring)
+        if abs(cxv) <= HALF + 30 and abs(czv) <= HALF + 30:
             polys.append(Polygon(ring).buffer(1.0))
     tree_strtree = STRtree(polys) if polys else None
 
-    # peak-pick canopy maxima with min spacing, skipping building roofs
     cand = np.argwhere(chm >= HMIN)
     order = np.argsort(-chm[cand[:, 0], cand[:, 1]])
     cand = cand[order]
@@ -129,9 +128,8 @@ def main():
         trees.append([round(x, 2), round(z, 2), round(cr, 2), round(h, 2)])
         taken[max(0, j - R):j + R + 1, max(0, i - R):i + R + 1] = True
 
-    out = {"source": "USGS 3DEP LiDAR 2021 CHM (canopy = LiDAR surface - bare-earth DTM)",
+    out = {"source": "USGS 3DEP LiDAR 2021 CHM (curvature-correct ENU)",
            "count": len(trees), "trees": trees}
-    os.makedirs(EXPORTS, exist_ok=True)
     json.dump(out, open(os.path.join(EXPORTS, "trees.json"), "w"), separators=(",", ":"))
     hs = np.array([t[3] for t in trees]) if trees else np.array([0])
     print(f"  {len(trees)} trees  (height {hs.min():.1f}..{hs.max():.1f} m, median {np.median(hs):.1f})")

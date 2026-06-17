@@ -11,21 +11,21 @@ Usage:  scripts/.venv/bin/python scripts/fetch_parcels.py
 """
 import json
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import geo  # curvature-correct ENU shared with the exporter / app
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXPORTS = os.path.join(ROOT, "exports")
 DEM = json.load(open(os.path.join(EXPORTS, "dem_1m.json")))
-SCENE = json.load(open(os.path.join(ROOT, "src", "assets", "scene.json")))
-CX, CY = SCENE["center"]
-LAT0, LON0, COSLAT = DEM["LAT0"], DEM["LON0"], DEM["COSLAT"]
 HALF = (DEM["latN"] - DEM["latS"]) * 110540.0 / 2.0
 MINE = {"416-120-67", "416-120-68"}
 
 
 def to_world(lon, lat):
-    e = (lon - LON0) * COSLAT * 111320.0
-    n = (lat - LAT0) * 110540.0
-    return [round(e - CX, 2), round(CY - n, 2)]
+    x, z = geo.to_world(lat, lon)   # curvature-correct (E, -N), house at origin
+    return [round(float(x), 2), round(float(z), 2)]
 
 
 def rings_of(geom):
