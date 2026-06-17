@@ -259,7 +259,7 @@ export function createInterior(scene, { cx = 0, cz = 0, floorY = 0 }, onReady, o
       const target = couchSofa, tBox = couchSofa ? new THREE.Box3().setFromObject(couchSofa) : null;
       if (target) new USDLoader().load(couchyUrl, dog => {
         if (cancelled || !dog) { if (dog) disposeLoadedObject(dog); return; }
-        dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3); } });   // keep default frustumCulled so the far-away couch isn't drawn in the yard
+        dog.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; if (o.material) for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m) { if (m.metalness !== undefined) m.metalness = 0; if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.9); if (m.clearcoat !== undefined) m.clearcoat = 0; m.envMapIntensity = 0.25; } } });   // matte fabric, not a glossy plastic couch: kill metalness/clearcoat, force high roughness, damp env reflections. keep default frustumCulled so the far-away couch isn't drawn in the yard
         const dgrp = new THREE.Group(); dgrp.add(dog);
         scene.add(dgrp);                                  // parent to the SCENE, not the 1.4x interior group, so the
         dgrp.updateMatrixWorld(true);                     // house scale doesn't double-apply and overshoot the placement
