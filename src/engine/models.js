@@ -35,9 +35,18 @@ export function loadAnimalModel(url, { yaw = 0, length = 1 }, onReady) {
   new GLTFLoader().load(url, gltf => {
     const root = gltf.scene;
     root.updateMatrixWorld(true);
-    // drop flat scene cruft (ground/backdrop planes some exports bake in)
+    // drop flat scene cruft: named ground/backdrop planes AND degenerate alpha-card
+    // sheets (one bbox axis ~0) — e.g. the iguana's center-plane dorsal frill, which
+    // reads as a stray white sheet on the ground under the game's un-managed pipeline.
     const cruft = [];
-    root.traverse(o => { if (o.isMesh && /plane|ground|floor|backdrop/i.test(o.name)) cruft.push(o); });
+    root.traverse(o => {
+      if (!o.isMesh) return;
+      if (/plane|ground|floor|backdrop/i.test(o.name)) { cruft.push(o); return; }
+      o.geometry.computeBoundingBox();
+      const s = new THREE.Vector3(); o.geometry.boundingBox.getSize(s);
+      const a = [s.x, s.y, s.z].sort((p, q) => p - q);
+      if (a[2] > 0 && a[0] < 0.01 * a[2]) cruft.push(o);   // planar sheet
+    });
     for (const o of cruft) o.parent && o.parent.remove(o);
     let hasMesh = false; root.traverse(o => { if (o.isMesh) { hasMesh = true; o.castShadow = true; o.frustumCulled = false; } });
     if (!hasMesh) { console.warn('animal GLB had no usable mesh, keeping fallback', url); disposeSource(root); return; }

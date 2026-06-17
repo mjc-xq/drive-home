@@ -2486,7 +2486,7 @@ export function createEngine({ canvas, ui, emit }) {
     { featureType: 'poi', stylers: [{ visibility: 'off' }] },
     { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#222831' }] },
   ];
-  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapClick = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0, _gmapHeading = 0;
+  let _gmap = null, _gmapCar = null, _gmapRoute = null, _gmapClick = null, _gmapT = 0, _gmapDiv = null, _gmapRouteFor = null, _gmaps = null, _gmapOverviewUntil = 0, _gmapHeading = 0, _gmapRot = 0, _gmapScale = 1;
   function disposeMiniMap() {
     if (_gmapDiv) _gmapDiv.style.transform = '';   // drop any heading-up rotation so a re-mount starts clean
     if (_gmapClick) { _gmapClick.remove(); _gmapClick = null; }
@@ -2512,7 +2512,24 @@ export function createEngine({ canvas, ui, emit }) {
       _gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: _gmap, zIndex: 5,
         icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5, scale: 1.05, rotation: 0, anchor: new maps.Point(0, 0) } });
       _gmapRoute = new maps.Polyline({ map: _gmap, strokeColor: '#2D8CFF', strokeOpacity: 0.95, strokeWeight: 4, path: [], zIndex: 3 });
-      _gmapClick = _gmap.addListener('click', e => { const w = geoToWorld(e.latLng.lat(), e.latLng.lng()); setDriveTarget(w[0], w[1]); });
+      // TAP-TO-DRIVE on the heading-up map: Google's own click→latLng is computed from the click's
+      // offset within the container, which a CSS rotate()+scale() DISTORTS (taps land in the wrong
+      // place). So handle the tap ourselves: undo the scale + rotation we applied, then convert the
+      // map-local pixel offset to a world point via the live metres-per-pixel. Capture phase so it
+      // beats any inner Google handler.
+      const onTap = (e) => {
+        if (!_gmap) return;
+        const r = div.getBoundingClientRect();
+        const fcx = r.left + r.width / 2, fcy = r.top + r.height / 2;   // rotate/scale are about centre → bbox centre stays on the car
+        const ox = (e.clientX - fcx) / _gmapScale, oy = (e.clientY - fcy) / _gmapScale;   // undo fill scale → layout px from centre
+        const ar = _gmapRot * Math.PI / 180, c = Math.cos(ar), s = Math.sin(ar);          // undo the heading-up rotation
+        const mx = ox * c - oy * s, my = ox * s + oy * c;
+        const lat = _gmap.getCenter().lat(), z = _gmap.getZoom();
+        const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);        // Web-Mercator metres per layout px
+        setDriveTarget(car.x + mx * mpp, car.z + my * mpp);   // screen x→east(+x), screen y(down)→south(+z)
+      };
+      div.addEventListener('click', onTap, true);
+      _gmapClick = { remove: () => div.removeEventListener('click', onTap, true) };   // disposeMiniMap calls _gmapClick.remove()
     }).catch(() => { });
   }
   function updateMiniMap(now) {
@@ -2527,7 +2544,8 @@ export function createEngine({ canvas, ui, emit }) {
     const bearing = 180 - car.yaw * 180 / Math.PI;
     const overview = now < _gmapOverviewUntil;
     if (!overview) { const d = ((bearing - _gmapHeading + 180) % 360 + 360) % 360 - 180; _gmapHeading += d * 0.35; }   // smoothed, unwrapped → no shimmer / no 360° spin
-    if (_gmapDiv) _gmapDiv.style.transform = overview ? 'none' : `rotate(${(-_gmapHeading).toFixed(2)}deg) scale(1.62)`;
+    _gmapRot = overview ? 0 : _gmapHeading; _gmapScale = overview ? 1 : 1.62;   // kept in sync with the transform below so the tap handler can invert it exactly
+    if (_gmapDiv) _gmapDiv.style.transform = overview ? 'none' : `rotate(${(-_gmapHeading).toFixed(2)}deg) scale(${_gmapScale})`;
     if (_gmapCar) {
       _gmapCar.setPosition({ lat: o.lat, lng: o.lon });
       const ic = _gmapCar.getIcon(); ic.rotation = overview ? bearing : _gmapHeading; _gmapCar.setIcon(ic);   // north-up: along bearing; heading-up: same as the div's counter-rotation → points UP
@@ -4436,6 +4454,7 @@ export function createEngine({ canvas, ui, emit }) {
     state: () => ({
       mode, buildings: S.buildings.length, photoreal: !!p3dtiles && !staticGroup.visible,
       poops: POOPS.length, car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), speed: +car.speed.toFixed(1), yaw: +car.yaw.toFixed(2), glb: !!car.glb },
+      dest: DEST ? { x: +DEST.x.toFixed(1), z: +DEST.z.toFixed(1) } : null,
       char: { x: +CHAR.x.toFixed(1), z: +CHAR.z.toFixed(1), bag: CHAR.bag, total: CHAR.total, lvl: CHAR.lvl }
     })
   };
