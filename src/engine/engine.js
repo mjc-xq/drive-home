@@ -102,10 +102,10 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.sun.position.set(-185, 240, 150);
   ctx.sun.castShadow = true;                 // gated to Scoop at runtime (see applyModeVisuals)
   ctx.sun.shadow.mapSize.set(ctx.MOBILE ? 1024 : 2048, ctx.MOBILE ? 1024 : 2048);   // casters sit in a tight frustum; 1024 is plenty on a phone
-  const sc2 = ctx.sun.shadow.camera;
+  ctx.sc2 = ctx.sun.shadow.camera;
   // tighter frustum (±170 vs ±300) ~= 3× the texel density where shadows actually
   // land (the scoop sanctuary + driveway); distant procedural shadows aren't missed.
-  sc2.left = -170; sc2.right = 170; sc2.top = 170; sc2.bottom = -170; sc2.far = 900;
+  ctx.sc2.left = -170; ctx.sc2.right = 170; ctx.sc2.top = 170; ctx.sc2.bottom = -170; ctx.sc2.far = 900;
   ctx.sun.shadow.bias = -0.0009;
   ctx.scene.add(ctx.sun);
   ctx.vehicleFillTarget = new THREE.Object3D();
@@ -158,12 +158,12 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.autoSteer = (() => { try { return localStorage.getItem('dahill.autosteer') !== '0'; } catch (e) { return true; } })();   // road/lane-keep assist, on by default
   ctx.roadLifeOn = (() => { try { return localStorage.getItem('dahill.roadlife') !== '0'; } catch (e) { return true; } })();   // pedestrians + traffic on by default
   ctx.trafficDensity = (() => { try { const v = parseFloat(localStorage.getItem('dahill.trafficdensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();   // traffic amount slider (0..2, 1 = default)
-  const TRAFFIC_MAX = 18;   // hard pool ceiling (perf); density scales how many are ACTIVE
-  const trafficActiveCount = () => Math.round(clamp(ctx.trafficDensity, 0, 2) / 2 * TRAFFIC_MAX);   // d:0→0, d:1→9, d:2→18
+  ctx.TRAFFIC_MAX = 18;   // hard pool ceiling (perf); density scales how many are ACTIVE
+  const trafficActiveCount = () => Math.round(clamp(ctx.trafficDensity, 0, 2) / 2 * ctx.TRAFFIC_MAX);   // d:0→0, d:1→9, d:2→18
   // Soft-wall / gravity-well that keeps the car on the street: past LANE_HALF metres off the
   // nearest road it gets pulled back, ramping in softly and clamped to WALL_MAX m/s so it never
   // overpowers a deliberate drive (and fades as the player steers).
-  const LANE_HALF = 4.2, WALL_GAIN = 3.5, WALL_MAX = 9.0;
+  ctx.LANE_HALF = 4.2, ctx.WALL_GAIN = 3.5, ctx.WALL_MAX = 9.0;
   ctx.offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
   ctx.recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
   ctx.ROUTE = null;       // [{x,z}, ...] road-following path from Google Directions
@@ -175,11 +175,11 @@ export function createEngine({ canvas, ui, emit }) {
   // true graph (segments on every side), so nearestRoadPoint / roadTargetAhead / the soft-wall / reset
   // all work EVERYWHERE, exactly like they do at home. Degrades to no-assist if Overpass is unreachable.
   ctx.osmRoadSegs = [];          // world-space road segments fetched around the car ([[ax,az],[bx,bz]])
-  let _osmCenter = null, _osmFetching = false, _osmT = 0;
+  ctx._osmCenter = null, ctx._osmFetching = false, ctx._osmT = 0;
   // Overpass mirrors, tried in order — the main de host throttles (429/504) under load, so fall
   // through to the public mirrors before giving up. Rotates start point so we don't always hammer #0.
-  const OVERPASS_MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
-  let _osmMirror = 0;
+  ctx.OVERPASS_MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  ctx._osmMirror = 0;
   ctx.autoDrive = false;
   ctx._railRoute = null;   // the ROUTE the auto-drive rail's arc-length (car.railS) was acquired for; re-acquire when it changes
 
@@ -282,8 +282,8 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- drive run: a coin-rally clock, a quick-chain combo, and a saved best time ----
   ctx.runStart = 0, ctx.runActive = false, ctx.lastRunMs = 0, ctx.comboExpired = true;
   ctx.combo = 0, ctx.comboExpire = 0;
-  const BEST_KEY = 'dahill.drive.bestMs';
-  ctx.bestMs = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem(BEST_KEY)) || '0', 10) || 0;
+  ctx.BEST_KEY = 'dahill.drive.bestMs';
+  ctx.bestMs = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem(ctx.BEST_KEY)) || '0', 10) || 0;
   const fmtTime = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   function startRun(now) { if (!ctx.runActive && ctx.coinsGot < ctx.coins.length) { ctx.runActive = true; ctx.runStart = now; } }
   function emitScore(extra) { ctx.emit('driveScore', Object.assign({ got: ctx.coinsGot, total: ctx.coins.length, best: ctx.bestMs, bestStr: ctx.bestMs ? fmtTime(ctx.bestMs) : '', combo: ctx.combo, trip: ctx.tripScore }, extra)); }
@@ -298,7 +298,7 @@ export function createEngine({ canvas, ui, emit }) {
     let finishMs = 0;
     if (ctx.coinsGot >= ctx.coins.length) {                                // rally complete → stop clock, save best
       ctx.runActive = false; ctx.lastRunMs = now - ctx.runStart; finishMs = ctx.lastRunMs;
-      if (!ctx.bestMs || ctx.lastRunMs < ctx.bestMs) { ctx.bestMs = ctx.lastRunMs; try { localStorage.setItem(BEST_KEY, String(ctx.bestMs)); } catch (e) { } }
+      if (!ctx.bestMs || ctx.lastRunMs < ctx.bestMs) { ctx.bestMs = ctx.lastRunMs; try { localStorage.setItem(ctx.BEST_KEY, String(ctx.bestMs)); } catch (e) { } }
     }
     emitScore({ finishMs });
   }
@@ -331,11 +331,11 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- neighbourhood landmarks: the 5 real places, doubling as a "visit them all"
   // meta-goal. Driving within 45 m calls it out AND ticks lasting progress, so the
   // marquee fantasy (drive to Meemaw's / your school) finally pays off + persists. ----
-  const poiSeen = new Set();   // per-session (suppress repeat toasts)
-  const POI_KEY = 'dahill.drive.poisFound';
-  const poiFound = new Set((() => { try { return JSON.parse(localStorage.getItem(POI_KEY) || '[]'); } catch (e) { return []; } })());
-  const homeGeo = ctx.geo.worldToGeo(ctx.house.c[0], ctx.house.c[1]);
-  const POIS = [{ key: 'home', x: ctx.house.c[0], z: ctx.house.c[1], lat: homeGeo.lat, lon: homeGeo.lon, icon: '🏠', label: 'your house', msg: "👋 That's YOUR house — welcome home!" }].concat(
+  ctx.poiSeen = new Set();   // per-session (suppress repeat toasts)
+  ctx.POI_KEY = 'dahill.drive.poisFound';
+  ctx.poiFound = new Set((() => { try { return JSON.parse(localStorage.getItem(ctx.POI_KEY) || '[]'); } catch (e) { return []; } })());
+  ctx.homeGeo = ctx.geo.worldToGeo(ctx.house.c[0], ctx.house.c[1]);
+  ctx.POIS = [{ key: 'home', x: ctx.house.c[0], z: ctx.house.c[1], lat: ctx.homeGeo.lat, lon: ctx.homeGeo.lon, icon: '🏠', label: 'your house', msg: "👋 That's YOUR house — welcome home!" }].concat(
     [['meemaw', 37.6995618, -122.0639216, '🏡', "Meemaw's", "🏡 Meemaw's house!"],
      ['canyon', 37.7046462, -122.0524363, '🏫', 'Canyon Middle', '🏫 Canyon Middle School!'],
      ['stanton', 37.7005734, -122.0940411, '🏫', 'Stanton Elem', '🏫 Stanton Elementary!'],
@@ -344,12 +344,12 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.tripScore = 0;
   ctx.boost = 0, ctx.boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
   function addBoost(amt) { ctx.boost = clamp(ctx.boost + amt, 0, 1); }
-  function emitPOIs() { ctx.emit('poiProgress', { found: poiFound.size, total: POIS.length }); }
+  function emitPOIs() { ctx.emit('poiProgress', { found: ctx.poiFound.size, total: ctx.POIS.length }); }
   // Route the player to the nearest place they HAVEN'T found yet — turns 5 one-shot
   // discoveries into a chained road trip ("now drive to the next place!").
   function chainToNextPOI(now) {
     let best = null, bd = 1e18;
-    for (const p of POIS) { if (poiFound.has(p.key)) continue; const d = Math.hypot(p.x - ctx.car.x, p.z - ctx.car.z); if (d < 35) continue; if (d < bd) { bd = d; best = p; } }   // skip the one you're at
+    for (const p of ctx.POIS) { if (ctx.poiFound.has(p.key)) continue; const d = Math.hypot(p.x - ctx.car.x, p.z - ctx.car.z); if (d < 35) continue; if (d < bd) { bd = d; best = p; } }   // skip the one you're at
     if (!best) return;
     ctx.autoDrive = false;
     setDestination(best.lat, best.lon, best.label, true);
@@ -357,13 +357,13 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.toast('🏁 Next stop: floor it to ' + ctx.esc(best.label) + ' — follow the pink beam! 🏁', 2600);
   }
   function checkPOIs(now) {
-    for (const poi of POIS) {
-      if (poiSeen.has(poi.key)) continue;
+    for (const poi of ctx.POIS) {
+      if (ctx.poiSeen.has(poi.key)) continue;
       if (Math.hypot(ctx.car.x - poi.x, ctx.car.z - poi.z) < 45) {
-        poiSeen.add(poi.key);
-        const fresh = !poiFound.has(poi.key);
-        poiFound.add(poi.key);
-        try { localStorage.setItem(POI_KEY, JSON.stringify([...poiFound])); } catch (e) { }
+        ctx.poiSeen.add(poi.key);
+        const fresh = !ctx.poiFound.has(poi.key);
+        ctx.poiFound.add(poi.key);
+        try { localStorage.setItem(ctx.POI_KEY, JSON.stringify([...ctx.poiFound])); } catch (e) { }
         // fare score: a base + a speed bonus + the running combo (rewards a brisk trip)
         if (fresh && poi.key !== 'home') {
           const pts = 250 + Math.round(Math.abs(ctx.car.speed) * 4) + ctx.combo * 50;
@@ -371,11 +371,11 @@ export function createEngine({ canvas, ui, emit }) {
           ctx.combo = (!ctx.comboExpired && now < ctx.comboExpire) ? ctx.combo + 1 : 1; ctx.comboExpire = now + 6000; ctx.comboExpired = false;
           arriveCelebrate(poi.label, pts, now);   // the finish-line moment
         } else {
-          ctx.toast(poi.msg + (fresh ? '  ·  🏆 ' + poiFound.size + '/' + POIS.length : ''), 2600);
+          ctx.toast(poi.msg + (fresh ? '  ·  🏆 ' + ctx.poiFound.size + '/' + ctx.POIS.length : ''), 2600);
           if (ctx.audio.sfxChime) ctx.audio.sfxChime(fresh ? [659, 988, 1319] : [659, 988]);
         }
         emitScore({}); emitPOIs();
-        if (poiFound.size === POIS.length && fresh) {
+        if (ctx.poiFound.size === ctx.POIS.length && fresh) {
           checkFerrariUnlock();
           ctx.toast('🏆 ALL 5 places found! Trip score ' + ctx.tripScore + ' 🎉', 3800);
         } else if (fresh && ctx.DEST && poi.key === (ctx.DEST.poiKey || '') ) {
@@ -391,7 +391,7 @@ export function createEngine({ canvas, ui, emit }) {
   // (depthTest off) so you can literally SEE your school / Meemaw's from across the
   // neighbourhood and drive toward it. Pink = still to find, green = found; the nearest
   // un-found one pulses. Only in Drive, faded in by distance. ----
-  const poiBeacons = POIS.map(poi => {
+  ctx.poiBeacons = ctx.POIS.map(poi => {
     const geo = new THREE.CylinderGeometry(1.6, 3.4, 160, 16, 1, true);
     const mat = new THREE.MeshBasicMaterial({ color: 0xff5ad0, transparent: true, opacity: 0, depthWrite: false, depthTest: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
     const m = new THREE.Mesh(geo, mat); m.position.set(poi.x, 74, poi.z); m.frustumCulled = false; m.renderOrder = 998; m.visible = false;
@@ -409,7 +409,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.fillStyle = '#fff'; ctx.fillText(text, 320, 72);
     const tex = new THREE.CanvasTexture(c); tex.anisotropy = 4; return tex;
   }
-  const poiLabels = POIS.map(poi => {
+  ctx.poiLabels = ctx.POIS.map(poi => {
     const mat = new THREE.SpriteMaterial({ map: makeLabelTex(poi.icon + '  ' + poi.label.toUpperCase()), transparent: true, opacity: 0, depthTest: false, depthWrite: false });
     const s = new THREE.Sprite(mat); s.position.set(poi.x, 13, poi.z); s.scale.set(26, 5.7, 1); s.frustumCulled = false; s.renderOrder = 999; s.visible = false;
     ctx.scene.add(s);
@@ -419,8 +419,8 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- ambient TRAFFIC: simple cars roaming the neighbourhood roads, so there's
   // finally something alive to weave through. They feed the near-miss/combo economy
   // and bounce on contact. Lives only on the ±330 m procedural street network. ----
-  const modelLoadCancels = [];
-  const traffic = [];
+  ctx.modelLoadCancels = [];
+  ctx.traffic = [];
   {
     const tSegs = ctx.roadSegs.filter(s => Math.hypot((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2) < 700 && Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) > 3);   // wider radius so the bigger pool covers outer streets too
     const cols = [0xb53a32, 0x2f5fb0, 0xd9d9d9, 0x2a2a2a, 0xd6a52e, 0x3f9e63, 0x8a8f96];
@@ -428,15 +428,15 @@ export function createEngine({ canvas, ui, emit }) {
     // shared materials: one cab + 7 body colours, reused across all cars (was 22 clones)
     const bodyMats = cols.map(c => new THREE.MeshStandardMaterial({ color: c, metalness: 0.35, roughness: 0.55 }));
     const cabMat = new THREE.MeshStandardMaterial({ color: 0x1b2735, metalness: 0.2, roughness: 0.35 });
-    for (let i = 0; i < TRAFFIC_MAX && tSegs.length; i++) {
+    for (let i = 0; i < ctx.TRAFFIC_MAX && tSegs.length; i++) {
       const g = new THREE.Group();
       const body = new THREE.Mesh(bodyGeo, bodyMats[i % bodyMats.length]); body.position.y = 0.6; body.castShadow = true;
       const cab = new THREE.Mesh(cabGeo, cabMat); cab.position.set(0, 1.18, -0.25);
       g.add(body); g.add(cab); g.frustumCulled = false; g.visible = false; ctx.scene.add(g);
       const seg = tSegs[(i * 9 + 3) % tSegs.length];
-      traffic.push({ group: g, box: [body, cab], a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false, ti: i });
+      ctx.traffic.push({ group: g, box: [body, cab], a: seg[0], b: seg[1], t: (i * 0.21) % 1, speed: 6 + (i % 4) * 2.0, near: false, ti: i });
     }
-    traffic._segs = tSegs;
+    ctx.traffic._segs = tSegs;
     // upgrade the placeholder boxes to REAL (cloned) car models once they load — a few
     // normal neighbourhood cars spread across the fleet; clones share geometry (cheap).
     // flip:false → the proto's nose sits at +Z so the group's atan2(dx,dz) points it
@@ -446,9 +446,9 @@ export function createEngine({ canvas, ui, emit }) {
     // surface (emissiveMap = the texture) so the car reads bright while keeping ALL its
     // texture detail. (The earlier flat-colour recolour is exactly what looked "lame".)
     [[rav4Url, 4.6], [miniUrl, 3.85], [granviaUrl, 5.1]].forEach((def, mi, defs) => {
-      modelLoadCancels.push(loadCarProto(def[0], def[1], false, proto => {
-        for (let i = mi; i < traffic.length; i += defs.length) {
-          const c = traffic[i];
+      ctx.modelLoadCancels.push(loadCarProto(def[0], def[1], false, proto => {
+        for (let i = mi; i < ctx.traffic.length; i += defs.length) {
+          const c = ctx.traffic[i];
           for (const m of c.box) c.group.remove(m);     // drop the box
           const inst = proto.clone(true);
           inst.traverse(o => {
@@ -474,7 +474,7 @@ export function createEngine({ canvas, ui, emit }) {
     });
   }
   function nextTrafficSeg(c) {
-    const segs = traffic._segs, cand = [];
+    const segs = ctx.traffic._segs, cand = [];
     for (const s of segs) {
       for (const pr of [[s[0], s[1]], [s[1], s[0]]]) {
         if (Math.hypot(pr[0][0] - c.b[0], pr[0][1] - c.b[1]) < 3.5 && Math.hypot(pr[1][0] - c.a[0], pr[1][1] - c.a[1]) > 4) cand.push(pr);
@@ -489,8 +489,8 @@ export function createEngine({ canvas, ui, emit }) {
     if (!ctx.roadLifeOn) { hideTraffic(); return; }
     const active = trafficActiveCount();
     ctx.trafficTick++;
-    for (let ci = 0; ci < traffic.length; ci++) {
-      const c = traffic[ci];
+    for (let ci = 0; ci < ctx.traffic.length; ci++) {
+      const c = ctx.traffic[ci];
       if (ci >= active) { if (c.group.visible) c.group.visible = false; continue; }   // parked by the density slider
       const dx = c.b[0] - c.a[0], dz = c.b[1] - c.a[1], len = Math.hypot(dx, dz) || 1;
       const fdx = dx / len, fdz = dz / len, rgx = fdz, rgz = -fdx;   // forward + right (for lanes)
@@ -524,32 +524,32 @@ export function createEngine({ canvas, ui, emit }) {
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);
     }
   }
-  function hideTraffic() { for (const c of traffic) c.group.visible = false; }
+  function hideTraffic() { for (const c of ctx.traffic) c.group.visible = false; }
   function updateBeacons(now) {
     let nearestKey = null, nd = 1e18;
-    for (const b of poiBeacons) { if (poiFound.has(b.poi.key)) continue; const d = Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z); if (d < nd) { nd = d; nearestKey = b.poi.key; } }
-    for (const b of poiBeacons) {
+    for (const b of ctx.poiBeacons) { if (ctx.poiFound.has(b.poi.key)) continue; const d = Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z); if (d < nd) { nd = d; nearestKey = b.poi.key; } }
+    for (const b of ctx.poiBeacons) {
       const d = Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z);
       const show = d > 16 && d < 1200;                // hide once you're basically there
       b.mesh.visible = show;
       if (!show) continue;
-      const found = poiFound.has(b.poi.key);
+      const found = ctx.poiFound.has(b.poi.key);
       b.mat.color.setHex(found ? 0x6dffa8 : 0xff7ad8);
       const fade = clamp((d - 16) / 55, 0, 1) * clamp(1 - (d - 260) / 940, 0.3, 1);   // strong near, fades far
       const pulse = (b.poi.key === nearestKey && !ctx.reduceMotion) ? 0.7 + 0.3 * Math.sin(now * 0.006) : 0.8;
       b.mat.opacity = fade * 0.95 * pulse;
     }
     // name-plates: legible only when you're close enough to actually be AT the place
-    for (const l of poiLabels) {
+    for (const l of ctx.poiLabels) {
       const d = Math.hypot(l.poi.x - ctx.car.x, l.poi.z - ctx.car.z);
       const show = d < 170;
       l.spr.visible = show;
       if (!show) continue;
-      l.mat.color.setHex(poiFound.has(l.poi.key) ? 0x9bf3bb : 0xffffff);
+      l.mat.color.setHex(ctx.poiFound.has(l.poi.key) ? 0x9bf3bb : 0xffffff);
       l.mat.opacity = clamp(1 - (d - 60) / 110, 0, 1);
     }
   }
-  function hideBeacons() { for (const b of poiBeacons) b.mesh.visible = false; for (const l of poiLabels) l.spr.visible = false; }
+  function hideBeacons() { for (const b of ctx.poiBeacons) b.mesh.visible = false; for (const l of ctx.poiLabels) l.spr.visible = false; }
 
   // the finish-line moment: a big gold burst, a fanfare, a beat of slow-mo + flash, and
   // an 'ARRIVED' card. Fires for reaching a real place (or any nav destination).
@@ -608,103 +608,103 @@ export function createEngine({ canvas, ui, emit }) {
 
   // Parked cars live in their own group (NOT staticGroup) so they stay visible
   // over the photoreal world — Drew walks up to one in Scoop to start driving.
-  const carsGroup = new THREE.Group(); ctx.scene.add(carsGroup);
-  const parkedSpots = [];
+  ctx.carsGroup = new THREE.Group(); ctx.scene.add(ctx.carsGroup);
+  ctx.parkedSpots = [];
 
   // Always-visible marker pin above the keeper (Scoop) — drawn on top of the
   // photoreal so Drew is never lost behind a real tree blob.
-  const marker = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 4),
+  ctx.marker = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 4),
     new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
-  marker.rotation.x = Math.PI; marker.renderOrder = 20; marker.visible = false; marker.frustumCulled = false;
-  ctx.scene.add(marker);
+  ctx.marker.rotation.x = Math.PI; ctx.marker.renderOrder = 20; ctx.marker.visible = false; ctx.marker.frustumCulled = false;
+  ctx.scene.add(ctx.marker);
   // draw-to-drive target ring (Top-down view)
-  const navMarker = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.7, 28),
+  ctx.navMarker = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.7, 28),
     new THREE.MeshBasicMaterial({ color: 0xd94f1e, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
-  navMarker.rotation.x = -Math.PI / 2; navMarker.renderOrder = 19; navMarker.visible = false; navMarker.frustumCulled = false;
-  ctx.scene.add(navMarker);
+  ctx.navMarker.rotation.x = -Math.PI / 2; ctx.navMarker.renderOrder = 19; ctx.navMarker.visible = false; ctx.navMarker.frustumCulled = false;
+  ctx.scene.add(ctx.navMarker);
   // Scoop walk-to-drive cue: a tall poppy pin that floats high over the nearest
   // parked car (drawn through walls) so the keeper can find it from the backyard.
-  const carMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
+  ctx.carMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
     new THREE.MeshBasicMaterial({ color: 0xd94f1e, depthTest: false, transparent: true, opacity: 0.92 }));
-  carMarker.rotation.x = Math.PI; carMarker.renderOrder = 20; carMarker.visible = false; carMarker.frustumCulled = false;
-  ctx.scene.add(carMarker);
+  ctx.carMarker.rotation.x = Math.PI; ctx.carMarker.renderOrder = 20; ctx.carMarker.visible = false; ctx.carMarker.frustumCulled = false;
+  ctx.scene.add(ctx.carMarker);
   // Compost pin: a green pin over the compost bin shown while the keeper is carrying
   // poop, so the empty-here loop is obvious (drawn through walls from anywhere).
-  const compostMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
+  ctx.compostMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
     new THREE.MeshBasicMaterial({ color: 0x3a7d44, depthTest: false, transparent: true, opacity: 0.92 }));
-  compostMarker.rotation.x = Math.PI; compostMarker.renderOrder = 20; compostMarker.visible = false; compostMarker.frustumCulled = false;
-  ctx.scene.add(compostMarker);
+  ctx.compostMarker.rotation.x = Math.PI; ctx.compostMarker.renderOrder = 20; ctx.compostMarker.visible = false; ctx.compostMarker.frustumCulled = false;
+  ctx.scene.add(ctx.compostMarker);
   // ---- House interior (Scoop sub-scene) ----
   // The interior loads lazily and is mounted FAR from the yard (~2 km). Scoop's tight fog
   // (near 38 / far 92) hides the distant yard so the indoor camera only ever frames the room —
   // no per-object yard hide needed. scoopScene forks updateScoop between 'yard' and 'interior'.
   ctx.scoopScene = 'yard', ctx.interior = null, ctx.doorT = 0, ctx.entryArmed = true, ctx.exitArmed = false;
   ctx.npcs = [], ctx.npcsLoadStarted = false;   // non-playable house NPCs (dad, mom) — walk out of rooms + dance, never playable
-  const NPC_LOADERS = [loadDadController, loadMomController];
+  ctx.NPC_LOADERS = [loadDadController, loadMomController];
   ctx._syncDance = false, ctx._syncDanceUntil = 0, ctx._syncDanceNext = 0;   // periodic in-house "everybody dance the SAME thing" moment
-  const SYNC_DANCES = ['All_Night_Dance'];   // clip Dad + Mom both carry, so a pose() on all of them actually lines up
-  const INT_CX = 0, INT_CZ = 3000, INT_FLOOR = 0;
+  ctx.SYNC_DANCES = ['All_Night_Dance'];   // clip Dad + Mom both carry, so a pose() on all of them actually lines up
+  ctx.INT_CX = 0, ctx.INT_CZ = 3000, ctx.INT_FLOOR = 0;
   // Blue glowing pads: the front-yard "enter" pad and the indoor "exit" pad (drawn through walls).
-  const doorMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
+  ctx.doorMarker = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4),
     new THREE.MeshBasicMaterial({ color: 0x49b0ff, depthTest: false, transparent: true, opacity: 0.92 }));
-  doorMarker.rotation.x = Math.PI; doorMarker.renderOrder = 20; doorMarker.visible = false; doorMarker.frustumCulled = false;
-  ctx.scene.add(doorMarker);
-  const exitMarker = new THREE.Mesh(doorMarker.geometry, doorMarker.material.clone());
-  exitMarker.rotation.x = Math.PI; exitMarker.renderOrder = 20; exitMarker.visible = false; exitMarker.frustumCulled = false;
-  ctx.scene.add(exitMarker);
+  ctx.doorMarker.rotation.x = Math.PI; ctx.doorMarker.renderOrder = 20; ctx.doorMarker.visible = false; ctx.doorMarker.frustumCulled = false;
+  ctx.scene.add(ctx.doorMarker);
+  ctx.exitMarker = new THREE.Mesh(ctx.doorMarker.geometry, ctx.doorMarker.material.clone());
+  ctx.exitMarker.rotation.x = Math.PI; ctx.exitMarker.renderOrder = 20; ctx.exitMarker.visible = false; ctx.exitMarker.frustumCulled = false;
+  ctx.scene.add(ctx.exitMarker);
   // Flat blue "exit pad" ring on the floor (the floating cone sits overhead, easy to miss when you
   // spawn standing on it) — drawn through walls so it's findable from anywhere inside.
-  const exitRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 1.05, 32),
+  ctx.exitRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 1.05, 32),
     new THREE.MeshBasicMaterial({ color: 0x49b0ff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthTest: false }));
-  exitRing.rotation.x = -Math.PI / 2; exitRing.renderOrder = 19; exitRing.visible = false; exitRing.frustumCulled = false;
-  ctx.scene.add(exitRing);
+  ctx.exitRing.rotation.x = -Math.PI / 2; ctx.exitRing.renderOrder = 19; ctx.exitRing.visible = false; ctx.exitRing.frustumCulled = false;
+  ctx.scene.add(ctx.exitRing);
   // Address guide: a ground-draped ribbon that FOLLOWS THE ROUTE through its turns — a
   // real navigation line over the road, not a single rotating bar. The geometry is a
   // triangle-strip rebuilt each frame from the route polyline just ahead of the car,
   // resampled + draped to the ground and drawn on top so road bumps don't hide it.
-  const GUIDE_N = 90;                                   // max cross-sections (~5 m apart)
-  const guidePos = new Float32Array(GUIDE_N * 2 * 3);
-  const guideGeo = new THREE.BufferGeometry();
-  guideGeo.setAttribute('position', new THREE.BufferAttribute(guidePos, 3).setUsage(THREE.DynamicDrawUsage));
-  { const idx = []; for (let i = 0; i < GUIDE_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } guideGeo.setIndex(idx); }
+  ctx.GUIDE_N = 90;                                   // max cross-sections (~5 m apart)
+  ctx.guidePos = new Float32Array(ctx.GUIDE_N * 2 * 3);
+  ctx.guideGeo = new THREE.BufferGeometry();
+  ctx.guideGeo.setAttribute('position', new THREE.BufferAttribute(ctx.guidePos, 3).setUsage(THREE.DynamicDrawUsage));
+  { const idx = []; for (let i = 0; i < ctx.GUIDE_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } ctx.guideGeo.setIndex(idx); }
   // depthTest TRUE so the solid CAR (and hills/buildings) occlude the ribbon — the car
   // drives OVER the line, the line never paints on top of the car. depthWrite stays off so
   // it doesn't disturb other transparent sorting.
-  const guideLine = new THREE.Mesh(guideGeo, new THREE.MeshBasicMaterial({ color: 0x28c9ff, transparent: true, opacity: 0.82, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, side: THREE.DoubleSide }));
-  guideLine.renderOrder = 6; guideLine.visible = false; guideLine.frustumCulled = false;
-  ctx.scene.add(guideLine);
-  const destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
+  ctx.guideLine = new THREE.Mesh(ctx.guideGeo, new THREE.MeshBasicMaterial({ color: 0x28c9ff, transparent: true, opacity: 0.82, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, side: THREE.DoubleSide }));
+  ctx.guideLine.renderOrder = 6; ctx.guideLine.visible = false; ctx.guideLine.frustumCulled = false;
+  ctx.scene.add(ctx.guideLine);
+  ctx.destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
     new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
-  destPin.rotation.x = Math.PI; destPin.renderOrder = 21; destPin.visible = false; destPin.frustumCulled = false;
-  ctx.scene.add(destPin);
+  ctx.destPin.rotation.x = Math.PI; ctx.destPin.renderOrder = 21; ctx.destPin.visible = false; ctx.destPin.frustumCulled = false;
+  ctx.scene.add(ctx.destPin);
   // "You are here" locator — a bright downward chevron + halo bobbing over the car, drawn
   // on top, so you can FIND the car in the high aerial / top-down views where it's tiny.
-  const carLocator = new THREE.Group();
+  ctx.carLocator = new THREE.Group();
   { const cone = new THREE.Mesh(new THREE.ConeGeometry(1.9, 3.6, 4), new THREE.MeshBasicMaterial({ color: 0x3ad6ff, depthTest: false, depthWrite: false, transparent: true, opacity: 0.92 }));
     cone.rotation.x = Math.PI; cone.renderOrder = 1001;
     const ring = new THREE.Mesh(new THREE.RingGeometry(2.6, 3.4, 28), new THREE.MeshBasicMaterial({ color: 0x3ad6ff, depthTest: false, depthWrite: false, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = -3.2; ring.renderOrder = 1000;
-    carLocator.add(cone); carLocator.add(ring); }
-  carLocator.frustumCulled = false; carLocator.visible = false; ctx.scene.add(carLocator);
+    ctx.carLocator.add(cone); ctx.carLocator.add(ring); }
+  ctx.carLocator.frustumCulled = false; ctx.carLocator.visible = false; ctx.scene.add(ctx.carLocator);
 
   // Scoop renders the procedural world, so Drew collides with every visible
   // procedural tree (they sit along the streets, clear of the backyard sanctuary).
   // sancCx/sancCz mark the backyard centre (behind the house toward the creek).
-  const sancCx = -16, sancCz = -10;
-  const SCOOP_CLEAR_R = 25;
-  const scoopTrees = ctx.treePts;
+  ctx.sancCx = -16, ctx.sancCz = -10;
+  ctx.SCOOP_CLEAR_R = 25;
+  ctx.scoopTrees = ctx.treePts;
 
   // The scoop backyard: a disc of the REAL procedural ground — true topology
   // (terrainAt heights) + the aerial photo (uvAt on the shared terrain material),
   // not a flat green pad. The photoreal neighborhood streams beyond it.
   ctx.scoopGrass = null;
   {
-    const R = SCOOP_CLEAR_R + 4, rings = 24, segs = 60, pos = [], uv = [], idx = [];
+    const R = ctx.SCOOP_CLEAR_R + 4, rings = 24, segs = 60, pos = [], uv = [], idx = [];
     const addV = (x, z) => { pos.push(x, terrainAt(x, z) + 0.05, z); const t = uvAt(x, z); uv.push(t[0], t[1]); };
-    addV(sancCx, sancCz);                                   // vertex 0 = centre
+    addV(ctx.sancCx, ctx.sancCz);                                   // vertex 0 = centre
     for (let r = 1; r <= rings; r++) {
       const rad = R * r / rings;
-      for (let s = 0; s <= segs; s++) { const a = s / segs * Math.PI * 2; addV(sancCx + Math.cos(a) * rad, sancCz + Math.sin(a) * rad); }
+      for (let s = 0; s <= segs; s++) { const a = s / segs * Math.PI * 2; addV(ctx.sancCx + Math.cos(a) * rad, ctx.sancCz + Math.sin(a) * rad); }
     }
     const rowStart = r => 1 + (r - 1) * (segs + 1);
     for (let s = 0; s < segs; s++) idx.push(0, rowStart(1) + s + 1, rowStart(1) + s);
@@ -721,7 +721,7 @@ export function createEngine({ canvas, ui, emit }) {
     const yardMat = ctx.aerialMat.clone();
     yardMat.transparent = true; yardMat.depthWrite = false;
     yardMat.onBeforeCompile = sh => {
-      sh.uniforms.uYC = { value: new THREE.Vector2(sancCx, sancCz) };
+      sh.uniforms.uYC = { value: new THREE.Vector2(ctx.sancCx, ctx.sancCz) };
       sh.uniforms.uYR = { value: R };
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWPy;')
@@ -754,11 +754,11 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.scoopFence = null;
   {
     const parts = [], woodC = new THREE.Color(0x8a6f49), railC = new THREE.Color(0x9c8259);
-    const Rf = SCOOP_CLEAR_R, Np = 60;
+    const Rf = ctx.SCOOP_CLEAR_R, Np = 60;
     for (let i = 0; i < Np; i++) {
       const a0 = i / Np * Math.PI * 2, a1 = (i + 1) / Np * Math.PI * 2;
-      const x0 = sancCx + Math.cos(a0) * Rf, z0 = sancCz + Math.sin(a0) * Rf;
-      const x1 = sancCx + Math.cos(a1) * Rf, z1 = sancCz + Math.sin(a1) * Rf;
+      const x0 = ctx.sancCx + Math.cos(a0) * Rf, z0 = ctx.sancCz + Math.sin(a0) * Rf;
+      const x1 = ctx.sancCx + Math.cos(a1) * Rf, z1 = ctx.sancCz + Math.sin(a1) * Rf;
       const py = terrainAt(x0, z0);
       const post = asNonIndexed(new THREE.BoxGeometry(0.13, 1.15, 0.13)); post.translate(x0, py + 0.57, z0);
       parts.push({ g: post, color: woodC });
@@ -777,9 +777,9 @@ export function createEngine({ canvas, ui, emit }) {
   // the house are all rendered procedurally in Scoop now, so Drew should bump
   // them. insideScoopBuilding tests the tight footprint polygon (not the oversized
   // AABB), so keeping every building can't wall off the open lawn.
-  const scoopBldPolys = ctx.bldPolys;
+  ctx.scoopBldPolys = ctx.bldPolys;
   function insideScoopBuilding(x, z) {
-    for (const b of scoopBldPolys) {
+    for (const b of ctx.scoopBldPolys) {
       const bb = b.bb;
       if (x < bb[0] || x > bb[1] || z < bb[2] || z > bb[3]) continue;
       const p = b.p; let inside = false;
@@ -800,17 +800,17 @@ export function createEngine({ canvas, ui, emit }) {
   // frame). LAT0/LON0 = the geocode origin; C is the house centroid (orig E/N).
   ctx.p3dtiles = null;
   ctx._tilesUpdT = 0;   // throttle the (expensive, full-tree) tiles LOD traversal to ~18 Hz
-  const DEG = Math.PI / 180;
+  ctx.DEG = Math.PI / 180;
   // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
   // yOffset lifts the photoreal ground to the procedural terrain height; xOffset/
   // zOffset + spin (deg) translate/rotate the photoreal world about the house so
   // it matches the procedural frame (spawns + collision). Spin pivots on origin.
-  const P3DT = { yOffset: 32, xOffset: 0, zOffset: 0, spin: 0 };
+  ctx.P3DT = { yOffset: 32, xOffset: 0, zOffset: 0, spin: 0 };
   const applyP3DT = () => {
     if (!ctx.p3dtiles || !ctx.p3dtiles.holder) return;
     const h = ctx.p3dtiles.holder;
-    h.rotation.y = P3DT.spin * DEG;
-    h.position.set(P3DT.xOffset, P3DT.yOffset, P3DT.zOffset);
+    h.rotation.y = ctx.P3DT.spin * ctx.DEG;
+    h.position.set(ctx.P3DT.xOffset, ctx.P3DT.yOffset, ctx.P3DT.zOffset);
   };
   // ---- ground height authority ---- (see occlusion/ground-height.js)
   // ctx.ground.{rawTileY,groundAt,actorGroundY}: photoreal-tile surface height under (x,z) for
@@ -833,7 +833,7 @@ export function createEngine({ canvas, ui, emit }) {
     ys.sort((a, b) => a - b);
     const adjust = terrainAt(0, 0) - ys[ys.length >> 1];
     if (Math.abs(adjust) > 18) return false;  // garbage (rays hit roofs/voids/coarse tiles) — retry
-    P3DT.yOffset = clamp(P3DT.yOffset + adjust, 8, 56);
+    ctx.P3DT.yOffset = clamp(ctx.P3DT.yOffset + adjust, 8, 56);
     applyP3DT();
     ctx.alignDone = true;
     return true;
@@ -863,7 +863,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = photoModes(ctx.mode);
     if (ctx.p3dtiles && ctx.p3dtiles.clipPlanes && ctx.mode !== 'drive') ctx.p3dtiles.clipPlanes.length = 0;   // R8 cutaway is Drive-only; never slice the Explore high-orbit / Scoop
     ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
-    carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
+    ctx.carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
     if (ctx.ring) ctx.ring.visible = ctx.mode === 'explore';   // marker only makes sense from the air
     // SHADOWS only in Scoop: in Drive/Explore the procedural receivers are hidden and the
     // Google tiles are MeshBasicMaterial (can't receive), so a full extra depth pass each
@@ -878,9 +878,9 @@ export function createEngine({ canvas, ui, emit }) {
   }
   if (!ctx.flags.has('flat')) {
     if (!import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map key missing — showing the built world');
-    const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * DEG);
-    const houseLat = (LAT0 + C[1] / 110540) * DEG;
-    const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * DEG;
+    const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * ctx.DEG);
+    const houseLat = (LAT0 + C[1] / 110540) * ctx.DEG;
+    const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * ctx.DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
       if (ctx.disposed) return;
       ctx.p3dtiles = createPhotorealTiles(ctx.scene, ctx.camera, ctx.renderer, {
@@ -945,10 +945,10 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.audio = createAudio();
 
   ctx.scoopHudDirty = false;
-  const animals = createAnimals(ctx.scene, { terrainAt, SREC, bldBoxes: ctx.bldBoxes, onPoopChange: () => { ctx.scoopHudDirty = true; } });
-  const { ANIMALS, POOPS, updateAnimals, removePoop } = animals;
+  ctx.animals = createAnimals(ctx.scene, { terrainAt, SREC, bldBoxes: ctx.bldBoxes, onPoopChange: () => { ctx.scoopHudDirty = true; } });
+  ({ ANIMALS: ctx.ANIMALS, POOPS: ctx.POOPS, updateAnimals: ctx.updateAnimals, removePoop: ctx.removePoop } = ctx.animals);
   ctx.CHAR = createCharacter(ctx.scene, SREC);
-  const cleanPct = () => Math.max(0, Math.round(100 * (1 - POOPS.length / POOP_ACTIVE_CAP)));
+  const cleanPct = () => Math.max(0, Math.round(100 * (1 - ctx.POOPS.length / POOP_ACTIVE_CAP)));
 
   // ---- CROWD: dancing CeCe + Drew characters. Yard dancers liven up Scoop; street
   // dancers + clusters at every preset destination liven up Drive. Visibility is mode- and
@@ -957,13 +957,13 @@ export function createEngine({ canvas, ui, emit }) {
   // Pick a street/scatter pedestrian: mostly the CeCe/Drew kids, with the occasional grown-up Dad/Mom
   // mixed in (taller, distinct models). Falls back to the kids if the adult rigs haven't loaded.
   const pickPed = (i) => { const r = Math.random(); if (ctx.dadCrowd && r < 0.09) return ctx.dadCrowd; if (ctx.momCrowd && r < 0.18) return ctx.momCrowd; return (i & 1) ? ctx.ceceCrowd : ctx.drewCrowd; };
-  const crowdSpots = [];   // { rec, zone }
+  ctx.crowdSpots = [];   // { rec, zone }
   // Pedestrian density (settings slider): scales the spread-out pool size. 1 = default.
-  let CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
-  const CROWD_VIS_CAP = 20;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
-  const SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
-  const CROWD_POOL_CAP = 120;     // SINGLE hard cap on total persistent clones at density 1 (×D): sidewalk+scatter take POOL = cap − RESERVED, the POI/cluster/meemaw dancers take RESERVED. Visibility cap animates only the nearest 20. Bounds total boot-time SkeletonUtils.clone cost.
-  let _crowdReplaceT = 0, _crowdVisT = 0;   // debounce the slider re-pool; throttle the nearest-N visibility scan
+  ctx.CROWD_DENSITY = (() => { try { const v = parseFloat(localStorage.getItem('dahill.peddensity')); return Number.isFinite(v) ? clamp(v, 0, 2) : 1; } catch (e) { return 1; } })();
+  ctx.CROWD_VIS_CAP = 20;       // max pedestrians visible/animating at once (skinned meshes are costly) — bounds per-frame cost no matter the pool size
+  ctx.SIDEWALK_OFF = 3.0;       // metres from the road centre out to the sidewalk
+  ctx.CROWD_POOL_CAP = 120;     // SINGLE hard cap on total persistent clones at density 1 (×D): sidewalk+scatter take POOL = cap − RESERVED, the POI/cluster/meemaw dancers take RESERVED. Visibility cap animates only the nearest 20. Bounds total boot-time SkeletonUtils.clone cost.
+  ctx._crowdReplaceT = 0, ctx._crowdVisT = 0;   // debounce the slider re-pool; throttle the nearest-N visibility scan
   function placeCrowd() {
     const put = (crowd, x, z, zone, onRoadHt, opts = {}) => {
       if (!crowd) return;
@@ -974,7 +974,7 @@ export function createEngine({ canvas, ui, emit }) {
       const gy = onRoadHt ? ctx.ground.actorGroundY(x, z) : terrainAt(x, z);
       const y = (Number.isFinite(gy) ? gy : (ctx.car.groundY ?? 0)) + 0.02;
       const yaw = opts.yaw != null ? opts.yaw : Math.random() * Math.PI * 2;
-      crowdSpots.push({ rec: crowd.add(ctx.scene, { x, y, z, yaw, clip: opts.clip }), zone, onRoadHt: !!onRoadHt, settleT: 0 });
+      ctx.crowdSpots.push({ rec: crowd.add(ctx.scene, { x, y, z, yaw, clip: opts.clip }), zone, onRoadHt: !!onRoadHt, settleT: 0 });
     };
     const hx = ctx.house.c[0], hz = ctx.house.c[1];
     // Keep a yard dancer out of any building footprint: if the ring spot lands inside a
@@ -992,10 +992,10 @@ export function createEngine({ canvas, ui, emit }) {
     // STREETS (Drive): walk EVERY drivable road segment and drop pedestrians along its whole
     // length, on randomized sidewalk offsets and either side — so they line the sidewalks
     // across the WHOLE neighbourhood, not just near home. Denser slider → smaller spacing.
-    const D = CROWD_DENSITY;
+    const D = ctx.CROWD_DENSITY;
     const cn = Math.min(20, Math.round(16 * D));                 // school-cluster size (also used below); hoisted so it counts against the cap
     const RESERVED = (D > 0 ? 18 : 0) + cn * 2 + Math.min(8, cn) + (D > 0 ? 2 : 0);   // POI dancers (18) + 2 school clusters + XQ Mike cluster + meemaw pair — reserved out of the single cap
-    const POOL = Math.max(0, Math.round(CROWD_POOL_CAP * D) - RESERVED);   // sidewalk+scatter share of ONE hard clone cap (keeps total boot clones ≈ CROWD_POOL_CAP×D)
+    const POOL = Math.max(0, Math.round(ctx.CROWD_POOL_CAP * D) - RESERVED);   // sidewalk+scatter share of ONE hard clone cap (keeps total boot clones ≈ CROWD_POOL_CAP×D)
     let placed = 0;
     if (D > 0 && POOL > 0) {
       // Spacing is derived from the TOTAL curb length so the sidewalk pass spreads its share
@@ -1015,7 +1015,7 @@ export function createEngine({ canvas, ui, emit }) {
           const jt = clamp(t + (Math.random() - 0.5) * step * 0.5, 0, L);   // jitter along the curb
           const cx = ax + ux * jt, cz = az + uz * jt;
           const side = Math.random() < 0.5 ? 1 : -1;                 // random side each time
-          const off = SIDEWALK_OFF + Math.random() * 1.4;
+          const off = ctx.SIDEWALK_OFF + Math.random() * 1.4;
           const px = cx + nx * side * off, pz = cz + nz * side * off;
           if (insideBuilding(px, pz) || insideScoopBuilding(px, pz)) continue;
           const crowd = pickPed(placed);
@@ -1035,7 +1035,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     // DESTINATIONS (Drive): every preset stop gets Drew/Cece right on or beside
     // the arrival point, so there is something visible and hittable when you get there.
-    POIS.forEach((p, pi) => {
+    ctx.POIS.forEach((p, pi) => {
       const count = p.key === 'home' ? 2 : 4;
       for (let i = 0; i < count; i++) {
         const a = pi * 0.7 + i / count * Math.PI * 2 + 0.35;
@@ -1060,11 +1060,11 @@ export function createEngine({ canvas, ui, emit }) {
         put(crowd, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.key, true, { yaw: a + Math.PI, clip });
       }
     };
-    scatterCluster(ctx.ceceCrowd, POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary (cn hoisted above, counted against the cap)
-    scatterCluster(ctx.drewCrowd, POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
-    scatterCluster(ctx.dadCrowd, D > 0 ? POIS.find(q => q.key === 'dad') : null, Math.min(8, cn), 'Bass_Beats');   // a few Mikes hanging around XQ (Dad's work)
+    scatterCluster(ctx.ceceCrowd, ctx.POIS.find(q => q.key === 'stanton'), cn, 'All_Night_Dance');   // CeCe all over Stanton Elementary (cn hoisted above, counted against the cap)
+    scatterCluster(ctx.drewCrowd, ctx.POIS.find(q => q.key === 'canyon'), cn, 'dance');               // Drew all over Canyon Middle
+    scatterCluster(ctx.dadCrowd, D > 0 ? ctx.POIS.find(q => q.key === 'dad') : null, Math.min(8, cn), 'Bass_Beats');   // a few Mikes hanging around XQ (Dad's work)
     // MEEMAW: a CeCe + Drew pair dancing together right out front of the house.
-    const meemaw = D > 0 ? POIS.find(q => q.key === 'meemaw') : null;
+    const meemaw = D > 0 ? ctx.POIS.find(q => q.key === 'meemaw') : null;
     if (meemaw) {
       const a = Math.PI / 2, r = 7;   // out the front, side by side, facing back toward the house
       const fx = meemaw.x + Math.cos(a) * r, fz = meemaw.z + Math.sin(a) * r;
@@ -1076,30 +1076,30 @@ export function createEngine({ canvas, ui, emit }) {
   // Remove every placed pedestrian (stop mixers, detach groups, drop the clone pool) so a
   // density change can re-place from scratch without leaking clones/mixers.
   function clearCrowd() {
-    for (const sp of crowdSpots) { if (sp.rec.grp.parent) sp.rec.grp.parent.remove(sp.rec.grp); sp.rec.mixer.stopAllAction(); }
-    crowdSpots.length = 0;
+    for (const sp of ctx.crowdSpots) { if (sp.rec.grp.parent) sp.rec.grp.parent.remove(sp.rec.grp); sp.rec.mixer.stopAllAction(); }
+    ctx.crowdSpots.length = 0;
     if (ctx.ceceCrowd) ctx.ceceCrowd.removeAll(); if (ctx.drewCrowd) ctx.drewCrowd.removeAll();
     if (ctx.dadCrowd) ctx.dadCrowd.removeAll(); if (ctx.momCrowd) ctx.momCrowd.removeAll();
   }
   function setCrowdDensity(v) {
-    CROWD_DENSITY = clamp(+v || 0, 0, 2);
-    try { localStorage.setItem('dahill.peddensity', String(CROWD_DENSITY)); } catch (e) { }
+    ctx.CROWD_DENSITY = clamp(+v || 0, 0, 2);
+    try { localStorage.setItem('dahill.peddensity', String(ctx.CROWD_DENSITY)); } catch (e) { }
     // DEBOUNCE the re-pool: a slider drag fires every step, and clearCrowd()+placeCrowd()
     // re-clones the whole pedestrian pool (skinned-mesh clones) — doing that per step stalls the
     // main thread. Re-pool once, ~220 ms after the drag settles.
-    clearTimeout(_crowdReplaceT);
-    _crowdReplaceT = setTimeout(() => { if (!ctx.disposed && ctx.ceceCrowd && ctx.drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
-    return CROWD_DENSITY;
+    clearTimeout(ctx._crowdReplaceT);
+    ctx._crowdReplaceT = setTimeout(() => { if (!ctx.disposed && ctx.ceceCrowd && ctx.drewCrowd) { clearCrowd(); placeCrowd(); } }, 220);
+    return ctx.CROWD_DENSITY;
   }
-  let _crowdN = 0, _crowdPlaced = false, _placedNoAdults = false;
-  const _doPlace = () => { if (ctx.disposed || _crowdPlaced || !(ctx.ceceCrowd && ctx.drewCrowd)) return; _crowdPlaced = true; _placedNoAdults = !(ctx.dadCrowd && ctx.momCrowd); placeCrowd(); geocodePOIs(); };
+  ctx._crowdN = 0, ctx._crowdPlaced = false, ctx._placedNoAdults = false;
+  const _doPlace = () => { if (ctx.disposed || ctx._crowdPlaced || !(ctx.ceceCrowd && ctx.drewCrowd)) return; ctx._crowdPlaced = true; ctx._placedNoAdults = !(ctx.dadCrowd && ctx.momCrowd); placeCrowd(); geocodePOIs(); };
   const _onCrowd = () => {
     if (ctx.disposed) return;
-    _crowdN++;
-    if (!_crowdPlaced) { if (_crowdN >= 4) _doPlace(); return; }   // wait for all four rigs so Dad/Mom are mixed in from the FIRST placement (no slider needed)
+    ctx._crowdN++;
+    if (!ctx._crowdPlaced) { if (ctx._crowdN >= 4) _doPlace(); return; }   // wait for all four rigs so Dad/Mom are mixed in from the FIRST placement (no slider needed)
     // If the 9 s fallback placed a kids-only crowd before the adult rigs loaded, re-pool ONCE (debounced,
     // same path as the density slider) when both Dad + Mom finally arrive so they aren't absent all session.
-    if (_placedNoAdults && ctx.dadCrowd && ctx.momCrowd) { _placedNoAdults = false; clearTimeout(_crowdReplaceT); _crowdReplaceT = setTimeout(() => { if (!ctx.disposed && ctx.ceceCrowd && ctx.drewCrowd) { clearCrowd(); placeCrowd(); } }, 220); }
+    if (ctx._placedNoAdults && ctx.dadCrowd && ctx.momCrowd) { ctx._placedNoAdults = false; clearTimeout(ctx._crowdReplaceT); ctx._crowdReplaceT = setTimeout(() => { if (!ctx.disposed && ctx.ceceCrowd && ctx.drewCrowd) { clearCrowd(); placeCrowd(); } }, 220); }
   };
   if (!ctx.flags.has('nochar')) {
     loadCeceCrowd(c => { if (!ctx.disposed) ctx.ceceCrowd = c; _onCrowd(); }, () => _onCrowd());
@@ -1108,9 +1108,9 @@ export function createEngine({ canvas, ui, emit }) {
     loadMomCrowd(c => { if (!ctx.disposed) ctx.momCrowd = c; _onCrowd(); }, () => _onCrowd());
     setTimeout(() => _doPlace(), 9000);   // …but don't let a slow Dad/Mom rig hold the whole crowd hostage
   } else geocodePOIs();
-  let _crowdHitT = 0;
+  ctx._crowdHitT = 0;
   function hideCrowd() {
-    for (const sp of crowdSpots) sp.rec.grp.visible = false;
+    for (const sp of ctx.crowdSpots) sp.rec.grp.visible = false;
   }
   function settleCrowdSpot(sp, dt) {
     if (!sp.onRoadHt || sp.rec.vel) return;
@@ -1143,7 +1143,7 @@ export function createEngine({ canvas, ui, emit }) {
         const d = Math.hypot(cx - ctx.car.x, cz - ctx.car.z);
         if (d < 45 || d > 230) continue;                                   // not on top of you, within the cull radius
         const ux = sdx / L, uz = sdz / L, side = Math.random() < 0.5 ? 1 : -1;
-        const off = SIDEWALK_OFF + Math.random() * 1.4;
+        const off = ctx.SIDEWALK_OFF + Math.random() * 1.4;
         nx = cx + (-uz) * side * off; nz = cz + ux * side * off; break;     // out to the sidewalk
       }
     }
@@ -1156,18 +1156,18 @@ export function createEngine({ canvas, ui, emit }) {
     rec.vel = null; rec.respawnAt = 0; sp.onRoadHt = true; sp.settleT = 0;
   }
   function updateCrowd(dt, now) {
-    if (!crowdSpots.length) return;
+    if (!ctx.crowdSpots.length) return;
     const inDrive = ctx.mode === 'drive', inScoop = ctx.mode === 'scoop';
     const wantInt = inScoop && ctx.scoopScene === 'interior';
     if (!ctx.roadLifeOn) {
       // "People + traffic" OFF hides street/yard pedestrians — but the in-house companion is gameplay,
       // not road life, so keep showing + ticking it.
-      for (const sp of crowdSpots) sp.rec.grp.visible = wantInt && sp.zone === 'interior' && sp.char !== ctx.CHAR.avatar;
+      for (const sp of ctx.crowdSpots) sp.rec.grp.visible = wantInt && sp.zone === 'interior' && sp.char !== ctx.CHAR.avatar;
       if (wantInt) { if (ctx.ceceCrowd) ctx.ceceCrowd.tick(dt, now); if (ctx.drewCrowd) ctx.drewCrowd.tick(dt, now); if (ctx.dadCrowd) ctx.dadCrowd.tick(dt, now); if (ctx.momCrowd) ctx.momCrowd.tick(dt, now); }
       return;
     }
     if (inScoop) {
-      for (const sp of crowdSpots) {
+      for (const sp of ctx.crowdSpots) {
         // indoors: show only the companion you're NOT playing (one at a time); outdoors: the yard pair
         if (sp.zone === 'interior') sp.rec.grp.visible = wantInt && sp.char !== ctx.CHAR.avatar;
         else sp.rec.grp.visible = !wantInt && sp.zone === 'yard';
@@ -1176,12 +1176,12 @@ export function createEngine({ canvas, ui, emit }) {
       // VISIBILITY CAP: with a spread-out pool we can't animate them all (skinned meshes are
       // costly). Show only the nearest CROWD_VIS_CAP within a cull radius — bounds the per-frame
       // mixer work to N. The scan/sort itself is throttled to ~9 Hz (pedestrians barely move).
-      if (now - _crowdVisT > 110) {
-        _crowdVisT = now;
+      if (now - ctx._crowdVisT > 110) {
+        ctx._crowdVisT = now;
         const CULL2 = 240 * 240;
         const cand = [], prio = [];   // prio = POI-cluster dancers (Stanton/Canyon/XQ/Meemaw) near you — shown FIRST so the
         let _reloc = 0;               // street peds that follow the car don't eat all the slots and hide the cluster you drove to.
-        for (const sp of crowdSpots) {
+        for (const sp of ctx.crowdSpots) {
           if (sp.zone === 'yard' || sp.zone === 'interior') { sp.rec.grp.visible = false; continue; }
           const d2 = (sp.rec.x - ctx.car.x) ** 2 + (sp.rec.z - ctx.car.z) ** 2;
           if (d2 < CULL2) { (sp.zone === 'street' ? cand : prio).push({ sp, d2 }); continue; }
@@ -1190,18 +1190,18 @@ export function createEngine({ canvas, ui, emit }) {
         }
         prio.sort((a, b) => a.d2 - b.d2); cand.sort((a, b) => a.d2 - b.d2);
         let _shown = 0;
-        for (const c of prio) { const v = _shown < CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // POI clusters first
-        for (const c of cand) { const v = _shown < CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // then the nearest street peds
+        for (const c of prio) { const v = _shown < ctx.CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // POI clusters first
+        for (const c of cand) { const v = _shown < ctx.CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // then the nearest street peds
       }
-      for (const sp of crowdSpots) if (sp.rec.grp.visible) settleCrowdSpot(sp, dt);   // settle ground height each frame for the visible few
+      for (const sp of ctx.crowdSpots) if (sp.rec.grp.visible) settleCrowdSpot(sp, dt);   // settle ground height each frame for the visible few
     } else {
-      for (const sp of crowdSpots) sp.rec.grp.visible = false;
+      for (const sp of ctx.crowdSpots) sp.rec.grp.visible = false;
     }
     // COMEDY: plough into a pedestrian and they cartwheel off the road (then pop back up).
-    if (inDrive && Math.abs(ctx.car.speed) > 6 && now - _crowdHitT > 250) {
+    if (inDrive && Math.abs(ctx.car.speed) > 6 && now - ctx._crowdHitT > 250) {
       const dir = Math.sign(ctx.car.speed) || 1, vx = Math.sin(ctx.car.yaw) * dir, vz = Math.cos(ctx.car.yaw) * dir, sp = Math.abs(ctx.car.speed);
       const hit = (ctx.ceceCrowd && ctx.ceceCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (ctx.drewCrowd && ctx.drewCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (ctx.dadCrowd && ctx.dadCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp)) || (ctx.momCrowd && ctx.momCrowd.launchNear(ctx.car.x, ctx.car.z, vx, vz, sp));
-      if (hit) { _crowdHitT = now; if (ctx.audio.sfxThunk) ctx.audio.sfxThunk(0.5); ctx.toast('🎳 WHEEE!', 700); if (navigator.vibrate) { try { navigator.vibrate(22); } catch (e) { } } }
+      if (hit) { ctx._crowdHitT = now; if (ctx.audio.sfxThunk) ctx.audio.sfxThunk(0.5); ctx.toast('🎳 WHEEE!', 700); if (navigator.vibrate) { try { navigator.vibrate(22); } catch (e) { } } }
     }
     if (ctx.ceceCrowd) ctx.ceceCrowd.tick(dt, now);   // tick() advances visible mixers + any in-flight launch
     if (ctx.drewCrowd) ctx.drewCrowd.tick(dt, now);
@@ -1218,12 +1218,12 @@ export function createEngine({ canvas, ui, emit }) {
     ctx._railRoute = null;
   }
   ctx.car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
-  let cancelCarLoad = null;
+  ctx.cancelCarLoad = null;
   // LAZY vehicle roster: each slot's GLB is only fetched when that car is actually driven (the
   // random start car at boot, or a garage pick). Unpicked cars never download — so a big garage
   // doesn't weigh down a session. Slot 2 (Ferrari) is the Draco loadRealCar path; the rest are
   // loadDrivableCar. All these GLBs run nose -Z, so flip:true points them forward.
-  const CAR_DEFS = {
+  ctx.CAR_DEFS = {
     0: { url: granviaUrl, length: 5.1 },
     1: { url: rav4Url, length: 4.6 },
     3: { url: mustangUrl, length: 4.9 },
@@ -1239,31 +1239,31 @@ export function createEngine({ canvas, ui, emit }) {
     13: { url: hotrodUrl, length: 4.5, flip: false, extraYaw: Math.PI / 2 },   // this GLB's length runs on X → a +quarter-turn aligns the nose to travel (−π/2 pointed it backwards; +π/2 is forward)
     14: { url: ratrodUrl, length: 4.6 },
   };
-  const vehLoading = new Set();
-  let ferrariLoadStarted = false;
+  ctx.vehLoading = new Set();
+  ctx.ferrariLoadStarted = false;
   function ensureVehicle(slot) {
     if (ctx.flags.has('nocar') || ctx.disposed) return;
     if (slot === 2) {   // Ferrari — Draco, lazy on first need (its own fallback toast)
-      if (ferrariLoadStarted) return;
-      ferrariLoadStarted = true;
+      if (ctx.ferrariLoadStarted) return;
+      ctx.ferrariLoadStarted = true;
       installDracoDecoder();
-      cancelCarLoad = loadRealCar(ctx.car, carGlbUrl, () => { if (!ctx.disposed) ctx.toast('Using fallback car model'); });
+      ctx.cancelCarLoad = loadRealCar(ctx.car, carGlbUrl, () => { if (!ctx.disposed) ctx.toast('Using fallback car model'); });
       return;
     }
-    if (ctx.car.models[slot] || vehLoading.has(slot)) return;   // already loaded / in flight
-    const def = CAR_DEFS[slot];
+    if (ctx.car.models[slot] || ctx.vehLoading.has(slot)) return;   // already loaded / in flight
+    const def = ctx.CAR_DEFS[slot];
     if (!def) return;
-    vehLoading.add(slot);
-    modelLoadCancels.push(loadDrivableCar(ctx.car, def.url, slot, {
+    ctx.vehLoading.add(slot);
+    ctx.modelLoadCancels.push(loadDrivableCar(ctx.car, def.url, slot, {
       length: def.length, flip: def.flip !== false, black: false, extraYaw: def.extraYaw || 0, meta: VEHICLES[slot],   // default nose -Z (flip:true); extraYaw is a per-car quarter-turn for odd model axes
-      onReady: (s) => { vehLoading.delete(s); ctx.emit('cars', getCars()); if (ctx.car.modelIdx === s) showCarCard(); }
+      onReady: (s) => { ctx.vehLoading.delete(s); ctx.emit('cars', getCars()); if (ctx.car.modelIdx === s) showCarCard(); }
     }));
   }
   if (!ctx.flags.has('nocar')) {
     installDracoDecoder();
     // START ON A RANDOM CAR: pick a random non-Ferrari roster slot as this session's default,
     // load ONLY that one (others stay lazy), and hold the reveal until it arrives.
-    const startable = Object.keys(CAR_DEFS).map(Number);
+    const startable = Object.keys(ctx.CAR_DEFS).map(Number);
     ctx.car.defaultSlot = startable[(Math.random() * startable.length) | 0];
     ctx.car.heldForDefault = true;
     // fallback: if the random default is slow/fails, after ~2.8 s show whatever HAS loaded
@@ -1279,10 +1279,10 @@ export function createEngine({ canvas, ui, emit }) {
     const park = (url, side, len, flip, black = true) => {
       const cx = ctx.frontPt[0] + u[0] * 7 + perp[0] * side * 2.4;
       const cz = ctx.frontPt[1] + u[1] * 7 + perp[1] * side * 2.4;
-      parkedSpots.push({ x: cx, z: cz });          // walk-to-drive targets
+      ctx.parkedSpots.push({ x: cx, z: cz });          // walk-to-drive targets
       // add the footprint collider only once the car actually loads, so a failed
       // load doesn't leave an invisible wall the driven car bounces off.
-      modelLoadCancels.push(loadParkedCar(carsGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
+      ctx.modelLoadCancels.push(loadParkedCar(ctx.carsGroup, url, { x: cx, z: cz, y: terrainAt(cx, cz), yaw: carYaw, length: len, black, flip }, () => {
         const hl = len / 2, hw = 1.05, yaw = carYaw + (flip ? Math.PI : 0);
         const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
         const p = [
@@ -1313,7 +1313,7 @@ export function createEngine({ canvas, ui, emit }) {
   // The Ferrari (slot 2) is the reward for finding all 5 neighbourhood places.
   ctx.ferrariUnlocked = (() => { try { return localStorage.getItem('dahill.drive.ferrari') === '1'; } catch (e) { return false; } })();
   function checkFerrariUnlock() {
-    if (ctx.ferrariUnlocked || poiFound.size < POIS.length) return;
+    if (ctx.ferrariUnlocked || ctx.poiFound.size < ctx.POIS.length) return;
     ctx.ferrariUnlocked = true;
     try { localStorage.setItem('dahill.drive.ferrari', '1'); } catch (e) { }
     ctx.toast('🏎️ You earned the Ferrari 458! Tap 🚗 to drive it', 4000);
@@ -1339,15 +1339,15 @@ export function createEngine({ canvas, ui, emit }) {
   // and a back-door pad on the yard/patio side (near where Scoop is played).
   // Put the "go inside" pad on the house side FACING the Scoop play area (the sanctuary spawn), so
   // the player walks straight into it. entryU points from the house centre toward that spawn.
-  const _spawnPt = [(SREC.coop[0] + SREC.pen[0]) / 2, (SREC.coop[1] + SREC.pen[1]) / 2];
-  const _toSpawn = [_spawnPt[0] - ctx.house.c[0], _spawnPt[1] - ctx.house.c[1]];
-  const _uL = Math.hypot(_toSpawn[0], _toSpawn[1]) || 1;
-  const entryU = [_toSpawn[0] / _uL, _toSpawn[1] / _uL];
-  const _halfExt = 0.5 * (Math.abs(entryU[0]) * (ctx.house.bbox[1] - ctx.house.bbox[0]) + Math.abs(entryU[1]) * (ctx.house.bbox[3] - ctx.house.bbox[2]));
-  const entryPt = [ctx.house.c[0] + entryU[0] * (_halfExt + 1.6), ctx.house.c[1] + entryU[1] * (_halfExt + 1.6)];
+  ctx._spawnPt = [(SREC.coop[0] + SREC.pen[0]) / 2, (SREC.coop[1] + SREC.pen[1]) / 2];
+  ctx._toSpawn = [ctx._spawnPt[0] - ctx.house.c[0], ctx._spawnPt[1] - ctx.house.c[1]];
+  ctx._uL = Math.hypot(ctx._toSpawn[0], ctx._toSpawn[1]) || 1;
+  ctx.entryU = [ctx._toSpawn[0] / ctx._uL, ctx._toSpawn[1] / ctx._uL];
+  ctx._halfExt = 0.5 * (Math.abs(ctx.entryU[0]) * (ctx.house.bbox[1] - ctx.house.bbox[0]) + Math.abs(ctx.entryU[1]) * (ctx.house.bbox[3] - ctx.house.bbox[2]));
+  ctx.entryPt = [ctx.house.c[0] + ctx.entryU[0] * (ctx._halfExt + 1.6), ctx.house.c[1] + ctx.entryU[1] * (ctx._halfExt + 1.6)];
 
   if (!ctx.flags.has('nointerior')) {
-    modelLoadCancels.push(createInterior(ctx.scene, { cx: INT_CX, cz: INT_CZ, floorY: INT_FLOOR },
+    ctx.modelLoadCancels.push(createInterior(ctx.scene, { cx: ctx.INT_CX, cz: ctx.INT_CZ, floorY: ctx.INT_FLOOR },
       mod => { ctx.interior = mod; ctx.interior.group.visible = ctx.scoopScene === 'interior'; placeInteriorDancers(); ctx.emit('house', { inside: ctx.scoopScene === 'interior', ready: true }); },
       () => { /* fail-soft: the door pad just stays inert */ }));
   }
@@ -1357,8 +1357,8 @@ export function createEngine({ canvas, ui, emit }) {
   function setInside(on) {
     ctx.scoopScene = on ? 'interior' : 'yard';
     if (ctx.interior) ctx.interior.group.visible = on;
-    if (on) { marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; if (ctx.nearCar) { ctx.nearCar = false; ctx.emit('nearCar', false); } }
-    else { exitMarker.visible = false; exitRing.visible = false; for (const npc of ctx.npcs) npc.group.visible = false; }
+    if (on) { ctx.marker.visible = false; ctx.carMarker.visible = false; ctx.compostMarker.visible = false; ctx.doorMarker.visible = false; if (ctx.nearCar) { ctx.nearCar = false; ctx.emit('nearCar', false); } }
+    else { ctx.exitMarker.visible = false; ctx.exitRing.visible = false; for (const npc of ctx.npcs) npc.group.visible = false; }
     ctx.emit('house', { inside: on, ready: !!ctx.interior });
   }
   function enterHouse(now) {
@@ -1371,7 +1371,7 @@ export function createEngine({ canvas, ui, emit }) {
     // House NPCs (dad, mom): lazy-load on first entry, then have each walk out of a room and dance.
     if (!ctx.npcsLoadStarted) {
       ctx.npcsLoadStarted = true;
-      for (const load of NPC_LOADERS) load(ctrl => { if (ctx.disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; ctx.scene.add(g); ctx.npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, state: 'act', act: 'idle', actUntil: 0 }); resetNpcs(); }, () => {});
+      for (const load of ctx.NPC_LOADERS) load(ctrl => { if (ctx.disposed) return; const g = new THREE.Group(); g.add(ctrl.group); g.visible = false; ctx.scene.add(g); ctx.npcs.push({ ctrl, group: g, x: 0, z: 0, yaw: 0, state: 'act', act: 'idle', actUntil: 0 }); resetNpcs(); }, () => {});
     } else resetNpcs();
     if (ctx.audio.blip) ctx.audio.blip();
     ctx.toast('🏠 Inside the house! Open the ☰ menu (top-right) for characters &amp; actions · tap "Leave house 🚪" to head back out', 3600);
@@ -1381,7 +1381,7 @@ export function createEngine({ canvas, ui, emit }) {
   // furniture) and door-routed — with a bias to share the player's room. On arrival they pick an
   // activity: cycle dances, sprinkle one-shot emote beats, idle, or (if they have a sit clip) SIT
   // down on a couch. State per NPC: 'travel' | 'act'.
-  const NPC_RAD = 0.34, NPC_SPD = 1.35;
+  ctx.NPC_RAD = 0.34, ctx.NPC_SPD = 1.35;
   function playerRoomIndex() {
     const rs = ctx.interior.rooms;
     if (!rs || !rs.length) return 0;
@@ -1478,8 +1478,8 @@ export function createEngine({ canvas, ui, emit }) {
     }
     npc.wantSeat = wantSeat;
     let tx, tz;
-    if (wantSeat) { const ap = ctx.interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75, NPC_RAD, true); tx = ap.x; tz = ap.z; }
-    else { const p = ctx.interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2), NPC_RAD, true); tx = p.x; tz = p.z; }
+    if (wantSeat) { const ap = ctx.interior.clearAt(wantSeat.x + Math.sin(wantSeat.yaw) * 0.75, wantSeat.z + Math.cos(wantSeat.yaw) * 0.75, ctx.NPC_RAD, true); tx = ap.x; tz = ap.z; }
+    else { const p = ctx.interior.clearAt(room.minX + 0.6 + Math.random() * Math.max(0.2, room.maxX - room.minX - 1.2), room.minZ + 0.6 + Math.random() * Math.max(0.2, room.maxZ - room.minZ - 1.2), ctx.NPC_RAD, true); tx = p.x; tz = p.z; }
     startTravel(npc, tx, tz);
   }
   // Each NPC starts in a distinct far room and heads for the main room, then wanders.
@@ -1492,7 +1492,7 @@ export function createEngine({ canvas, ui, emit }) {
       // START clustered around the MAIN room (where the player enters) so they're together near you, not
       // scattered into far bedrooms they then get stuck pathing out of. They idle a beat, then wander off.
       const a = i / Math.max(1, ctx.npcs.length) * Math.PI * 2 + 0.4;
-      const from = ctx.interior.clearAt(main.x + Math.cos(a) * 1.5, main.z + Math.sin(a) * 1.5, NPC_RAD, true);
+      const from = ctx.interior.clearAt(main.x + Math.cos(a) * 1.5, main.z + Math.sin(a) * 1.5, ctx.NPC_RAD, true);
       npc.x = from.x; npc.z = from.z; npc.yaw = Math.atan2(main.x - from.x, main.z - from.z); npc.seat = null; npc.wantSeat = null; npc.baseY = ctx.interior.floorY;
       npc.state = 'act'; npc.act = 'idle'; npc.actUntil = now + 2200 + Math.random() * 3500; npc.ctrl.locomotion(0);
       npc.group.visible = true; npc.group.position.set(npc.x, npc.baseY, npc.z);
@@ -1505,7 +1505,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx._syncDance && now > ctx._syncDanceUntil) { ctx._syncDance = false; ctx._syncDanceNext = now + 30000 + Math.random() * 25000; for (const npc of ctx.npcs) pickNextRoom(npc, now); }
     else if (!ctx._syncDance && now > ctx._syncDanceNext && ctx.npcs.length > 1 && ctx.interior) {
       ctx._syncDance = true; ctx._syncDanceUntil = now + 11000 + Math.random() * 6000;
-      const clip = SYNC_DANCES[(Math.random() * SYNC_DANCES.length) | 0];
+      const clip = ctx.SYNC_DANCES[(Math.random() * ctx.SYNC_DANCES.length) | 0];
       for (const npc of ctx.npcs) {
         npc.state = 'act'; npc.act = 'dance'; npc.seat = null; npc.wantSeat = null; npc.baseY = ctx.interior.floorY;
         npc.yaw = Math.atan2(ctx.interior.spawn.x - npc.x, ctx.interior.spawn.z - npc.z);   // turn in toward the middle → a little dance circle
@@ -1541,8 +1541,8 @@ export function createEngine({ canvas, ui, emit }) {
             if (!door) { let bd = Infinity; for (const dw of (ctx.interior.doorways || [])) { const dd = (dw.x - npc.x) ** 2 + (dw.z - npc.z) ** 2; if (dd < bd) { bd = dd; door = dw; } } }   // graph said nothing → at least aim at the NEAREST opening, never a wall
             if (door && Math.hypot(door.x - npc.x, door.z - npc.z) > 0.3) { const px = gx - door.x, pz = gz - door.z, pl = Math.hypot(px, pz) || 1; tx = door.x + px / pl * 0.4; tz = door.z + pz / pl * 0.4; }   // aim ~0.4 m PAST the door toward the goal so the heading carries straight THROUGH the opening, not into the jamb
           }
-          const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = NPC_SPD * dt;
-          const r = ctx.interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, NPC_RAD, true);
+          const dx = tx - npc.x, dz = tz - npc.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d, want = ctx.NPC_SPD * dt;
+          const r = ctx.interior.collide(npc.x, npc.z, npc.x + ux * want, npc.z + uz * want, ctx.NPC_RAD, true);
           const moved = Math.hypot(r.x - npc.x, r.z - npc.z);
           npc.x = r.x; npc.z = r.z; npc.yaw = Math.atan2(ux, uz); speed = moved / Math.max(dt, 1e-3);
           // "stuck" = collision is eating the step (a wall-jam) — judged by ACTUAL displacement, NOT
@@ -1561,7 +1561,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   function leaveHouse(now) {
     setInside(false);
-    if (entryPt) { ctx.CHAR.x = entryPt[0] + entryU[0] * 1.6; ctx.CHAR.z = entryPt[1] + entryU[1] * 1.6; ctx.CHAR.yaw = Math.atan2(entryU[0], entryU[1]); }
+    if (ctx.entryPt) { ctx.CHAR.x = ctx.entryPt[0] + ctx.entryU[0] * 1.6; ctx.CHAR.z = ctx.entryPt[1] + ctx.entryU[1] * 1.6; ctx.CHAR.yaw = Math.atan2(ctx.entryU[0], ctx.entryU[1]); }
     ctx.camYawS = ctx.CHAR.yaw; ctx.CHAR.airY = 0; ctx.CHAR.vy = 0; ctx.camInit = false; ctx.szoom = 1; ctx.camGroundRef = null;
     ctx.doorT = now + 1200; ctx.entryArmed = false;
     if (ctx.audio.blip) ctx.audio.blip();
@@ -1571,29 +1571,29 @@ export function createEngine({ canvas, ui, emit }) {
   // pedestrian-density re-pool (placeCrowd calls this) so the slider doesn't wipe them.
   function placeInteriorDancers() {
     if (!ctx.interior || !ctx.ceceCrowd || !ctx.drewCrowd) return;
-    if (crowdSpots.some(s => s.zone === 'interior')) return;
+    if (ctx.crowdSpots.some(s => s.zone === 'interior')) return;
     const sp = ctx.interior.spawn, fwd = [Math.sin(sp.yaw), Math.cos(sp.yaw)];
     const c = ctx.interior.clearAt(sp.x + fwd[0] * 2.6, sp.z + fwd[1] * 2.6);   // open floor, not embedded in a sofa/table
     // Both stand at the same (cleared) spot; updateCrowd shows only the ONE you're not currently playing.
     const add = (crowd, charName, h, clip) => {
-      crowdSpots.push({ rec: crowd.add(ctx.scene, { x: c.x, y: ctx.interior.floorY, z: c.z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
+      ctx.crowdSpots.push({ rec: crowd.add(ctx.scene, { x: c.x, y: ctx.interior.floorY, z: c.z, yaw: sp.yaw + Math.PI, targetH: h, clip }), zone: 'interior', char: charName, onRoadHt: false, settleT: 0 });
     };
     add(ctx.drewCrowd, 'drew', DREW_HEIGHT_M, 'dance');
     add(ctx.ceceCrowd, 'cece', CECE_HEIGHT_M);
   }
 
   // ---------- controls (explore) ----------
-  const ctl = {
+  ctx.ctl = {
     tx: ctx.house.c[0], ty: ctx.house.baseY + 5, tz: ctx.house.c[1], az: 0.85, po: 0.72, r: 330,
     gtx: ctx.house.c[0], gty: ctx.house.baseY + 5, gtz: ctx.house.c[1], gaz: 0.45, gpo: 0.92, gr: 185
   };
-  if (ctx.reduceMotion) { ctl.az = 0.45; ctl.po = 0.92; ctl.r = 185; }
+  if (ctx.reduceMotion) { ctx.ctl.az = 0.45; ctx.ctl.po = 0.92; ctx.ctl.r = 185; }
   function applyCam() {
     ctx.camera.position.set(
-      ctl.tx + ctl.r * Math.sin(ctl.po) * Math.sin(ctl.az),
-      ctl.ty + ctl.r * Math.cos(ctl.po),
-      ctl.tz + ctl.r * Math.sin(ctl.po) * Math.cos(ctl.az));
-    ctx.camera.lookAt(ctl.tx, ctl.ty, ctl.tz);
+      ctx.ctl.tx + ctx.ctl.r * Math.sin(ctx.ctl.po) * Math.sin(ctx.ctl.az),
+      ctx.ctl.ty + ctx.ctl.r * Math.cos(ctx.ctl.po),
+      ctx.ctl.tz + ctx.ctl.r * Math.sin(ctx.ctl.po) * Math.cos(ctx.ctl.az));
+    ctx.camera.lookAt(ctx.ctl.tx, ctx.ctl.ty, ctx.ctl.tz);
   }
 
   ctx.mode = 'explore';
@@ -1609,8 +1609,8 @@ export function createEngine({ canvas, ui, emit }) {
     }
     ctx.emit('mode', m); applyModeVisuals();
   };
-  const ptrs = new Map(); let lastPinch = 0, lastMid = null, moved = 0;
-  const lookPtrs = new Map();
+  ctx.ptrs = new Map(); ctx.lastPinch = 0, ctx.lastMid = null, ctx.moved = 0;
+  ctx.lookPtrs = new Map();
   ctx.camOrbit = { yaw: 0, pitch: 0, t: 0 };
   ctx._orbitUserSet = false;   // has the user dragged to set the orbit angle? (until then, autodrive/follow runs cinematic "race day" camera sweeps)
   ctx._viewYaw = 0;            // smoothed heading the MAP views (overhead/aerial) + minimap orient to — car-heading normally, compass in follow. Eased so turns don't shimmer.
@@ -1620,17 +1620,17 @@ export function createEngine({ canvas, ui, emit }) {
   // stick + gas/brake pedals for touch driving, shift-lock for the keeper, and
   // flick momentum in explore. inp2 mixes stick (j*), keyboard (k*) and the
   // dedicated touch driving inputs (steer/gas/brake).
-  const LOOK_YAW_PER_SCREEN = 2.8, LOOK_PITCH_PER_SCREEN = 2.4, ZOOM_RATE = 0.0011, MOVE_DEADZONE = 0.10;   // screen-normalized free-look
-  const JOY_R = 66, JOY_MAX = 52;
+  ctx.LOOK_YAW_PER_SCREEN = 2.8, ctx.LOOK_PITCH_PER_SCREEN = 2.4, ctx.ZOOM_RATE = 0.0011, ctx.MOVE_DEADZONE = 0.10;   // screen-normalized free-look
+  ctx.JOY_R = 66, ctx.JOY_MAX = 52;
   ctx.inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
   ctx.camYawS = 0, ctx.scPitch = 0.34, ctx.bagWarned = false, ctx.spotless = false, ctx.nearCar = false;
   ctx.scoopMoveYaw = 0, ctx.scoopMoveActive = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
   // onto the ground and the car steers toward it + auto-throttles, so you trace its
   // path with one finger. (Joystick/keyboard still drive the other camera views.)
-  let navPtr = null, navDownX = 0, navDownY = 0, navMoved = false, navCurX = 0, navCurY = 0;   // tap (route along roads) vs drag (freeform draw-to-drive); navCur tracks the live finger for overhead pinch
-  const _navRay = new THREE.Raycaster(), _navNDC = new THREE.Vector2();
-  const _navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _navHit = new THREE.Vector3();
+  ctx.navPtr = null, ctx.navDownX = 0, ctx.navDownY = 0, ctx.navMoved = false, ctx.navCurX = 0, ctx.navCurY = 0;   // tap (route along roads) vs drag (freeform draw-to-drive); navCur tracks the live finger for overhead pinch
+  ctx._navRay = new THREE.Raycaster(), ctx._navNDC = new THREE.Vector2();
+  ctx._navPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), ctx._navHit = new THREE.Vector3();
   // drag-to-drive ("trace") is available in the overhead-style views (Top-down AND Aerial)
   const driveTopDown = () => ctx.mode === 'drive' && DRIVE_CAMS[ctx.camMode] && DRIVE_CAMS[ctx.camMode].dragdrive;
   // Overhead/Aerial zoom-out slider support: czoom is the altitude/orbit multiplier. Map it log-wise to
@@ -1640,10 +1640,10 @@ export function createEngine({ canvas, ui, emit }) {
   function setDriveZoom(norm) { const [lo, hi] = driveZoomRange(); ctx.czoom = lo * Math.pow(hi / lo, clamp(norm, 0, 1)); emitDriveZoom(); }
   function setNavFromPointer(clientX, clientY) {
     const r = ctx.canvas.getBoundingClientRect();
-    _navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    _navRay.setFromCamera(_navNDC, ctx.camera);
-    _navPlane.constant = -(ctx.car && ctx.car.groundY != null ? ctx.car.groundY : 0);   // ground plane at the car's height
-    if (_navRay.ray.intersectPlane(_navPlane, _navHit)) { ctx.inp2.navX = _navHit.x; ctx.inp2.navZ = _navHit.z; ctx.inp2.navActive = true; }
+    ctx._navNDC.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    ctx._navRay.setFromCamera(ctx._navNDC, ctx.camera);
+    ctx._navPlane.constant = -(ctx.car && ctx.car.groundY != null ? ctx.car.groundY : 0);   // ground plane at the car's height
+    if (ctx._navRay.ray.intersectPlane(ctx._navPlane, ctx._navHit)) { ctx.inp2.navX = ctx._navHit.x; ctx.inp2.navZ = ctx._navHit.z; ctx.inp2.navActive = true; }
   }
   ctx.lastLookT = -1e9;   // last manual look-drag time (ms); suppresses scoop follow-cam briefly
   ctx.shiftLock = false, ctx.azVel = 0, ctx.poVel = 0;
@@ -1651,11 +1651,11 @@ export function createEngine({ canvas, ui, emit }) {
   function lookDelta(dx, dy) {
     const w = Math.max(320, ctx.canvas.clientWidth || innerWidth || 800);
     const h = Math.max(320, ctx.canvas.clientHeight || innerHeight || 600);
-    return { yaw: dx / w * LOOK_YAW_PER_SCREEN, pitch: dy / h * LOOK_PITCH_PER_SCREEN };
+    return { yaw: dx / w * ctx.LOOK_YAW_PER_SCREEN, pitch: dy / h * ctx.LOOK_PITCH_PER_SCREEN };
   }
   function scaledDeadzoneMagnitude(x, y) {
     const m = Math.min(1, Math.hypot(x, y));
-    return m <= MOVE_DEADZONE ? 0 : (m - MOVE_DEADZONE) / (1 - MOVE_DEADZONE);
+    return m <= ctx.MOVE_DEADZONE ? 0 : (m - ctx.MOVE_DEADZONE) / (1 - ctx.MOVE_DEADZONE);
   }
 
   function hideJoy() {
@@ -1665,8 +1665,8 @@ export function createEngine({ canvas, ui, emit }) {
   }
 
   function clearLiveInput() {
-    navPtr = null; lookPtrs.clear(); ptrs.clear();
-    lastPinch = 0; lastMid = null; ctx.pinchD = 0; moved = 0;
+    ctx.navPtr = null; ctx.lookPtrs.clear(); ctx.ptrs.clear();
+    ctx.lastPinch = 0; ctx.lastMid = null; ctx.pinchD = 0; ctx.moved = 0;
     ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0;
     ctx.inp2.steer = ctx.inp2.gas = ctx.inp2.brake = 0;
     ctx.inp2.hbrake = false; ctx.inp2.boost = false; ctx.inp2.navActive = false;
@@ -1685,18 +1685,18 @@ export function createEngine({ canvas, ui, emit }) {
         // FOLLOWING, or AUTO-DRIVING in an overhead/aerial view: the whole screen ORBITS/pinches the camera
         // (one finger = look, two = pinch) so you can rotate the "race day" view freely — a drag must NOT
         // draw-to-drive or grab the joystick (which would cancel follow). Re-target via the minimap/search.
-        lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        ctx.lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (ctx.mode === 'drive') ctx.camOrbit.t = performance.now();
-        if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+        if (ctx.lookPtrs.size === 2) { const a = [...ctx.lookPtrs.values()]; ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
         return;
       }
       if (driveTopDown()) {
-        if (navPtr === null && lookPtrs.size === 0) {
-          navPtr = e.pointerId; navDownX = navCurX = e.clientX; navDownY = navCurY = e.clientY; navMoved = false; ctx.showT = 0; setNavFromPointer(e.clientX, e.clientY);
+        if (ctx.navPtr === null && ctx.lookPtrs.size === 0) {
+          ctx.navPtr = e.pointerId; ctx.navDownX = ctx.navCurX = e.clientX; ctx.navDownY = ctx.navCurY = e.clientY; ctx.navMoved = false; ctx.showT = 0; setNavFromPointer(e.clientX, e.clientY);
         } else {
-          if (navPtr !== null) { lookPtrs.set(navPtr, { x: navCurX, y: navCurY }); navPtr = null; ctx.inp2.navActive = false; }   // 2nd finger → stop driving, pinch instead
-          lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          if (lookPtrs.size === 2) { const a = [...lookPtrs.values()]; ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+          if (ctx.navPtr !== null) { ctx.lookPtrs.set(ctx.navPtr, { x: ctx.navCurX, y: ctx.navCurY }); ctx.navPtr = null; ctx.inp2.navActive = false; }   // 2nd finger → stop driving, pinch instead
+          ctx.lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (ctx.lookPtrs.size === 2) { const a = [...ctx.lookPtrs.values()]; ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
         }
         return;
       }
@@ -1715,47 +1715,47 @@ export function createEngine({ canvas, ui, emit }) {
         if (ctx.mode === 'scoop') { ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = true; }
         if (ctx.ui.joy) {
           ctx.ui.joy.style.display = 'block';
-          ctx.ui.joy.style.left = (e.clientX - JOY_R) + 'px'; ctx.ui.joy.style.top = (e.clientY - JOY_R) + 'px';
+          ctx.ui.joy.style.left = (e.clientX - ctx.JOY_R) + 'px'; ctx.ui.joy.style.top = (e.clientY - ctx.JOY_R) + 'px';
         }
         if (ctx.ui.knob) ctx.ui.knob.style.transform = 'translate(-50%,-50%)';
       } else {
-        lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        ctx.lookPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (ctx.mode === 'drive') ctx.camOrbit.t = performance.now();   // count a look-start as activity so the hold timer doesn't snap a resting finger back
-        if (lookPtrs.size === 2) {
-          const a = [...lookPtrs.values()];
+        if (ctx.lookPtrs.size === 2) {
+          const a = [...ctx.lookPtrs.values()];
           ctx.pinchD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         }
       }
       return;
     }
     ctx.canvas.setPointerCapture(e.pointerId);
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, b: e.button }); moved = 0;
+    ctx.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, b: e.button }); ctx.moved = 0;
     ctx.azVel = ctx.poVel = 0;
     ctx.canvas.classList.add('dragging');
-    if (ptrs.size === 2) {
-      const [a, b] = [...ptrs.values()];
-      lastPinch = Math.hypot(a.x - b.x, a.y - b.y); lastMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (ctx.ptrs.size === 2) {
+      const [a, b] = [...ctx.ptrs.values()];
+      ctx.lastPinch = Math.hypot(a.x - b.x, a.y - b.y); ctx.lastMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     }
   }
 
   function onPointerMove(e) {
     if (ctx.mode !== 'explore') {
-      if (e.pointerId === navPtr) { navCurX = e.clientX; navCurY = e.clientY; if (Math.hypot(e.clientX - navDownX, e.clientY - navDownY) > 12) navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
+      if (e.pointerId === ctx.navPtr) { ctx.navCurX = e.clientX; ctx.navCurY = e.clientY; if (Math.hypot(e.clientX - ctx.navDownX, e.clientY - ctx.navDownY) > 12) ctx.navMoved = true; setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
       if (e.pointerId === ctx.movePtr) {
         let dx = e.clientX - ctx.joyBX, dy = e.clientY - ctx.joyBY;
-        const d = Math.hypot(dx, dy), mx = JOY_MAX;
+        const d = Math.hypot(dx, dy), mx = ctx.JOY_MAX;
         if (d > mx) { dx *= mx / d; dy *= mx / d; }
         ctx.inp2.jx = dx / mx; ctx.inp2.jy = dy / mx;
         if (ctx.ui.knob) ctx.ui.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
         if (Math.hypot(ctx.inp2.jx, ctx.inp2.jy) > 0.25) ctx.showT = 0;
         return;
       }
-      const lp = lookPtrs.get(e.pointerId);
+      const lp = ctx.lookPtrs.get(e.pointerId);
       if (!lp) return;
       const ox = lp.x, oy = lp.y;
       lp.x = e.clientX; lp.y = e.clientY;
-      if (lookPtrs.size === 2) {
-        const a = [...lookPtrs.values()];
+      if (ctx.lookPtrs.size === 2) {
+        const a = [...ctx.lookPtrs.values()];
         const nd = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
         if (ctx.pinchD > 0 && nd > 0) {
           const f = ctx.pinchD / nd;
@@ -1780,66 +1780,66 @@ export function createEngine({ canvas, ui, emit }) {
       }
       return;
     }
-    if (!ptrs.has(e.pointerId)) return;
-    const p = ptrs.get(e.pointerId);
+    if (!ctx.ptrs.has(e.pointerId)) return;
+    const p = ctx.ptrs.get(e.pointerId);
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
-    moved += Math.abs(dx) + Math.abs(dy);
+    ctx.moved += Math.abs(dx) + Math.abs(dy);
     p.x = e.clientX; p.y = e.clientY;
-    if (ptrs.size === 1) {
+    if (ctx.ptrs.size === 1) {
       if (p.b === 2 || e.shiftKey) pan(dx, dy);
       else {
-        ctl.gaz -= dx * 0.0052; ctl.gpo = clamp(ctl.gpo - dy * 0.0042, 0.14, 1.46);
+        ctx.ctl.gaz -= dx * 0.0052; ctx.ctl.gpo = clamp(ctx.ctl.gpo - dy * 0.0042, 0.14, 1.46);
         ctx.azVel = -dx * 0.0052; ctx.poVel = -dy * 0.0042; // for flick momentum on release
       }
-    } else if (ptrs.size === 2) {
-      const [a, b] = [...ptrs.values()];
+    } else if (ctx.ptrs.size === 2) {
+      const [a, b] = [...ctx.ptrs.values()];
       const pinch = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      if (lastPinch) ctl.gr = clamp(ctl.gr * lastPinch / pinch, 14, 640);
-      if (lastMid) pan(mid.x - lastMid.x, mid.y - lastMid.y);
-      lastPinch = pinch; lastMid = mid;
+      if (ctx.lastPinch) ctx.ctl.gr = clamp(ctx.ctl.gr * ctx.lastPinch / pinch, 14, 640);
+      if (ctx.lastMid) pan(mid.x - ctx.lastMid.x, mid.y - ctx.lastMid.y);
+      ctx.lastPinch = pinch; ctx.lastMid = mid;
     }
   }
 
   function onPointerEnd(e) {
-    if (e.pointerId === navPtr) {
-      navPtr = null;
+    if (e.pointerId === ctx.navPtr) {
+      ctx.navPtr = null;
       // A TAP (no drag) on a road point → route there ALONG the roads and auto-drive, not a
       // straight line off-road. A DRAG was the freeform draw-to-drive, so release just coasts.
-      if (!navMoved) setDriveTarget(ctx.inp2.navX, ctx.inp2.navZ);
+      if (!ctx.navMoved) setDriveTarget(ctx.inp2.navX, ctx.inp2.navZ);
       else ctx.inp2.navActive = false;
     }
     if (e.pointerId === ctx.movePtr) hideJoy();
-    lookPtrs.delete(e.pointerId);
-    if (lookPtrs.size < 2) ctx.pinchD = 0;
-    ptrs.delete(e.pointerId); lastPinch = 0; lastMid = null;
-    if (!ptrs.size) ctx.canvas.classList.remove('dragging');
+    ctx.lookPtrs.delete(e.pointerId);
+    if (ctx.lookPtrs.size < 2) ctx.pinchD = 0;
+    ctx.ptrs.delete(e.pointerId); ctx.lastPinch = 0; ctx.lastMid = null;
+    if (!ctx.ptrs.size) ctx.canvas.classList.remove('dragging');
   }
 
   function onWheel(e) {
     e.preventDefault();
-    if (ctx.mode === 'explore') ctl.gr = clamp(ctl.gr * Math.exp(e.deltaY * ZOOM_RATE), 14, 640);
-    else if (ctx.mode === 'drive') { ctx.czoom = clamp(ctx.czoom * Math.exp(e.deltaY * ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }
-    else if (ctx.mode === 'scoop') ctx.szoom = clamp(ctx.szoom * Math.exp(e.deltaY * ZOOM_RATE), 0.32, 2.6);
+    if (ctx.mode === 'explore') ctx.ctl.gr = clamp(ctx.ctl.gr * Math.exp(e.deltaY * ctx.ZOOM_RATE), 14, 640);
+    else if (ctx.mode === 'drive') { ctx.czoom = clamp(ctx.czoom * Math.exp(e.deltaY * ctx.ZOOM_RATE), driveTopDown() ? 0.14 : 0.4, driveTopDown() ? 7 : 3.4); emitDriveZoom(); }
+    else if (ctx.mode === 'scoop') ctx.szoom = clamp(ctx.szoom * Math.exp(e.deltaY * ctx.ZOOM_RATE), 0.32, 2.6);
   }
 
   function onContextMenu(e) { e.preventDefault(); }
 
   function onDblClick() {
-    if (ctx.mode === 'explore') { ctl.gtx = ctx.house.c[0]; ctl.gtz = ctx.house.c[1]; ctl.gr = 160; ctl.gpo = 0.95; }
+    if (ctx.mode === 'explore') { ctx.ctl.gtx = ctx.house.c[0]; ctx.ctl.gtz = ctx.house.c[1]; ctx.ctl.gr = 160; ctx.ctl.gpo = 0.95; }
   }
 
   function pan(dx, dy) {
-    const s = ctl.r * 0.0013;
-    const rx = Math.cos(ctl.az), rz = -Math.sin(ctl.az);
-    const fx = -Math.sin(ctl.az), fz = -Math.cos(ctl.az);
-    ctl.gtx = clamp(ctl.gtx - rx * dx * s + fx * dy * s, -310, 310);
-    ctl.gtz = clamp(ctl.gtz - rz * dx * s + fz * dy * s, -310, 310);
-    ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3;
+    const s = ctx.ctl.r * 0.0013;
+    const rx = Math.cos(ctx.ctl.az), rz = -Math.sin(ctx.ctl.az);
+    const fx = -Math.sin(ctx.ctl.az), fz = -Math.cos(ctx.ctl.az);
+    ctx.ctl.gtx = clamp(ctx.ctl.gtx - rx * dx * s + fx * dy * s, -310, 310);
+    ctx.ctl.gtz = clamp(ctx.ctl.gtz - rz * dx * s + fz * dy * s, -310, 310);
+    ctx.ctl.gty = terrainAt(ctx.ctl.gtx, ctx.ctl.gtz) + 3;
   }
 
   function focusHouse(close) {
-    ctl.gtx = ctx.house.c[0]; ctl.gtz = ctx.house.c[1]; ctl.gty = ctx.house.baseY + 3.5;
-    ctl.gr = close ? 48 : 120; ctl.gpo = close ? 0.78 : 0.95;
+    ctx.ctl.gtx = ctx.house.c[0]; ctx.ctl.gtz = ctx.house.c[1]; ctx.ctl.gty = ctx.house.baseY + 3.5;
+    ctx.ctl.gr = close ? 48 : 120; ctx.ctl.gpo = close ? 0.78 : 0.95;
   }
 
   // ---------- keyboard ----------
@@ -1872,12 +1872,12 @@ export function createEngine({ canvas, ui, emit }) {
       e.preventDefault(); return;
     }
     const step = 0.12;
-    if (e.key === 'ArrowLeft') ctl.gaz += step;
-    else if (e.key === 'ArrowRight') ctl.gaz -= step;
-    else if (e.key === 'ArrowUp') ctl.gpo = clamp(ctl.gpo - step, 0.14, 1.46);
-    else if (e.key === 'ArrowDown') ctl.gpo = clamp(ctl.gpo + step, 0.14, 1.46);
-    else if (e.key === '+' || e.key === '=') ctl.gr = clamp(ctl.gr * 0.85, 14, 640);
-    else if (e.key === '-') ctl.gr = clamp(ctl.gr * 1.18, 14, 640);
+    if (e.key === 'ArrowLeft') ctx.ctl.gaz += step;
+    else if (e.key === 'ArrowRight') ctx.ctl.gaz -= step;
+    else if (e.key === 'ArrowUp') ctx.ctl.gpo = clamp(ctx.ctl.gpo - step, 0.14, 1.46);
+    else if (e.key === 'ArrowDown') ctx.ctl.gpo = clamp(ctx.ctl.gpo + step, 0.14, 1.46);
+    else if (e.key === '+' || e.key === '=') ctx.ctl.gr = clamp(ctx.ctl.gr * 0.85, 14, 640);
+    else if (e.key === '-') ctx.ctl.gr = clamp(ctx.ctl.gr * 1.18, 14, 640);
     else if (e.key === 'Enter') focusHouse(true);
     else return;
     e.preventDefault();
@@ -1918,7 +1918,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.CHAR.x = (SREC.coop[0] + SREC.pen[0]) / 2; ctx.CHAR.z = (SREC.coop[1] + SREC.pen[1]) / 2;
     ctx.CHAR.yaw = Math.atan2(SREC.barn[0] - ctx.CHAR.x, SREC.barn[1] - ctx.CHAR.z);
     ctx.camYawS = ctx.CHAR.yaw; ctx.scoopMoveYaw = ctx.camYawS; ctx.scoopMoveActive = false;
-    ctx.scoopScene = 'yard'; ctx.entryArmed = true; ctx.exitArmed = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
+    ctx.scoopScene = 'yard'; ctx.entryArmed = true; ctx.exitArmed = false; ctx.doorMarker.visible = false; ctx.exitMarker.visible = false; ctx.exitRing.visible = false;
     ctx.emit('avatar', { name: ctx.CHAR.avatar, actions: ctx.CHAR.getActions() });
     ctx.audio.ensure();
     setTool(ctx.CHAR.lvl);
@@ -1931,15 +1931,15 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.groundPatch) ctx.groundPatch.visible = false;
     if (ctx.scoopGrass) ctx.scoopGrass.visible = false;
     if (ctx.scoopFence) ctx.scoopFence.visible = false;
-    marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false; exitMarker.visible = false; exitRing.visible = false;
+    ctx.marker.visible = false; ctx.carMarker.visible = false; ctx.compostMarker.visible = false; ctx.doorMarker.visible = false; ctx.exitMarker.visible = false; ctx.exitRing.visible = false;
     if (ctx.nearCar) { ctx.nearCar = false; ctx.emit('nearCar', false); }
     hideJoy();
     for (const s of ctx.labelSprites) s.visible = true;
     ctx.CHAR.group.visible = false;
     ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0; ctx.scoopMoveActive = false;
-    ctl.gtx = clamp(ctx.CHAR.x, -310, 310); ctl.gtz = clamp(ctx.CHAR.z, -310, 310);
-    ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3; ctl.gr = 60; ctl.gpo = 0.85;
-    ctl.tx = ctl.gtx; ctl.tz = ctl.gtz;
+    ctx.ctl.gtx = clamp(ctx.CHAR.x, -310, 310); ctx.ctl.gtz = clamp(ctx.CHAR.z, -310, 310);
+    ctx.ctl.gty = terrainAt(ctx.ctl.gtx, ctx.ctl.gtz) + 3; ctx.ctl.gr = 60; ctx.ctl.gpo = 0.85;
+    ctx.ctl.tx = ctx.ctl.gtx; ctx.ctl.tz = ctx.ctl.gtz;
   }
 
   function updateScoop(dt, now) {
@@ -1987,11 +1987,11 @@ export function createEngine({ canvas, ui, emit }) {
           else if (!insideScoopBuilding(ctx.CHAR.x, nz)) nx = ctx.CHAR.x;
           else { nx = ctx.CHAR.x; nz = ctx.CHAR.z; }
         }
-        for (const t of scoopTrees) {
+        for (const t of ctx.scoopTrees) {
           const dx = nx - t[0], dz = nz - t[1], d2 = dx * dx + dz * dz, rr = 0.55 + rad;
           if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = t[0] + dx / d * rr; nz = t[1] + dz / d * rr; }
         }
-        for (const a of ANIMALS) {
+        for (const a of ctx.ANIMALS) {
           const dx = nx - a.x, dz = nz - a.z, d2 = dx * dx + dz * dz, rr = a.r + rad;
           if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); nx = a.x + dx / d * rr; nz = a.z + dz / d * rr; }
         }
@@ -2010,31 +2010,31 @@ export function createEngine({ canvas, ui, emit }) {
     const bobY = (ctx.CHAR.airY > 0 || ctx.CHAR.drew) ? 0 : Math.abs(Math.sin(ctx.CHAR.bob)) * 0.05;
     ctx.CHAR.group.position.set(ctx.CHAR.x, cy + ctx.CHAR.airY + bobY, ctx.CHAR.z);
     ctx.CHAR.group.rotation.y = ctx.CHAR.yaw - Math.PI / 2;
-    if (ctx.CHAR.drew) { ctx.CHAR.drew.locomotion(rawMag > MOVE_DEADZONE ? 4.4 * mag : 0); ctx.CHAR.drew.tick(dt); }
+    if (ctx.CHAR.drew) { ctx.CHAR.drew.locomotion(rawMag > ctx.MOVE_DEADZONE ? 4.4 * mag : 0); ctx.CHAR.drew.tick(dt); }
     if (inside) { updateScoopInterior(dt, now); return; }
     // ===== YARD =====
     // door ENTRY: stand on the front-yard pad to walk inside the house
-    if (ctx.interior && entryPt) {
-      doorMarker.visible = true;
-      doorMarker.position.set(entryPt[0], terrainAt(entryPt[0], entryPt[1]) + 2.6 + Math.abs(Math.sin(now * 0.005)) * 0.3, entryPt[1]);
-      const din = Math.hypot(ctx.CHAR.x - entryPt[0], ctx.CHAR.z - entryPt[1]);
+    if (ctx.interior && ctx.entryPt) {
+      ctx.doorMarker.visible = true;
+      ctx.doorMarker.position.set(ctx.entryPt[0], terrainAt(ctx.entryPt[0], ctx.entryPt[1]) + 2.6 + Math.abs(Math.sin(now * 0.005)) * 0.3, ctx.entryPt[1]);
+      const din = Math.hypot(ctx.CHAR.x - ctx.entryPt[0], ctx.CHAR.z - ctx.entryPt[1]);
       if (din > 4.0) ctx.entryArmed = true;
       if (ctx.entryArmed && din < 2.6 && now > ctx.doorT) { enterHouse(now); updateScoopInterior(dt, now); return; }   // run the interior frame now — no 1-frame yard flash
-    } else doorMarker.visible = false;
+    } else ctx.doorMarker.visible = false;
     // always-on-top marker so Drew is never lost behind a real tree
-    marker.visible = true;
-    marker.position.set(ctx.CHAR.x, cy + 2.6 + Math.abs(Math.sin(now * 0.004)) * 0.22, ctx.CHAR.z);
-    marker.rotation.y = now * 0.003;
+    ctx.marker.visible = true;
+    ctx.marker.position.set(ctx.CHAR.x, cy + 2.6 + Math.abs(Math.sin(now * 0.004)) * 0.22, ctx.CHAR.z);
+    ctx.marker.rotation.y = now * 0.003;
     // scooping
     const tool = TOOLS[ctx.CHAR.lvl];
-    for (let i = POOPS.length - 1; i >= 0; i--) {
-      const p = POOPS[i];
+    for (let i = ctx.POOPS.length - 1; i >= 0; i--) {
+      const p = ctx.POOPS[i];
       if (Math.hypot(ctx.CHAR.x - p.x, ctx.CHAR.z - p.z) < tool.r) {
         if (ctx.CHAR.bag >= tool.cap) {
           if (!ctx.bagWarned) { ctx.toast('Scoop is full! Empty it at the green bin ♻️'); ctx.bagWarned = true; }
           break;
         }
-        removePoop(p); ctx.CHAR.bag++; ctx.CHAR.total++; ctx.audio.sfxScoop();
+        ctx.removePoop(p); ctx.CHAR.bag++; ctx.CHAR.total++; ctx.audio.sfxScoop();
         const nl = toolAfterScoop(ctx.CHAR.lvl, ctx.CHAR.total);
         if (nl !== ctx.CHAR.lvl) {
           setTool(nl);
@@ -2046,15 +2046,15 @@ export function createEngine({ canvas, ui, emit }) {
     }
     if (ctx.COMPOST) {
       // green pin over the bin whenever you're carrying — makes the dump-off obvious
-      compostMarker.visible = ctx.CHAR.bag > 0;
-      if (compostMarker.visible) compostMarker.position.set(ctx.COMPOST[0], terrainAt(ctx.COMPOST[0], ctx.COMPOST[1]) + 3.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, ctx.COMPOST[1]);
+      ctx.compostMarker.visible = ctx.CHAR.bag > 0;
+      if (ctx.compostMarker.visible) ctx.compostMarker.position.set(ctx.COMPOST[0], terrainAt(ctx.COMPOST[0], ctx.COMPOST[1]) + 3.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, ctx.COMPOST[1]);
       if (ctx.CHAR.bag > 0 && Math.hypot(ctx.CHAR.x - ctx.COMPOST[0], ctx.CHAR.z - ctx.COMPOST[1]) < 3) {
         const dumped = ctx.CHAR.bag; ctx.CHAR.bag = 0; ctx.bagWarned = false; ctx.audio.sfxChime([392, 523]); pushScoopHud();
         ctx.toast('Composted ' + dumped + ' ♻️');
       }
     }
-    if (POOPS.length === 0 && !ctx.spotless) { ctx.spotless = true; ctx.toast('Yard is spotless ✨ (for now…)', 2400); if (ctx.CHAR.drew) ctx.CHAR.drew.react('dance'); ctx._syncDanceNext = now; }   // clean yard → the house throws a dance party next time you step inside
-    if (POOPS.length > 0) ctx.spotless = false;
+    if (ctx.POOPS.length === 0 && !ctx.spotless) { ctx.spotless = true; ctx.toast('Yard is spotless ✨ (for now…)', 2400); if (ctx.CHAR.drew) ctx.CHAR.drew.react('dance'); ctx._syncDanceNext = now; }   // clean yard → the house throws a dance party next time you step inside
+    if (ctx.POOPS.length > 0) ctx.spotless = false;
     if (ctx.scoopHudDirty) { ctx.scoopHudDirty = false; pushScoopHud(); }
     // Scoop renders the full procedural world (its aerial-photo terrain IS the
     // backyard ground, with the real house + sanctuary structures), so the old
@@ -2071,30 +2071,30 @@ export function createEngine({ canvas, ui, emit }) {
     // instead of the old dolly that stacked scPitch into both dist AND szoom.
     const dist = SC.dist * ctx.szoom, h = (SC.h + ctx.scPitch * 9) * Math.max(0.75, ctx.szoom);
     ctx.camGroundRef = ctx.camGroundRef == null ? cy : ctx.camGroundRef + (cy - ctx.camGroundRef) * Math.min(1, dt * 1.5);
-    const camT = _camT.set(ctx.CHAR.x - fx * dist, ctx.camGroundRef + h, ctx.CHAR.z - fz * dist);
-    if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
-    camV.lerp(camT, Math.min(1, dt * 6));
-    camV.y = Math.max(camV.y, terrainAt(camV.x, camV.z) + 1.2);
-    ctx.camera.position.copy(camV);
+    const camT = ctx._camT.set(ctx.CHAR.x - fx * dist, ctx.camGroundRef + h, ctx.CHAR.z - fz * dist);
+    if (!ctx.camInit) { ctx.camV.copy(camT); ctx.camInit = true; }
+    ctx.camV.lerp(camT, Math.min(1, dt * 6));
+    ctx.camV.y = Math.max(ctx.camV.y, terrainAt(ctx.camV.x, ctx.camV.z) + 1.2);
+    ctx.camera.position.copy(ctx.camV);
     ctx.camera.lookAt(ctx.CHAR.x, cy + 1.0, ctx.CHAR.z);
     // walk-to-drive: prompt when Drew reaches a parked car in the driveway, and
     // float a pin over the nearest car so the handoff is discoverable from the yard.
     let near = false, best = null, bestD = 1e9;
-    for (const s of parkedSpots) {
+    for (const s of ctx.parkedSpots) {
       const d = Math.hypot(ctx.CHAR.x - s.x, ctx.CHAR.z - s.z);
       if (d < 3.6) near = true;
       if (d < bestD) { bestD = d; best = s; }
     }
     if (near !== ctx.nearCar) { ctx.nearCar = near; ctx.emit('nearCar', near); }
-    carMarker.visible = !!best && !near;
-    if (carMarker.visible) carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
+    ctx.carMarker.visible = !!best && !near;
+    if (ctx.carMarker.visible) ctx.carMarker.position.set(best.x, terrainAt(best.x, best.z) + 5.2 + Math.abs(Math.sin(now * 0.005)) * 0.4, best.z);
   }
   // Indoor follow cam + the exit pad (movement/grounding/collision already ran in updateScoop).
-  const _wallRay = new THREE.Raycaster(); const _wallDir = new THREE.Vector3();
-  let _wallCutT = 0;
+  ctx._wallRay = new THREE.Raycaster(); ctx._wallDir = new THREE.Vector3();
+  ctx._wallCutT = 0;
   function updateScoopInterior(dt, now) {
-    marker.visible = false; carMarker.visible = false; compostMarker.visible = false; doorMarker.visible = false;
-    exitMarker.visible = false; exitRing.visible = false;   // no blue indicators inside — exit via the "Leave house" button
+    ctx.marker.visible = false; ctx.carMarker.visible = false; ctx.compostMarker.visible = false; ctx.doorMarker.visible = false;
+    ctx.exitMarker.visible = false; ctx.exitRing.visible = false;   // no blue indicators inside — exit via the "Leave house" button
     updateNpcs(dt, now);
     // small indoor follow cam: pull IN before it pokes a wall (but never collapse onto the avatar),
     // and rise toward overhead when forced close; clamp under the ceiling.
@@ -2107,30 +2107,30 @@ export function createEngine({ canvas, ui, emit }) {
     }
     const camY = ctx.interior.floorY + 2.1 + ctx.scPitch * 3.4 * Math.max(0.75, szi);
     const cc = ctx.interior.clampCam(camX, camY, camZ, 0.3);
-    const camT = _camT.set(cc.x, cc.y, cc.z);
-    if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
-    camV.lerp(camT, Math.min(1, dt * 6));
-    const cl = ctx.interior.clampCam(camV.x, camV.y, camV.z, 0.28);
-    camV.set(cl.x, Math.max(cl.y, ctx.interior.floorY + 0.7), cl.z);
+    const camT = ctx._camT.set(cc.x, cc.y, cc.z);
+    if (!ctx.camInit) { ctx.camV.copy(camT); ctx.camInit = true; }
+    ctx.camV.lerp(camT, Math.min(1, dt * 6));
+    const cl = ctx.interior.clampCam(ctx.camV.x, ctx.camV.y, ctx.camV.z, 0.28);
+    ctx.camV.set(cl.x, Math.max(cl.y, ctx.interior.floorY + 0.7), cl.z);
     // if an outer-wall corner clamped the camera in close, rise toward overhead so we look DOWN at the
     // kid instead of zooming into their head.
-    const pd = Math.hypot(camV.x - ctx.CHAR.x, camV.z - ctx.CHAR.z);
-    if (pd < MIND) camV.y = Math.min(ctx.interior.ceilingY - 0.3, Math.max(camV.y, ctx.interior.floorY + 1.1 + (MIND - pd) * 2.0 + 1.2));
-    ctx.camera.position.copy(camV);
+    const pd = Math.hypot(ctx.camV.x - ctx.CHAR.x, ctx.camV.z - ctx.CHAR.z);
+    if (pd < MIND) ctx.camV.y = Math.min(ctx.interior.ceilingY - 0.3, Math.max(ctx.camV.y, ctx.interior.floorY + 1.1 + (MIND - pd) * 2.0 + 1.2));
+    ctx.camera.position.copy(ctx.camV);
     ctx.camera.lookAt(ctx.CHAR.x, ctx.interior.floorY + 1.1, ctx.CHAR.z);
     // SEE-THROUGH: hide any non-floor mesh between the camera and a BOUNDARY around the avatar — not just
     // the one dead-centre ray (which left walls covering the kid's body/sides in the way). Cast a small fan
     // to the torso, head, and a ring around them, so a wall blocking ANY part of the kid (or right around
     // them) is cut — a clean cutout boundary. Collision still uses precomputed AABBs, so hidden walls block.
     const occ = ctx.interior.occluders;
-    if (occ && now - _wallCutT > (ctx.MOBILE ? 75 : 45)) {
-      _wallCutT = now;
+    if (occ && now - ctx._wallCutT > (ctx.MOBILE ? 75 : 45)) {
+      ctx._wallCutT = now;
       for (const w of occ) if (!w.userData.permaHidden) w.visible = true;
       const cp = ctx.camera.position, fy = ctx.interior.floorY;
       const hideAlong = (tx, ty, tz) => {
         const dx = tx - cp.x, dy = ty - cp.y, dz = tz - cp.z, len = Math.hypot(dx, dy, dz) || 1;
-        _wallRay.set(cp, _wallDir.set(dx / len, dy / len, dz / len)); _wallRay.far = Math.max(0.1, len - 0.5);
-        const hits = _wallRay.intersectObjects(occ, false);
+        ctx._wallRay.set(cp, ctx._wallDir.set(dx / len, dy / len, dz / len)); ctx._wallRay.far = Math.max(0.1, len - 0.5);
+        const hits = ctx._wallRay.intersectObjects(occ, false);
         for (const h of hits) h.object.visible = false;
       };
       hideAlong(ctx.CHAR.x, fy + 1.1, ctx.CHAR.z);                                                            // torso
@@ -2158,7 +2158,7 @@ export function createEngine({ canvas, ui, emit }) {
     setMode('drive'); ctx.camInit = false;
     setInside(false);
     clearDestination();
-    if (navMarker) navMarker.visible = false;
+    if (ctx.navMarker) ctx.navMarker.visible = false;
     // Default to the Roblox-style CHASE cam ('Close') so driving leads with the
     // dynamic thumbstick + swipe-to-look controls — that IS the Roblox feel the
     // player expects. The overhead drag-to-drive map stays one tap away on the VIEW
@@ -2169,7 +2169,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (i >= 0) ctx.camMode = i;
     }
     ctx.czoom = 1;                                            // fresh zoom (pinch shouldn't leak between drives)
-    poiSeen.clear();                                      // re-arm the neighbourhood callouts
+    ctx.poiSeen.clear();                                      // re-arm the neighbourhood callouts
     for (const c of ctx.coins) { c.got = false; c.groundY = null; } ctx.coinsGot = 0;   // fresh coins each drive
     resetRun(); resetParticles();
     emitScore({ finishMs: 0 });
@@ -2197,31 +2197,31 @@ export function createEngine({ canvas, ui, emit }) {
     showCarCard();
     // TRUE free roam: never auto-set a destination on entry. The pink POI beacons still
     // point the way; pick a place with 🧭 or by tapping the map when YOU want a route+ETA.
-    if (poiFound.size >= POIS.length) ctx.toast('🏆 All places found — free roam, beat your times!', 2400);
+    if (ctx.poiFound.size >= ctx.POIS.length) ctx.toast('🏆 All places found — free roam, beat your times!', 2400);
   }
   function exitDrive() {
     setMode('explore');
     stopFollow();
     ctx.camera.up.set(0, 1, 0);
     hideJoy();
-    navPtr = null; ctx.inp2.navActive = false; if (navMarker) navMarker.visible = false;
-    guideLine.visible = false; destPin.visible = false;
+    ctx.navPtr = null; ctx.inp2.navActive = false; if (ctx.navMarker) ctx.navMarker.visible = false;
+    ctx.guideLine.visible = false; ctx.destPin.visible = false;
     if (ctx.ui.fx) ctx.ui.fx.classList.remove('on');
     if (ctx.camera.fov !== 46) { ctx.camera.fov = 46; ctx.camera.updateProjectionMatrix(); }
     for (const c of ctx.coins) c.mesh.visible = false;
     resetParticles();
     hideBeacons();
     hideTraffic();
-    carLocator.visible = false;
+    ctx.carLocator.visible = false;
     ctx.car.group.visible = false;
     if (ctx.groundPatch) ctx.groundPatch.visible = false;
     for (const s of ctx.labelSprites) s.visible = true;
     ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0;
     ctx.audio.engineStop();
     if (ctx.audio.stopMusic) ctx.audio.stopMusic();
-    ctl.gtx = clamp(ctx.car.x, -310, 310); ctl.gtz = clamp(ctx.car.z, -310, 310);
-    ctl.gty = terrainAt(ctl.gtx, ctl.gtz) + 3; ctl.gr = 110; ctl.gpo = 0.95;
-    ctl.tx = ctl.gtx; ctl.tz = ctl.gtz;
+    ctx.ctl.gtx = clamp(ctx.car.x, -310, 310); ctx.ctl.gtz = clamp(ctx.car.z, -310, 310);
+    ctx.ctl.gty = terrainAt(ctx.ctl.gtx, ctx.ctl.gtz) + 3; ctx.ctl.gr = 110; ctx.ctl.gpo = 0.95;
+    ctx.ctl.tx = ctx.ctl.gtx; ctx.ctl.tz = ctx.ctl.gtz;
   }
   // Unstick: snap the car to the nearest point ON a drivable road segment, facing
   // along it, stopped. Projects onto each segment (not just vertices) for accuracy.
@@ -2277,14 +2277,14 @@ export function createEngine({ canvas, ui, emit }) {
   // Real road route from Google Directions (via the Maps JS SDK, which works in the
   // browser — the Directions web service is CORS-blocked). Falls back to a straight
   // line if the SDK/Directions API isn't enabled on the key.
-  let _mapsSDK = null;
+  ctx._mapsSDK = null;
   ctx.routeReqId = 0, ctx._quietRoute = false;
   function loadMapsSDK() {
     if (window.google && window.google.maps && window.google.maps.DirectionsService) return Promise.resolve(window.google.maps);
-    if (_mapsSDK) return _mapsSDK;
+    if (ctx._mapsSDK) return ctx._mapsSDK;
     const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
     if (!key) return Promise.reject(new Error('no key'));
-    _mapsSDK = new Promise((res, rej) => {
+    ctx._mapsSDK = new Promise((res, rej) => {
       const s = document.createElement('script');
       s.src = 'https://maps.googleapis.com/maps/api/js?key=' + key + '&libraries=places&loading=async';   // places = address autocomplete
       s.async = true; s.defer = true;
@@ -2292,7 +2292,7 @@ export function createEngine({ canvas, ui, emit }) {
       s.onerror = () => rej(new Error('maps script failed'));
       document.head.appendChild(s);
     });
-    return _mapsSDK;
+    return ctx._mapsSDK;
   }
   // Shift a centreline route into the correct travel lane (US = right-hand side) so the guide
   // line sits in the lane you actually drive, not on the centre divider — most noticeable on
@@ -2309,7 +2309,7 @@ export function createEngine({ canvas, ui, emit }) {
     }
     return out;
   }
-  const LANE_OFFSET = 2.8;   // metres right of centreline ≈ middle of the right-hand lane
+  ctx.LANE_OFFSET = 2.8;   // metres right of centreline ≈ middle of the right-hand lane
 
   function fetchRoute(destLat, destLon) {
     const reqId = ++ctx.routeReqId;
@@ -2327,7 +2327,7 @@ export function createEngine({ canvas, ui, emit }) {
             const src = stepPath.length ? stepPath : route.overview_path;
             const pts = src.map(p => { const w = ctx.geo.geoToWorld(p.lat(), p.lng()); return { x: w[0], z: w[1] }; });
             if (pts.length > 1) {
-              ctx.ROUTE = laneOffsetRoute(pts, LANE_OFFSET); ctx.routeIdx = 0;   // ride the correct lane, not the divider
+              ctx.ROUTE = laneOffsetRoute(pts, ctx.LANE_OFFSET); ctx.routeIdx = 0;   // ride the correct lane, not the divider
               snapDestinationToRouteEnd(ctx.ROUTE);
               if (ctx.autoDrive && Math.abs(ctx.car.speed) < 6) faceRouteStart();   // just set off / was holding → aim down the real route
               if (!ctx._quietRoute) ctx.toast('🗺️ Route ready — follow the line', 1500);
@@ -2349,7 +2349,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (Math.hypot(end.x - rawX, end.z - rawZ) > maxSnap) return;
     ctx.DEST.rawX = rawX; ctx.DEST.rawZ = rawZ;
     ctx.DEST.x = end.x; ctx.DEST.z = end.z;
-    destPin.userData.groundY = null;
+    ctx.destPin.userData.groundY = null;
   }
   // fromSearch = the player explicitly chose this place from the GO address search;
   // only THOSE arrivals earn the "Arrived" banner (a casual map tap does not).
@@ -2367,7 +2367,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.DEST = { x: w[0], z: w[1], rawX: w[0], rawZ: w[1], label: label || 'Destination', geo: { lat, lon }, celebrate: (!!fromSearch || !!opts.celebrate) && !opts.quiet };   // geo kept so a failed route can self-retry
     ctx.ROUTE = seedRoute || null; ctx.routeIdx = 0;
     if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
-    destPin.userData.groundY = null;
+    ctx.destPin.userData.groundY = null;
     ctx.emit('dest', { label: ctx.DEST.label });
     ctx._quietRoute = !!opts.quiet;   // suppress the follow-up "Route ready" toast on quiet (follow-mode) re-routes
     if (!isChain && !opts.quiet) { const km = (Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) / 1000).toFixed(1); ctx.toast('📍 ' + ctx.esc(ctx.DEST.label) + ' · ' + km + ' km — routing…', 2200); }
@@ -2381,7 +2381,7 @@ export function createEngine({ canvas, ui, emit }) {
   function clearDestination() {
     ctx.routeReqId++; ctx.DEST = null; ctx.ROUTE = null; ctx.routeIdx = 0; ctx.autoDrive = false; ctx.inp2.navActive = false;
     clearRouteRail(); clearRouteCaches();
-    guideLine.visible = false; destPin.visible = false; destPin.userData.groundY = null;
+    ctx.guideLine.visible = false; ctx.destPin.visible = false; ctx.destPin.userData.groundY = null;
     ctx.emit('dest', null); ctx.emit('autodrive', false);
   }
   // ---- address search (Google JS SDK — the Geocoder + Places run IN-BROWSER where the REST
@@ -2397,22 +2397,22 @@ export function createEngine({ canvas, ui, emit }) {
   // Correct the preset POIs to their REAL coordinates via Google geocoding (the hardcoded
   // lat/lons were approximate). Updates each POI's world position so proximity/'found' and
   // the in-world beacon+label point at the actual place; shifts the Stanton dancers along.
-  const POI_ADDR = {
+  ctx.POI_ADDR = {
     meemaw: '4311 Circle Ave, Castro Valley, CA 94546',
     canyon: 'Canyon Middle School, Castro Valley, CA',
     stanton: 'Stanton Elementary School, Castro Valley, CA',
     dad: '807 Broadway, Oakland, CA 94607',
   };
   function geocodePOIs() {
-    for (const p of POIS) {
-      const addr = POI_ADDR[p.key];
+    for (const p of ctx.POIS) {
+      const addr = ctx.POI_ADDR[p.key];
       if (!addr) continue;
       geocodeAddress(addr).then(g => {
         const w = ctx.geo.geoToWorld(g.lat, g.lon), ox = p.x, oz = p.z;
         p.x = w[0]; p.z = w[1]; p.lat = g.lat; p.lon = g.lon;
-        const b = poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
-        const lb = poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
-        for (const sp of crowdSpots) if (sp.zone === p.key) {
+        const b = ctx.poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
+        const lb = ctx.poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
+        for (const sp of ctx.crowdSpots) if (sp.zone === p.key) {
           const dx = p.x - ox, dz = p.z - oz;
           sp.rec.grp.position.x += dx; sp.rec.grp.position.z += dz;
           sp.rec.x += dx; sp.rec.z += dz;
@@ -2424,7 +2424,7 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- live Google minimap (always shows real streets, even far from the procedural
   // neighbourhood where the canvas minimap goes blank). Centres on the car, draws the route,
   // and a tap drives there. Sits OVER the procedural canvas, which stays as the fallback. ----
-  const DARK_MAP_STYLE = [
+  ctx.DARK_MAP_STYLE = [
     { elementType: 'geometry', stylers: [{ color: '#1b2027' }] },
     { elementType: 'labels', stylers: [{ visibility: 'off' }] },
     { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#3a4350' }] },
@@ -2454,7 +2454,7 @@ export function createEngine({ canvas, ui, emit }) {
       ctx._gmap = new maps.Map(div, {
         center: { lat: o.lat, lng: o.lon }, zoom: 12, disableDefaultUI: true,   // zoomed-out district view (~10 km across) so fast cross-town drives stay on the map
         gestureHandling: 'none', keyboardShortcuts: false, clickableIcons: false,
-        styles: DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
+        styles: ctx.DARK_MAP_STYLE, backgroundColor: '#1b2027', isFractionalZoomEnabled: true,
       });
       ctx._gmapCar = new maps.Marker({ position: { lat: o.lat, lng: o.lon }, map: ctx._gmap, zIndex: 5,
         icon: { path: 'M0,-10 L7,8 L0,3 L-7,8 Z', fillColor: '#2D8CFF', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5, scale: 1.05, rotation: 0, anchor: new maps.Point(0, 0) } });
@@ -2518,21 +2518,21 @@ export function createEngine({ canvas, ui, emit }) {
       });
     }));
   }
-  let _acSvc = null, _acTok = null;
-  const _acCache = new Map();
+  ctx._acSvc = null, ctx._acTok = null;
+  ctx._acCache = new Map();
   function placeSuggest(text) {
     const q = (text || '').trim().replace(/\s+/g, ' ');
     if (q.length < 4) return Promise.resolve([]);
     const key = q.toLowerCase();
-    if (_acCache.has(key)) return Promise.resolve(_acCache.get(key));
+    if (ctx._acCache.has(key)) return Promise.resolve(ctx._acCache.get(key));
     return loadMapsSDK().then(maps => new Promise(res => {
       if (!maps.places) { res([]); return; }
-      if (!_acSvc) _acSvc = new maps.places.AutocompleteService();
-      if (!_acTok) _acTok = new maps.places.AutocompleteSessionToken();
-      _acSvc.getPlacePredictions({ input: q, sessionToken: _acTok, componentRestrictions: { country: 'us' } }, (preds, status) => {
+      if (!ctx._acSvc) ctx._acSvc = new maps.places.AutocompleteService();
+      if (!ctx._acTok) ctx._acTok = new maps.places.AutocompleteSessionToken();
+      ctx._acSvc.getPlacePredictions({ input: q, sessionToken: ctx._acTok, componentRestrictions: { country: 'us' } }, (preds, status) => {
         const out = (status === 'OK' && preds) ? preds.slice(0, 4).map(p => ({ description: p.description, placeId: p.place_id })) : [];
-        _acCache.set(key, out);
-        if (_acCache.size > 40) _acCache.delete(_acCache.keys().next().value);
+        ctx._acCache.set(key, out);
+        if (ctx._acCache.size > 40) ctx._acCache.delete(ctx._acCache.keys().next().value);
         res(out);
       });
     })).catch(() => []);
@@ -2604,15 +2604,15 @@ export function createEngine({ canvas, ui, emit }) {
     return geocodeAddress(text).then(g => { setDestination(g.lat, g.lon, g.label, false, true, { drive, celebrate: true }); return g; });
   }
   function setDestinationByPlace(placeId, label, drive) {
-    return geocodePlaceId(placeId, label).then(g => { _acTok = null; setDestination(g.lat, g.lon, g.label, false, true, { drive, celebrate: true }); return g; });
+    return geocodePlaceId(placeId, label).then(g => { ctx._acTok = null; setDestination(g.lat, g.lon, g.label, false, true, { drive, celebrate: true }); return g; });
   }
   function driveHome() {
-    setDestination(homeGeo.lat, homeGeo.lon, 'Home', false, true, { drive: true, celebrate: true });
-    return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
+    setDestination(ctx.homeGeo.lat, ctx.homeGeo.lon, 'Home', false, true, { drive: true, celebrate: true });
+    return Promise.resolve({ lat: ctx.homeGeo.lat, lon: ctx.homeGeo.lon, label: 'Home' });
   }
   function jumpHome() {   // TELEPORT home (the "Jump there" button) — driveHome() chauffeur-drives, which is wrong for Jump
-    jumpTo(homeGeo.lat, homeGeo.lon, 'Home');
-    return Promise.resolve({ lat: homeGeo.lat, lon: homeGeo.lon, label: 'Home' });
+    jumpTo(ctx.homeGeo.lat, ctx.homeGeo.lon, 'Home');
+    return Promise.resolve({ lat: ctx.homeGeo.lat, lon: ctx.homeGeo.lon, label: 'Home' });
   }
   function driveToLatLon(lat, lon, label, quiet) {
     setDestination(lat, lon, label, false, true, { drive: true, celebrate: true, quiet });
@@ -2734,7 +2734,7 @@ export function createEngine({ canvas, ui, emit }) {
     const g = ctx.geo.worldToGeo(wx, wz);
     let route = localRoadRoute(ctx.car.x, ctx.car.z, wx, wz);
     if (!route) { const np = ctx.roads.nearestRoadPoint(wx, wz); if (np && np.d < 90) route = localRoadRoute(ctx.car.x, ctx.car.z, np.x, np.z); }
-    ctx.DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ctx.ROUTE = route || null; ctx.routeIdx = 0; destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
+    ctx.DEST = { x: wx, z: wz, rawX: wx, rawZ: wz, label: 'the map point', geo: g }; ctx.ROUTE = route || null; ctx.routeIdx = 0; ctx.destPin.userData.groundY = null;   // geo kept so a failed route can self-retry
     if (ctx.ROUTE) snapDestinationToRouteEnd(ctx.ROUTE);
     fetchRoute(g.lat, g.lon);                            // Google road path (async) → overwrites the seed when ready
     ctx.autoDrive = true; ctx.inp2.navActive = false;
@@ -2788,13 +2788,13 @@ export function createEngine({ canvas, ui, emit }) {
   // ---- auto-drive RAIL: a chauffeur is not a physics sim. Glue the car to the route polyline and
   // advance it by arc-length at a fast cruise, so a cross-town trip takes ~30-90 s and it can never
   // overshoot a bend or ping-pong off the route, no matter the speed. (Supernatural traction by design.)
-  let _routeLenFor = null, _routeLen = 0;
+  ctx._routeLenFor = null, ctx._routeLen = 0;
   function routeTotalLen() {
     if (!ctx.ROUTE) return 0;
-    if (_routeLenFor === ctx.ROUTE) return _routeLen;
-    _routeLenFor = ctx.ROUTE; _routeLen = 0;
-    for (let i = 0; i < ctx.ROUTE.length - 1; i++) _routeLen += Math.hypot(ctx.ROUTE[i + 1].x - ctx.ROUTE[i].x, ctx.ROUTE[i + 1].z - ctx.ROUTE[i].z);
-    return _routeLen;
+    if (ctx._routeLenFor === ctx.ROUTE) return ctx._routeLen;
+    ctx._routeLenFor = ctx.ROUTE; ctx._routeLen = 0;
+    for (let i = 0; i < ctx.ROUTE.length - 1; i++) ctx._routeLen += Math.hypot(ctx.ROUTE[i + 1].x - ctx.ROUTE[i].x, ctx.ROUTE[i + 1].z - ctx.ROUTE[i].z);
+    return ctx._routeLen;
   }
   function railArcAt(x, z) {   // arc-length (m from ROUTE[0]) of the nearest point on the route to (x,z)
     let bestS = 0, bd = 1e18, acc = 0;
@@ -2843,17 +2843,17 @@ export function createEngine({ canvas, ui, emit }) {
   // Live "where am I" readout: reverse-geocode the car's position to a rough STREET · CITY, ST and push
   // it to the subline. Throttled hard (every ~4 s, and only after moving ~140 m) to stay well within the
   // geocoder quota; falls back silently on any error.
-  let _geoT = 0, _geoBusy = false, _geoLabel = '', _geoLast = null;
+  ctx._geoT = 0, ctx._geoBusy = false, ctx._geoLabel = '', ctx._geoLast = null;
   function updateLocationLabel(now) {
-    if (_geoBusy && now - _geoT > 12000) _geoBusy = false;   // watchdog: a Geocoder callback that never fires must not wedge the readout dead for the session
-    if (ctx.mode !== 'drive' || _geoBusy || now - _geoT < 4000) return;
-    if (_geoLast && Math.hypot(ctx.car.x - _geoLast.x, ctx.car.z - _geoLast.z) < 140) return;
-    _geoT = now; _geoLast = { x: ctx.car.x, z: ctx.car.z };
+    if (ctx._geoBusy && now - ctx._geoT > 12000) ctx._geoBusy = false;   // watchdog: a Geocoder callback that never fires must not wedge the readout dead for the session
+    if (ctx.mode !== 'drive' || ctx._geoBusy || now - ctx._geoT < 4000) return;
+    if (ctx._geoLast && Math.hypot(ctx.car.x - ctx._geoLast.x, ctx.car.z - ctx._geoLast.z) < 140) return;
+    ctx._geoT = now; ctx._geoLast = { x: ctx.car.x, z: ctx.car.z };
     const g = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
-    _geoBusy = true;
+    ctx._geoBusy = true;
     loadMapsSDK().then(maps => {
       new maps.Geocoder().geocode({ location: { lat: g.lat, lng: g.lon } }, (res, status) => {
-        _geoBusy = false;
+        ctx._geoBusy = false;
         if (status !== 'OK' || !res || !res.length) return;
         let route = '', locality = '', hood = '', state = '';
         for (const r of res) for (const c of (r.address_components || [])) {
@@ -2864,9 +2864,9 @@ export function createEngine({ canvas, ui, emit }) {
         }
         const place = [locality || hood, state].filter(Boolean).join(', ');
         const label = [route, place].filter(Boolean).join(' · ');
-        if (label && label !== _geoLabel) { _geoLabel = label; ctx.emit('subline', label); }
+        if (label && label !== ctx._geoLabel) { ctx._geoLabel = label; ctx.emit('subline', label); }
       });
-    }).catch(() => { _geoBusy = false; });
+    }).catch(() => { ctx._geoBusy = false; });
   }
   // Fetch the REAL road network around the car from OpenStreetMap (Overpass) in a ~2.6 km box,
   // projected through the same ENU geoToWorld as the photoreal tiles, and refresh it as you drive
@@ -2877,12 +2877,12 @@ export function createEngine({ canvas, ui, emit }) {
   function updateAreaRoads(now, force) {
     if (ctx.mode !== 'drive') return;
     if (Math.hypot(ctx.car.x, ctx.car.z) < 300) return;                                  // the hood's own roadSegs already cover here
-    if (_osmFetching) return;                                                    // one fetch at a time
+    if (ctx._osmFetching) return;                                                    // one fetch at a time
     if (!force) {
-      if (now - _osmT < 4000) return;                                            // min 4 s apart (unless forced, e.g. by Return-to-road)
-      if (_osmCenter && Math.hypot(ctx.car.x - _osmCenter.x, ctx.car.z - _osmCenter.z) < 850) return;   // the current box still covers us
+      if (now - ctx._osmT < 4000) return;                                            // min 4 s apart (unless forced, e.g. by Return-to-road)
+      if (ctx._osmCenter && Math.hypot(ctx.car.x - ctx._osmCenter.x, ctx.car.z - ctx._osmCenter.z) < 850) return;   // the current box still covers us
     }
-    _osmFetching = true; _osmT = now;
+    ctx._osmFetching = true; ctx._osmT = now;
     const fx = ctx.car.x, fz = ctx.car.z, R = 1300;                                      // ~2.6 km box around the car
     const cs = [ctx.geo.worldToGeo(fx - R, fz - R), ctx.geo.worldToGeo(fx + R, fz - R), ctx.geo.worldToGeo(fx - R, fz + R), ctx.geo.worldToGeo(fx + R, fz + R)];
     const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
@@ -2890,8 +2890,8 @@ export function createEngine({ canvas, ui, emit }) {
     const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
     const body = 'data=' + encodeURIComponent(q);
     const tryMirror = (n) => {
-      if (n >= OVERPASS_MIRRORS.length) { _osmFetching = false; return; }   // all mirrors down: keep the last roads, retry next box
-      const url = OVERPASS_MIRRORS[(_osmMirror + n) % OVERPASS_MIRRORS.length];
+      if (n >= ctx.OVERPASS_MIRRORS.length) { ctx._osmFetching = false; return; }   // all mirrors down: keep the last roads, retry next box
+      const url = ctx.OVERPASS_MIRRORS[(ctx._osmMirror + n) % ctx.OVERPASS_MIRRORS.length];
       // Hard 12 s cap per mirror: an overloaded Overpass host hangs ~48 s before its 504, which would
       // pin _osmFetching and starve the road graph. Abort early and fall through to the next mirror.
       const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 12000);
@@ -2907,7 +2907,7 @@ export function createEngine({ canvas, ui, emit }) {
             }
           }
           if (segs.length) {
-            ctx.osmRoadSegs = segs; _osmCenter = { x: fx, z: fz }; _osmMirror = (_osmMirror + n) % OVERPASS_MIRRORS.length;   // stick with the mirror that worked
+            ctx.osmRoadSegs = segs; ctx._osmCenter = { x: fx, z: fz }; ctx._osmMirror = (ctx._osmMirror + n) % ctx.OVERPASS_MIRRORS.length;   // stick with the mirror that worked
             // A far jump left the car off-road; now that we have THIS area's roads, snap it on — but ONLY if
             // it's still the SAME stopped, hands-off car the jump dropped (not following, no destination, still
             // near the jump target, within the deadline). Consume the stamp on the FIRST OSM landing either way
@@ -2919,7 +2919,7 @@ export function createEngine({ canvas, ui, emit }) {
               }
             }
           }
-          _osmFetching = false;
+          ctx._osmFetching = false;
         })
         .catch(() => { clearTimeout(to); tryMirror(n + 1); });   // this host is throttling/down — fall through to the next mirror
     };
@@ -2989,15 +2989,15 @@ export function createEngine({ canvas, ui, emit }) {
   // write the triangle-strip vertices. Falls back to a straight line to a routeless DEST.
   // Cached canopy-skipped ROAD height per ROUTE point. Fallback heights retry until
   // tiles stream, so a route line never gets stuck forever at a procedural/clamped y.
-  let _routeYFor = null, _routeY = [];
+  ctx._routeYFor = null, ctx._routeY = [];
   function clearRouteCaches() {
-    _routeLenFor = null; _routeLen = 0;
-    _routeYFor = null; _routeY = [];
+    ctx._routeLenFor = null; ctx._routeLen = 0;
+    ctx._routeYFor = null; ctx._routeY = [];
   }
   function guideHeightAt(i) {
-    if (_routeYFor !== ctx.ROUTE) { _routeYFor = ctx.ROUTE; _routeY = []; }
+    if (ctx._routeYFor !== ctx.ROUTE) { ctx._routeYFor = ctx.ROUTE; ctx._routeY = []; }
     const p = ctx.ROUTE[i], tA = terrainAt(p.x, p.z), nowMs = performance.now();
-    let rec = _routeY[i];
+    let rec = ctx._routeY[i];
     if (!rec || (!rec.confirmed && nowMs >= (rec.retryAt || 0))) {
       const base = rec ? rec.y : tA;
       let y = ctx.ground.rawTileY(p.x, p.z, base + 8);
@@ -3008,7 +3008,7 @@ export function createEngine({ canvas, ui, emit }) {
         rec = { y: inHood ? clamp(y, tA - 2, tA + 2) : y, confirmed: true, retryAt: 0 };
       } else if (!rec) rec = { y: tA, confirmed: false, retryAt: nowMs + 350 };
       else rec.retryAt = nowMs + 350;
-      _routeY[i] = rec;
+      ctx._routeY[i] = rec;
     }
     return rec.y;
   }
@@ -3021,28 +3021,28 @@ export function createEngine({ canvas, ui, emit }) {
     if (ctx.ROUTE && ctx.routeIdx < ctx.ROUTE.length) {
       let acc = 0, px = ctx.car.x, pz = ctx.car.z;
       for (let i = ctx.routeIdx; i < ctx.ROUTE.length && acc < 170; i++) { acc += Math.hypot(ctx.ROUTE[i].x - px, ctx.ROUTE[i].z - pz); raw.push([ctx.ROUTE[i].x, ctx.ROUTE[i].z, guideHeightAt(i)]); px = ctx.ROUTE[i].x; pz = ctx.ROUTE[i].z; }
-    } else { guideLine.visible = false; return; }   // ONLY ever follow a real road ROUTE — never a straight line across the land
+    } else { ctx.guideLine.visible = false; return; }   // ONLY ever follow a real road ROUTE — never a straight line across the land
     // resample to ~5 m steps, carrying the draped height through so each cross-section sits
     // on the road surface (interpolated between cached route-point heights).
     const pts = [raw[0]];
-    for (let i = 1; i < raw.length && pts.length < GUIDE_N; i++) {
+    for (let i = 1; i < raw.length && pts.length < ctx.GUIDE_N; i++) {
       const a = pts[pts.length - 1], b = raw[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const steps = Math.max(1, Math.min(GUIDE_N - pts.length, Math.round(L / 5)));
+      const steps = Math.max(1, Math.min(ctx.GUIDE_N - pts.length, Math.round(L / 5)));
       for (let s = 1; s <= steps; s++) { const t = s / steps; pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]); }
     }
-    if (pts.length < 2) { guideLine.visible = false; return; }
+    if (pts.length < 2) { ctx.guideLine.visible = false; return; }
     const hw = 1.55;
-    for (let i = 0; i < GUIDE_N; i++) {
+    for (let i = 0; i < ctx.GUIDE_N; i++) {
       const k = Math.min(i, pts.length - 1), p = pts[k];
       const pp = pts[Math.max(0, k - 1)], pn = pts[Math.min(pts.length - 1, k + 1)];
       let tx = pn[0] - pp[0], tz = pn[1] - pp[1]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
       const nx = -tz, nz = tx, y = p[2] + 0.38, o = i * 6;
-      guidePos[o] = p[0] + nx * hw; guidePos[o + 1] = y; guidePos[o + 2] = p[1] + nz * hw;
-      guidePos[o + 3] = p[0] - nx * hw; guidePos[o + 4] = y; guidePos[o + 5] = p[1] - nz * hw;
+      ctx.guidePos[o] = p[0] + nx * hw; ctx.guidePos[o + 1] = y; ctx.guidePos[o + 2] = p[1] + nz * hw;
+      ctx.guidePos[o + 3] = p[0] - nx * hw; ctx.guidePos[o + 4] = y; ctx.guidePos[o + 5] = p[1] - nz * hw;
     }
-    guideGeo.attributes.position.needsUpdate = true;
-    guideGeo.setDrawRange(0, (Math.min(pts.length, GUIDE_N) - 1) * 6);   // only the built segments
-    guideLine.visible = true;
+    ctx.guideGeo.attributes.position.needsUpdate = true;
+    ctx.guideGeo.setDrawRange(0, (Math.min(pts.length, ctx.GUIDE_N) - 1) * 6);   // only the built segments
+    ctx.guideLine.visible = true;
   }
   // 2D minimap (HEADING-UP, centred on the car): roads, house, destination + line, car. The map
   // rotates so the car's forward is always "up" — oriented like the driver / user, the way a phone
@@ -3068,11 +3068,11 @@ export function createEngine({ canvas, ui, emit }) {
     for (const c of ctx.coins) { if (c.got) continue; const p = toPx(c.x, c.z); if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) { g.beginPath(); g.arc(p[0], p[1], 2, 0, 7); g.fill(); } }
     // neighbourhood landmarks — your 5 real places. On-map = dot; off-map = clamped to
     // the edge as a "that way" hint. Pink = still to find, green = found.
-    for (const poi of POIS) {
+    for (const poi of ctx.POIS) {
       const p = toPx(poi.x, poi.z);
       const m = 7, edge = p[0] < m || p[0] > w - m || p[1] < m || p[1] > h - m;
       const px = clamp(p[0], m, w - m), py = clamp(p[1], m, h - m);
-      const found = poiFound.has(poi.key);
+      const found = ctx.poiFound.has(poi.key);
       g.fillStyle = found ? '#3ad17a' : '#ff5ad0';
       g.beginPath(); g.arc(px, py, edge ? 2.6 : 3.4, 0, 7); g.fill();
       if (!found && !edge) { g.strokeStyle = 'rgba(255,90,208,0.8)'; g.lineWidth = 1.3; g.beginPath(); g.arc(px, py, 5.4, 0, 7); g.stroke(); }
@@ -3127,14 +3127,14 @@ export function createEngine({ canvas, ui, emit }) {
     return true;
   }
 
-  const camV = new THREE.Vector3();
-  const _camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
-  const _lookT = new THREE.Vector3();     // desired chase look point (scratch)
-  let _lookV = null;                       // smoothed chase look point — lags so the car whips toward frame edge
-  let _lookYS = null;                      // low-passed look-point height — kills the per-bump vertical pitch on photoreal ground
+  ctx.camV = new THREE.Vector3();
+  ctx._camT = new THREE.Vector3();      // per-frame camera target scratch (drive/scoop are mutually exclusive)
+  ctx._lookT = new THREE.Vector3();     // desired chase look point (scratch)
+  ctx._lookV = null;                       // smoothed chase look point — lags so the car whips toward frame edge
+  ctx._lookYS = null;                      // low-passed look-point height — kills the per-bump vertical pitch on photoreal ground
   ctx.camGroundRef = null;                 // slow-smoothed ground height for a STATIC-feeling drone altitude
   ctx.camFloorRef = null;                   // low-passed anti-clip floor so per-bump groundAt spikes don't POP the cam
-  let _camFloorT = 0, _camFloorRaw = 0;     // throttle the floor raycast (~14 Hz) — its output is low-passed to ~3 Hz anyway
+  ctx._camFloorT = 0, ctx._camFloorRaw = 0;     // throttle the floor raycast (~14 Hz) — its output is low-passed to ~3 Hz anyway
   ctx.camMode = 0;
   ctx.camInit = false;
   ctx.driveCamUserPicked = false;
@@ -3148,7 +3148,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();   // fresh framing per view (pinch-zoom/look don't leak)
     const dd = DRIVE_CAMS[ctx.camMode].dragdrive;
     if (!DRIVE_CAMS[ctx.camMode].topdown) ctx.camera.up.set(0, 1, 0);   // only top-down is heading-up
-    if (!dd) { ctx.inp2.navActive = false; navPtr = null; }         // leaving a drag-to-drive view ends it
+    if (!dd) { ctx.inp2.navActive = false; ctx.navPtr = null; }         // leaving a drag-to-drive view ends it
     ctx.emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();
     ctx.toast('Camera: ' + DRIVE_CAMS[ctx.camMode].name + (dd ? ' · drag to drive 🪄' : ''), dd ? 1700 : 1100);
   }
@@ -3160,7 +3160,7 @@ export function createEngine({ canvas, ui, emit }) {
     if (i < 0) return;
     if (ctx.camMode === i) {
       ctx.camMode = 0; ctx.camInit = false; ctx.czoom = 1; ctx.camOrbit.yaw = 0; ctx.camOrbit.pitch = 0; ctx._orbitUserSet = false; ctx._viewYaw = viewHeading();
-      ctx.inp2.navActive = false; navPtr = null; ctx.camera.up.set(0, 1, 0);
+      ctx.inp2.navActive = false; ctx.navPtr = null; ctx.camera.up.set(0, 1, 0);
       ctx.emit('driveCam', DRIVE_CAMS[ctx.camMode].name); emitDriveZoom();   // keep the overhead zoom slider's show/hide + value in sync with the view (mirrors cycleCamera)
       ctx.toast('Camera: ' + DRIVE_CAMS[ctx.camMode].name, 1100);
       return;
@@ -3176,9 +3176,9 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // March the subject->camera segment and pull the camera in before it would
   // enter a building below that building's roofline.
-  const _camRayO = new THREE.Vector3(), _camRayD = new THREE.Vector3();
-  const camRay = new THREE.Raycaster(); camRay.firstHitOnly = true;
-  const _camHits = [];
+  ctx._camRayO = new THREE.Vector3(), ctx._camRayD = new THREE.Vector3();
+  ctx.camRay = new THREE.Raycaster(); ctx.camRay.firstHitOnly = true;
+  ctx._camHits = [];
   function resolveCam(tx, ty, tz, px, py, pz) {
     let g = 1;
     // procedural buildings: march subject->camera, pull in before a wall
@@ -3196,18 +3196,18 @@ export function createEngine({ canvas, ui, emit }) {
     // tile geometry — the procedural bldBoxes are hidden, so this is what keeps
     // the chase/follow cam from burying itself in real trees & houses.
     if (ctx.p3dtiles && ctx.p3dtiles.holder.visible) {
-      _camRayD.set(px - tx, py - ty, pz - tz);
-      const dist = _camRayD.length();
+      ctx._camRayD.set(px - tx, py - ty, pz - tz);
+      const dist = ctx._camRayD.length();
       if (dist > 0.05) {
-        _camRayD.multiplyScalar(1 / dist);
-        camRay.set(_camRayO.set(tx, ty, tz), _camRayD);
-        camRay.far = dist;
+        ctx._camRayD.multiplyScalar(1 / dist);
+        ctx.camRay.set(ctx._camRayO.set(tx, ty, tz), ctx._camRayD);
+        ctx.camRay.far = dist;
         // tiles.raycast prunes by per-tile bounding volume + early-exits on the
         // first hit — far cheaper than intersectObject(group, true), which tested
         // every triangle of every loaded tile each frame.
-        _camHits.length = 0;
-        ctx.p3dtiles.raycast(camRay, _camHits);
-        const hit = _camHits[0];
+        ctx._camHits.length = 0;
+        ctx.p3dtiles.raycast(ctx.camRay, ctx._camHits);
+        const hit = ctx._camHits[0];
         if (hit) g = Math.min(g, Math.max(0.12, (hit.distance - 0.6) / dist));
       }
     }
@@ -3247,8 +3247,8 @@ export function createEngine({ canvas, ui, emit }) {
     //   jy < 0 (push up)   → gas, proportional to how far up
     //   jy > 0 (pull down) → brake / reverse
     // (setGasAmount/setBrake still feed inp2.gas/inp2.brake for back-compat.)
-    const jyGas = ctx.inp2.jy < -MOVE_DEADZONE ? clamp((-ctx.inp2.jy - MOVE_DEADZONE) / (1 - MOVE_DEADZONE), 0, 1) : 0;
-    const jyBrake = ctx.inp2.jy > MOVE_DEADZONE;
+    const jyGas = ctx.inp2.jy < -ctx.MOVE_DEADZONE ? clamp((-ctx.inp2.jy - ctx.MOVE_DEADZONE) / (1 - ctx.MOVE_DEADZONE), 0, 1) : 0;
+    const jyBrake = ctx.inp2.jy > ctx.MOVE_DEADZONE;
     // BRAKE vs REVERSE — the fix for "too easy to end up backwards": a light/partial down-pull only
     // BRAKES (stop + hold at 0). Reverse needs a DELIBERATE near-full pull-down (or full brake button /
     // held down-arrow) AND the car already stopped for a moment, so steering with a little downward
@@ -3272,7 +3272,7 @@ export function createEngine({ canvas, ui, emit }) {
     let throttle = ctx.car.throttle;
     // GRAB THE WHEEL: any real steer/gas/brake input drops auto-drive so the player
     // instantly takes over instead of fighting the robot.
-    const _userInput = Math.abs(ctx.inp2.jx + ctx.inp2.kx + ctx.inp2.steer) > 0.2 || Math.abs(ctx.inp2.jy) > MOVE_DEADZONE || ctx.inp2.gas || ctx.inp2.brake || ctx.inp2.ky;
+    const _userInput = Math.abs(ctx.inp2.jx + ctx.inp2.kx + ctx.inp2.steer) > 0.2 || Math.abs(ctx.inp2.jy) > ctx.MOVE_DEADZONE || ctx.inp2.gas || ctx.inp2.brake || ctx.inp2.ky;
     if (ctx.autoDrive && _userInput) {
       ctx.autoDrive = false; ctx.inp2.navActive = false; clearRouteRail(); stopFollow(); ctx.emit('autodrive', false); ctx.toast('🕹️ You took the wheel!', 900);
     }
@@ -3302,7 +3302,7 @@ export function createEngine({ canvas, ui, emit }) {
       const atEnd = !railActive && end && (ctx.routeIdx >= ctx.ROUTE.length || Math.hypot(end.x - ctx.car.x, end.z - ctx.car.z) < 12);
       if (!ctx.ROUTE) { ctx.inp2.navActive = false; if (ctx.DEST.geo && now - (ctx.DEST._retryT || 0) > 4000) { ctx.DEST._retryT = now; fetchRoute(ctx.DEST.geo.lat, ctx.DEST.geo.lon); } }   // hold + self-retry the route every 4 s (transient API/network blip → self-heals)
       else if (atEnd) {
-        if (!ctx.DEST.reached) { ctx.DEST.reached = true; if (ctx.DEST.celebrate && !POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now); }
+        if (!ctx.DEST.reached) { ctx.DEST.reached = true; if (ctx.DEST.celebrate && !ctx.POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now); }
         clearDestination();   // arrived — drop the nav card + route line (was sticking on "arriving…") and end auto-drive
       } else { const t = navTarget(); ctx.inp2.navActive = true; ctx.inp2.navX = t.x; ctx.inp2.navZ = t.z; }
     }
@@ -3312,7 +3312,7 @@ export function createEngine({ canvas, ui, emit }) {
     // you pick an address from GO). POIs run their own richer celebration via checkPOIs.
     else if (ctx.DEST && !ctx.DEST.reached && Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z) < 14) {
       ctx.DEST.reached = true;
-      if (ctx.DEST.celebrate && !POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now);
+      if (ctx.DEST.celebrate && !ctx.POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now);
       clearDestination();
     }
     // Point-and-drive override (Top-down drag + auto-drive): steer toward the target
@@ -3541,12 +3541,12 @@ export function createEngine({ canvas, ui, emit }) {
     // can't. Ramps in over a few metres (soft edge), clamps under driving speed (never yanks), and
     // fades as you steer, so it reads like an invisible berm on the shoulder. Only where a road
     // graph exists (the hood or a live route) so it never tugs you back into town from the open road.
-    if (ctx.autoSteer && !hb && (inHood || onRouteNow || ctx.osmRoadSegs.length) && offRoadDist > LANE_HALF && offRoadDist < 120) {
-      const over = offRoadDist - LANE_HALF;
+    if (ctx.autoSteer && !hb && (inHood || onRouteNow || ctx.osmRoadSegs.length) && offRoadDist > ctx.LANE_HALF && offRoadDist < 120) {
+      const over = offRoadDist - ctx.LANE_HALF;
       const ramp = clamp(over / 6, 0, 1);                       // ease in over the first 6 m
       const yours = clamp(Math.abs(jx) * 1.5, 0, 1);            // fade out as the player steers hard
       let ux = nrp.x - ctx.car.x, uz = nrp.z - ctx.car.z; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
-      const pull = Math.min(WALL_MAX, over * WALL_GAIN) * ramp * (1 - yours);
+      const pull = Math.min(ctx.WALL_MAX, over * ctx.WALL_GAIN) * ramp * (1 - yours);
       nx += ux * pull * dt; nz += uz * pull * dt;
     }
     updateTraffic(dt, now);   // move the ambient cars (positions feed the collision below)
@@ -3571,7 +3571,7 @@ export function createEngine({ canvas, ui, emit }) {
       } else if (fast && d2 < (rr + 1.6) * (rr + 1.6)) nearThisFrame = true;   // skimmed it
     }
     // sanctuary-safe: animals always bounce the car, never get hurt
-    for (const a of ANIMALS) {
+    for (const a of ctx.ANIMALS) {
       const dx = nx - a.x, dz = nz - a.z, d2 = dx * dx + dz * dz, rr = a.r + rad + 0.5;
       if (d2 < rr * rr && d2 > 1e-6) {
         const d = Math.sqrt(d2); nx = a.x + dx / d * rr; nz = a.z + dz / d * rr;
@@ -3582,7 +3582,7 @@ export function createEngine({ canvas, ui, emit }) {
     // TRAFFIC: weave past it for a near-miss combo, clip it for a soft deflect (it yields
     // + keeps its lane, so a tap is a glancing bump you keep rolling through, not a wall).
     if (ctx.roadLifeOn) {
-      for (const c of traffic) {
+      for (const c of ctx.traffic) {
         if (c.x === undefined) continue;
         const dx = nx - c.x, dz = nz - c.z, d2 = dx * dx + dz * dz, rr = 1.9 + rad;
         if (d2 < rr * rr && d2 > 1e-6) {
@@ -3658,7 +3658,7 @@ export function createEngine({ canvas, ui, emit }) {
       if (remain <= 1.5 && ctx.car.speed < 6 && (!farFromDest || ctx.car.railEndT > 6)) {  // braked to a near-stop AT the destination → arrive
         if (ctx.DEST) { const bx = ctx.DEST.rawX != null ? ctx.DEST.rawX : ctx.DEST.x, bz = ctx.DEST.rawZ != null ? ctx.DEST.rawZ : ctx.DEST.z; if (Math.hypot(bx - ctx.car.x, bz - ctx.car.z) > 1) ctx.car.yaw = Math.atan2(bx - ctx.car.x, bz - ctx.car.z); }   // PARK facing the actual BUILDING (rawX/rawZ), not the snapped curb point (≈ the car)
         ctx.car.speed = 0; ctx.car.railS = null; ctx.car.railSpeed = null; ctx.car.railEndT = 0;
-        if (ctx.DEST && !ctx.DEST.reached) { ctx.DEST.reached = true; if (ctx.DEST.celebrate && !POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now); }
+        if (ctx.DEST && !ctx.DEST.reached) { ctx.DEST.reached = true; if (ctx.DEST.celebrate && !ctx.POIS.some(p => Math.hypot(p.x - ctx.DEST.x, p.z - ctx.DEST.z) < 50)) arriveCelebrate(ctx.DEST.label, 0, now); }
         clearDestination();
       } else {
         const rp = railPointAt(ctx.car.railS);
@@ -3713,12 +3713,12 @@ export function createEngine({ canvas, ui, emit }) {
     // On arrival, briefly ease the camera's look-ahead to 0 so the car frames DEAD-CENTRE
     // (the constant look-ahead otherwise leaves it offset toward the bottom even when stopped).
     const aheadScale = 1 - (ctx.arriveCenterT && now < ctx.arriveCenterT ? clamp((ctx.arriveCenterT - now) / 1400, 0, 1) : 0);
-    carLocator.visible = overhead;
+    ctx.carLocator.visible = overhead;
     if (overhead) {
-      carLocator.position.set(ctx.car.x, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, ctx.car.z);
-      carLocator.scale.setScalar(_camV.aerial ? 1.25 : 0.9);
-      if (carLocator.children[0]) carLocator.children[0].material.opacity = _camV.aerial ? 0.75 : 0.55;
-      if (carLocator.children[1]) carLocator.children[1].material.opacity = _camV.aerial ? 0.5 : 0.34;
+      ctx.carLocator.position.set(ctx.car.x, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, ctx.car.z);
+      ctx.carLocator.scale.setScalar(_camV.aerial ? 1.25 : 0.9);
+      if (ctx.carLocator.children[0]) ctx.carLocator.children[0].material.opacity = _camV.aerial ? 0.75 : 0.55;
+      if (ctx.carLocator.children[1]) ctx.carLocator.children[1].material.opacity = _camV.aerial ? 0.5 : 0.34;
     }
     // collectible coins: spin + bob, picked up by driving over them
     ctx.coinGroundCursor = ctx.coins.length ? (ctx.coinGroundCursor + 1) % ctx.coins.length : 0;
@@ -3790,24 +3790,24 @@ export function createEngine({ canvas, ui, emit }) {
           : (dd > 950 ? (dd / 1000).toFixed(1) + ' km' : Math.round(dd) + ' m') + ' · ~' + fmtTime(etaMs);
       } else ctx.ui.eta.textContent = '';
     }
-    if (navMarker) {
-      navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
-      if (navMarker.visible) {
-        navMarker.userData.groundY = ctx.ground.actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, navMarker.userData.groundY);
-        navMarker.position.set(ctx.inp2.navX, navMarker.userData.groundY + 0.16, ctx.inp2.navZ);
-      } else navMarker.userData.groundY = null;
+    if (ctx.navMarker) {
+      ctx.navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
+      if (ctx.navMarker.visible) {
+        ctx.navMarker.userData.groundY = ctx.ground.actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, ctx.navMarker.userData.groundY);
+        ctx.navMarker.position.set(ctx.inp2.navX, ctx.navMarker.userData.groundY + 0.16, ctx.inp2.navZ);
+      } else ctx.navMarker.userData.groundY = null;
     }
     // address guide: a continuous line along the actual ROUTE (every turn), draped on
     // the road just ahead of the car; + a pin at the destination when near.
     if (ctx.DEST) {
       updateGuide(yC);
       const ddDest = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
-      destPin.visible = ddDest < 700;
-      if (destPin.visible) {
-        destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, destPin.userData.groundY);
-        destPin.position.set(ctx.DEST.x, destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, ctx.DEST.z);
+      ctx.destPin.visible = ddDest < 700;
+      if (ctx.destPin.visible) {
+        ctx.destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, ctx.destPin.userData.groundY);
+        ctx.destPin.position.set(ctx.DEST.x, ctx.destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, ctx.DEST.z);
       }
-    } else { guideLine.visible = false; destPin.visible = false; }
+    } else { ctx.guideLine.visible = false; ctx.destPin.visible = false; }
     // The flat aerial patch under the car read as an ugly disc (a different, lower-res
     // texture than the Google tiles). Keep the car riding the same sampled road
     // HEIGHT (actorGroundY), but leave the patch hidden so only the photoreal shows.
@@ -3852,15 +3852,15 @@ export function createEngine({ canvas, ui, emit }) {
       const po = clamp(0.92 - (ctx.camOrbit.pitch + _cinePit) * 0.45, 0.18, 1.4);
       const r = (185 + sp * 38) * ctx.czoom;                             // float higher/further as you wind it out
       ctx.camGroundRef = ctx.camGroundRef == null ? yC : ctx.camGroundRef + (yC - ctx.camGroundRef) * Math.min(1, dt * 1.0);
-      const camT = _camT.set(ctx.car.x + r * Math.sin(po) * Math.sin(a), ctx.camGroundRef + r * Math.cos(po), ctx.car.z + r * Math.sin(po) * Math.cos(a));
-      if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
+      const camT = ctx._camT.set(ctx.car.x + r * Math.sin(po) * Math.sin(a), ctx.camGroundRef + r * Math.cos(po), ctx.car.z + r * Math.sin(po) * Math.cos(a));
+      if (!ctx.camInit) { ctx.camV.copy(camT); ctx.camInit = true; }
       // track TIGHTER the faster you go so a 700 mph autodrive never outruns the orbit cam
-      camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));
+      ctx.camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));
       // hard backstop: never let the camera trail the orbit target by more than ~45% of the
       // range, so a hard turn at top speed can't swing the car out of frame (invisible car).
-      const lagMax = r * 0.45, dxc = camV.x - camT.x, dzc = camV.z - camT.z, lc = Math.hypot(dxc, dzc);
-      if (lc > lagMax) { const f = lagMax / lc; camV.x = camT.x + dxc * f; camV.z = camT.z + dzc * f; }
-      ctx.camera.position.copy(camV);
+      const lagMax = r * 0.45, dxc = ctx.camV.x - camT.x, dzc = ctx.camV.z - camT.z, lc = Math.hypot(dxc, dzc);
+      if (lc > lagMax) { const f = lagMax / lc; ctx.camV.x = camT.x + dxc * f; ctx.camV.z = camT.z + dzc * f; }
+      ctx.camera.position.copy(ctx.camV);
       ctx.camera.lookAt(ctx.car.x + fx * sp * 26 * aheadScale, ctx.camGroundRef + 1, ctx.car.z + fz * sp * 26 * aheadScale);   // bias the gaze where you're heading (→ centred on arrival)
       const fovT = 46 + 5 * sp;
       ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix();
@@ -3873,10 +3873,10 @@ export function createEngine({ canvas, ui, emit }) {
       // forward so the car slides toward the bottom of frame and you see the road
       // rushing up — the overhead read of velocity.
       const vfx = Math.sin(ctx._viewYaw), vfz = Math.cos(ctx._viewYaw);   // map-view forward (compass while following) — keeps this overhead view oriented like the minimap
-      const camT = _camT.set(ctx.car.x - vfx * (CAM.dist + sp * 4), yC + CAM.h * ctx.czoom + sp * 9, ctx.car.z - vfz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
-      if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; }
-      camV.lerp(camT, 1 - Math.exp(-(5 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));   // keep up at top speed
-      ctx.camera.position.copy(camV);
+      const camT = ctx._camT.set(ctx.car.x - vfx * (CAM.dist + sp * 4), yC + CAM.h * ctx.czoom + sp * 9, ctx.car.z - vfz * (CAM.dist + sp * 4));   // czoom = pure altitude (wide pinch range), speed-float added on top
+      if (!ctx.camInit) { ctx.camV.copy(camT); ctx.camInit = true; }
+      ctx.camV.lerp(camT, 1 - Math.exp(-(5 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));   // keep up at top speed
+      ctx.camera.position.copy(ctx.camV);
       ctx.camera.up.set(vfx, 0, vfz); // heading-up = same orientation as the minimap
       const spHiT = clamp((Math.abs(ctx.car.speed) - feelRef) / (feelRef * 2.7), 0, 1);
       const ahead = (CAM.ahead + sp * sp * 16 + spHiT * 14) * aheadScale;     // see further down the road flat-out (→ centred on arrival)
@@ -3908,7 +3908,7 @@ export function createEngine({ canvas, ui, emit }) {
       // hold a STATIC altitude (drone cams): slow-smooth the ground ref so terrain
       // rolls don't bob the high cam; the low Close cam snaps to the ground.
       ctx.camGroundRef = ctx.camGroundRef == null ? yC : ctx.camGroundRef + (yC - ctx.camGroundRef) * (1 - Math.exp(-dt * (CAM.drone ? 1.2 : 6)));
-      const camT = _camT.set(ctx.car.x + Math.sin(a) * dist, ctx.camGroundRef + h, ctx.car.z + Math.cos(a) * dist);
+      const camT = ctx._camT.set(ctx.car.x + Math.sin(a) * dist, ctx.camGroundRef + h, ctx.car.z + Math.cos(a) * dist);
       if (!CAM.drone) {
         const g = resolveCam(ctx.car.x, yC + 1.2, ctx.car.z, camT.x, camT.y, camT.z);
         // Boxed in by buildings (e.g. arriving on a tight residential street): pull the
@@ -3916,17 +3916,17 @@ export function createEngine({ canvas, ui, emit }) {
         // above instead of burying into the wall / staring at the car's own roof.
         if (g < 1) { const lift = (1 - g) * 7; camT.set(ctx.car.x + (camT.x - ctx.car.x) * g, yC + 1.2 + (camT.y - yC - 1.2) * g + lift, ctx.car.z + (camT.z - ctx.car.z) * g); }
       }
-      if (!ctx.camInit) { camV.copy(camT); ctx.camInit = true; _lookV = null; _lookYS = null; ctx.camFloorRef = null; }
-      camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed
+      if (!ctx.camInit) { ctx.camV.copy(camT); ctx.camInit = true; ctx._lookV = null; ctx._lookYS = null; ctx.camFloorRef = null; }
+      ctx.camV.lerp(camT, 1 - Math.exp(-(4.6 + clamp(Math.abs(ctx.car.speed) / 16, 0, 13)) * dt));   // frame-rate-independent + keeps up at top speed
       // Anti-clip floor based on the CAR's road level (yC = actorGroundY, which is
       // overpass/canopy-skipped). A high groundAt() raycast at the camera's xz used to hit an
       // OVERPASS deck above and shove the camera up over it — hiding the car under an
       // underpass / when changing levels. Tracking the car's own level fixes that (and the
       // low-pass keeps photogrammetry bumps from popping the cam).
-      _camFloorRaw = yC + 1.3;
-      ctx.camFloorRef = ctx.camFloorRef == null ? _camFloorRaw : ctx.camFloorRef + (_camFloorRaw - ctx.camFloorRef) * (1 - Math.exp(-dt * 2.2));   // softer low-pass → fewer cam pops on photoreal bumps
-      if (camV.y < ctx.camFloorRef) camV.y = ctx.camFloorRef;
-      ctx.camera.position.copy(camV);
+      ctx._camFloorRaw = yC + 1.3;
+      ctx.camFloorRef = ctx.camFloorRef == null ? ctx._camFloorRaw : ctx.camFloorRef + (ctx._camFloorRaw - ctx.camFloorRef) * (1 - Math.exp(-dt * 2.2));   // softer low-pass → fewer cam pops on photoreal bumps
+      if (ctx.camV.y < ctx.camFloorRef) ctx.camV.y = ctx.camFloorRef;
+      ctx.camera.position.copy(ctx.camV);
       // WHIP: the look point isn't nailed to the car — it lags and carries a lateral
       // lead from the drift/steer, so on a hard corner the car slides toward the edge of
       // frame then snaps back. Sells corners far more than a rigid lookAt.
@@ -3936,14 +3936,14 @@ export function createEngine({ canvas, ui, emit }) {
       // toward the car's roof when slow so the car frames higher, not at its wheels.
       const lookAhead = (CAM.ahead * (0.32 + 0.68 * sp) + sp * 6) * aheadScale;
       const lookYRaw = yC + 1.0 + (1 - sp) * 0.9;
-      _lookYS = _lookYS == null ? lookYRaw : _lookYS + (lookYRaw - _lookYS) * (1 - Math.exp(-dt * 4));   // smooth ONLY the vertical so road bumps don't pitch the whole view (x/z keep the snappy whip)
-      const lookY = _lookYS;
+      ctx._lookYS = ctx._lookYS == null ? lookYRaw : ctx._lookYS + (lookYRaw - ctx._lookYS) * (1 - Math.exp(-dt * 4));   // smooth ONLY the vertical so road bumps don't pitch the whole view (x/z keep the snappy whip)
+      const lookY = ctx._lookYS;
       const rpxL = Math.cos(ctx.car.yaw), rpzL = -Math.sin(ctx.car.yaw);
       const latLead = (ctx.car.vlat * 0.05 + ctx.car.steer * 2.0) * (1 - 0.3 * sp) * aheadScale;
-      _lookT.set(ctx.car.x + fx * lookAhead + rpxL * latLead, lookY, ctx.car.z + fz * lookAhead + rpzL * latLead);
-      if (!_lookV) _lookV = _lookT.clone(); else _lookV.lerp(_lookT, 1 - Math.exp(-7 * dt));
+      ctx._lookT.set(ctx.car.x + fx * lookAhead + rpxL * latLead, lookY, ctx.car.z + fz * lookAhead + rpzL * latLead);
+      if (!ctx._lookV) ctx._lookV = ctx._lookT.clone(); else ctx._lookV.lerp(ctx._lookT, 1 - Math.exp(-7 * dt));
       ctx.camera.up.set(0, 1, 0);
-      ctx.camera.lookAt(_lookV);
+      ctx.camera.lookAt(ctx._lookV);
       // asymmetric FOV: a stab of GO shoves the view wide FAST, then it relaxes slow.
       // The spHi term adds a second, smaller kick that only opens up at true top speed.
       const fovT = 46 + 30 * Math.pow(sp, 1.25) + 8 * spHi;           // ~76° at cruise top, ~84° flat out
@@ -4002,10 +4002,10 @@ export function createEngine({ canvas, ui, emit }) {
     const h = vv ? Math.round(vv.height) : document.documentElement.clientHeight || innerHeight;
     return [Math.max(1, w), Math.max(1, h)];
   }
-  let _rw = 0, _rh = 0, _resizeRaf = 0, _kbdOpen = false;
+  ctx._rw = 0, ctx._rh = 0, ctx._resizeRaf = 0, ctx._kbdOpen = false;
   function resize() {
     const [w, h] = viewportSize();
-    _rw = w; _rh = h;
+    ctx._rw = w; ctx._rh = h;
     ctx.renderer.setPixelRatio(ctx.renderPixelRatio());
     ctx.renderer.setSize(w, h, false);
     ctx.canvas.style.width = w + 'px'; ctx.canvas.style.height = h + 'px';
@@ -4021,29 +4021,29 @@ export function createEngine({ canvas, ui, emit }) {
     // Resizing the canvas + HUD to that smaller strip is what "screws up the rest of the screen" — the
     // 3D scene squished into the top while you type. Hold the size steady while a text field is focused
     // and restore it on blur (see the focusin/focusout listeners below).
-    if (_kbdOpen) return;
-    if (_resizeRaf) return;
-    _resizeRaf = requestAnimationFrame(() => {
-      _resizeRaf = 0;
-      if (_kbdOpen) return;   // the keyboard may have opened AFTER this rAF was queued (focusin one frame later) — don't squish to the keyboard strip
+    if (ctx._kbdOpen) return;
+    if (ctx._resizeRaf) return;
+    ctx._resizeRaf = requestAnimationFrame(() => {
+      ctx._resizeRaf = 0;
+      if (ctx._kbdOpen) return;   // the keyboard may have opened AFTER this rAF was queued (focusin one frame later) — don't squish to the keyboard strip
       const [w, h] = viewportSize();
-      if (w !== _rw || h !== _rh) resize();
+      if (w !== ctx._rw || h !== ctx._rh) resize();
     });
   }
 
   // ---------- loop ----------
-  const dirV = new THREE.Vector3();
+  ctx.dirV = new THREE.Vector3();
   ctx.prev = performance.now();
   ctx.raf = 0, ctx.paused = false, ctx.ctxLost = false, ctx._miniT = 0, ctx._miniCtx = null, ctx._miniEl = null, ctx._shadowT = 0, ctx._miniYaw = 0;
   // Google 3D Tiles ToS: surface the LIVE data attribution for the tiles currently
   // in view whenever the photoreal world is shown. Throttled; emits only on change.
-  const _attrTarget = []; let _attrStr = '', _attrT = 0;
+  ctx._attrTarget = []; ctx._attrStr = '', ctx._attrT = 0;
   function updateAttribution(now) {
-    if (now - _attrT < 500) return;
-    _attrT = now; _attrTarget.length = 0;
-    try { ctx.p3dtiles.getAttributions(_attrTarget); } catch (e) { return; }
-    const s = _attrTarget.filter(a => a && a.type === 'string').map(a => a.value).filter(Boolean).join(' · ');
-    if (s !== _attrStr) { _attrStr = s; ctx.emit('attribution', s); }
+    if (now - ctx._attrT < 500) return;
+    ctx._attrT = now; ctx._attrTarget.length = 0;
+    try { ctx.p3dtiles.getAttributions(ctx._attrTarget); } catch (e) { return; }
+    const s = ctx._attrTarget.filter(a => a && a.type === 'string').map(a => a.value).filter(Boolean).join(' · ');
+    if (s !== ctx._attrStr) { ctx._attrStr = s; ctx.emit('attribution', s); }
   }
   function loop(now) {
     if (ctx.disposed || ctx.paused || ctx.ctxLost) return;
@@ -4052,7 +4052,7 @@ export function createEngine({ canvas, ui, emit }) {
     else ctx.timeScale += (1 - ctx.timeScale) * Math.min(1, rawDt * 4.5);   // recover from slow-mo back to real time
     const dt = rawDt * ctx.timeScale;
     if (ctx.waterMat) ctx.waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
-    updateAnimals(dt, now, (ctx.mode === 'scoop' && ctx.scoopScene === 'yard') ? ctx.CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
+    ctx.updateAnimals(dt, now, (ctx.mode === 'scoop' && ctx.scoopScene === 'yard') ? ctx.CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
     updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch
     if (ctx.mode === 'drive') {
       updateDrive(dt, now);
@@ -4062,12 +4062,12 @@ export function createEngine({ canvas, ui, emit }) {
       // frame-rate-INDEPENDENT blend (was a fixed 0.16/frame → converged twice as fast on a
       // 120 Hz phone and micro-stuttered under variable dt — the "aerial orbit isn't smooth").
       const k = ctx.reduceMotion ? 1 : (1 - Math.exp(-rawDt * 10.6));
-      if (!ctx.reduceMotion && !ptrs.size && (Math.abs(ctx.azVel) > 1e-4 || Math.abs(ctx.poVel) > 1e-4)) {
-        ctl.gaz += ctx.azVel * rawDt * 60; ctl.gpo = clamp(ctl.gpo + ctx.poVel * rawDt * 60, 0.14, 1.46);
+      if (!ctx.reduceMotion && !ctx.ptrs.size && (Math.abs(ctx.azVel) > 1e-4 || Math.abs(ctx.poVel) > 1e-4)) {
+        ctx.ctl.gaz += ctx.azVel * rawDt * 60; ctx.ctl.gpo = clamp(ctx.ctl.gpo + ctx.poVel * rawDt * 60, 0.14, 1.46);
         const decay = Math.exp(-dt * 4); ctx.azVel *= decay; ctx.poVel *= decay; // flick momentum
       }
-      ctl.tx += (ctl.gtx - ctl.tx) * k; ctl.ty += (ctl.gty - ctl.ty) * k; ctl.tz += (ctl.gtz - ctl.tz) * k;
-      ctl.az += (ctl.gaz - ctl.az) * k; ctl.po += (ctl.gpo - ctl.po) * k; ctl.r += (ctl.gr - ctl.r) * k;
+      ctx.ctl.tx += (ctx.ctl.gtx - ctx.ctl.tx) * k; ctx.ctl.ty += (ctx.ctl.gty - ctx.ctl.ty) * k; ctx.ctl.tz += (ctx.ctl.gtz - ctx.ctl.tz) * k;
+      ctx.ctl.az += (ctx.ctl.gaz - ctx.ctl.az) * k; ctx.ctl.po += (ctx.ctl.gpo - ctx.ctl.po) * k; ctx.ctl.r += (ctx.ctl.gr - ctx.ctl.r) * k;
       applyCam();
       ctx.camInit = false;
     }
@@ -4077,11 +4077,11 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.ring.material.opacity = 0.5 + 0.22 * Math.sin(now * 0.0023);
     }
     if (ctx.sun.castShadow && now - ctx._shadowT > 140) { ctx.renderer.shadowMap.needsUpdate = true; ctx._shadowT = now; }
-    ctx.camera.getWorldDirection(dirV);
-    if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(dirV.x, dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
+    ctx.camera.getWorldDirection(ctx.dirV);
+    if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(ctx.dirV.x, ctx.dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     ctx.prefetch.updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
     if (ctx.p3dtiles && photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
-    else if (_attrStr) { _attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
+    else if (ctx._attrStr) { ctx._attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
     if (ctx.mode === 'drive') {
       updateMiniMap(now);                                            // live Google minimap (when up)
       if (!ctx._gmap && ctx.ui.minimap && now - ctx._miniT > 80) {              // procedural fallback until/unless it loads
@@ -4135,8 +4135,8 @@ export function createEngine({ canvas, ui, emit }) {
   // text field, so it self-heals even when iOS/WebKit DROPS focusout on a focused <input> that React
   // unmounts on submit (the address box on Go/X/Escape) — which would otherwise stick _kbdOpen true and
   // silently freeze EVERY later resize for the session.
-  const _clearKbd = () => { if (!_kbdOpen) return; _kbdOpen = false; try { window.scrollTo(0, 0); } catch (e) { } requestResize(); };
-  const onFocusIn = e => { if (_isTextField(e.target)) _kbdOpen = true; };
+  const _clearKbd = () => { if (!ctx._kbdOpen) return; ctx._kbdOpen = false; try { window.scrollTo(0, 0); } catch (e) { } requestResize(); };
+  const onFocusIn = e => { if (_isTextField(e.target)) ctx._kbdOpen = true; };
   const onFocusOut = e => { if (_isTextField(e.target)) setTimeout(() => { if (!_isTextField(document.activeElement)) _clearKbd(); }, 0); };
   addEventListener('focusin', onFocusIn);
   addEventListener('focusout', onFocusOut);
@@ -4160,7 +4160,7 @@ export function createEngine({ canvas, ui, emit }) {
   function dispose() {
     ctx.disposed = true;
     cancelAnimationFrame(ctx.raf);
-    clearTimeout(t1); clearTimeout(t2); clearTimeout(_crowdReplaceT);
+    clearTimeout(t1); clearTimeout(t2); clearTimeout(ctx._crowdReplaceT);
     ctx.canvas.removeEventListener('pointerdown', onPointerDown);
     ctx.canvas.removeEventListener('pointermove', onPointerMove);
     ctx.canvas.removeEventListener('pointerup', onPointerEnd);
@@ -4186,12 +4186,12 @@ export function createEngine({ canvas, ui, emit }) {
       visualViewport.removeEventListener('resize', requestResize);
       visualViewport.removeEventListener('scroll', requestResize);
     }
-    cancelAnimationFrame(_resizeRaf);
+    cancelAnimationFrame(ctx._resizeRaf);
     ctx.audio.engineStop();
     if (ctx.audio.stopMusic) ctx.audio.stopMusic();      // kill the 30ms music scheduler interval (was leaking)
     if (ctx.audio.close) ctx.audio.close();              // close the AudioContext so it isn't left running
-    if (cancelCarLoad) cancelCarLoad();          // late car load/timeout can't touch a dead scene
-    for (const cancel of modelLoadCancels) if (cancel) cancel();
+    if (ctx.cancelCarLoad) ctx.cancelCarLoad();          // late car load/timeout can't touch a dead scene
+    for (const cancel of ctx.modelLoadCancels) if (cancel) cancel();
     disposeMiniMap();
     if (ctx.ceceCrowd) ctx.ceceCrowd.dispose();          // stop crowd mixers + detach the dancers
     if (ctx.drewCrowd) ctx.drewCrowd.dispose();
@@ -4254,12 +4254,12 @@ export function createEngine({ canvas, ui, emit }) {
     driveToLatLon,
     setAutoMaxMph, getAutoMaxMph: () => ctx.autoMaxMph,
     setSpeedMul, getSpeedMul: () => ctx.speedMul, setDriveZoom,
-    setCrowdDensity, getCrowdDensity: () => CROWD_DENSITY,
+    setCrowdDensity, getCrowdDensity: () => ctx.CROWD_DENSITY,
     setTrafficDensity: (d) => {
       ctx.trafficDensity = clamp(+d || 0, 0, 2);
       try { localStorage.setItem('dahill.trafficdensity', String(ctx.trafficDensity)); } catch (e) { }
       const active = trafficActiveCount();
-      for (let i = active; i < traffic.length; i++) traffic[i].group.visible = false;   // park any now-over-cap cars at once
+      for (let i = active; i < ctx.traffic.length; i++) ctx.traffic[i].group.visible = false;   // park any now-over-cap cars at once
       return ctx.trafficDensity;
     },
     getTrafficDensity: () => ctx.trafficDensity,
@@ -4304,14 +4304,14 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
-    scoop: () => ({ scene: ctx.scoopScene, ready: !!ctx.interior, avatar: ctx.CHAR.avatar, entry: entryPt && entryPt.map(v => +v.toFixed(1)), char: [+ctx.CHAR.x.toFixed(1), +ctx.CHAR.z.toFixed(1)], dDoor: entryPt ? +Math.hypot(ctx.CHAR.x - entryPt[0], ctx.CHAR.z - entryPt[1]).toFixed(1) : null, occ: ctx.interior ? ctx.interior.occluders.length : 0, hiddenOcc: ctx.interior ? ctx.interior.occluders.filter(o => !o.visible).length : 0 }),
-    crowd: () => ({ on: ctx.roadLifeOn, cece: !!ctx.ceceCrowd, drew: !!ctx.drewCrowd, spots: crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - ctx.car.x, s.rec.z - ctx.car.z)) })) }),
-    traffic: () => ({ on: ctx.roadLifeOn, total: traffic.length, visible: traffic.filter(c => c.group.visible).length, cars: traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
-    p3dt: P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
+    scoop: () => ({ scene: ctx.scoopScene, ready: !!ctx.interior, avatar: ctx.CHAR.avatar, entry: ctx.entryPt && ctx.entryPt.map(v => +v.toFixed(1)), char: [+ctx.CHAR.x.toFixed(1), +ctx.CHAR.z.toFixed(1)], dDoor: ctx.entryPt ? +Math.hypot(ctx.CHAR.x - ctx.entryPt[0], ctx.CHAR.z - ctx.entryPt[1]).toFixed(1) : null, occ: ctx.interior ? ctx.interior.occluders.length : 0, hiddenOcc: ctx.interior ? ctx.interior.occluders.filter(o => !o.visible).length : 0 }),
+    crowd: () => ({ on: ctx.roadLifeOn, cece: !!ctx.ceceCrowd, drew: !!ctx.drewCrowd, spots: ctx.crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - ctx.car.x, s.rec.z - ctx.car.z)) })) }),
+    traffic: () => ({ on: ctx.roadLifeOn, total: ctx.traffic.length, visible: ctx.traffic.filter(c => c.group.visible).length, cars: ctx.traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
+    p3dt: ctx.P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
     nudge: applyP3DT,
     tiles: () => ctx.p3dtiles,
     setProcedural: (on) => { ctx.staticGroup.visible = on; },
-    beacons: () => poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +b.mat.opacity.toFixed(2), d: Math.round(Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z)) })),
+    beacons: () => ctx.poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +b.mat.opacity.toFixed(2), d: Math.round(Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z)) })),
     // sweep spin; score = avg tile height at building centroids − at road points
     // (correct alignment => buildings high/roofs, roads low). Pick the max.
     calibrate: () => {
@@ -4328,7 +4328,7 @@ export function createEngine({ canvas, ui, emit }) {
       // photoreal +s) and probe the static tiles — avoids stale matrixWorld.
       const out = {};
       for (let s = 0; s < 360; s += 5) {
-        const a = -s * DEG, ca = Math.cos(a), sa = Math.sin(a);
+        const a = -s * ctx.DEG, ca = Math.cos(a), sa = Math.sin(a);
         let rs = 0, rn = 0, bs = 0, bn = 0;
         for (const [x, z] of road) { const y = ctx.ground.rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { rs += y; rn++; } }
         for (const [x, z] of bld) { const y = ctx.ground.rawTileY(x * ca - z * sa, x * sa + z * ca); if (y != null) { bs += y; bn++; } }
@@ -4340,7 +4340,7 @@ export function createEngine({ canvas, ui, emit }) {
     },
     state: () => ({
       mode: ctx.mode, buildings: S.buildings.length, photoreal: !!ctx.p3dtiles && !ctx.staticGroup.visible,
-      poops: POOPS.length, car: { x: +ctx.car.x.toFixed(1), z: +ctx.car.z.toFixed(1), speed: +ctx.car.speed.toFixed(1), yaw: +ctx.car.yaw.toFixed(2), glb: !!ctx.car.glb },
+      poops: ctx.POOPS.length, car: { x: +ctx.car.x.toFixed(1), z: +ctx.car.z.toFixed(1), speed: +ctx.car.speed.toFixed(1), yaw: +ctx.car.yaw.toFixed(2), glb: !!ctx.car.glb },
       dest: ctx.DEST ? { x: +ctx.DEST.x.toFixed(1), z: +ctx.DEST.z.toFixed(1) } : null,
       char: { x: +ctx.CHAR.x.toFixed(1), z: +ctx.CHAR.z.toFixed(1), bag: ctx.CHAR.bag, total: ctx.CHAR.total, lvl: ctx.CHAR.lvl }
     })

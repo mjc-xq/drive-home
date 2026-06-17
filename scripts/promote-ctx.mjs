@@ -23,10 +23,11 @@ const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : nu
 const FILE = val('--file') || 'src/engine/engine.js';
 const WRITE = has('--write');
 const allowFns = has('--promote-fns');
-const refsOnly = has('--refs-only');
+const cut = has('--cut');         // delete the named top-level definitions AND rewrite external call sites to ctx.<ns>.<name>; prints the removed source so it can be pasted into a module factory
+const refsOnly = has('--refs-only') || cut;
 const NS = val('--ns'); // when set, references rewrite to `ctx.<NS>.<name>` (subsystem namespace) instead of `ctx.<name>`
 const pfx = (name) => NS ? `ctx.${NS}.${name}` : `ctx.${name}`;
-const promoteArg = val('--promote') || val('--promote-fns') || val('--refs-only');
+const promoteArg = val('--promote') || val('--promote-fns') || val('--refs-only') || val('--cut');
 const names = new Set((promoteArg || '').split(',').map(s => s.trim()).filter(Boolean));
 
 const src = readFileSync(FILE, 'utf8');
@@ -103,6 +104,42 @@ if (!refsOnly) {
 }
 const fnsRequested = refsOnly ? [] : topDecls.filter(d => names.has(d.name) && d.kind === 'function');
 if (fnsRequested.length && !allowFns) { console.error('these are hoisted function declarations; use --promote-fns to allow: ' + fnsRequested.map(d => d.name).join(', ')); process.exit(1); }
+
+// ---- --cut: delete the named top-level definitions (+ leading line-comment block) ----
+const cutRanges = []; // {start, end, name}
+if (cut) {
+  const missing = [...names].filter(n => !topNames.has(n));
+  if (missing.length) { console.error('--cut: not a top-level declaration: ' + missing.join(', ')); process.exit(1); }
+  const byNode = new Map(); // declNode -> Set(names) so we can verify whole multi-declarator lines are cut together
+  for (const d of topDecls) if (names.has(d.name)) {
+    if (!byNode.has(d.declNode)) byNode.set(d.declNode, []);
+    byNode.get(d.declNode).push(d);
+  }
+  for (const [node, ds] of byNode) {
+    if (node.type === 'VariableDeclaration' && node.declarations.length !== ds.length) {
+      console.error(`--cut: ${ds.map(d=>d.name).join(',')} share a multi-declarator line with un-cut siblings; cut them together or split first`); process.exit(1);
+    }
+    // extend end past a trailing semicolon
+    let end = node.end; while (end < src.length && /[ \t]/.test(src[end])) end++; if (src[end] === ';') end++;
+    // capture contiguous leading line-comment block (and the newline before the node)
+    let start = node.start;
+    // back up to the start of the node's own line
+    let ls = src.lastIndexOf('\n', start - 1) + 1;
+    start = ls;
+    // walk upward over contiguous comment-only lines (// ... ), stop at blank/code
+    while (start > 0) {
+      const prevLineEnd = start - 1;                 // the '\n' terminating the previous line
+      const prevLineStart = src.lastIndexOf('\n', prevLineEnd - 1) + 1;
+      const line = src.slice(prevLineStart, prevLineEnd).trim();
+      if (line.startsWith('//')) start = prevLineStart; else break;
+    }
+    // include the trailing newline after end
+    if (src[end] === '\n') end++;
+    cutRanges.push({ start, end, name: ds.map(d => d.name).join(','), order: node.start });
+  }
+  cutRanges.sort((a, b) => a.start - b.start);
+}
+const inCut = (pos) => cutRanges.some(r => pos >= r.start && pos < r.end);
 
 // ---- lexical scope resolver (no `var` in this codebase -> pure block scoping) ----
 // We walk pushing a scope on each scope-creating node (collecting that scope's direct
@@ -191,6 +228,7 @@ walk(fn, {
     }
     ancestors.push(node);
     if (node.type !== 'Identifier' || !names.has(node.name)) return;
+    if (cut && inCut(node.start)) return; // inside a to-be-deleted definition — don't rewrite (it's going away)
     // skip declaration ids & binding positions
     if (parent.type === 'VariableDeclarator' && key === 'id') return;
     if (isFnNode(parent) && (key === 'id' || key === 'params')) return;
@@ -223,7 +261,16 @@ walk(fn, {
   leave(node) { ancestors.pop(); if (node.__scope) { scopeStack.pop(); delete node.__scope; } },
 });
 
-console.log(`promote${refsOnly ? ' (refs-only)' : ''}: ${[...names].join(', ')}`);
-console.log(`  declarations rewritten: ${declCount}, references: ${refCount}, shorthand expanded: ${shorthandCount}`);
+// ---- --cut: remove the definition ranges, and write the removed source to --out (or stdout) ----
+let removed = '';
+if (cut) {
+  for (const r of cutRanges) { removed += src.slice(r.start, r.end); ms.remove(r.start, r.end); }
+  const outPath = val('--out');
+  if (outPath && WRITE) { writeFileSync(outPath, removed); console.log(`  removed-source -> ${outPath} (${cutRanges.length} defs)`); }
+  else { console.log(`\n----- REMOVED SOURCE (${cutRanges.length} defs) -----\n${removed}\n----- END REMOVED -----`); }
+}
+
+console.log(`${cut ? 'cut' : 'promote'}${refsOnly && !cut ? ' (refs-only)' : ''}: ${[...names].join(', ')}`);
+console.log(`  declarations rewritten: ${declCount}, references: ${refCount}, shorthand expanded: ${shorthandCount}${cut ? `, defs removed: ${cutRanges.length}` : ''}`);
 if (WRITE) { writeFileSync(FILE, ms.toString()); console.log(`  WROTE ${FILE}`); }
 else console.log('  (dry-run; pass --write to apply)');
