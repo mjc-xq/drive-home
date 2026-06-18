@@ -1,68 +1,109 @@
 import * as THREE from 'three';
 
-// Drive-mode tile cutaway: rewrites ctx.p3dtiles.clipPlanes each frame so the photoreal
-// tiles between the camera and the car are sliced away (you can always see the car). The
-// clipPlanes array is OWNED by tiles3d.js (assigned to every tile material with
-// clipIntersection=true); this module only MUTATES its contents. Scratch planes are reused
-// per frame and kept module-private (never shared — that would alias the per-frame cut).
-// Empty array == no clip, so explore/scoop (which never call this) are uncut.
+// Drive-mode tile cutaway — the photoreal tiles between the camera and the car are sliced away
+// so the car is always visible. The occluding volume is the CONVEX HULL of the eye (camera) and
+// a padded oriented car box: every sightline of a pinhole camera passes through the eye, so the
+// rays that reach the car form the cone from the eye to the car box, and anything inside that
+// cone (between eye and car) is exactly what can hide the car. We hand tiles3d.js the OUTWARD-
+// normal face planes of that hull; with clipIntersection=true a fragment is discarded iff it is
+// behind EVERY plane — i.e. inside the hull — so only the true occluders are cut.
+//
+// Why this beats the old flat-cap corridor: the hull tapers along the real sightline (no bizarre
+// flat strip), tall/wide occluders can't leak past a cap, and TERRAIN IS NEVER CUT — the hull's
+// lower boundary is the eye→car-BASE sightline, which rises above the road everywhere except
+// directly under the car (where the car covers it). One code path serves every camera angle
+// (chase / cruise / overhead / aerial); overhead simply becomes a near-vertical hull.
+//
+// The clipPlanes array is OWNED by tiles3d.js (shared by every tile material, clipIntersection=true).
+// We always write EXACTLY N planes (padding spare slots with no-op planes) so the per-fragment
+// clip-plane count never changes — a changing count forces Three.js to recompile tile shaders.
 export function createTileClip(ctx) {
-  const _clipHoriz = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);   // kept side: BELOW the (tilted) sightline + clearance
-  const _clipDepth = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);    // kept side: AT/BEYOND the car along the camera→car axis
-  const _clipConeA = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);    // cone wall (+lateral): kept side = outside the wedge
-  const _clipConeB = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);   // cone wall (−lateral)
-  const _clipBox = [new THREE.Plane(), new THREE.Plane(), new THREE.Plane(), new THREE.Plane()];   // overhead column walls (±x, ±z)
-  const _clipN = new THREE.Vector3(), _clipP = new THREE.Vector3();
+  // Base (dispScale=1) padded car box. Footprint + roof scale with car.dispScale so the cut
+  // matches the rendered car (which is blown up 3–9× in overhead/aerial); FLOOR_PAD does NOT
+  // scale — it is the fixed margin that keeps the road (and graded road) out of the cut.
+  const CAR_HALF_LEN = 2.3, CAR_HALF_WID = 1.05;   // ~4.6 m × 2.1 m car
+  const PAD_LEN = 0.9, PAD_WID = 0.7;              // margin so the car never clips its own edges + a thin surround
+  const ROOF = 1.95;                               // box top above the road (covers a tall van + margin)
+  const FLOOR_PAD = 0.5;                           // box bottom above the road → terrain stays below the cut
+  const CLOSE_GUARD = 5;                           // eye within 5 m of the car → don't cut (showcase orbit / nose-in)
+  const N = 9;                                     // FIXED plane count = max hull faces (3–5 back faces + 4–6 silhouette edges)
+  const EPS = 1e-5;
 
-  function updateTileClip(carX, carY, carZ, view) {
-    const planes = ctx.p3dtiles && ctx.p3dtiles.clipPlanes;
-    if (!planes) return;
-    // eye→car vector d; dist = |d|, dh = its horizontal extent (how horizontal the view is).
-    const ex = ctx.camera.position.x, ey = ctx.camera.position.y, ez = ctx.camera.position.z;
-    const dx = carX - ex, dy = carY - ey, dz = carZ - ez;
-    const dist = Math.hypot(dx, dy, dz);
-    if (dist < 1e-3) { planes.length = 0; return; }
-    const dh = Math.hypot(dx, dz);
-    if (view.topdown || dh < dist * 0.25) {
-      // OVERHEAD COLUMN: cap the canopy just above the car and box it to ±W around the car so the
-      // cut is a tight column over the road, never spreading to trees off to the sides.
-      const W = 7, clearance = 2.5;                          // clearance ≥ tallest car roof (~2 m van) so the car never clips
-      _clipHoriz.constant = carY + clearance;   // kept BELOW carY+clearance (normal fixed at construction)
-      // Box walls point INWARD so "behind EVERY plane" (clipIntersection) = inside the column. (Outward
-      // normals made the four behind-halves mutually exclusive → empty cut → overhead clipped nothing.)
-      _clipBox[0].normal.set(-1, 0, 0); _clipBox[0].constant = (carX - W);    // behind ⇔ x > carX−W
-      _clipBox[1].normal.set(1, 0, 0);  _clipBox[1].constant = -(carX + W);   // behind ⇔ x < carX+W
-      _clipBox[2].normal.set(0, 0, -1); _clipBox[2].constant = (carZ - W);    // behind ⇔ z > carZ−W
-      _clipBox[3].normal.set(0, 0, 1);  _clipBox[3].constant = -(carZ + W);   // behind ⇔ z < carZ+W
-      planes.length = 0; planes.push(_clipHoriz, _clipBox[0], _clipBox[1], _clipBox[2], _clipBox[3]);
-      return;
+  // 12 box edges as corner-index pairs. Corner index bits: b0 = forward sign, b1 = right sign, b2 = up.
+  const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+
+  const pool = Array.from({ length: N }, () => new THREE.Plane());   // reused every frame (zero per-frame allocation)
+  const C = Array.from({ length: 8 }, () => new THREE.Vector3());    // box corners
+  const eye = new THREE.Vector3(), ctr = new THREE.Vector3();
+  const n = new THREE.Vector3(), ab = new THREE.Vector3(), ae = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const UP = new THREE.Vector3(0, 1, 0);
+
+  // commit the pool (first `used` slots are real planes; pad the rest with no-ops that don't change
+  // the clipIntersection result, then publish to the shared array without reallocating it)
+  function commit(clip, used, noopBehind) {
+    for (let i = used; i < N; i++) {
+      // padding: clipIntersection discards a fragment only if it's behind ALL planes. A plane that
+      // every fragment is BEHIND (constant −1e9) leaves the real planes in charge (use when cutting);
+      // a plane every fragment is IN FRONT of (constant +1e9) forces "kept" (use for no-cut).
+      pool[i].normal.copy(UP); pool[i].constant = noopBehind ? -1e9 : 1e9;
     }
-    // OBLIQUE (chase / cruise / aerial): a constant-width CORRIDOR from the camera to the car.
-    const W = 6, clearance = 2.5;                            // ±W slab around the look axis; flat-cap height above the car
-    // (1) FLAT height cap at carY + clearance. The earlier TILTED sightline rose to CAMERA height near
-    // the lens, so near-camera foreground sat below it and was never cut — it "reappeared right before
-    // your eyes" as you drove forward. A flat cap stays low ALL the way back to the camera, so the whole
-    // corridor (lens → car) is cleared. It can't gouge distant hills (the old "white middle") because the
-    // ±W slab below bounds the cut to the road strip, which is ~flat; the car itself is kept by the depth
-    // gate, not this cap, so the clearance only needs to tolerate the road's grade over the corridor.
-    _clipHoriz.constant = carY + clearance;                 // kept BELOW carY + clearance (normal fixed at construction)
-    // (2) depth gate: keep everything at/beyond (car − 2.6 m) along the eye→car axis. 2.6 m (not less)
-    // because the car's own tail sits ~2.25 m behind its centre along this axis in chase/cruise; a
-    // tighter band would clip the car's rear.
-    const fx = dx / dist, fy = dy / dist, fz = dz / dist;
-    _clipN.set(fx, fy, fz);
-    _clipP.set(carX, carY, carZ).addScaledVector(_clipN, -2.6);
-    _clipDepth.normal.copy(_clipN);
-    _clipDepth.constant = -_clipN.dot(_clipP);
-    // (3) corridor walls — a constant-width slab, NOT an apex cone (a cone is a point at the lens and
-    // only ±W/2 at mid-corridor, which leaves the SIDES of the trees). u = horizontal ⊥ the look axis
-    // = normalize(f.z,0,−f.x); two VERTICAL planes ±W along u bound a ±W strip around the WHOLE eye→car
-    // line. Removed (behind both) = within W m either side of the line of sight — "a few metres each side".
-    const ul = Math.hypot(fz, fx) || 1, ux = fz / ul, uz = -fx / ul;   // unit horizontal ⊥ f
-    const ue = ux * ex + uz * ez;                                      // u·E (u has no y component)
-    _clipConeA.normal.set(ux, 0, uz);   _clipConeA.constant = -ue - W;   // behind ⇔ u·P < u·E + W
-    _clipConeB.normal.set(-ux, 0, -uz); _clipConeB.constant = ue - W;    // behind ⇔ u·P > u·E − W
-    planes.length = 0; planes.push(_clipHoriz, _clipDepth, _clipConeA, _clipConeB);
+    for (let i = 0; i < N; i++) clip[i] = pool[i];
+    clip.length = N;
+  }
+
+  function updateTileClip(carX, carY, carZ /*, view */) {
+    const clip = ctx.p3dtiles && ctx.p3dtiles.clipPlanes;
+    if (!clip) return;
+    eye.copy(ctx.camera.position);
+
+    // --- padded oriented car box (scaled to the rendered car) ---
+    const s = Math.max(0.5, ctx.car.dispScale || 1);
+    const hl = (CAR_HALF_LEN + PAD_LEN) * s, hw = (CAR_HALF_WID + PAD_WID) * s;
+    const yb = carY + FLOOR_PAD, yt = carY + ROOF * s;
+    const fx = Math.sin(ctx.car.yaw), fz = Math.cos(ctx.car.yaw);   // forward (world)
+    const rx = Math.cos(ctx.car.yaw), rz = -Math.sin(ctx.car.yaw);  // right (world)
+    let idx = 0;
+    for (let up = 0; up < 2; up++) for (let sr = -1; sr <= 1; sr += 2) for (let sf = -1; sf <= 1; sf += 2) {
+      C[idx++].set(carX + rx * sr * hw + fx * sf * hl, up ? yt : yb, carZ + rz * sr * hw + fz * sf * hl);
+    }
+    ctr.set(carX, (yb + yt) / 2, carZ);
+
+    // --- guard: eye too close / inside the box → no occlusion needed ---
+    if (eye.distanceTo(ctr) < CLOSE_GUARD) { commit(clip, 0, false); return; }
+
+    let used = 0;
+    const tryFace = (nx, ny, nz, px, py, pz) => {
+      // back face of the hull ⇔ eye on the inner (negative) side of this outward-normal box face
+      if (nx * (eye.x - px) + ny * (eye.y - py) + nz * (eye.z - pz) <= EPS && used < N) {
+        const p = pool[used++]; p.normal.set(nx, ny, nz); p.constant = -(nx * px + ny * py + nz * pz);
+      }
+    };
+    // 6 box faces (outward normal + a point on the face = box centre + normal·halfExtent)
+    tryFace(fx, 0, fz, ctr.x + fx * hl, ctr.y, ctr.z + fz * hl);      // +forward
+    tryFace(-fx, 0, -fz, ctr.x - fx * hl, ctr.y, ctr.z - fz * hl);    // −forward
+    tryFace(rx, 0, rz, ctr.x + rx * hw, ctr.y, ctr.z + rz * hw);      // +right
+    tryFace(-rx, 0, -rz, ctr.x - rx * hw, ctr.y, ctr.z - rz * hw);    // −right
+    tryFace(0, 1, 0, ctr.x, yt, ctr.z);                               // +up
+    tryFace(0, -1, 0, ctr.x, yb, ctr.z);                             // −up
+
+    // 12 box edges → the plane through (eye, A, B) is a hull (silhouette) face iff every box corner
+    // is on its inner side. This builds the tapered cone walls from the eye to the car silhouette.
+    for (const [ia, ib] of EDGES) {
+      if (used >= N) break;
+      const A = C[ia], B = C[ib];
+      ab.subVectors(B, A); ae.subVectors(eye, A);
+      n.crossVectors(ab, ae);
+      const len = n.length();
+      if (len < EPS) continue;                                         // eye colinear with the edge
+      n.multiplyScalar(1 / len);
+      if (n.dot(tmp.subVectors(ctr, A)) > 0) n.negate();               // orient OUTWARD (away from the box centre)
+      let supporting = true;
+      for (let i = 0; i < 8; i++) { if (n.dot(tmp.subVectors(C[i], A)) > EPS) { supporting = false; break; } }
+      if (!supporting) continue;                                       // corners on both sides → interior edge, skip
+      const p = pool[used++]; p.normal.copy(n); p.constant = -n.dot(A);
+    }
+
+    commit(clip, used, true);
   }
 
   return { updateTileClip };
