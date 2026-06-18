@@ -181,25 +181,25 @@ if (houseIdx >= 0) {
   scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col }));
 }
 const bW = { pos: [], uv: [], col: [] }, bRf = { pos: [], col: [] };
-let nBld = 0;
+// Keep the OWNER'S two lots clear of any generated building except the house —
+// the back lot stays empty for a manually-placed shed. Parcel rings from parcels.json.
+const pip = (x, z, r) => { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, zi] = r[i], [xj, zj] = r[j]; if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) c = !c; } return c; };
+const MINE = existsSync(path.join(ROOT, 'exports/parcels.json'))
+  ? (JSON.parse(readFileSync(path.join(ROOT, 'exports/parcels.json'), 'utf8')).parcels || []).filter(p => p.mine).map(p => p.ring) : [];
+const inMine = (x, z) => MINE.some(r => pip(x, z, r));
+let nBld = 0, nSkip = 0;
 S.buildings.forEach((b, ib) => {
   if (b.house) return;
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
+  if (inMine(cw[0], cw[1])) { nSkip++; return; }     // never put others' buildings on the owner's lots
   const base = terrainAt(cw[0], cw[1]) - 0.5;
   buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b, ib), bW, bRf));
   nBld++;
 });
-// LiDAR-detected gap buildings (no existing footprint) — fills the missing houses
-const FILL = existsSync(path.join(ROOT, 'exports/buildings_fill.json'))
-  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_fill.json'), 'utf8')).buildings : [];
-let nFill = 0;
-for (const fb of FILL) {
-  const cx = fb.ring.reduce((s, p) => s + p[0], 0) / fb.ring.length, cz = fb.ring.reduce((s, p) => s + p[1], 0) / fb.ring.length;
-  if (!inPatch(cx, cz)) continue;
-  const base = terrainAt(cx, cz) - 0.5;
-  emitRing(fb.ring.map(p => [p[0], p[1]]), base, (fb.h || 4) + 0.5, null, STUCCO, roofColor(900 + nFill), bW, bRf);
-  buildingPolys.push(fb.ring.map(p => [p[0], p[1]])); nFill++;
-}
+// gap-fill LiDAR buildings DISABLED — they produced false structures (incl. one in
+// the back yard) and crossed property lines. The photoreal layer covers genuinely
+// missing buildings; the clean model stays trustworthy instead.
+const nFill = 0;
 if (bW.pos.length) {
   scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { uvs: bW.uv, colors: bW.col }));
   scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col }));
@@ -366,7 +366,7 @@ writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 const objs = [];
 scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
 console.log(`terrain: ${terrSrc}`);
-console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} + ${nFill} LiDAR-fill   trees: ${trees.length} (${treeSrc})`);
+console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
 console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);
