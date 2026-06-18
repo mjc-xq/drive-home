@@ -525,7 +525,8 @@ mainScene.addChild(treesParent);
 // avoiding buildings + roads. Every spot must be STRICTLY inside the real terrain
 // bounds (inTerrain), not just the symmetric ±cropHalf box, so no tree falls past
 // the E-W edge into mid-air.
-const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5;
+const TREE_RADIUS = 100;   // cluster trees around the property, not out to the patch edge
+const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5 && Math.hypot(x, z) <= TREE_RADIUS;
 const treeSpots = [];
 if (creekW) for (let k = 1; k < creekW.length; k++) {
   const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
