@@ -96,10 +96,10 @@ export function createTileClip(ctx) {
 
     const aerialWide = aerial && (ctx.czoom || 1) > 2.2;
     const shortSide = Math.min(w, h);
-    const margin = topdown ? 24 : aerial ? (aerialWide ? 18 : 34) : close ? 162 : 112;
-    const minR = topdown ? 48 : aerial ? (aerialWide ? 42 : 58) : close ? 138 : 112;
-    const maxRx = shortSide * (topdown ? 0.16 : aerial ? (aerialWide ? 0.11 : 0.18) : close ? 0.62 : 0.34);
-    const maxRy = shortSide * (topdown ? 0.16 : aerial ? (aerialWide ? 0.11 : 0.18) : close ? 0.78 : 0.34);
+    const margin = topdown ? 24 : aerial ? (aerialWide ? 18 : 34) : close ? 176 : 112;
+    const minR = topdown ? 48 : aerial ? (aerialWide ? 42 : 58) : close ? 150 : 112;
+    const maxRx = shortSide * (topdown ? 0.16 : aerial ? (aerialWide ? 0.11 : 0.18) : close ? 0.68 : 0.34);
+    const maxRy = shortSide * (topdown ? 0.16 : aerial ? (aerialWide ? 0.11 : 0.18) : close ? 0.84 : 0.34);
     const rxp = Math.min(maxRx, Math.max(minR, (maxX - minX) * 0.5 + margin));
     const ryp = Math.min(maxRy, Math.max(minR, (maxY - minY) * 0.5 + margin));
 
@@ -107,12 +107,12 @@ export function createTileClip(ctx) {
     cutaway.target.value.copy(cutTarget);
     cutaway.baseY.value = carY + 0.55;
     cutaway.screen.value.set(cx, cy, rxp, ryp);
-    cutaway.minOpacity.value = close ? 0.05 : topdown ? 0.2 : aerial ? (aerialWide ? 0.36 : 0.18) : 0.14;
-    cutaway.flatMinOpacity.value = close ? 0.78 : topdown ? 0.76 : aerial ? 0.88 : 0.86;
-    cutaway.flatFadeHeight.value = close ? 4.4 : topdown ? 2.9 : aerial ? 3.8 : 2.8;
+    cutaway.minOpacity.value = close ? 0.08 : topdown ? 0.2 : aerial ? (aerialWide ? 0.36 : 0.18) : 0.14;
+    cutaway.flatMinOpacity.value = close ? 0.94 : topdown ? 0.76 : aerial ? 0.88 : 0.86;
+    cutaway.flatFadeHeight.value = close ? 2.7 : topdown ? 2.9 : aerial ? 3.8 : 2.8;
     cutaway.depthPad.value = topdown || aerial ? 0.12 : 0.28;
-    cutaway.groundPad.value = close ? 0.45 : topdown || aerial ? 0.12 : 0.2;
-    cutaway.minHeight.value = topdown ? 1.05 : aerial ? 1.25 : close ? 2.05 : 0.75;
+    cutaway.groundPad.value = close ? 1.15 : topdown || aerial ? 0.12 : 0.2;
+    cutaway.minHeight.value = topdown ? 1.05 : aerial ? 1.25 : close ? 0.85 : 0.75;
     // Overhead views get an extra world-space column so the cut only follows blockers
     // almost directly over the car, instead of clearing a broad screen-shaped patch.
     cutaway.columnRadius.value = topdown ? Math.max(4.0, 1.55 * s) : aerial ? Math.max(aerialWide ? 4.5 : 7.0, (aerialWide ? 0.9 : 1.45) * s) : 0;

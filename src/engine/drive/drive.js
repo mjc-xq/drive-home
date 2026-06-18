@@ -36,21 +36,26 @@ export function createDrive(ctx) {
     // in like the touch stick instead of snapping (kSteer feeds jx; touch jx stays direct).
     ctx.car.kSteer = (ctx.car.kSteer || 0) + (ctx.inp2.kx - (ctx.car.kSteer || 0)) * Math.min(1, dt * 7);
     let jx = clamp(ctx.inp2.jx + ctx.car.kSteer + ctx.inp2.steer, -1, 1);
-    let throttleTarget = 0, brake = 0, reverse = false;
+    let throttleTarget = 0, brake = 0, reverse = false, reversePower = 0;
     // TWIN-STICK MOVE: the left stick's vertical axis IS the throttle/brake now.
     //   jy < 0 (push up)   → gas, proportional to how far up
     //   jy > 0 (pull down) → brake / reverse
     // (setGasAmount/setBrake still feed inp2.gas/inp2.brake for back-compat.)
     const jyGas = ctx.inp2.jy < -ctx.MOVE_DEADZONE ? clamp((-ctx.inp2.jy - ctx.MOVE_DEADZONE) / (1 - ctx.MOVE_DEADZONE), 0, 1) : 0;
-    const jyBrake = ctx.inp2.jy > ctx.MOVE_DEADZONE;
-    // BRAKE vs REVERSE — the fix for "too easy to end up backwards": a light/partial down-pull only
-    // BRAKES (stop + hold at 0). Reverse needs a DELIBERATE near-full pull-down (or full brake button /
-    // held down-arrow) AND the car already stopped for a moment, so steering with a little downward
-    // drift — or a hard brake-to-stop — can no longer fling the car into reverse.
-    const wantReverse = (ctx.inp2.jy > 0.62 || ctx.inp2.brake > 0.85 || ctx.inp2.ky > 0);
-    if (wantReverse && Math.abs(ctx.car.speed) < 1.4) ctx.car.revArmT = (ctx.car.revArmT || 0) + dt; else if (!wantReverse) ctx.car.revArmT = 0;
-    reverse = wantReverse && (ctx.car.revArmT || 0) > 0.32;
-    if (ctx.inp2.brake || ctx.inp2.ky > 0 || jyBrake) brake = 1;
+    const jyBrakeAmt = ctx.inp2.jy > ctx.MOVE_DEADZONE ? clamp((ctx.inp2.jy - ctx.MOVE_DEADZONE) / (1 - ctx.MOVE_DEADZONE), 0, 1) : 0;
+    const legacyBrake = clamp(ctx.inp2.brake || 0, 0, 1);
+    const keyBack = ctx.inp2.ky > 0 ? 1 : 0;
+    const pullBack = Math.max(jyBrakeAmt, legacyBrake, keyBack);
+    // BRAKE vs REVERSE: while moving forward, back/down is still a brake. Once the
+    // car is nearly stopped, the same held input backs up promptly and keeps backing
+    // up instead of being cancelled by the brake branch on the next frame.
+    const wantReverse = pullBack > 0.32;
+    if (wantReverse && ctx.car.speed < 2.4) ctx.car.revArmT = (ctx.car.revArmT || 0) + dt;
+    else ctx.car.revArmT = 0;
+    const reverseGate = pullBack > 0.82 ? 0.04 : 0.12;
+    reverse = wantReverse && ctx.car.speed < 0.8 && (ctx.car.revArmT || 0) >= reverseGate;
+    if (reverse) reversePower = clamp(0.35 + pullBack * 0.65, 0, 1);
+    if (pullBack > 0) brake = Math.max(0.35, pullBack);
     else if (ctx.inp2.ky < 0) throttleTarget = 1;                  // keyboard = full
     else if (jyGas > 0) throttleTarget = jyGas;                // left stick up = analog gas
     else if (ctx.inp2.gas > 0) throttleTarget = ctx.inp2.gas;          // touch gas (analog 0..1)
@@ -72,6 +77,7 @@ export function createDrive(ctx) {
     }
     // FOLLOW runs with autoDrive OFF, so the grab-wheel check above won't catch it — let real input end it too.
     if (ctx.followMode && _userInput) { ctx.follow.stopFollow(); ctx.toast('🕹️ You took the wheel!', 900); }
+    if (_userInput && ctx.inp2.navActive) ctx.inp2.navActive = false;   // manual gas/brake/reverse owns the car over any stale drag-to-drive target
     // advance the route waypoint as the car passes it. Advance by PROJECTION (how far the car
     // has travelled along the current segment), not just proximity — at high speed the car
     // overshoots a 16 m radius without ever entering it, so routeIdx would stick and the car
@@ -204,10 +210,15 @@ export function createDrive(ctx) {
     if (aGap > 0) acc *= 0.75 + 0.25 * clamp(Math.abs(ctx.car.speed) / 6, 0, 1);   // gentle off-the-line ramp — keeps a floored stab feeling punchy, not sluggish
     // PROGRESSIVE brake: ramp the brake force in over ~0.25 s so a quick tap trail-brakes
     // lightly (corner-entry finesse) while a long hold still hauls it down hard.
+    if (reverse && reversePower <= 0) reversePower = clamp(0.35 + brake * 0.65, 0, 1);   // nav reverse path
     const braking = brake > 0.1;
     const bcur = ctx.car.brakeAmt || 0;
-    ctx.car.brakeAmt = bcur + ((braking ? 1 : 0) - bcur) * Math.min(1, dt * (braking ? 4 : 9));
-    if (braking) acc = ctx.car.speed > 0.5 ? -32 * ctx.car.brakeAmt : ctx.car.speed < -0.5 ? 32 * ctx.car.brakeAmt : (reverse ? -13 : 0);   // forward → brake; rolling backward → brake forward to a stop; stopped → back up only on a DELIBERATE reverse
+    const brakeTarget = braking ? clamp(brake, 0, 1) : 0;
+    ctx.car.brakeAmt = bcur + (brakeTarget - bcur) * Math.min(1, dt * (braking ? (reverse ? 8 : 4) : 9));
+    if (braking) {
+      if (reverse) acc = ctx.car.speed > 0.5 ? -34 * Math.max(ctx.car.brakeAmt, brakeTarget) : -18 * reversePower;
+      else acc = ctx.car.speed > 0.5 ? -32 * ctx.car.brakeAmt : ctx.car.speed < -0.5 ? 32 * ctx.car.brakeAmt : 0;
+    }   // forward → brake; stopped/rolling back + reverse held → back up; otherwise brake backward motion to a stop
     // (engine-braking is now implicit: lifting off drops the pedal target below your speed,
     // so the curve above coasts you down on its own.)
     // LOAD TRANSFER: the body dives forward under braking and squats back under power —
