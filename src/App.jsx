@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { createEngine } from './engine/engine.js';
 import MobileControls from './ui/MobileControls.jsx';   // unified on-screen joystick (scoop; drive later)
+// NOTE: the engine (Three.js + ~50 modules, the bulk of the JS payload) is imported
+// LAZILY via import('./engine/engine.js') inside the mount effect below — NOT statically —
+// so the entry chunk is just React + this HUD chrome and the welcome menu paints without
+// waiting for the engine to download/parse. See the boot effect.
 
 // Reusable address box with live Google Places autocomplete. `suggest(text)` returns
 // [{description, placeId}]; picking one calls onPick(item); typing + submit calls onText.
@@ -49,13 +52,15 @@ export default function App() {
   const canvasRef = useRef(null);
   const uiRefs = useRef({ box: null, mph: null, gear: null, needle: null, joy: null, knob: null, minimap: null, speedBar: null, fx: null, runTime: null, rev: null, eta: null, brakeLbl: null, boostBar: null });
   const engineRef = useRef(null);
+  const pendingModeRef = useRef(null);   // a mode the user tapped while the engine chunk was still streaming; applied on load
   const dvTopRightRef = useRef(null);   // the top-right ☰ cluster: outside-tap dismiss tests against this
   const scoopMenuRef = useRef(null);    // the Scoop ☰ side menu: outside-tap dismiss tests against this
 
   const [ready, setReady] = useState(false);
   const [engineError, setEngineError] = useState('');
   const [photoreal, setPhotoreal] = useState(false);   // real Google tiles are up (vs the procedural placeholder)
-  const [revealTimedOut, setRevealTimedOut] = useState(false);   // fallback so the loader never hangs if tiles fail
+  const [booted, setBooted] = useState(false);   // React shell mounted: the welcome menu can paint NOW, before the (lazy) engine chunk arrives
+  const [starting, setStarting] = useState(false);   // user picked a mode before the engine finished loading → show "Starting…" until it lands
   const [picking, setPicking] = useState(true);   // start menu: pick a mode before playing
   const [mode, setMode] = useState('explore');
   const [subline, setSubline] = useState('Hayward, CA');
@@ -146,17 +151,35 @@ export default function App() {
         default: break;
       }
     };
-    let engine = null;
-    try {
-      engine = createEngine({ canvas: canvasRef.current, ui: uiRefs.current, emit });
-      engineRef.current = engine;
-    } catch (e) {
-      console.error('[engine] failed to start', e);
-      setEngineError('Could not start WebGL. Try closing other tabs or using a newer browser.');
-      return;
-    }
+    setBooted(true);   // paint the welcome menu immediately — the engine streams in behind it
+    let engine = null, cancelled = false;
+    // LAZY-load the engine as its own chunk (pulls Three.js off the entry critical path too):
+    // the menu is interactive before this resolves; a mode tapped meanwhile is queued in
+    // pendingModeRef and applied here on arrival.
+    import('./engine/engine.js').then(({ createEngine }) => {
+      if (cancelled) return;
+      try {
+        engine = createEngine({ canvas: canvasRef.current, ui: uiRefs.current, emit });
+        engineRef.current = engine;
+        if (pendingModeRef.current) {
+          const m = pendingModeRef.current; pendingModeRef.current = null;
+          if (m === 'drive') engine.enterDrive(); else if (m === 'scoop') engine.enterScoop();
+          setPicking(false); setStarting(false);
+        }
+      } catch (e) {
+        console.error('[engine] failed to start', e);
+        setEngineError('Could not start WebGL. Try closing other tabs or using a newer browser.');
+        setStarting(false);
+      }
+    }).catch(e => {
+      if (cancelled) return;
+      console.error('[engine] failed to load', e);
+      setEngineError('Could not load the 3D engine. Check your connection and reload.');
+      setStarting(false);
+    });
     return () => {
-      engine.dispose();
+      cancelled = true;
+      if (engine) engine.dispose();
       engineRef.current = null;
       clearTimeout(toastTimer.current);
       clearTimeout(cardTimer.current);
@@ -191,11 +214,14 @@ export default function App() {
     return () => document.removeEventListener('pointerdown', onDown, true);
   }, [menuOpen]);
 
-  // Hold the loading veil until the real Google tiles are up, so the procedural placeholder
-  // world doesn't flash in first. A 5.5 s fallback ensures the loader never hangs (e.g. no key).
-  useEffect(() => { if (!ready) return; const t = setTimeout(() => setRevealTimedOut(true), 5500); return () => clearTimeout(t); }, [ready]);
-
   const eng = () => engineRef.current;
+  // Pick a mode from the welcome menu. If the engine chunk is still streaming, queue the
+  // intent (pendingModeRef) and show a "Starting…" veil; the boot effect applies it on load.
+  const pickMode = (m) => {
+    const e = eng();
+    if (e) { if (m === 'drive') e.enterDrive(); else e.enterScoop(); setPicking(false); }
+    else { pendingModeRef.current = m; setStarting(true); }
+  };
   // NOTE: camera LOOK has no dedicated on-screen stick anymore. Following Roblox's
   // touch convention, the whole RIGHT HALF of the screen is camera dead-space — the
   // engine's canvas pointer handler turns any single-finger drag there into a
@@ -222,12 +248,12 @@ export default function App() {
 
   return (
     <div id="appShell">
-      <div id="loading" className={engineError ? 'error' : (ready && (photoreal || revealTimedOut)) ? 'done' : ''}>
+      <div id="loading" className={engineError ? 'error' : (booted && !starting) ? 'done' : ''}>
         <div className="loadInner">
           <div className="loadKick">Welcome home</div>
           <div className="loadTitle">Neighborhood<br />Drive</div>
           {!engineError && <div className="loadBar"><i /></div>}
-          <div className="loadSub">{engineError || 'Building the neighborhood…'}</div>
+          <div className="loadSub">{engineError || (starting ? 'Starting…' : 'Building the neighborhood…')}</div>
         </div>
       </div>
       <canvas
@@ -235,7 +261,7 @@ export default function App() {
         aria-label="Interactive 3D model of a drivable neighborhood"
       />
       <div id="fx" ref={el => (uiRefs.current.fx = el)} />
-      {ready && picking && (
+      {booted && picking && (
         <div id="startMenu">
           <div className="menuSheet startSheet">
             <div className="menuHead">
@@ -251,11 +277,11 @@ export default function App() {
               )}
             </div>
             <div className="modeCards">
-              <button className="modeCard drive" onClick={() => { setPicking(false); eng().enterDrive(); }}>
+              <button className="modeCard drive" onClick={() => pickMode('drive')}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--go)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /><circle cx="7.5" cy="17.5" r="1.4" /><circle cx="16.5" cy="17.5" r="1.4" /></svg>
                 <span className="mcTitle">Drive</span><span className="mcSub">Arcade controls</span>
               </button>
-              <button className="modeCard" onClick={() => { setPicking(false); eng().enterScoop(); }}>
+              <button className="modeCard" onClick={() => pickMode('scoop')}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12a7 7 0 0 1 14 0v5H5z" /><path d="M9 17v3M15 17v3" /></svg>
                 <span className="mcTitle">Scoop</span><span className="mcSub">Collect &amp; deliver</span>
               </button>
