@@ -612,7 +612,11 @@ export function createDrive(ctx) {
       ctx.destPin.visible = ddDest < 700;
       if (ctx.destPin.visible) {
         if (ctx.destPin.userData.groundY == null || now - (ctx.destPin.userData._gyT || 0) > 200) { ctx.destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, ctx.destPin.userData.groundY); ctx.destPin.userData._gyT = now; }   // ~5 Hz: a fixed destination doesn't move
-        ctx.destPin.position.set(ctx.DEST.x, ctx.destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, ctx.DEST.z);
+        const destFade = clamp((ddDest - 10) / 70, 0.35, 1) * clamp(1 - (ddDest - 360) / 340, 0.45, 1);
+        const destPulse = ctx.reduceMotion ? 1 : 1 + 0.045 * Math.sin(now * 0.005);
+        ctx.destPin.position.set(ctx.DEST.x, ctx.destPin.userData.groundY + 0.28, ctx.DEST.z);
+        ctx.destPin.rotation.y = ctx.reduceMotion ? 0 : Math.sin(now * 0.0018) * 0.1;
+        ctx.destPin.userData.setState(0xffc21e, destFade, destPulse);
       }
     } else { ctx.guideLine.visible = false; ctx.destPin.visible = false; }
     // The flat aerial patch under the car read as an ugly disc (a different, lower-res

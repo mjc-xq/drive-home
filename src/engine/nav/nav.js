@@ -131,7 +131,7 @@ export function createNav(ctx) {
       ctx.nav.geocodeAddress(addr).then(g => {
         const w = ctx.geo.geoToWorld(g.lat, g.lon), ox = p.x, oz = p.z;
         p.x = w[0]; p.z = w[1]; p.lat = g.lat; p.lon = g.lon;
-        const b = ctx.poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; }
+        const b = ctx.poiBeacons.find(x => x.poi.key === p.key); if (b) { b.mesh.position.x = p.x; b.mesh.position.z = p.z; b.mesh.userData.groundY = null; b.mesh.userData._gyT = 0; }
         const lb = ctx.poiLabels.find(x => x.poi.key === p.key); if (lb) { lb.spr.position.x = p.x; lb.spr.position.z = p.z; }
         for (const sp of ctx.crowdSpots) if (sp.zone === p.key) {
           const dx = p.x - ox, dz = p.z - oz;
