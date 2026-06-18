@@ -58,6 +58,11 @@ def zext(o):
     return max(zs) - min(zs)
 
 
+def xyext(o):                                      # native canopy width
+    xs = [v[0] for v in o.bound_box]; ys = [v[1] for v in o.bound_box]
+    return max(max(xs) - min(xs), max(ys) - min(ys))
+
+
 def zmin(o):
     return min(v[2] for v in o.bound_box)
 
@@ -65,7 +70,7 @@ def zmin(o):
 coll = bpy.context.scene.collection
 made = 0
 for t in PLACED:
-    big = t["canopyR"] >= 3.4 and acacia and rng.random() < 0.18
+    big = t["canopyR"] >= 4.0 and acacia and rng.random() < 0.10   # occasional feature tree
     src = rng.choice(acacia if big else normals)
     inst = src.copy()                              # linked dup: separate OBJECT, shared mesh data
     coll.objects.link(inst)
@@ -75,8 +80,10 @@ for t in PLACED:
     yaw = rng.uniform(0, 2 * math.pi)              # random yaw about world up
     inst.rotation_euler = (0.0, 0.0, yaw)
     nh = zext(src) or 1.0
-    target = t["height"] * (1.15 if big else 1.0)
-    s = max(0.15, target / nh)
+    nw = xyext(src) or 1.0
+    target = t["height"] * (1.1 if big else 1.0)
+    wcap = 16.0 if big else 11.0                   # cap canopy width so no 40 m monster trees
+    s = max(0.2, min(target / nh, wcap / nw))
     inst.scale = (s, s, s)
     # world pos: glTF (x, base, z) -> Blender (x, -z, base); seat trunk base on terrain
     inst.location = (t["x"], -t["z"], t["base"] - zmin(src) * s)
