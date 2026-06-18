@@ -30,7 +30,6 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
-const { makeGeoENU } = await import('../src/engine/coords.js');
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf8'));
@@ -38,24 +37,19 @@ const C = S.center;                                        // house centroid (fl
 let A = S.aerial;                                          // aerial bounds (flat ENU)
 const GAERIAL = path.join(ROOT, 'exports/google_aerial.json');
 if (existsSync(GAERIAL)) A = JSON.parse(readFileSync(GAERIAL, 'utf8'));   // prefer Google satellite
-// Curvature-correct ENU, identical to the frame the app's Google photoreal tiles
-// use (coords.js makeGeoENU), origin = house lat/lon. Replaces the old flat approx
-// (0.4%-low latitude constant) that drifted metres from Google with distance.
-const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * Math.PI / 180), D2R = Math.PI / 180;
-const houseLat = LAT0 + C[1] / 110540, houseLon = LON0 + C[0] / (COSLAT * 111320);
-const ENU = makeGeoENU(houseLat, houseLon);
-const flatToLL = (e, n) => [LAT0 + n / 110540, LON0 + e / (COSLAT * 111320)];   // scene.json flat -> lat/lon
-const w2 = (e, n) => { const [lat, lon] = flatToLL(e, n); const [E, N] = ENU.toEN(lat, lon); return [E, -N]; };
-// aerial: world/lat-lon -> web-mercator fraction within the photo's lat/lon corners
-const mercY = lat => Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2));
-const aLatN = LAT0 + A.Nt / 110540, aLatS = LAT0 + A.Nb / 110540;
-const aLonW = LON0 + A.E0 / (COSLAT * 111320), aLonE = LON0 + A.E1 / (COSLAT * 111320);
-const aMyN = mercY(aLatN), aMyS = mercY(aLatS);
-// V: glTF's texture origin is v=0 at the TOP of the image, and the aerial mosaic is
-// stored north-up (top row = north) -> north must map to v=0. (The old Mapbox photo
-// was stored south-up, so the inverse looked right until we swapped in the north-up
-// Google mosaic, which then rendered upside-down / N-S flipped.)
-const aerialUVll = (lat, lon) => [(lon - aLonW) / (aLonE - aLonW), (aMyN - mercY(lat)) / (aMyN - aMyS)];
+// FLAT ENU end-to-end — the SAME frame as the verified 2-D overlay (footprint
+// flat-ENU -> aerial-bounds pixel). Geometry and aerial UVs now share one frame, so
+// the 3-D export lands exactly where the 2-D overlay does. (makeGeoENU was only
+// needed to match the Google PHOTOREAL tiles, now dropped; it placed geometry in a
+// curvature frame while the aerial UVs were flat -> the metres of drift between the
+// buildings/creek and the satellite texture.)
+const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * Math.PI / 180);
+const llToEN = (lat, lon) => [(lon - LON0) * COSLAT * 111320, (lat - LAT0) * 110540];  // GEO0-relative flat ENU
+const enToLL = (e, n) => [LAT0 + n / 110540, LON0 + e / (COSLAT * 111320)];
+const w2 = (e, n) => [e - C[0], -(n - C[1])];                  // flat ENU -> world (house centroid at origin)
+// world XZ -> aerial-bounds UV: LINEAR in flat ENU, v=0 at the north/top edge — the
+// exact mapping the 2-D overlay and fetch_terrain_colors.py use.
+const aerialUVen = (e, n) => [(e - A.E0) / (A.E1 - A.E0), (A.Nt - n) / (A.Nt - A.Nb)];
 
 // ---- terrain: crisp 1 m DEM patch if present, else coarse Terrarium ------
 const DEMPATH = path.join(ROOT, 'exports/dem_1m.json');
@@ -82,8 +76,8 @@ if (existsSync(DEMPATH)) {
   terrSrc = D.source;
   // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon (curvature-correct).
   terrainAt = (X, Z) => {
-    const g = ENU.toGeo(X, -Z);
-    let fi = (g.lon - D.lonW) / dLon * cols - 0.5, fj = (D.latN - g.lat) / dLat * rows - 0.5;
+    const [lat, lon] = enToLL(X + C[0], C[1] - Z);
+    let fi = (lon - D.lonW) / dLon * cols - 0.5, fj = (D.latN - lat) / dLat * rows - 0.5;
     fi = Math.max(0, Math.min(cols - 1.001, fi)); fj = Math.max(0, Math.min(rows - 1.001, fj));
     const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
     const a = h[j * cols + i], b = h[j * cols + i + 1], c = h[(j + 1) * cols + i], d = h[(j + 1) * cols + i + 1];
@@ -94,8 +88,8 @@ if (existsSync(DEMPATH)) {
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
     const k = j * cols + i;
     const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
-    const [E, N] = ENU.toEN(lat, lon); pos.push(E, h[k], -N);
-    const w = aerialUVll(lat, lon); uv.push(w[0], w[1]);
+    const [e, n] = llToEN(lat, lon); pos.push(e - C[0], h[k], -(n - C[1]));
+    const w = aerialUVen(e, n); uv.push(w[0], w[1]);
   }
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
     const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; idx.push(a, c, b, b, c, d);
@@ -127,7 +121,7 @@ function gableTris(rect, base, wallH) {
 // v = height / TILE -> tiled stucco+window texture) and ROOF triangles (cap +
 // gables, UV = nadir aerial projection -> real satellite roof imagery).
 const TILE = 3.0;
-const aerialUV = (X, Z) => { const g = ENU.toGeo(X, -Z); return aerialUVll(g.lat, g.lon); };
+const aerialUV = (X, Z) => aerialUVen(X + C[0], C[1] - Z);
 // Per-building wall colour from Street View (exports/buildings_color.json) and a
 // clean solid roof colour (NADIR aerial on pitched roofs looks wrong, so roofs are
 // solid). Walls = facade window texture x SV colour; roofs = solid shingle.
