@@ -1,5 +1,6 @@
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
+import { fetchMapboxRoadBox, hasMapboxRoadToken } from './mapbox-roads.js';
 // Map management: Google Maps SDK, routing + auto-drive rail, geocoding/search, live + procedural
 // minimap, the OSM road graph, teleport/jump, the route guide ribbon, and the location label.
 export function createNav(ctx) {
@@ -57,6 +58,7 @@ export function createNav(ctx) {
             if (pts.length > 1) {
               ctx.ROUTE = ctx.nav.laneOffsetRoute(pts, ctx.LANE_OFFSET); ctx.routeIdx = 0;   // ride the correct lane, not the divider
               ctx.nav.snapDestinationToRouteEnd(ctx.ROUTE);
+              ctx.nav.updateAreaRoads(performance.now(), true);   // warm OSM boxes along the route + destination in the background
               if (ctx.autoDrive && Math.abs(ctx.car.speed) < 6) ctx.nav.faceRouteStart();   // just set off / was holding → aim down the real route
               if (!ctx._quietRoute) ctx.toast('🗺️ Route ready — follow the line', 1500);
             }
@@ -467,62 +469,130 @@ export function createNav(ctx) {
       });
     }).catch(() => { ctx._geoBusy = false; });
   }
-  // Fetch the REAL road network around the car from OpenStreetMap (Overpass) in a ~2.6 km box,
-  // projected through the same ENU geoToWorld as the photoreal tiles, and refresh it as you drive
-  // into new areas. This gives the lane-keep assist + soft-wall + reset a true road GRAPH everywhere,
-  // not just the procedural hood — so road-hugging works far from home exactly like it does at home.
-  // Self-throttled (one request at a time, ≥4 s apart, only when the car leaves the last box), and
-  // fully graceful: if Overpass is unreachable it just keeps whatever roads it had (or none).
+  // Fetch the REAL road network around/ahead of the car. Mapbox vector tiles are the fast
+  // path (CDN, GET, service-worker-cacheable); Overpass remains a fallback when the token
+  // is absent or a tile request fails. Drive keeps a rolling corridor cache: current box
+  // first, then forward boxes based on speed. The steering loop only scans boxes near the
+  // car (road-graph.js), so retaining recent boxes does not make stale data pull the car.
   function updateAreaRoads(now, force) {
     if (ctx.mode !== 'drive') return;
     if (Math.hypot(ctx.car.x, ctx.car.z) < 300) return;                                  // the hood's own roadSegs already cover here
-    if (ctx._osmFetching) return;                                                    // one fetch at a time
+    const R = 3500;                                                                   // each box is ~7 km square; corridor boxes cover high-speed travel
+    const q = ctx._osmQueue || (ctx._osmQueue = []);
+    const boxes = ctx._osmBoxes || (ctx._osmBoxes = []);
+    if (force) q.length = 0;                                                         // jump/new route gets the next fetch slots, not stale old-heading jobs
+    const covered = (x, z) =>
+      boxes.some(b => Math.hypot(x - b.x, z - b.z) < b.r * 0.72) ||
+      q.some(b => Math.hypot(x - b.x, z - b.z) < b.r * 0.72);
+    const enqueue = (x, z, priority = false) => {
+      if (covered(x, z)) return;
+      const job = { x, z, r: R };
+      if (priority) q.unshift(job); else q.push(job);
+    };
+    enqueue(ctx.car.x, ctx.car.z, force);
+    const speed = Math.abs(ctx.car.speed || 0);
+    const step = R * 1.05;
+    const queueLimit = 14;
+    const enqueueRouteCorridor = () => {
+      if (!ctx.ROUTE || ctx.ROUTE.length < 2) return false;
+      let acc = 0, nextAt = 0, px = ctx.car.x, pz = ctx.car.z;
+      const horizon = Math.max(clamp(speed * 80, R * 2, 50000), R * 4);
+      for (let i = Math.max(0, ctx.routeIdx || 0); i < ctx.ROUTE.length && acc <= horizon && q.length < queueLimit; i++) {
+        const p = ctx.ROUTE[i], segLen = Math.hypot(p.x - px, p.z - pz);
+        acc += segLen; px = p.x; pz = p.z;
+        if (acc >= nextAt) { enqueue(p.x, p.z); nextAt += step; }
+      }
+      const end = ctx.ROUTE[ctx.ROUTE.length - 1];
+      if (end) enqueue(end.x, end.z);                                                // always warm the destination curb too
+      return true;
+    };
+    const hasRoute = enqueueRouteCorridor();
     if (!force) {
-      if (now - ctx._osmT < 4000) return;                                            // min 4 s apart (unless forced, e.g. by Return-to-road)
-      if (ctx._osmCenter && Math.hypot(ctx.car.x - ctx._osmCenter.x, ctx.car.z - ctx._osmCenter.z) < 850) return;   // the current box still covers us
+      let sx = Math.sin(ctx.car.yaw || 0), sz = Math.cos(ctx.car.yaw || 0);
+      if (ctx.followMode && ctx._followGeo) {
+        const dx = ctx._followGeo.x - ctx.car.x, dz = ctx._followGeo.z - ctx.car.z, dl = Math.hypot(dx, dz);
+        if (dl > 3) { sx = dx / dl; sz = dz / dl; }
+      } else if (!hasRoute && ctx.DEST) {
+        const dx = ctx.DEST.x - ctx.car.x, dz = ctx.DEST.z - ctx.car.z, dl = Math.hypot(dx, dz);
+        if (dl > 3) { sx = dx / dl; sz = dz / dl; enqueue(ctx.DEST.x, ctx.DEST.z); }
+      }
+      const horizon = clamp(speed * 75, speed > 35 ? R * 1.2 : 0, 45000);              // more ahead than behind; current box covers behind
+      for (let d = step; d <= horizon && q.length < queueLimit; d += step) enqueue(ctx.car.x + sx * d, ctx.car.z + sz * d);
     }
+    if (ctx._osmFetching || !q.length) return;                                        // one fetch at a time
+    if (!force && now - ctx._osmT < 1200) return;                                      // do not hammer public Overpass mirrors
+    const job = q.shift();
     ctx._osmFetching = true; ctx._osmT = now;
-    const fx = ctx.car.x, fz = ctx.car.z, R = 1300;                                      // ~2.6 km box around the car
-    const cs = [ctx.geo.worldToGeo(fx - R, fz - R), ctx.geo.worldToGeo(fx + R, fz - R), ctx.geo.worldToGeo(fx - R, fz + R), ctx.geo.worldToGeo(fx + R, fz + R)];
-    const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
-    const s = Math.min(...lats).toFixed(6), n = Math.max(...lats).toFixed(6), w = Math.min(...lons).toFixed(6), e = Math.max(...lons).toFixed(6);
-    const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
-    const body = 'data=' + encodeURIComponent(q);
-    const tryMirror = (n) => {
-      if (n >= ctx.OVERPASS_MIRRORS.length) { ctx._osmFetching = false; return; }   // all mirrors down: keep the last roads, retry next box
-      const url = ctx.OVERPASS_MIRRORS[(ctx._osmMirror + n) % ctx.OVERPASS_MIRRORS.length];
-      // Hard 12 s cap per mirror: an overloaded Overpass host hangs ~48 s before its 504, which would
-      // pin _osmFetching and starve the road graph. Abort early and fall through to the next mirror.
-      const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 12000);
-      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: ac.signal })
-        .then(r => { clearTimeout(to); return r.ok ? r.json() : Promise.reject(r.status); })
-        .then(data => {
-          const segs = [];
-          for (const el of (data.elements || [])) {
-            const g = el.geometry; if (el.type !== 'way' || !g || g.length < 2) continue;
-            for (let i = 0; i < g.length - 1; i++) {
-              const a = ctx.geo.geoToWorld(g[i].lat, g[i].lon), b = ctx.geo.geoToWorld(g[i + 1].lat, g[i + 1].lon);
-              segs.push([[a[0], a[1]], [b[0], b[1]]]);
-            }
-          }
-          if (segs.length) {
-            ctx.osmRoadSegs = segs; ctx._osmCenter = { x: fx, z: fz }; ctx._osmMirror = (ctx._osmMirror + n) % ctx.OVERPASS_MIRRORS.length;   // stick with the mirror that worked
-            // A far jump left the car off-road; now that we have THIS area's roads, snap it on — but ONLY if
-            // it's still the SAME stopped, hands-off car the jump dropped (not following, no destination, still
-            // near the jump target, within the deadline). Consume the stamp on the FIRST OSM landing either way
-            // so it can never leak into a later drive.
-            if (ctx._jumpSnap) {
-              const j = ctx._jumpSnap; ctx._jumpSnap = null;
-              if (!ctx.followMode && !ctx.DEST && Math.abs(ctx.car.speed) < 4 && performance.now() < j.until && Math.hypot(ctx.car.x - j.x, ctx.car.z - j.z) < 60) {
-                const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z); if (np && np.d < 250) { ctx.car.x = np.x; ctx.car.z = np.z; ctx.nav.settleAfterTeleport(); ctx.toast('🛣️ On the road', 900); }
+    const fx = job.x, fz = job.z;
+    const finishFetch = () => { ctx._osmFetching = false; if (ctx._osmQueue && ctx._osmQueue.length) setTimeout(() => ctx.nav.updateAreaRoads(performance.now(), false), 0); };
+    const recordRoadBox = (segs, source, extra = {}) => {
+      boxes.push({ x: fx, z: fz, r: R, segs, t: performance.now(), source, ...extra });
+      ctx._osmBoxes = boxes
+        .filter(b => performance.now() - b.t < 300000 && Math.hypot(ctx.car.x - b.x, ctx.car.z - b.z) < R * 9)
+        .slice(-8);
+      ctx.osmRoadSegs = ctx._osmBoxes.flatMap(b => b.segs);
+      ctx._osmCenter = { x: fx, z: fz, source }; ctx._osmRadius = R;
+      if (!segs.length) return;
+      // A far jump left the car off-road; now that we have THIS area's roads, snap it on — but ONLY if
+      // it's still the SAME stopped, hands-off car the jump dropped (not following, no destination, still
+      // near the jump target, within the deadline). Consume the stamp on the FIRST road-data landing either
+      // way so it can never leak into a later drive.
+      if (ctx._jumpSnap) {
+        const j = ctx._jumpSnap; ctx._jumpSnap = null;
+        if (!ctx.followMode && !ctx.DEST && Math.abs(ctx.car.speed) < 4 && performance.now() < j.until && Math.hypot(ctx.car.x - j.x, ctx.car.z - j.z) < 60) {
+          const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z); if (np && np.d < 250) { ctx.car.x = np.x; ctx.car.z = np.z; ctx.nav.settleAfterTeleport(); ctx.toast('🛣️ On the road', 900); }
+        }
+      }
+    };
+    const fetchOverpass = () => {
+      const cs = [ctx.geo.worldToGeo(fx - R, fz - R), ctx.geo.worldToGeo(fx + R, fz - R), ctx.geo.worldToGeo(fx - R, fz + R), ctx.geo.worldToGeo(fx + R, fz + R)];
+      const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
+      const s = Math.min(...lats).toFixed(6), n = Math.max(...lats).toFixed(6), w = Math.min(...lons).toFixed(6), e = Math.max(...lons).toFixed(6);
+      const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
+      const body = 'data=' + encodeURIComponent(query);
+      const tryMirror = (mi) => {
+        if (mi >= ctx.OVERPASS_MIRRORS.length) { finishFetch(); return; }   // all mirrors down: keep the last roads, retry later/next box
+        const url = ctx.OVERPASS_MIRRORS[(ctx._osmMirror + mi) % ctx.OVERPASS_MIRRORS.length];
+        // Hard 12 s cap per mirror: an overloaded Overpass host hangs ~48 s before its 504, which would
+        // pin _osmFetching and starve the road graph. Abort early and fall through to the next mirror.
+        const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 12000);
+        fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: ac.signal })
+          .then(r => { clearTimeout(to); return r.ok ? r.json() : Promise.reject(r.status); })
+          .then(data => {
+            if (ctx.disposed) { finishFetch(); return; }   // engine torn down while this 12 s fetch was in flight — don't write dead ctx / emit to an unmounted React tree
+            const segs = [];
+            for (const el of (data.elements || [])) {
+              const g = el.geometry; if (el.type !== 'way' || !g || g.length < 2) continue;
+              for (let i = 0; i < g.length - 1; i++) {
+                const a = ctx.geo.geoToWorld(g[i].lat, g[i].lon), b = ctx.geo.geoToWorld(g[i + 1].lat, g[i + 1].lon);
+                segs.push([[a[0], a[1]], [b[0], b[1]]]);
               }
             }
-          }
-          ctx._osmFetching = false;
-        })
-        .catch(() => { clearTimeout(to); tryMirror(n + 1); });   // this host is throttling/down — fall through to the next mirror
+            recordRoadBox(segs, 'osm');
+            ctx._osmMirror = (ctx._osmMirror + mi) % ctx.OVERPASS_MIRRORS.length;   // stick with the mirror that worked
+            finishFetch();
+          })
+          .catch(() => { clearTimeout(to); tryMirror(mi + 1); });   // this host is throttling/down — fall through to the next mirror
+      };
+      tryMirror(0);
     };
-    tryMirror(0);
+    const mapboxOk = hasMapboxRoadToken() && performance.now() >= (ctx._mapboxRoadDisabledUntil || 0);
+    if (mapboxOk) {
+      fetchMapboxRoadBox(ctx, fx, fz, R)
+        .then(result => {
+          if (ctx.disposed) { finishFetch(); return; }
+          if (result && result.segs.length) {
+            recordRoadBox(result.segs, 'mapbox', { zoom: result.zoom, tileCount: result.tileCount });
+            finishFetch();
+          } else if (force || ctx._jumpSnap || ctx.DEST || ctx.followMode) fetchOverpass();
+          else { recordRoadBox([], 'mapbox', result ? { zoom: result.zoom, tileCount: result.tileCount } : {}); finishFetch(); }
+        })
+        .catch(e => {
+          if (e && (e.status === 401 || e.status === 403)) ctx._mapboxRoadDisabledUntil = performance.now() + 60000;
+          else if (e && e.status === 429) ctx._mapboxRoadDisabledUntil = performance.now() + 15000;
+          fetchOverpass();
+        });
+    } else fetchOverpass();
   }
   // Local street fallback for minimap/tap auto-drive. Google Directions handles real
   // address trips; this keeps nearby "drive there" pins on neighborhood roads instead

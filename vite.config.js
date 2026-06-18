@@ -3,17 +3,19 @@ import react from '@vitejs/plugin-react';
 
 // Normal multi-file build (no longer a single inlined artifact): big assets
 // (aerial, GLBs) stay external and load lazily, photoreal 3D-tiles stream from
-// Google, and the renderer/tiles libs code-split. The Google Maps key is read
-// from .env.local (NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) and surfaced to the client
-// as import.meta.env.VITE_GOOGLE_MAPS_KEY by name only (value never in source).
+// Google, and the renderer/tiles libs code-split. Public map keys are read
+// from .env.local and surfaced to the client by the Vite-facing names used in
+// source (values never live in source).
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const googleKey = env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+  const mapboxToken = env.NEXT_PUBLIC_MAPBOX_TOKEN || env.VITE_MAPBOX_TOKEN || '';
   return {
     plugins: [react()],
     assetsInclude: ['**/*.glb', '**/*.usdz'],
     define: {
-      'import.meta.env.VITE_GOOGLE_MAPS_KEY': JSON.stringify(googleKey)
+      'import.meta.env.VITE_GOOGLE_MAPS_KEY': JSON.stringify(googleKey),
+      'import.meta.env.VITE_MAPBOX_TOKEN': JSON.stringify(mapboxToken)
     },
     build: {
       target: 'es2020',
