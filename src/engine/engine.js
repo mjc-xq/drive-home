@@ -802,9 +802,15 @@ export function createEngine({ canvas, ui, emit }) {
   ctx._photorealGen = 0;
   function photorealOpts() {
     return {
-      // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
-      // is the dominant iOS memory cost, and Drive can now roam far and stream more.
-      lat: ctx.tileAnchor.lat, lon: ctx.tileAnchor.lon, azimuth: Math.PI, errorTarget: ctx.MOBILE ? 16 : 10, mobile: ctx.MOBILE
+      // errorTarget = screen-space pixel error the LOD traversal aims for; LOWER =
+      // crisper (and a zoom/view change now actually pulls a higher LOD, since the
+      // bar is tight enough to be unmet by coarse tiles). Google photoreal reads
+      // sharp around 5–6 px. Phones stay coarser — leaf-tile geometry/texture is
+      // the dominant iOS memory cost. lruMaxMB grows the resident budget on
+      // desktop so the extra high-LOD tiles actually stay put instead of thrashing.
+      lat: ctx.tileAnchor.lat, lon: ctx.tileAnchor.lon, azimuth: Math.PI,
+      errorTarget: ctx.MOBILE ? 12 : 6, mobile: ctx.MOBILE,
+      lruMinMB: ctx.MOBILE ? 120 : 280, lruMaxMB: ctx.MOBILE ? 200 : 460
     };
   }
   function mountPhotorealTiles(createPhotorealTiles) {
