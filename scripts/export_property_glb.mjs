@@ -53,7 +53,7 @@ const aerialUVen = (e, n) => [(e - A.E0) / (A.E1 - A.E0), (A.Nt - n) / (A.Nt - A
 
 // ---- terrain: crisp 1 m DEM patch if present, else coarse Terrarium ------
 const DEMPATH = path.join(ROOT, 'exports/dem_1m.json');
-let terrainAt, terrainMesh, cropHalf, terrSrc;
+let terrainAt, terrainMesh, cropHalf, terrSrc, tXmin, tXmax, tZmin, tZmax;
 function mkMesh(positions, indices, color, name, opts = {}) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -73,6 +73,12 @@ if (existsSync(DEMPATH)) {
   const { cols, rows, h } = D;
   const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
   cropHalf = dLat * 110540 / 2 - 4;
+  // real terrain world bounds — the patch is narrower E-W than N-S (and may be off-centre
+  // from the house), so a symmetric ±cropHalf box let trees fall past the E-W edge into
+  // mid-air. Filter geometry against these actual bounds instead.
+  tXmin = (D.lonW - LON0) * COSLAT * 111320 - C[0]; tXmax = (D.lonE - LON0) * COSLAT * 111320 - C[0];
+  const _za = -((D.latN - LAT0) * 110540 - C[1]), _zb = -((D.latS - LAT0) * 110540 - C[1]);
+  tZmin = Math.min(_za, _zb); tZmax = Math.max(_za, _zb);
   terrSrc = D.source;
   // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon (curvature-correct).
   terrainAt = (X, Z) => {
@@ -99,7 +105,8 @@ if (existsSync(DEMPATH)) {
   throw new Error('exports/dem_1m.json missing — run: scripts/.venv/bin/python scripts/fetch_dem.py 400');
 }
 
-const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
+const inPatch = (X, Z) => X >= tXmin && X <= tXmax && Z >= tZmin && Z <= tZmax;
+const inTerrain = (X, Z, m = 5) => X >= tXmin + m && X <= tXmax - m && Z >= tZmin + m && Z <= tZmax - m;
 const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
 
 // ---- buildings: walls + flat eave cap + gabled roofs (ported from geom.js) -
@@ -127,10 +134,29 @@ const aerialUV = (X, Z) => aerialUVen(X + C[0], C[1] - Z);
 // solid). Walls = facade window texture x SV colour; roofs = solid shingle.
 const COL = existsSync(path.join(ROOT, 'exports/buildings_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_color.json'), 'utf8')) : {};
+// Real per-roof colour sampled from the aerial (fetch_roof_colors.py) — terracotta,
+// gray shingle, brown — instead of a random palette.
+const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const ROOFP = [[0.34, 0.32, 0.30], [0.40, 0.36, 0.31], [0.30, 0.30, 0.31], [0.37, 0.33, 0.29], [0.26, 0.26, 0.27]];
-const wallColor = ib => COL[ib] || STUCCO;
-const roofColor = ib => ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+// Real Google Street View facades projected onto street-facing walls of the
+// playable-core buildings (scripts/fetch_sv_facades.py -> exports/sv_facades.json).
+// Each such wall edge gets its OWN primitive + material carrying its SV crop;
+// the remaining walls keep the shared tiled facade. Keyed building -> edge -> rec.
+const SV = existsSync(path.join(ROOT, 'exports/sv_facades.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/sv_facades.json'), 'utf8')) : { walls: [] };
+const svByBld = new Map();
+for (const w of SV.walls || []) {
+  if (!svByBld.has(w.building)) svByBld.set(w.building, new Map());
+  svByBld.get(w.building).set(w.edge, w);
+}
+const svOut = [];   // { ib, edge, pos:[], uv:[] } one entry per SV-textured wall
+const lighten = c => c.map(v => Math.min(1, v * 0.55 + 0.40));   // plausible wall from a roof colour
+// walls: Street View colour if known, else a light tint of the roof, else stucco
+const wallColor = ib => COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
+// roofs: real sampled colour, else the old palette
+const roofColor = ib => RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
 
 // push a roof triangle with upward-facing winding, solid roof colour (no texture)
 function pushUpTri(Rf, col, a, b, c) {
@@ -138,14 +164,30 @@ function pushUpTri(Rf, col, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
 }
+// SV crop padding above the eave (matches WALL_PAD in fetch_sv_facades.py) — the
+// crop spans world height 0..(wallH+SV_PAD), so the wall top samples partway up.
+const SV_PAD = 0.6;
 // W = {pos,uv,col} facade walls (window texture x wallC);  Rf = {pos,col} solid roof
-function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf) {
+function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, ib) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
+  const svEdges = (ib != null && svByBld.get(ib)) || null;
   let dist = 0;
   for (let i = 0; i < ring.length; i++) {           // walls
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
     const seg = Math.hypot(xj - xi, zj - zi), u0 = dist / TILE, u1 = (dist + seg) / TILE; dist += seg;
+    if (svEdges && svEdges.has(i)) {                // street-facing wall -> real SV crop
+      // crop V: 0 at top (wallH+SV_PAD) .. 1 at ground (0). Wall bottom samples
+      // V=1 (ground), wall top samples V = SV_PAD/(wallH+SV_PAD) (eave + pad).
+      const vTop = SV_PAD / (wallH + SV_PAD), vBot = 1.0;
+      svOut.push({
+        ib, edge: i,
+        pos: [xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi],
+        // u left->right along the wall A->B; v as above
+        uv: [0, vBot, 1, vBot, 1, vTop, 0, vBot, 1, vTop, 0, vTop],
+      });
+      continue;                                     // keep this edge OFF the shared facade
+    }
     W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
     W.uv.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
     for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
@@ -161,7 +203,7 @@ function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf) {
   return ring;
 }
 const emitBuilding = (b, ib, base, wallH, W, Rf) =>
-  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf);
+  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf, ib);
 
 // ---- assemble ------------------------------------------------------------
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
@@ -202,6 +244,17 @@ const nFill = 0;
 if (bW.pos.length) {
   scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { uvs: bW.uv, colors: bW.col }));
   scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col }));
+}
+
+// ---- Street View facade walls: one primitive + material per textured wall --
+// Material name SVWall_b<ib>_e<edge> lets the gltf-transform pass below attach the
+// matching exports/sv_facades/*.jpg crop. White baseColorFactor so the photo is
+// unmodulated. These were diverted out of the shared facade buffers above.
+let nSV = 0;
+for (const w of svOut) {
+  const m = mkMesh(w.pos, null, 0xffffff, `SVWall_b${w.ib}_e${w.edge}`, { uvs: w.uv });
+  m.material.name = `SVWall_b${w.ib}_e${w.edge}`;   // unique -> unique texture
+  scene.add(m); nSV++;
 }
 
 // roads (context) + collect world polylines for tree spacing
@@ -260,10 +313,10 @@ for (const r of S.roads || []) {
   const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (lw.length < 2) continue;
   roadLines.push(lw);
-  ribbon(lw, ROADW, 0.04, rPos, rIdx);                                   // asphalt
-  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.17, cuPos, cuIdx);     // left curb
-  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.17, cuPos, cuIdx);  // right curb
-  centreDashes(lw, 0.14, 0.06);                                          // dashed centre line
+  ribbon(lw, ROADW, 0.28, rPos, rIdx);                                   // asphalt — raised ~1 ft so DEM crowns/bumps don't poke through
+  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.44, cuPos, cuIdx);     // left curb (lip above asphalt)
+  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.44, cuPos, cuIdx);  // right curb
+  centreDashes(lw, 0.14, 0.34);                                          // dashed centre line just above asphalt
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
@@ -322,7 +375,7 @@ if (existsSync(TREESJSON)) {
   // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
   // house readable instead of buried.
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
-    .filter(([x, z]) => inPatch(x, z) && !onBuilding(x, z))
+    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z))   // strictly on the terrain
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
   treeSrc = `LiDAR canopy 2021 (real; ${trees.length} on-patch)`;
 } else {
@@ -393,11 +446,23 @@ const aerialP = existsSync(gAerialJpg) ? gAerialJpg : path.join(ROOT, 'src/asset
 const facadeP = path.join(ROOT, 'exports/facade.png');
 const aerialTex = existsSync(aerialP) ? doc.createTexture('aerial').setImage(new Uint8Array(readFileSync(aerialP))).setMimeType('image/jpeg') : null;
 const facadeTex = existsSync(facadeP) ? doc.createTexture('facade').setImage(new Uint8Array(readFileSync(facadeP))).setMimeType('image/png') : null;
+// one SV texture per textured wall, keyed by material name SVWall_b<ib>_e<edge>
+const svTexByName = new Map();
+for (const w of SV.walls || []) {
+  const p = path.join(ROOT, 'exports', w.image);
+  if (!existsSync(p)) continue;
+  const name = `SVWall_b${w.building}_e${w.edge}`;
+  svTexByName.set(name, doc.createTexture(name).setImage(new Uint8Array(readFileSync(p))).setMimeType('image/jpeg'));
+}
 const REPEAT = 10497, CLAMP = 33071;
-let textured = 0;
+let textured = 0, svTextured = 0;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
-  if (aerialTex && /terrain/i.test(n)) {
+  if (svTexByName.has(n)) {                          // real Street View facade crop
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(svTexByName.get(n));
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
+    m.setRoughnessFactor(0.95).setMetallicFactor(0); svTextured++;
+  } else if (aerialTex && /terrain/i.test(n)) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {
@@ -408,9 +473,11 @@ for (const m of doc.getRoot().listMaterials()) {
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 
 const objs = [];
-scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
+scene.traverse(o => { if (o.isMesh && !/^SVWall_/.test(o.name)) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
+const svBldSet = new Set(svOut.map(w => w.ib));
 console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
-console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
+console.log(`  + ${nSV} SVWall_* meshes (real Street View) across ${svBldSet.size} buildings: [${[...svBldSet].sort((a,b)=>a-b).join(', ')}]`);
+console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls) + ${svTextured} Street View facade crops`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);
