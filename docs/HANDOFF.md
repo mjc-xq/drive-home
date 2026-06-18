@@ -4,16 +4,38 @@ Read README.md first for architecture. This file is the lessons.
 
 ## Engine architecture: the `ctx` object (2026-06 monolith breakup)
 
-`src/engine/engine.js` (was a 4569-line `createEngine()` god-closure) is being split into
-small modules under `src/engine/{core,nav,drive,scoop,house,crowd,camera,controls,occlusion,
-follow}/`. The keystone: a single **flat plain-JS `ctx` object** holds 100% of cross-region
-engine state + the React bridge (`ctx.emit/ui/canvas`). The RAF loop mutates `ctx` ~60–120×/s,
-so it deliberately lives OUTSIDE React (context/jotai would re-render every frame). `ctx.car`/
-`ctx.CHAR`/`ctx.inp2` are the existing aggregate bags. Subsystems are `createX(ctx)` factories
-attached to `ctx` (`ctx.geo`, `ctx.roads`, `ctx.ground`, `ctx.tileClip`, `ctx.prefetch`, …);
-cross-module calls go `ctx.ns.fn()`. Leaf utils still import normally (`clamp`, `terrainAt`).
-The split was driven by a scope-aware codemod, `scripts/promote-ctx.mjs`; the full recipe +
-remaining roadmap is in `docs/engine-refactor-recipe.md`, the design in `plans/plan-engine-decomposition-*`.
+`src/engine/engine.js` was a 4569-line `createEngine()` god-closure. It is now a **1.5k-line
+composition root** (renderer/scene/world/car/audio setup, the RAF loop, lifecycle/dispose,
+the mode transitions, and the public `api`) that wires up ~18 domain modules.
+
+The keystone: a single **flat plain-JS `ctx` object** holds 100% of cross-region engine state
++ the React bridge (`ctx.emit/ui/canvas`). The RAF loop mutates `ctx` ~60–120×/s, so it
+deliberately lives OUTSIDE React (context/jotai would re-render every frame). `ctx.car`/
+`ctx.CHAR`/`ctx.inp2` are the existing aggregate bags.
+
+Each domain is a `createX(ctx)` factory whose returned functions hang off a `ctx.<ns>` namespace;
+**all cross-module calls go through `ctx.<ns>.fn()`** (resolved at runtime, so there are no
+import cycles). A tiny `ctx.fn` registry holds the cross-cutting core back-edges that stay in
+engine.js (`setMode`, `applyModeVisuals`, `photoModes`, the `enter*/exit*/driveFromScoop/
+resetToRoad` transitions, `insideBuilding`/`insideScoopBuilding`, `alignP3DT`/`applyP3DT`).
+Leaf utils still import normally (`clamp`, `terrainAt`, `DRIVE_CAMS`, …).
+
+Module map:
+- `core leaves` — `nav/geo.js` (ctx.geo), `nav/road-graph.js` (ctx.roads),
+  `occlusion/{ground-height,tile-clip,prefetch}.js` (ctx.ground/ctx.tileClip/ctx.prefetch),
+  `camera/presets.js` (DRIVE_CAMS/SCOOP_CAMS leaf — breaks the controls↔cam cycle)
+- `drive/` — `score-fx.js` (ctx.score), `poi.js` (ctx.poi), `traffic.js` (ctx.trafficSys),
+  `cars.js` (ctx.cars), `drive.js` (ctx.drive — `updateDrive` physics + `carHit`)
+- `nav/nav.js` (ctx.nav) — routing/auto-drive rail, geocode, minimap, OSM roads, teleport, guide
+- `scoop/scoop.js` (ctx.scoop) · `house/house.js` (ctx.houseSys, NPC FSM + room graph)
+- `crowd/crowd-system.js` (ctx.crowd) · `follow/follow.js` (ctx.follow)
+- `camera/cameras.js` (ctx.cam, `resolveCam` + cycles) · `controls/controls.js` (ctx.controls)
+
+The split was driven by AST codemods: `scripts/promote-ctx.mjs` (scope-aware state/ref promotion
++ `--cut` to lift a function set into a module), `scripts/fix-imports.mjs` (import normalizer),
+and `scripts/check-free-idents.mjs` (catches a carved module referencing an undefined closure
+var — a runtime ReferenceError the bundler can't see; **run it after any engine edit**). The
+recipe is in `docs/engine-refactor-recipe.md`, the design in `plans/plan-engine-decomposition-*`.
 
 **GOTCHA — `ctx` name shadow.** Two functions take a canvas 2D context historically named
 `ctx` (`drawMinimap`, `makeLabelTex`). When promoting `let X` → `ctx.X`, a state ref inside
