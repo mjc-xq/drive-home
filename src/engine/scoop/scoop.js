@@ -2,9 +2,12 @@ import { TOOLS, toolAfterScoop } from '../animals.js';
 import { SCOOP_CAMS } from '../camera/presets.js';
 import { clamp } from '../coords.js';
 import { terrainAt } from '../data.js';
+import { createSeeThrough } from '../occlusion/see-through.js';
 // Scoop game: the keeper HUD/tools, the yard scoop loop (updateScoop), and the indoor
 // follow-cam + see-through occluder hiding (updateScoopInterior).
 export function createScoop(ctx) {
+  const seeThrough = createSeeThrough({ minOpacity: 0.1 });
+
   // ---------- scoop mode ----------
   function pushScoopHud() {
     ctx.emit('scoopHud', {
@@ -198,13 +201,13 @@ export function createScoop(ctx) {
     const occ = ctx.interior.occluders;
     if (occ && now - ctx._wallCutT > (ctx.MOBILE ? 75 : 45)) {
       ctx._wallCutT = now;
-      for (const w of occ) if (!w.userData.permaHidden) w.visible = true;
+      seeThrough.beginSample(occ);
       const cp = ctx.camera.position, fy = ctx.interior.floorY;
       const hideAlong = (tx, ty, tz) => {
         const dx = tx - cp.x, dy = ty - cp.y, dz = tz - cp.z, len = Math.hypot(dx, dy, dz) || 1;
         ctx._wallRay.set(cp, ctx._wallDir.set(dx / len, dy / len, dz / len)); ctx._wallRay.far = Math.max(0.1, len - 0.5);
         const hits = ctx._wallRay.intersectObjects(occ, false);
-        for (const h of hits) h.object.visible = false;
+        for (const h of hits) seeThrough.fade(h.object);
       };
       hideAlong(ctx.CHAR.x, fy + 1.1, ctx.CHAR.z);                                                            // torso
       hideAlong(ctx.CHAR.x, fy + 1.75, ctx.CHAR.z);                                                           // head
@@ -217,6 +220,7 @@ export function createScoop(ctx) {
         if (rx > ra[0] + 0.2 && rx < ra[1] - 0.2 && rz > ra[2] + 0.2 && rz < ra[3] - 0.2) hideAlong(rx, fy + 0.9, rz);
       }
     }
+    seeThrough.update(dt);
   }
-  return { pushScoopHud, setTool, updateScoop, updateScoopInterior };
+  return { pushScoopHud, setTool, updateScoop, updateScoopInterior, seeThrough };
 }

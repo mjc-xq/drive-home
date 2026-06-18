@@ -5,10 +5,38 @@ import { clamp } from '../coords.js';
 // off-road steer-back / soft-wall, reset-to-road, and "face along the street" while following.
 // Pure: no outbound calls, reads ctx state live at each call (never captures the arrays).
 export function createRoadGraph(ctx) {
+  const homeRoadRadius = () => ctx.HOME_ROAD_RADIUS || 380;
+  const nearHomeRoads = (x, z) => x * x + z * z <= homeRoadRadius() * homeRoadRadius();
+
+  function nearestRoadLocation(x, z, opts = {}) {
+    let best = null, bd = Infinity;
+    const maxD = opts.maxDistance == null ? Infinity : opts.maxDistance;
+    const maxD2 = maxD * maxD;
+    const includeRoute = opts.includeRoute !== false;
+    const includeOsm = opts.includeOsm !== false;
+    const includeHome = opts.includeHome == null ? nearHomeRoads(x, z) : !!opts.includeHome;
+    const tryAB = (ax, az, bx, bz, source) => {
+      const vx = bx - ax, vz = bz - az, L2 = vx * vx + vz * vz;
+      if (L2 < 1e-8) return;
+      const t = clamp(((x - ax) * vx + (z - az) * vz) / L2, 0, 1);
+      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d < bd) {
+        const L = Math.sqrt(L2);
+        bd = d; best = { x: px, z: pz, d: Math.sqrt(d), tx: vx / L, tz: vz / L, source };
+      }
+    };
+    if (includeRoute && ctx.ROUTE && ctx.ROUTE.length > 1) {
+      for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z, 'route');
+    }
+    if (includeOsm) for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1], 'osm');
+    if (includeHome) for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1], 'home');
+    return best && bd <= maxD2 ? best : null;
+  }
+
   // Look-ahead point on the road the car is heading toward (lane-keep assist target). Returns
   // null when the car is >10 m off any road (don't tug you around a lawn).
   function roadTargetAhead(x, z, yaw, speed) {
-    const segs = (x * x + z * z < 330 * 330) ? ctx.roadSegs : ctx.osmRoadSegs;   // hood graph near home, the fetched OSM graph everywhere else
+    const segs = nearHomeRoads(x, z) ? ctx.roadSegs : ctx.osmRoadSegs;   // hood graph near home, the fetched OSM graph everywhere else
     let carD = 1e18;                                 // how far the car is from the road right now
     for (const s of segs) {
       const ax = s[0][0], az = s[0][1], vx = s[1][0] - ax, vz = s[1][1] - az, L2 = vx * vx + vz * vz || 1;
@@ -31,39 +59,18 @@ export function createRoadGraph(ctx) {
     }
     return found ? [btx, btz] : null;
   }
-  // Nearest point on any neighbourhood road to (x,z), with its distance in metres. Drives
+  // Nearest point on any known road to (x,z), with its distance in metres. Drives
   // both the off-road steer-back (aim straight at it) and the auto-recover snap.
-  function nearestRoadPoint(x, z) {
-    let bx = x, bz = z, bd = 1e18;
-    const tryAB = (ax, az, b0, b1) => {
-      const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz || 1;
-      let t = clamp(((x - ax) * vx + (z - az) * vz) / L2, 0, 1);
-      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d < bd) { bd = d; bx = px; bz = pz; }
-    };
-    // Live Google route first (real roads), then the OSM road network fetched around the car (works
-    // far from the procedural hood), then EVERY mapped neighbourhood road. So the steer-back + soft
-    // wall + reset always have a real road to aim at, anywhere on the map.
-    if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
-    for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    return { x: bx, z: bz, d: Math.sqrt(bd) };
+  function nearestRoadPoint(x, z, opts) {
+    const p = nearestRoadLocation(x, z, opts);
+    return p ? { x: p.x, z: p.z, d: p.d, source: p.source } : { x, z, d: Infinity, source: null };
   }
   // Unit tangent {tx,tz} of the nearest mapped road segment (so a followed car can face ALONG the
   // street), or null if no road is known. Mirrors nearestRoadPoint's source order.
-  function nearestRoadSeg(x, z) {
-    let bd = 1e18, tx = 0, tz = 0, found = false;
-    const tryAB = (ax, az, b0, b1) => {
-      const vx = b0 - ax, vz = b1 - az, L2 = vx * vx + vz * vz; if (L2 < 1) return;
-      let t = clamp(((x - ax) * vx + (z - az) * vz) / L2, 0, 1);
-      const px = ax + vx * t, pz = az + vz * t, d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d < bd) { bd = d; const L = Math.sqrt(L2); tx = vx / L; tz = vz / L; found = true; }
-    };
-    if (ctx.ROUTE && ctx.ROUTE.length > 1) for (let i = 0; i < ctx.ROUTE.length - 1; i++) tryAB(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
-    for (const s of ctx.osmRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    for (const s of ctx.allRoadSegs) tryAB(s[0][0], s[0][1], s[1][0], s[1][1]);
-    return found ? { tx, tz, d: Math.sqrt(bd) } : null;
+  function nearestRoadSeg(x, z, opts) {
+    const p = nearestRoadLocation(x, z, opts);
+    return p ? { tx: p.tx, tz: p.tz, d: p.d, source: p.source } : null;
   }
 
-  return { roadTargetAhead, nearestRoadPoint, nearestRoadSeg };
+  return { roadTargetAhead, nearestRoadLocation, nearestRoadPoint, nearestRoadSeg };
 }

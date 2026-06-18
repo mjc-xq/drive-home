@@ -387,12 +387,9 @@ export function createDrive(ctx) {
       }
     }
     if (nearThisFrame && !hitThisFrame) ctx.score.nearMiss(now);   // Burnout-style close-call reward
-    // Roam far across the streamed Google tiles. The procedural neighborhood (and
-    // its collision) only spans ~±340 m; past that the car rides the real
-    // photoreal road directly (see actorGroundY), so the only bound is a generous
-    // sanity ring at the metro scale where the flat-earth frame stays accurate.
-    const lim = 30000;   // 30 km: reach the East Bay address presets (Oakland ≈ 22 km) across the streamed tiles
-    if (Math.hypot(nx, nz) > lim) { const d = Math.hypot(nx, nz); nx *= lim / d; nz *= lim / d; ctx.car.speed *= 0.4; }  // soft edge: ease to a stop, don't shove back
+    // Roam across the streamed Google tiles. The procedural neighborhood (and its collision)
+    // only spans ~±340 m; past that the car rides the real photoreal road directly
+    // (see actorGroundY), so there is no arbitrary starting-house radius clamp here.
     if (!ctx.followMode) { ctx.car.x = nx; ctx.car.z = nz; }   // in follow the glide below OWNS position — don't let the physics step creep the car forward each frame (it caused a ~1.5 m steady-state drift past the target)
     // AUTO-DRIVE RAIL: when the chauffeur has a route, ignore the physics result and glide the car
     // ALONG the route by arc-length at a fast cruise — so it follows the road EXACTLY (no overshoot,
@@ -473,7 +470,15 @@ export function createDrive(ctx) {
     // can track (uphill/onto a bridge at speed) — and once the car was under the surface,
     // the canopy-skipping down-ray (cast from just above the car) could no longer see the
     // road ABOVE it, so it stayed buried. The hard floor keeps that from ever happening.
-    const yr = ctx.ground.actorGroundY(ctx.car.x, ctx.car.z, ctx.car.groundY);
+    // Sample the car's road height, but skip the (expensive far-from-home tile raycast) when the
+    // car has barely moved — the road under a near-stationary car doesn't change. Near home this is
+    // already the cheap procedural terrainAt; the gate only bites out on the streamed photoreal road.
+    const _gd2 = (ctx.car.x - (ctx.car._gyX ?? 1e9)) ** 2 + (ctx.car.z - (ctx.car._gyZ ?? 1e9)) ** 2;
+    if (ctx.car._gyRaw == null || _gd2 > 0.25 || now - (ctx.car._gyT || 0) > 120) {
+      ctx.car._gyRaw = ctx.ground.actorGroundY(ctx.car.x, ctx.car.z, ctx.car.groundY);
+      ctx.car._gyX = ctx.car.x; ctx.car._gyZ = ctx.car.z; ctx.car._gyT = now;
+    }
+    const yr = ctx.car._gyRaw;
     if (ctx.car.groundY == null) ctx.car.groundY = yr;
     else { const rate = yr > ctx.car.groundY ? dt * 18 : dt * 9; ctx.car.groundY += (yr - ctx.car.groundY) * Math.min(1, rate); }
     if (yr != null && ctx.car.groundY < yr - 0.8) ctx.car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up

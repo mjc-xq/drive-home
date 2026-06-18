@@ -29,12 +29,9 @@ export function createFollow(ctx) {
     ctx.followMode = false; ctx._followGeo = null; ctx._followSeeded = false; ctx._followVx = 0; ctx._followVz = 0; ctx._jumpSnap = null; ctx.follow.stopHeading();
     if (was) ctx.emit('follow', false);
   }
-  // Set the live follow target, CLAMPED to the 30 km sanity ring (beyond it the flat-earth ENU
-  // mapping + ground tiles break down, and the glide — which bypasses the physics ring clamp — would
-  // otherwise march the car off into the void chasing a far/garbage fix).
+  // Set the live follow target in the same global navigation frame as routes and road snaps.
   function setFollowGeo(lat, lon) {
     const w = ctx.geo.geoToWorld(lat, lon); let wx = w[0], wz = w[1];
-    const r = Math.hypot(wx, wz); if (r > 30000) { const s = 30000 / r; wx *= s; wz *= s; }
     if (!ctx._followSeeded) { ctx._followSeeded = true; ctx.car.x = wx; ctx.car.z = wz; ctx._followVx = 0; ctx._followVz = 0; ctx.nav.settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
     ctx._followGeo = { x: wx, z: wz };
   }
@@ -72,7 +69,7 @@ export function createFollow(ctx) {
           const lat = pos.coords.latitude, lon = pos.coords.longitude;
           if (!ctx.followMode || ctx.mode !== 'drive' || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
           if (pos.coords.accuracy != null && pos.coords.accuracy > 60) return;   // drop junk fixes — those caused the "wrong street" jumps
-          ctx.follow.setFollowGeo(lat, lon);                                       // just move the (ring-clamped) target; the glide in updateDrive smooths jitter + can't overshoot
+          ctx.follow.setFollowGeo(lat, lon);                                       // just move the target; the glide in updateDrive smooths jitter + can't overshoot
         }, (werr) => { if (werr && werr.code === werr.PERMISSION_DENIED) { ctx.follow.stopFollow(); ctx.toast('📍 Location access needed to follow you', 2200); } }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 });   // end follow only on a REAL permission failure, not a transient timeout (the watch keeps retrying)
       }
     });

@@ -15,6 +15,93 @@ import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 const DRACO_CDN = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const BASIS_CDN = 'https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/libs/basis/';
 
+const CUTAWAY_VERTEX_PARS = `
+varying vec3 vDahillCutawayWorldPos;
+`;
+
+const CUTAWAY_VERTEX_BODY = `
+vDahillCutawayWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+`;
+
+const CUTAWAY_FRAGMENT_PARS = `
+varying vec3 vDahillCutawayWorldPos;
+uniform vec3 dahillCutawayEye;
+uniform vec3 dahillCutawayTarget;
+uniform vec4 dahillCutawayScreen;
+uniform float dahillCutawayBaseY;
+uniform float dahillCutawayMinOpacity;
+uniform float dahillCutawayDepthPad;
+uniform float dahillCutawayGroundPad;
+
+float dahillBayer4(vec2 p) {
+  vec2 q = floor(mod(p, 4.0));
+  float x = q.x;
+  float y = q.y;
+  float v = 0.0;
+  if (y < 0.5) {
+    if (x < 0.5) v = 0.0;
+    else if (x < 1.5) v = 8.0;
+    else if (x < 2.5) v = 2.0;
+    else v = 10.0;
+  } else if (y < 1.5) {
+    if (x < 0.5) v = 12.0;
+    else if (x < 1.5) v = 4.0;
+    else if (x < 2.5) v = 14.0;
+    else v = 6.0;
+  } else if (y < 2.5) {
+    if (x < 0.5) v = 3.0;
+    else if (x < 1.5) v = 11.0;
+    else if (x < 2.5) v = 1.0;
+    else v = 9.0;
+  } else {
+    if (x < 0.5) v = 15.0;
+    else if (x < 1.5) v = 7.0;
+    else if (x < 2.5) v = 13.0;
+    else v = 5.0;
+  }
+  return (v + 0.5) / 16.0;
+}
+
+void dahillApplyCutaway() {
+  if (dahillCutawayScreen.z <= 1.0 || dahillCutawayScreen.w <= 1.0) return;
+
+  vec3 eyeToTarget = dahillCutawayTarget - dahillCutawayEye;
+  float targetDist = length(eyeToTarget);
+  if (targetDist <= 0.001) return;
+  vec3 dir = eyeToTarget / targetDist;
+  float along = dot(vDahillCutawayWorldPos - dahillCutawayEye, dir);
+  if (along <= dahillCutawayDepthPad || along >= targetDist - dahillCutawayDepthPad) return;
+
+  float lineY = mix(dahillCutawayEye.y, dahillCutawayBaseY, clamp(along / targetDist, 0.0, 1.0));
+  if (vDahillCutawayWorldPos.y < lineY - dahillCutawayGroundPad) return;
+
+  vec2 ellipse = (gl_FragCoord.xy - dahillCutawayScreen.xy) / dahillCutawayScreen.zw;
+  float fade = 1.0 - smoothstep(0.78, 1.14, length(ellipse));
+  if (fade <= 0.0) return;
+  float keep = mix(1.0, dahillCutawayMinOpacity, fade);
+  if (dahillBayer4(gl_FragCoord.xy) > keep) discard;
+}
+`;
+
+function installTileCutawayDither(material, cutaway) {
+  material.onBeforeCompile = shader => {
+    shader.uniforms.dahillCutawayEye = cutaway.eye;
+    shader.uniforms.dahillCutawayTarget = cutaway.target;
+    shader.uniforms.dahillCutawayScreen = cutaway.screen;
+    shader.uniforms.dahillCutawayBaseY = cutaway.baseY;
+    shader.uniforms.dahillCutawayMinOpacity = cutaway.minOpacity;
+    shader.uniforms.dahillCutawayDepthPad = cutaway.depthPad;
+    shader.uniforms.dahillCutawayGroundPad = cutaway.groundPad;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${CUTAWAY_VERTEX_PARS}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${CUTAWAY_VERTEX_BODY}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${CUTAWAY_FRAGMENT_PARS}`)
+      .replace('#include <alphatest_fragment>', 'dahillApplyCutaway();\n#include <alphatest_fragment>');
+  };
+  material.customProgramCacheKey = () => 'dahill-tile-screen-cutaway-v1';
+}
+
 export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   const key = opts.key || import.meta.env.VITE_GOOGLE_MAPS_KEY;
   if (!key) { console.warn('[tiles3d] no Google Maps key — photoreal disabled'); return null; }
@@ -42,12 +129,20 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   // same check so the module still works standalone.
   const isMobile = opts.mobile ?? (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
   const maxAniso = isMobile ? Math.min(4, renderer.capabilities.getMaxAnisotropy()) : renderer.capabilities.getMaxAnisotropy();
-  // Shared cutaway planes for Drive: the engine fills/empties this ONE array per camera view
-  // (overhead slices the canopy just above the car, chase lifts the cut higher). Every tile
-  // material references it by the SAME reference, so mutating its CONTENTS each frame updates
-  // all streamed tiles for free — and new tiles inherit the live planes on load.
+  // Shared Drive cutaway uniforms. The engine updates these once per frame after placing the
+  // camera; every streamed tile material points at the same objects, so new tiles inherit the live
+  // oval visibility window immediately.
   const clipPlanes = [];
   tiles.clipPlanes = clipPlanes;
+  tiles.cutaway = {
+    eye: { value: new THREE.Vector3() },
+    target: { value: new THREE.Vector3() },
+    screen: { value: new THREE.Vector4(0, 0, 0, 0) },
+    baseY: { value: 0 },
+    minOpacity: { value: 0.0 },
+    depthPad: { value: 0.35 },
+    groundPad: { value: 0.28 },
+  };
   tiles.registerPlugin({
     name: 'DAHILL_LOOK',
     processTileModel(scene) {
@@ -57,8 +152,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
         const map = src && src.map ? src.map : null;
         if (map) { map.colorSpace = THREE.NoColorSpace; map.anisotropy = maxAniso; }   // sharp roads/roofs at grazing angles
         const m = new THREE.MeshBasicMaterial({ map, side: THREE.FrontSide });
-        m.clippingPlanes = clipPlanes;   // shared ref → Drive cutaway; empty in Explore/Scoop so nothing clips
-        m.clipIntersection = true;       // a fragment survives if it's on the kept side of EITHER plane → the two planes AND-clip (above street level AND between camera & car) only the sightline occluders
+        installTileCutawayDither(m, tiles.cutaway);   // shared uniforms → soft Drive cutaway without alpha sorting
         m.toneMapped = false;
         m.color.setScalar(tileGain.value);
         o.material = m;
