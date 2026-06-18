@@ -119,35 +119,46 @@ function gableTris(rect, base, wallH) {
 // gables, UV = nadir aerial projection -> real satellite roof imagery).
 const TILE = 3.0;
 const aerialUV = (X, Z) => { const g = ENU.toGeo(X, -Z); return aerialUVll(g.lat, g.lon); };
-// push a roof triangle with upward-facing winding (so the sun lights it) + aerial UVs
-function pushUpTri(rPos, rUV, a, b, c) {
+// Per-building wall colour from Street View (exports/buildings_color.json) and a
+// clean solid roof colour (NADIR aerial on pitched roofs looks wrong, so roofs are
+// solid). Walls = facade window texture x SV colour; roofs = solid shingle.
+const COL = existsSync(path.join(ROOT, 'exports/buildings_color.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_color.json'), 'utf8')) : {};
+const STUCCO = [0.82, 0.78, 0.70];
+const ROOFP = [[0.34, 0.32, 0.30], [0.40, 0.36, 0.31], [0.30, 0.30, 0.31], [0.37, 0.33, 0.29], [0.26, 0.26, 0.27]];
+const wallColor = ib => COL[ib] || STUCCO;
+const roofColor = ib => ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+
+// push a roof triangle with upward-facing winding, solid roof colour (no texture)
+function pushUpTri(Rf, col, a, b, c) {
   const ux = b[0] - a[0], uz = b[2] - a[2], vx = c[0] - a[0], vz = c[2] - a[2];
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
-  for (const v of tri) { rPos.push(v[0], v[1], v[2]); const uv = aerialUV(v[0], v[2]); rUV.push(uv[0], uv[1]); }
+  for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
 }
-function emitRing(ring, base, wallH, roofRects, wPos, wUV, rPos, rUV) {
+// W = {pos,uv,col} facade walls (window texture x wallC);  Rf = {pos,col} solid roof
+function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
   let dist = 0;
   for (let i = 0; i < ring.length; i++) {           // walls
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
     const seg = Math.hypot(xj - xi, zj - zi), u0 = dist / TILE, u1 = (dist + seg) / TILE; dist += seg;
-    wPos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
-    wUV.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
+    W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
+    W.uv.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
+    for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
   }
   const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));   // flat eave cap
-  for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, [])) {
-    pushUpTri(rPos, rUV, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
-  }
+  for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, []))
+    pushUpTri(Rf, roofC, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
   if (roofRects) for (const r of roofRects) {        // gables
     const g = gableTris(r, base, wallH);
     for (let k = 0; k < g.length; k += 9)
-      pushUpTri(rPos, rUV, [g[k], g[k + 1], g[k + 2]], [g[k + 3], g[k + 4], g[k + 5]], [g[k + 6], g[k + 7], g[k + 8]]);
+      pushUpTri(Rf, roofC, [g[k], g[k + 1], g[k + 2]], [g[k + 3], g[k + 4], g[k + 5]], [g[k + 6], g[k + 7], g[k + 8]]);
   }
   return ring;
 }
-const emitBuilding = (b, base, wallH, wPos, wUV, rPos, rUV) =>
-  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wPos, wUV, rPos, rUV);
+const emitBuilding = (b, ib, base, wallH, W, Rf) =>
+  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf);
 
 // ---- assemble ------------------------------------------------------------
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
@@ -161,21 +172,21 @@ const fullH = (b, ib) => { const lh = HGT[ib]; return (lh && lh > 2.2) ? lh : (b
 const wallHeight = (b, ib) => { const H = fullH(b, ib); return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
 const houseIdx = S.buildings.findIndex(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
-const hwPos = [], hwUV = [], hrPos = [], hrUV = [];
+const hW = { pos: [], uv: [], col: [] }, hRf = { pos: [], col: [] };
 if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
-  buildingPolys.push(emitBuilding(houseB, base, wallHeight(houseB, houseIdx), hwPos, hwUV, hrPos, hrUV));
-  scene.add(mkMesh(hwPos, null, 0xffffff, 'House_walls', { uvs: hwUV }));
-  scene.add(mkMesh(hrPos, null, 0xffffff, 'House_roof', { uvs: hrUV }));
+  buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB, houseIdx), hW, hRf));
+  scene.add(mkMesh(hW.pos, null, 0xffffff, 'House_walls', { uvs: hW.uv, colors: hW.col }));
+  scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col }));
 }
-const bwPos = [], bwUV = [], brPos = [], brUV = [];
+const bW = { pos: [], uv: [], col: [] }, bRf = { pos: [], col: [] };
 let nBld = 0;
 S.buildings.forEach((b, ib) => {
   if (b.house) return;
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   const base = terrainAt(cw[0], cw[1]) - 0.5;
-  buildingPolys.push(emitBuilding(b, base, wallHeight(b, ib), bwPos, bwUV, brPos, brUV));
+  buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b, ib), bW, bRf));
   nBld++;
 });
 // LiDAR-detected gap buildings (no existing footprint) — fills the missing houses
@@ -186,12 +197,12 @@ for (const fb of FILL) {
   const cx = fb.ring.reduce((s, p) => s + p[0], 0) / fb.ring.length, cz = fb.ring.reduce((s, p) => s + p[1], 0) / fb.ring.length;
   if (!inPatch(cx, cz)) continue;
   const base = terrainAt(cx, cz) - 0.5;
-  emitRing(fb.ring.map(p => [p[0], p[1]]), base, (fb.h || 4) + 0.5, null, bwPos, bwUV, brPos, brUV);
+  emitRing(fb.ring.map(p => [p[0], p[1]]), base, (fb.h || 4) + 0.5, null, STUCCO, roofColor(900 + nFill), bW, bRf);
   buildingPolys.push(fb.ring.map(p => [p[0], p[1]])); nFill++;
 }
-if (bwPos.length) {
-  scene.add(mkMesh(bwPos, null, 0xffffff, 'Buildings_walls', { uvs: bwUV }));
-  scene.add(mkMesh(brPos, null, 0xffffff, 'Buildings_roofs', { uvs: brUV }));
+if (bW.pos.length) {
+  scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { uvs: bW.uv, colors: bW.col }));
+  scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col }));
 }
 
 // roads (context) + collect world polylines for tree spacing
@@ -342,7 +353,7 @@ const REPEAT = 10497, CLAMP = 33071;
 let textured = 0;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
-  if (aerialTex && /(terrain|roof)/i.test(n)) {
+  if (aerialTex && /terrain/i.test(n)) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {
