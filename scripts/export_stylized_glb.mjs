@@ -553,12 +553,19 @@ function cloneTree(template, name, X, Y, Z, scl, rotY) {
   return wrap;
 }
 
-// NormalTree_1..5 are the everyday trees (≤11 m canopy); Acacia is the occasional
-// feature tree (≤16 m canopy). wCap caps the canopy width so no giant trees ship.
-const treeTemplates = [
-  ...await loadTreeTemplates('/Users/mcohen/Downloads/Trees.glb', { targetH: 7.5, hVar: 3.0, wCap: 11.0, feature: false }),
-  ...await loadTreeTemplates('/Users/mcohen/Downloads/Acacia.glb', { targetH: 9.0, hVar: 3.5, wCap: 16.0, feature: true }),
-];
+// Instance from the clean individual-tree library (exports/tree_lib, built by
+// build_tree_lib.py) — each file is ONE upright single tree (trunk base at origin).
+// The investigation confirmed the raw GLBs were already single trees (the 23 m Acacia
+// is one umbrella crown), so this is the same set, just normalised. NormalTrees ≤11 m
+// canopy; the Acacia feature ≤16 m. wCap caps canopy width so no giant trees ship.
+const TREE_LIB = path.join(ROOT, 'exports/tree_lib');
+const treeMan = JSON.parse(readFileSync(path.join(TREE_LIB, 'manifest.json'), 'utf8'));
+const treeTemplates = [];
+for (const tm of treeMan.trees) {
+  const opts = tm.feature ? { targetH: 9.0, hVar: 3.5, wCap: 16.0, feature: true }
+                          : { targetH: 7.5, hVar: 3.0, wCap: 11.0, feature: false };
+  treeTemplates.push(...await loadTreeTemplates(path.join(TREE_LIB, tm.file), opts));
+}
 const normalTpl = treeTemplates.filter(t => !t.opts.feature);
 const featureTpl = treeTemplates.filter(t => t.opts.feature);
 
