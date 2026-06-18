@@ -134,7 +134,7 @@ if (AER) {
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
     const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
     const e = (lon - LON0) * COSLAT * 111320, n = (lat - LAT0) * 110540;
-    sPos.push(e - C[0], h[j * cols + i] - 0.15, -(n - C[1]));
+    sPos.push(e - C[0], h[j * cols + i] - 0.5, -(n - C[1]));   // 0.5 m under grass (no z-fighting)
     sUv.push((e - AER.E0) / (AER.E1 - AER.E0), (AER.Nt - n) / (AER.Nt - AER.Nb));
   }
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
