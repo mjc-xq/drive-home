@@ -645,6 +645,10 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.p3dtiles = null;
   ctx._tilesUpdT = 0;   // throttle the (expensive, full-tree) tiles LOD traversal to ~18 Hz
   ctx.DEG = Math.PI / 180;
+  const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * ctx.DEG);
+  const houseLat = (LAT0 + C[1] / 110540) * ctx.DEG;
+  const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * ctx.DEG;
+  ctx.tileAnchor = { lat: houseLat, lon: houseLon, x: 0, z: 0, label: 'Home' };
   // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
   // yOffset lifts the photoreal ground to the procedural terrain height; xOffset/
   // zOffset + spin (deg) translate/rotate the photoreal world about the house so
@@ -653,9 +657,40 @@ export function createEngine({ canvas, ui, emit }) {
   const applyP3DT = () => {
     if (!ctx.p3dtiles || !ctx.p3dtiles.holder) return;
     const h = ctx.p3dtiles.holder;
+    const a = ctx.tileAnchor || { x: 0, z: 0 };
     h.rotation.y = ctx.P3DT.spin * ctx.DEG;
-    h.position.set(ctx.P3DT.xOffset, ctx.P3DT.yOffset, ctx.P3DT.zOffset);
+    h.position.set((a.x || 0) + ctx.P3DT.xOffset, ctx.P3DT.yOffset, (a.z || 0) + ctx.P3DT.zOffset);
+    h.updateMatrixWorld(true);
   };
+  function setPhotorealAnchor(lat, lon, x, z, label, force) {
+    if (ctx.flags.has('flat') || !Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(x) || !Number.isFinite(z)) return false;
+    const cur = ctx.tileAnchor || { x: 0, z: 0 };
+    const d = Math.hypot(x - (cur.x || 0), z - (cur.z || 0));
+    if (!force && d < 80000) return false;   // home/Bay Area stays in the original ENU tile frame
+    ctx.tileAnchor = { lat: lat * ctx.DEG, lon: lon * ctx.DEG, x, z, label: label || 'Map' };
+    ctx.alignDone = Math.hypot(x, z) > 80000;   // remote frames cannot use the home-yard alignment sampler
+    ctx.tilesReady = false; ctx.emit('photoreal', false);
+    ctx._tileWarmUntil = performance.now() + 14000;
+    ctx._tileWarmOn = false;
+    if (ctx.tileClip) ctx.tileClip.clearTileClip();
+    if (ctx.p3dtiles) {
+      // The Google root tileset is global, but after a continent-scale teleport
+      // the renderer's traversal/cache state can stay biased toward the old area.
+      // Rebuild on these rare jumps so Paris/Tokyo/etc. start from a clean root.
+      if (ctx.fn.rebuildPhotorealTiles && ctx.fn.rebuildPhotorealTiles()) {
+        ctx.fn.applyModeVisuals();
+        return true;
+      } else {
+        if (ctx.p3dtiles.setGeoAnchor) ctx.p3dtiles.setGeoAnchor(ctx.tileAnchor.lat, ctx.tileAnchor.lon);
+        if (ctx.p3dtiles.flushTileCache) ctx.p3dtiles.flushTileCache();
+        ctx.fn.applyP3DT();
+        ctx.p3dtiles.setResolutionFromRenderer(ctx.camera, ctx.renderer);
+        ctx._tilesUpdT = 0;
+      }
+    }
+    ctx.fn.applyModeVisuals();
+    return true;
+  }
   // ---- ground height authority ---- (see occlusion/ground-height.js)
   // ctx.ground.{rawTileY,groundAt,actorGroundY}: photoreal-tile surface height under (x,z) for
   // ACTOR + CAMERA height only; collision stays on the data (bldPolys/treePts).
@@ -690,6 +725,49 @@ export function createEngine({ canvas, ui, emit }) {
   // it warms only cheap COARSE tiles, filling the LRU cache without blowing the mobile budget.
   ctx.scoutOn = false; ctx._scoutT = 0; ctx._scoutPhase = 0;
   ctx.prefetch = createPrefetch(ctx);   // ctx.prefetch.{setScout, updateTilePrefetch, pointAlongRoute} — see occlusion/prefetch.js
+  ctx.tileWarmCam = new THREE.PerspectiveCamera(58, 1, 1, 5000);
+  ctx._tileWarmUntil = 0;
+  ctx._tileWarmOn = false;
+  function updateTileWarmCamera(now) {
+    if (!ctx.tileWarmCam || !ctx.p3dtiles) return;
+    const a = ctx.tileAnchor || { x: ctx.car.x, z: ctx.car.z };
+    const remote = Math.hypot(a.x || 0, a.z || 0) > 80000;
+    const on = ctx.fn.photoModes(ctx.mode) && (remote || now < ctx._tileWarmUntil);
+    if (!on) {
+      if (ctx._tileWarmOn && ctx.p3dtiles.deleteCamera) ctx.p3dtiles.deleteCamera(ctx.tileWarmCam);
+      ctx._tileWarmOn = false;
+      return;
+    }
+    if (!ctx._tileWarmOn) {
+      ctx.p3dtiles.setCamera(ctx.tileWarmCam);
+      ctx.p3dtiles.setResolution(ctx.tileWarmCam, 520, 520);
+      ctx._tileWarmOn = true;
+    }
+    if (remote) {
+      if (ctx.tileWarmCam.fov !== 72 || ctx.tileWarmCam.far !== 80000 || Math.abs(ctx.tileWarmCam.aspect - ctx.camera.aspect) > 0.001) {
+        ctx.tileWarmCam.fov = 72;
+        ctx.tileWarmCam.far = 80000;
+        ctx.tileWarmCam.aspect = ctx.camera.aspect;
+        ctx.tileWarmCam.updateProjectionMatrix();
+      }
+      ctx.tileWarmCam.up.copy(ctx.camera.up);
+      ctx.tileWarmCam.position.copy(ctx.camera.position);
+      ctx.tileWarmCam.quaternion.copy(ctx.camera.quaternion);
+    } else {
+      const y = (ctx.car.groundY != null ? ctx.car.groundY : ctx.P3DT.yOffset) + 420;
+      const x = a.x || ctx.car.x;
+      const z = a.z || ctx.car.z;
+      if (ctx.tileWarmCam.fov !== 58 || ctx.tileWarmCam.far !== 5000) {
+        ctx.tileWarmCam.fov = 58;
+        ctx.tileWarmCam.far = 5000;
+        ctx.tileWarmCam.updateProjectionMatrix();
+      }
+      ctx.tileWarmCam.up.set(0, 0, -1);
+      ctx.tileWarmCam.position.set(x, y, z);
+      ctx.tileWarmCam.lookAt(x, ctx.P3DT.yOffset, z);
+    }
+    ctx.tileWarmCam.updateMatrixWorld(true);
+  }
   // Photoreal is the AERIAL view ONLY: render tiles in Explore; show the clean
   // built (procedural) world at ground level (Drive/Scoop). The groundAt + camera
   // tile probes gate on holder.visible, so ground actors ride smooth terrainAt
@@ -720,37 +798,57 @@ export function createEngine({ canvas, ui, emit }) {
   function delayedTileFallbackToast(msg) {
     setTimeout(() => { if (!ctx.disposed && ctx.fn.photoModes(ctx.mode) && !ctx.tilesReady) ctx.toast(msg, 2600); }, 6100);
   }
+  ctx._photorealFactory = null;
+  ctx._photorealGen = 0;
+  function photorealOpts() {
+    return {
+      // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
+      // is the dominant iOS memory cost, and Drive can now roam far and stream more.
+      lat: ctx.tileAnchor.lat, lon: ctx.tileAnchor.lon, azimuth: Math.PI, errorTarget: ctx.MOBILE ? 16 : 10, mobile: ctx.MOBILE
+    };
+  }
+  function mountPhotorealTiles(createPhotorealTiles) {
+    if (ctx.disposed || ctx.flags.has('flat') || !createPhotorealTiles) return false;
+    const gen = ++ctx._photorealGen;
+    const tiles = createPhotorealTiles(ctx.scene, ctx.camera, ctx.renderer, photorealOpts());
+    if (!tiles) { if (import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); return false; }
+    if (ctx.disposed) { if (tiles.disposeAll) tiles.disposeAll(); return false; }
+    ctx.p3dtiles = tiles;
+    ctx.fn.applyP3DT();
+    let tries = 0;
+    tiles.addEventListener('load-model', () => {
+      if (gen !== ctx._photorealGen || ctx.p3dtiles !== tiles) return;
+      if (!ctx.tilesReady) { ctx.tilesReady = true; ctx.emit('photoreal', true); if (ctx.startCrowdLoad) ctx.startCrowdLoad(); }   // first tiles are up → the scene is visible, so NOW pull in the crowd rigs (deferred from boot)
+      // Vertically align the photoreal ground to the procedural terrain as the
+      // street tiles stream (Explore/Drive only — Scoop never shows tiles).
+      if (tries < 24) { tries++; ctx.fn.alignP3DT(); }
+      ctx.fn.applyModeVisuals();          // hide procedural once tiles are up (Explore/Drive)
+    });
+    // surface auth/quota/referrer failures instead of silently falling back to
+    // the procedural world (a baked, referrer-blocked or over-quota key 403s here).
+    let warnedErr = false;
+    tiles.addEventListener('load-error', e => {
+      if (gen !== ctx._photorealGen || ctx.p3dtiles !== tiles || warnedErr) return; warnedErr = true;
+      console.warn('[tiles3d] tile load error (check VITE_GOOGLE_MAPS_KEY restrictions/quota)', e && e.error);
+      if (!ctx.tilesReady) ctx.toast('Photoreal map unavailable — showing the built world', 2600);
+    });
+    ctx.fn.applyModeVisuals();
+    return true;
+  }
+  function rebuildPhotorealTiles() {
+    if (!ctx._photorealFactory || ctx.flags.has('flat')) return false;
+    const old = ctx.p3dtiles;
+    ctx.p3dtiles = null;
+    ctx._tilesUpdT = 0;
+    if (old && old.disposeAll) old.disposeAll();
+    return mountPhotorealTiles(ctx._photorealFactory);
+  }
   if (!ctx.flags.has('flat')) {
     if (!import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map key missing — showing the built world');
-    const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * ctx.DEG);
-    const houseLat = (LAT0 + C[1] / 110540) * ctx.DEG;
-    const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * ctx.DEG;
     import('./tiles3d.js').then(({ createPhotorealTiles }) => {
       if (ctx.disposed) return;
-      ctx.p3dtiles = createPhotorealTiles(ctx.scene, ctx.camera, ctx.renderer, {
-        // raise errorTarget on phones (coarser tiles) — leaf-tile geometry/texture
-        // is the dominant iOS memory cost, and Drive can now roam far and stream more.
-        lat: houseLat, lon: houseLon, azimuth: Math.PI, errorTarget: ctx.MOBILE ? 16 : 10, mobile: ctx.MOBILE
-      });
-      if (!ctx.p3dtiles) { if (import.meta.env.VITE_GOOGLE_MAPS_KEY) delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); return; }
-      if (ctx.disposed) { if (ctx.p3dtiles.disposeAll) ctx.p3dtiles.disposeAll(); ctx.p3dtiles = null; return; }
-      ctx.fn.applyP3DT();
-      let tries = 0;
-      ctx.p3dtiles.addEventListener('load-model', () => {
-        if (!ctx.tilesReady) { ctx.tilesReady = true; ctx.emit('photoreal', true); if (ctx.startCrowdLoad) ctx.startCrowdLoad(); }   // first tiles are up → the scene is visible, so NOW pull in the crowd rigs (deferred from boot)
-        // Vertically align the photoreal ground to the procedural terrain as the
-        // street tiles stream (Explore/Drive only — Scoop never shows tiles).
-        if (tries < 24) { tries++; ctx.fn.alignP3DT(); }
-        ctx.fn.applyModeVisuals();          // hide procedural once tiles are up (Explore/Drive)
-      });
-      // surface auth/quota/referrer failures instead of silently falling back to
-      // the procedural world (a baked, referrer-blocked or over-quota key 403s here).
-      let warnedErr = false;
-      ctx.p3dtiles.addEventListener('load-error', e => {
-        if (warnedErr) return; warnedErr = true;
-        console.warn('[tiles3d] tile load error (check VITE_GOOGLE_MAPS_KEY restrictions/quota)', e && e.error);
-        if (!ctx.tilesReady) ctx.toast('Photoreal map unavailable — showing the built world', 2600);
-      });
+      ctx._photorealFactory = createPhotorealTiles;
+      mountPhotorealTiles(createPhotorealTiles);
     }).catch(e => { console.warn('[tiles3d] import failed; staying procedural', e); delayedTileFallbackToast('Photoreal map unavailable — showing the built world'); });
   }
 
@@ -1145,7 +1243,7 @@ export function createEngine({ canvas, ui, emit }) {
   }
   // Register the cross-cutting core back-edges so extracted domain modules can call them via ctx.fn.
   // (mode machine, mode transitions, building hit-tests, tile align — these stay in engine.js / core for now.)
-  Object.assign(ctx.fn, { setMode, applyModeVisuals, photoModes, enterDrive, exitDrive, enterScoop, exitScoop, driveFromScoop, resetToRoad, insideBuilding, insideScoopBuilding, alignP3DT, applyP3DT });
+  Object.assign(ctx.fn, { setMode, applyModeVisuals, photoModes, enterDrive, exitDrive, enterScoop, exitScoop, driveFromScoop, resetToRoad, insideBuilding, insideScoopBuilding, alignP3DT, applyP3DT, setPhotorealAnchor, rebuildPhotorealTiles });
 
   // ---- destination / routing / auto-drive ----
   // Real road route from Google Directions (via the Maps JS SDK, which works in the
@@ -1370,6 +1468,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.camera.getWorldDirection(ctx.dirV);
     if (ctx.ui.needle) ctx.ui.needle.style.transform = `rotate(${(Math.atan2(ctx.dirV.x, ctx.dirV.z) * 180 / Math.PI).toFixed(1)}deg)`;
     ctx.prefetch.updateTilePrefetch(now);                                         // warm tiles along the route ahead (self-gates to drive + active destination)
+    updateTileWarmCamera(now);                                                   // after far teleports, bootstrap Google root traversal while the user stays in Close
     if (ctx.p3dtiles && ctx.fn.photoModes(ctx.mode)) { ctx.camera.updateMatrixWorld(); if (now - ctx._tilesUpdT > 55) { ctx.p3dtiles.update(); ctx._tilesUpdT = now; } updateAttribution(now); }   // ~18 Hz LOD traversal
     else if (ctx._attrStr) { ctx._attrStr = ''; ctx.emit('attribution', ''); }   // no tiles shown → no credit
     if (ctx.mode === 'drive') {
