@@ -31,6 +31,18 @@ describe('road graph nearest-road queries', () => {
     expect(p.tz).toBeCloseTo(0);
   });
 
+  it('only scans cached OSM boxes near the queried car position', () => {
+    const roads = createRoadGraph(makeCtx({
+      _osmBoxes: [
+        { x: 1000, z: 1000, r: 500, source: 'mapbox', segs: [[[990, 1000], [1010, 1000]]] },
+        { x: 9000, z: 9000, r: 500, segs: [[[8990, 9000], [9010, 9000]]] },
+      ],
+    }));
+    expect(roads.nearestRoadLocation(1000, 1007)).toMatchObject({ source: 'mapbox', x: 1000, z: 1000 });
+    expect(roads.nearestRoadLocation(9000, 9007)).toMatchObject({ source: 'osm', x: 9000, z: 9000 });
+    expect(roads.nearestRoadLocation(5000, 5000)).toBeNull();
+  });
+
   it('prefers the live route and returns the same tangent used by reset/follow', () => {
     const roads = createRoadGraph(makeCtx({
       ROUTE: [{ x: 100, z: 0 }, { x: 100, z: 60 }],

@@ -407,18 +407,23 @@ export function createDrive(ctx) {
       let mx = ctx._followVx * dt, mz = ctx._followVz * dt;
       const step = Math.hypot(mx, mz), MAXSTEP = 520 * ctx.speedMul * dt;   // safety cap (a far/garbage target can't fling the car)
       if (step > MAXSTEP && step > 1e-4) { const s = MAXSTEP / step; mx *= s; mz *= s; ctx._followVx *= s; ctx._followVz *= s; }
-      ctx.car.x += mx; ctx.car.z += mz; ctx.car.groundY = null; ctx.car.vlat = 0; ctx.car.steer = 0; ctx.car.assistRate = 0;   // assistRate=0 so a residual steer-assist rate can't keep rotating yaw under the street-tangent ease
+      ctx.car.x += mx; ctx.car.z += mz; ctx.car.groundY = null; ctx.car.vlat = 0; ctx.car.steer = 0; ctx.car.assistRate = 0; ctx.car.pitchDyn = 0;   // assistRate=0 so a residual steer-assist rate can't keep rotating yaw under the street-tangent ease; pitchDyn=0 because the spring glide isn't pedal-driven — the physics 'acc' is phantom here and would tilt the body nose-up
       ctx.car.speed = Math.hypot(mx, mz) / Math.max(dt, 1e-3);   // for cam framing / wheel spin
       ctx.car.railS = null; ctx.car.railSpeed = null;
-      // Face the car ALONG THE STREET (nearest road tangent, oriented toward travel) — NOT the compass.
-      // The compass instead drives the MAP rotation (minimap + overhead/aerial view) via viewHeading().
-      const mvx = Math.hypot(dx, dz) > 0.4 ? dx : Math.sin(ctx.car.yaw), mvz = Math.hypot(dx, dz) > 0.4 ? dz : Math.cos(ctx.car.yaw);
-      let tgtYaw;
-      const seg = ctx.roads.nearestRoadSeg(ctx.car.x, ctx.car.z);
-      if (seg && seg.d < 60) { const dot = seg.tx * mvx + seg.tz * mvz, tx = dot < 0 ? -seg.tx : seg.tx, tz = dot < 0 ? -seg.tz : seg.tz; tgtYaw = Math.atan2(tx, tz); }   // align to the road, in the direction we're heading
-      else tgtYaw = Math.hypot(dx, dz) > 0.5 ? Math.atan2(dx, dz) : ctx.car.yaw;   // off any known road → just face the way we're gliding
+      // Face the car along its ACTUAL travel (the glide velocity) — NOT the compass (the compass drives the
+      // MAP rotation via viewHeading()). Snap to the nearest road tangent ONLY when that road runs roughly
+      // the same way (within ~45°), so a perpendicular cross-street or an off-road glide can never turn the
+      // car sideways. Nearly stopped → hold the current heading (no spinning at the target).
+      const _vlen = Math.hypot(ctx._followVx, ctx._followVz);
+      let tgtYaw = ctx.car.yaw;
+      if (_vlen > 1.0) {
+        const vx = ctx._followVx / _vlen, vz = ctx._followVz / _vlen;
+        tgtYaw = Math.atan2(vx, vz);                                    // along the direction of travel
+        const seg = ctx.roads.nearestRoadSeg(ctx.car.x, ctx.car.z);
+        if (seg && seg.d < 40) { const dot = seg.tx * vx + seg.tz * vz; if (Math.abs(dot) > 0.7) tgtYaw = Math.atan2(dot < 0 ? -seg.tx : seg.tx, dot < 0 ? -seg.tz : seg.tz); }   // snap to the road only when it runs OUR way (>~45°)
+      }
       let _fd = tgtYaw - ctx.car.yaw; while (_fd > Math.PI) _fd -= 2 * Math.PI; while (_fd < -Math.PI) _fd += 2 * Math.PI;
-      ctx.car.yaw += _fd * (1 - Math.exp(-dt * 5));
+      ctx.car.yaw += _fd * (1 - Math.exp(-dt * 6));
     } else if (ctx.autoDrive && ctx.ROUTE && ctx.ROUTE.length > 1) {
       if (ctx.car.railS == null || ctx._railRoute !== ctx.ROUTE) { ctx.car.railS = ctx.nav.railArcAt(ctx.car.x, ctx.car.z); ctx._railRoute = ctx.ROUTE; ctx.car.railSpeed = Math.abs(ctx.car.speed); }
       const total = ctx.nav.routeTotalLen(), remain = total - ctx.car.railS;
@@ -487,7 +492,10 @@ export function createDrive(ctx) {
     // The 4 corner probes feed only the visual pitch/roll, which tolerates a lower rate, so
     // refresh these tile raycasts ~every 3rd frame and reuse the result between. (These were
     // the single biggest per-frame CPU cost on mobile — 4 brute-force tile casts every frame.)
-    if ((ctx.car._tiltTick = (ctx.car._tiltTick | 0) + 1) % 3 === 0 || ctx.car._pitchS == null) {
+    // LITE phones skip the 4 corner casts entirely (flat ride); else throttle to every 5th frame on
+    // mobile / 3rd on desktop — these tile casts were the single biggest per-frame mobile CPU cost.
+    if (ctx.LITE || ctx.followMode) { ctx.car._pitchS = 0; ctx.car._rollS = 0; }   // LITE: flat ride. follow: the glide phases through buildings, so corner probes would tilt the car off the road — keep it flat & level
+    else if ((ctx.car._tiltTick = (ctx.car._tiltTick | 0) + 1) % (ctx.MOBILE ? 5 : 3) === 0 || ctx.car._pitchS == null) {
       const tF = ctx.ground.actorGroundY(ctx.car.x + fx * 1.4, ctx.car.z + fz * 1.4, ctx.car.groundY), tB = ctx.ground.actorGroundY(ctx.car.x - fx * 1.4, ctx.car.z - fz * 1.4, ctx.car.groundY);
       const tR = ctx.ground.actorGroundY(ctx.car.x + rxv * 0.9, ctx.car.z + rzv * 0.9, ctx.car.groundY), tL = ctx.ground.actorGroundY(ctx.car.x - rxv * 0.9, ctx.car.z - rzv * 0.9, ctx.car.groundY);
       ctx.car._pitchS = Math.atan2(tB - tF, 2.8); ctx.car._rollS = Math.atan2(tR - tL, 1.8);
@@ -508,6 +516,7 @@ export function createDrive(ctx) {
     const dispTarget = (_camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.3) * _zoomGrow;
     ctx.car.dispScale = ctx.car.dispScale == null ? dispTarget : ctx.car.dispScale + (dispTarget - ctx.car.dispScale) * (1 - Math.exp(-dt * 6));
     ctx.car.group.scale.setScalar(ctx.car.dispScale);
+    ctx.carXray.update(ctx.car, _camV, dt);
     const overhead = _camV.aerial || _camV.topdown;
     // On arrival, briefly ease the camera's look-ahead to 0 so the car frames DEAD-CENTRE
     // (the constant look-ahead otherwise leaves it offset toward the bottom even when stopped).
@@ -592,9 +601,9 @@ export function createDrive(ctx) {
     if (ctx.navMarker) {
       ctx.navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
       if (ctx.navMarker.visible) {
-        ctx.navMarker.userData.groundY = ctx.ground.actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, ctx.navMarker.userData.groundY);
-        ctx.navMarker.position.set(ctx.inp2.navX, ctx.navMarker.userData.groundY + 0.16, ctx.inp2.navZ);
-      } else ctx.navMarker.userData.groundY = null;
+        if (now - (ctx.navMarker.userData._gyT || 0) > 200) { ctx.navMarker.userData.groundY = ctx.ground.actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, ctx.navMarker.userData.groundY); ctx.navMarker.userData._gyT = now; }   // ~5 Hz: the ground under the ring changes slowly
+        ctx.navMarker.position.set(ctx.inp2.navX, (ctx.navMarker.userData.groundY || 0) + 0.16, ctx.inp2.navZ);
+      } else { ctx.navMarker.userData.groundY = null; ctx.navMarker.userData._gyT = 0; }
     }
     // address guide: a continuous line along the actual ROUTE (every turn), draped on
     // the road just ahead of the car; + a pin at the destination when near.
@@ -603,7 +612,7 @@ export function createDrive(ctx) {
       const ddDest = Math.hypot(ctx.DEST.x - ctx.car.x, ctx.DEST.z - ctx.car.z);
       ctx.destPin.visible = ddDest < 700;
       if (ctx.destPin.visible) {
-        ctx.destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, ctx.destPin.userData.groundY);
+        if (ctx.destPin.userData.groundY == null || now - (ctx.destPin.userData._gyT || 0) > 200) { ctx.destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, ctx.destPin.userData.groundY); ctx.destPin.userData._gyT = now; }   // ~5 Hz: a fixed destination doesn't move
         ctx.destPin.position.set(ctx.DEST.x, ctx.destPin.userData.groundY + 6 + Math.abs(Math.sin(now * 0.004)) * 0.6, ctx.DEST.z);
       }
     } else { ctx.guideLine.visible = false; ctx.destPin.visible = false; }
@@ -662,7 +671,7 @@ export function createDrive(ctx) {
       ctx.camera.position.copy(ctx.camV);
       ctx.camera.lookAt(ctx.car.x + fx * sp * 26 * aheadScale, ctx.camGroundRef + 1, ctx.car.z + fz * sp * 26 * aheadScale);   // bias the gaze where you're heading (→ centred on arrival)
       const fovT = 46 + 5 * sp;
-      ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix();
+      if (Math.abs(fovT - ctx.camera.fov) > 0.01) { ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix(); }   // skip the matrix rebuild once FOV has converged
     } else if (DRIVE_CAMS[ctx.camMode].topdown) {
       const CAM = DRIVE_CAMS[ctx.camMode];
       const sp = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);          // sense of speed even from overhead
@@ -681,7 +690,7 @@ export function createDrive(ctx) {
       const ahead = (CAM.ahead + sp * sp * 16 + spHiT * 14) * aheadScale;     // see further down the road flat-out (→ centred on arrival)
       ctx.camera.lookAt(ctx.car.x + vfx * ahead, yC, ctx.car.z + vfz * ahead);
       const fovT = 46 + 9 * sp + 12 * spHiT;                   // a real widen when truly flying
-      ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix();
+      if (Math.abs(fovT - ctx.camera.fov) > 0.01) { ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-3 * dt)); ctx.camera.updateProjectionMatrix(); }   // skip the matrix rebuild once FOV has converged
       if (!ctx.reduceMotion && spHiT > 0.1) { const r = spHiT * 0.04; ctx.camera.position.x += (Math.random() - 0.5) * r; ctx.camera.position.z += (Math.random() - 0.5) * r; }
     } else {
       const CAM = DRIVE_CAMS[ctx.camMode];
@@ -746,7 +755,7 @@ export function createDrive(ctx) {
       // asymmetric FOV: a stab of GO shoves the view wide FAST, then it relaxes slow.
       // The spHi term adds a second, smaller kick that only opens up at true top speed.
       const fovT = 46 + 30 * Math.pow(sp, 1.25) + 8 * spHi;           // ~76° at cruise top, ~84° flat out
-      ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-(fovT > ctx.camera.fov ? 6 : 2.2) * dt)); ctx.camera.updateProjectionMatrix();
+      if (Math.abs(fovT - ctx.camera.fov) > 0.01) { ctx.camera.fov += (fovT - ctx.camera.fov) * (1 - Math.exp(-(fovT > ctx.camera.fov ? 6 : 2.2) * dt)); ctx.camera.updateProjectionMatrix(); }   // skip the matrix rebuild once FOV has converged
       if (!ctx.reduceMotion) {
         const roll = clamp(-ctx.car.steer * 2.0 - ctx.car.vlat * 0.012, -0.1, 0.1) * (0.4 + sp);   // Dutch-tilt into corners/drift
         ctx.camera.rotateZ(roll);
@@ -776,8 +785,8 @@ export function createDrive(ctx) {
       }
       if (ctx.ui.boostBar) {                                 // nitro meter (direct DOM, no React churn)
         ctx.ui.boostBar.style.width = (ctx.boost * 100).toFixed(0) + '%';
-        ctx.ui.boostBar.parentElement.classList.toggle('ready', ctx.boost > 0.25 && !boosting);
-        ctx.ui.boostBar.parentElement.classList.toggle('firing', boosting);
+        const _bp = ctx.ui.boostBar.parentElement;           // null if the HUD unmounted mid-frame
+        if (_bp) { _bp.classList.toggle('ready', ctx.boost > 0.25 && !boosting); _bp.classList.toggle('firing', boosting); }
       }
       if (ctx.ui.fx && !ctx.reduceMotion) {                      // speed streaks + vignette: build from ~18%, keep growing flat out
         const fHi = clamp((Math.abs(ctx.car.speed) - feelRef) / (feelRef * 2.7), 0, 1);

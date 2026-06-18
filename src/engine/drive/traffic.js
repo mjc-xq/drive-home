@@ -45,7 +45,7 @@ export function createTraffic(ctx) {
       // bumpy photogrammetry mesh near home while the player rides the smooth
       // terrain road, which made traffic visibly float/sink on a different surface.
       // Keep the staggered refresh so only a few traffic cars sample tiles per frame.
-      if (c.gy === undefined || (ctx.trafficTick + c.ti) % 4 === 0) c.gyT = ctx.ground.actorGroundY(x, z, c.gy) + 0.05;
+      if (c.gy === undefined || (ctx.trafficTick + c.ti) % (ctx.MOBILE ? 6 : 4) === 0) c.gyT = ctx.ground.actorGroundY(x, z, c.gy) + 0.05;
       c.gy = c.gy === undefined ? c.gyT : c.gy + (c.gyT - c.gy) * Math.min(1, dt * 6);
       c.group.position.set(x, c.gy, z);
       c.group.rotation.set(0, Math.atan2(dx, dz), 0);

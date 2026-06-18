@@ -32,8 +32,10 @@ export function createFollow(ctx) {
   // Set the live follow target in the same global navigation frame as routes and road snaps.
   function setFollowGeo(lat, lon) {
     const w = ctx.geo.geoToWorld(lat, lon); let wx = w[0], wz = w[1];
-    if (!ctx._followSeeded) { ctx._followSeeded = true; ctx.car.x = wx; ctx.car.z = wz; ctx._followVx = 0; ctx._followVz = 0; ctx.nav.settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
+    const first = !ctx._followSeeded;
+    if (first) { ctx._followSeeded = true; ctx.car.x = wx; ctx.car.z = wz; ctx._followVx = 0; ctx._followVz = 0; ctx.nav.settleAfterTeleport(); }   // JUMP to the user at the START (at rest) — don't drive/glide there. Subsequent fixes spring-track.
     ctx._followGeo = { x: wx, z: wz };
+    ctx.nav.updateAreaRoads(performance.now(), first);   // keep OSM roads warm around the live target path
   }
   function driveToMyLocation(follow) {
     if (!navigator.geolocation) { ctx.toast('📍 Location unavailable on this device', 1800); return Promise.reject(new Error('no-geo')); }

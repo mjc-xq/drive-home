@@ -14,6 +14,7 @@ import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, c
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import { createGround } from './occlusion/ground-height.js';
+import { createCarXray } from './occlusion/car-xray.js';
 import { createTileClip } from './occlusion/tile-clip.js';
 import { createPrefetch } from './occlusion/prefetch.js';
 import { createGeo } from './nav/geo.js';
@@ -195,11 +196,10 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.routeIdx = 0;       // current target waypoint along ROUTE
   // FAR-FROM-HOME road graph: the procedural roadSegs only cover the ~±330 m hood, so out on the open
   // photoreal tiles the lane-keep assist had nothing to hug. Instead of a fragile 1-D "route ahead",
-  // fetch the REAL road NETWORK from OpenStreetMap (Overpass) in a box around the car, projected
-  // through the same ENU geoToWorld as the tiles, and re-fetch as you drive into new areas. This is a
-  // true graph (segments on every side), so nearestRoadPoint / roadTargetAhead / the soft-wall / reset
-  // all work EVERYWHERE, exactly like they do at home. Degrades to no-assist if Overpass is unreachable.
-  ctx.osmRoadSegs = [];          // world-space road segments fetched around the car ([[ax,az],[bx,bz]])
+  // fetch the REAL road NETWORK in boxes around/ahead of the car (Mapbox vector tiles first, Overpass
+  // fallback), projected through the same ENU geoToWorld as the tiles. This is a true graph (segments
+  // on every side), so nearestRoadPoint / roadTargetAhead / the soft-wall / reset all work far from home.
+  ctx.osmRoadSegs = [];          // legacy name: world-space external road segments ([[ax,az],[bx,bz]])
   ctx._osmCenter = null, ctx._osmFetching = false, ctx._osmT = 0;
   // Overpass mirrors, tried in order — the main de host throttles (429/504) under load, so fall
   // through to the public mirrors before giving up. Rotates start point so we don't always hammer #0.
@@ -656,6 +656,7 @@ export function createEngine({ canvas, ui, emit }) {
     const photoOn = ctx.fn.photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
     if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = ctx.fn.photoModes(ctx.mode);
     if (ctx.mode !== 'drive' && ctx.tileClip) ctx.tileClip.clearTileClip();   // Drive-only visibility window; never leak into Explore/Scoop
+    if (ctx.mode !== 'drive' && ctx.carXray) ctx.carXray.hide();
     ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     ctx.carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
     if (ctx.ring) ctx.ring.visible = ctx.mode === 'explore';   // marker only makes sense from the air
@@ -776,6 +777,7 @@ export function createEngine({ canvas, ui, emit }) {
 
   ctx.disposed = false;
   ctx.car = createCar(ctx.scene);
+  ctx.carXray = createCarXray(ctx.scene);
   ctx.car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
   ctx.cancelCarLoad = null;
   // LAZY vehicle roster: each slot's GLB is only fetched when that car is actually driven (the
@@ -1055,6 +1057,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.trafficSys.hideTraffic();
     ctx.carLocator.visible = false;
     ctx.car.group.visible = false;
+    ctx.carXray.hide();
     if (ctx.groundPatch) ctx.groundPatch.visible = false;
     for (const s of ctx.labelSprites) s.visible = true;
     ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0;
