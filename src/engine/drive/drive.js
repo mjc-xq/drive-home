@@ -354,7 +354,7 @@ export function createDrive(ctx) {
       const pull = Math.min(ctx.WALL_MAX, over * ctx.WALL_GAIN) * ramp * (1 - yours);
       nx += ux * pull * dt; nz += uz * pull * dt;
     }
-    ctx.trafficSys.updateTraffic(dt, now);   // move the ambient cars (positions feed the collision below)
+    if (!ctx.remoteView) ctx.trafficSys.updateTraffic(dt, now);   // move the ambient cars (positions feed the collision below) — home-only, off when teleported away
     const rad = 1.25;
     let hitThisFrame = false, nearThisFrame = false;
     const fast = Math.abs(ctx.car.speed) > 14;
@@ -499,6 +499,11 @@ export function createDrive(ctx) {
     else { const rate = yr > ctx.car.groundY ? dt * 18 : dt * 9; ctx.car.groundY += (yr - ctx.car.groundY) * Math.min(1, rate); }
     if (yr != null && ctx.car.groundY < yr - 0.8) ctx.car.groundY = yr - 0.8;   // anti-bury backstop, loose enough that a brief canopy/roof spike can't snap the car up
     const yC = ctx.car.groundY;
+    // Floating render origin (0 near home; the anchor when teleported far). All the
+    // camera/physics math below stays in LOGICAL coords; only the rendered positions
+    // subtract this so a Paris-scale jump draws near (0,0) instead of out at 1e6+
+    // where float32 dies. Logical−render is the identity at home.
+    const rox = ctx.renderOrigin.x, roz = ctx.renderOrigin.z;
     const rxv = Math.cos(ctx.car.yaw), rzv = -Math.sin(ctx.car.yaw);
     // The 4 corner probes feed only the visual pitch/roll, which tolerates a lower rate, so
     // refresh these tile raycasts ~every 3rd frame and reuse the result between. (These were
@@ -512,7 +517,7 @@ export function createDrive(ctx) {
       ctx.car._pitchS = Math.atan2(tB - tF, 2.8); ctx.car._rollS = Math.atan2(tR - tL, 1.8);
     }
     const pitch = ctx.car._pitchS, roll = ctx.car._rollS;
-    ctx.car.group.position.set(ctx.car.x, yC + 0.06, ctx.car.z);
+    ctx.car.group.position.set(ctx.car.x - rox, yC + 0.06, ctx.car.z - roz);
     ctx.car.group.rotation.set(0, 0, 0);
     // point the body slightly into the slide so drifts read visually
     const driftYaw = clamp(Math.atan2(ctx.car.vlat || 0, Math.max(6, Math.abs(ctx.car.speed))) * 0.7, -0.5, 0.5);
@@ -533,14 +538,16 @@ export function createDrive(ctx) {
     const aheadScale = 1 - (ctx.arriveCenterT && now < ctx.arriveCenterT ? clamp((ctx.arriveCenterT - now) / 1400, 0, 1) : 0);
     ctx.carLocator.visible = overhead;
     if (overhead) {
-      ctx.carLocator.position.set(ctx.car.x, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, ctx.car.z);
+      ctx.carLocator.position.set(ctx.car.x - rox, yC + (_camV.aerial ? 13 : 8) + Math.abs(Math.sin(now * 0.004)) * 0.5, ctx.car.z - roz);
       ctx.carLocator.scale.setScalar(_camV.aerial ? 1.25 : 0.9);
       if (ctx.carLocator.children[0]) ctx.carLocator.children[0].material.opacity = _camV.aerial ? 0.75 : 0.55;
       if (ctx.carLocator.children[1]) ctx.carLocator.children[1].material.opacity = _camV.aerial ? 0.5 : 0.34;
     }
-    // collectible coins: spin + bob, picked up by driving over them
+    // collectible coins: spin + bob, picked up by driving over them. Home-only —
+    // they live at home coords, so they're hidden (in setPhotorealAnchor) and skipped
+    // while teleported away.
     ctx.coinGroundCursor = ctx.coins.length ? (ctx.coinGroundCursor + 1) % ctx.coins.length : 0;
-    for (let i = 0; i < ctx.coins.length; i++) {
+    for (let i = 0; !ctx.remoteView && i < ctx.coins.length; i++) {
       const c = ctx.coins[i];
       c.mesh.visible = !c.got;
       if (c.got) continue;
@@ -586,8 +593,7 @@ export function createDrive(ctx) {
       }
     } else ctx.driftAccum = 0;
     ctx.score.tickParticles(now, dt);
-    ctx.poi.checkPOIs(now);
-    ctx.poi.updateBeacons(now);
+    if (!ctx.remoteView) { ctx.poi.checkPOIs(now); ctx.poi.updateBeacons(now); }   // neighbourhood POIs are home-only — hidden when teleported away
     // live rally clock (direct DOM, no React churn) + combo expiry
     if (ctx.ui.runTime) ctx.ui.runTime.textContent = ctx.score.fmtTime(ctx.runActive ? now - ctx.runStart : ctx.lastRunMs);
     if (!ctx.comboExpired && now > ctx.comboExpire) { ctx.comboExpired = true; ctx.combo = 0; ctx.score.emitScore({}); }
@@ -612,7 +618,7 @@ export function createDrive(ctx) {
       ctx.navMarker.visible = ctx.inp2.navActive && !ctx.autoDrive;   // hide the finger ring during auto-drive
       if (ctx.navMarker.visible) {
         if (now - (ctx.navMarker.userData._gyT || 0) > 200) { ctx.navMarker.userData.groundY = ctx.ground.actorGroundY(ctx.inp2.navX, ctx.inp2.navZ, ctx.navMarker.userData.groundY); ctx.navMarker.userData._gyT = now; }   // ~5 Hz: the ground under the ring changes slowly
-        ctx.navMarker.position.set(ctx.inp2.navX, (ctx.navMarker.userData.groundY || 0) + 0.16, ctx.inp2.navZ);
+        ctx.navMarker.position.set(ctx.inp2.navX - rox, (ctx.navMarker.userData.groundY || 0) + 0.16, ctx.inp2.navZ - roz);
       } else { ctx.navMarker.userData.groundY = null; ctx.navMarker.userData._gyT = 0; }
     }
     // address guide: a continuous line along the actual ROUTE (every turn), draped on
@@ -625,7 +631,7 @@ export function createDrive(ctx) {
         if (ctx.destPin.userData.groundY == null || now - (ctx.destPin.userData._gyT || 0) > 200) { ctx.destPin.userData.groundY = ctx.ground.actorGroundY(ctx.DEST.x, ctx.DEST.z, ctx.destPin.userData.groundY); ctx.destPin.userData._gyT = now; }   // ~5 Hz: a fixed destination doesn't move
         const destFade = clamp((ddDest - 10) / 70, 0.35, 1) * clamp(1 - (ddDest - 360) / 340, 0.45, 1);
         const destPulse = ctx.reduceMotion ? 1 : 1 + 0.045 * Math.sin(now * 0.005);
-        ctx.destPin.position.set(ctx.DEST.x, ctx.destPin.userData.groundY + 0.28, ctx.DEST.z);
+        ctx.destPin.position.set(ctx.DEST.x - rox, ctx.destPin.userData.groundY + 0.28, ctx.DEST.z - roz);
         ctx.destPin.rotation.y = ctx.reduceMotion ? 0 : Math.sin(now * 0.0018) * 0.1;
         ctx.destPin.userData.setState(0xffc21e, destFade, destPulse);
       }
@@ -783,13 +789,18 @@ export function createDrive(ctx) {
       ctx.camera.position.z += (Math.random() - 0.5) * ctx.shakeMag;
       ctx.shakeMag *= Math.exp(-dt * 9);
     } else ctx.shakeMag = 0;
+    // Floating origin: the camera math above ran in logical space (and looked at the
+    // logical car). Shift the eye into render space so it sits with the render-space
+    // tiles + car. lookAt's orientation stays valid — eye and the whole drawn world
+    // translate by the same vector. No-op at home (renderOrigin = 0).
+    ctx.camera.position.x -= rox; ctx.camera.position.z -= roz;
     if (ctx.vehicleFill.visible) {
       ctx.vehicleFill.position.copy(ctx.camera.position);
       ctx.vehicleFill.position.y += 8;
-      ctx.vehicleFillTarget.position.set(ctx.car.x, yC + 1.1, ctx.car.z);
+      ctx.vehicleFillTarget.position.set(ctx.car.x - rox, yC + 1.1, ctx.car.z - roz);
       ctx.vehicleFillTarget.updateMatrixWorld();
     }
-    ctx.tileClip.updateTileClip(ctx.car.x, yC, ctx.car.z, DRIVE_CAMS[ctx.camMode] || {});   // R8: with the camera now placed, cut tile geometry between it and the car (ALL views)
+    ctx.tileClip.updateTileClip(ctx.car.x - rox, yC, ctx.car.z - roz, DRIVE_CAMS[ctx.camMode] || {});   // R8: cut tile geometry between the (render-space) camera and car (ALL views)
     if (ctx.ui.mph) ctx.ui.mph.textContent = Math.round(Math.abs(ctx.car.speed) * 2.237);
     {
       const f = clamp(Math.abs(ctx.car.speed) / feelRef, 0, 1);

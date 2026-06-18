@@ -33,9 +33,10 @@ export function createPrefetch(ctx) {
     const p = pointAlongRoute(90 + ctx._scoutPhase * 135);     // …≈90–765 m along the route (reach matches the faster rail cruise)
     if (!p) { setScout(false); return; }
     const gy = ctx.car.groundY != null ? ctx.car.groundY : 0;
+    const rox = ctx.renderOrigin.x, roz = ctx.renderOrigin.z;   // warm tiles in render space (no-op near home)
     scoutCam.up.set(0, 0, -1);
-    scoutCam.position.set(p.x, gy + 260, p.z);             // high, straight down → warms the ground tiles ahead
-    scoutCam.lookAt(p.x, gy, p.z);
+    scoutCam.position.set(p.x - rox, gy + 260, p.z - roz);             // high, straight down → warms the ground tiles ahead
+    scoutCam.lookAt(p.x - rox, gy, p.z - roz);
     scoutCam.updateMatrixWorld(true);
   }
 

@@ -58,7 +58,10 @@ export function createCam(ctx) {
       const dist = ctx._camRayD.length();
       if (dist > 0.05) {
         ctx._camRayD.multiplyScalar(1 / dist);
-        ctx.camRay.set(ctx._camRayO.set(tx, ty, tz), ctx._camRayD);
+        // tiles live in render space (logical − renderOrigin); cast the occlusion
+        // ray there too. Direction is unchanged by the translation; only the origin
+        // shifts. No-op near home (renderOrigin = 0).
+        ctx.camRay.set(ctx._camRayO.set(tx - ctx.renderOrigin.x, ty, tz - ctx.renderOrigin.z), ctx._camRayD);
         ctx.camRay.far = dist;
         // tiles.raycast prunes by per-tile bounding volume + early-exits on the
         // first hit — far cheaper than intersectObject(group, true), which tested
