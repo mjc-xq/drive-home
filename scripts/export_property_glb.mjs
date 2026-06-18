@@ -127,10 +127,17 @@ const aerialUV = (X, Z) => aerialUVen(X + C[0], C[1] - Z);
 // solid). Walls = facade window texture x SV colour; roofs = solid shingle.
 const COL = existsSync(path.join(ROOT, 'exports/buildings_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_color.json'), 'utf8')) : {};
+// Real per-roof colour sampled from the aerial (fetch_roof_colors.py) — terracotta,
+// gray shingle, brown — instead of a random palette.
+const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const ROOFP = [[0.34, 0.32, 0.30], [0.40, 0.36, 0.31], [0.30, 0.30, 0.31], [0.37, 0.33, 0.29], [0.26, 0.26, 0.27]];
-const wallColor = ib => COL[ib] || STUCCO;
-const roofColor = ib => ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+const lighten = c => c.map(v => Math.min(1, v * 0.55 + 0.40));   // plausible wall from a roof colour
+// walls: Street View colour if known, else a light tint of the roof, else stucco
+const wallColor = ib => COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
+// roofs: real sampled colour, else the old palette
+const roofColor = ib => RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
 
 // push a roof triangle with upward-facing winding, solid roof colour (no texture)
 function pushUpTri(Rf, col, a, b, c) {
