@@ -296,23 +296,15 @@ if (existsSync(TREESJSON)) {
   }
 }
 if (trees.length) {
-  const tPos = [], tCol = [];
-  const append = (geom, tx, ty, tz, col) => {
-    const g = geom.index ? geom.toNonIndexed() : geom.clone(); g.translate(tx, ty, tz);
-    const p = g.attributes.position.array;
-    for (let i = 0; i < p.length; i++) tPos.push(p[i]);
-    for (let i = 0; i < p.length; i += 3) tCol.push(col.r, col.g, col.b);
-  };
-  const bark = new THREE.Color(0x6e5340);
-  for (const [x, z, cr, th] of trees) {
-    const base = terrainAt(x, z);
-    const trunkH = th * 0.42;
-    append(new THREE.CylinderGeometry(0.16, 0.26, trunkH, 5), x, base + trunkH / 2, z, bark);
-    const can = new THREE.IcosahedronGeometry(cr, 0);
-    const g = 0.42 + rand() * 0.16;
-    append(can, x, base + trunkH + cr * 0.55, z, new THREE.Color(0.22 + rand() * 0.1, g, 0.26 + rand() * 0.08));
-  }
-  scene.add(mkMesh(tPos, null, 0x5e7d47, 'Trees', { colors: tCol, flat: true }));
+  // Tree POSITIONS only — real tree models (Trees.glb / Acacia.glb) are instanced as
+  // separate, individually-deletable objects by scripts/place_trees.py. Frame: glTF
+  // Y-up world (x=east, y=up, z=-north), house at origin; base = terrain height.
+  const placed = trees.map(([x, z, cr, th], i) => ({
+    i, x: +x.toFixed(2), z: +z.toFixed(2), base: +terrainAt(x, z).toFixed(2),
+    canopyR: +cr.toFixed(2), height: +th.toFixed(2),
+  }));
+  writeFileSync(path.join(ROOT, 'exports/trees_placed.json'),
+    JSON.stringify({ frame: 'gltf-y-up; x=east, y=up, z=-north; house at origin', count: placed.length, trees: placed }));
 }
 
 // ---- Parcels / lot lines (real fences run along these) -------------------
