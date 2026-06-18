@@ -1,5 +1,5 @@
 import { clamp } from '../coords.js';
-// Neighbourhood POIs: the 5 real landmarks — light-pillar beacons + labels, proximity
+// Neighbourhood POIs: the 5 real landmarks — waypoint pads + labels, proximity
 // found-checks, the arrival celebration, and the visit-them-all chain.
 export function createPoi(ctx) {
   function emitPOIs() { ctx.emit('poiProgress', { found: ctx.poiFound.size, total: ctx.POIS.length }); }
@@ -12,7 +12,7 @@ export function createPoi(ctx) {
     ctx.autoDrive = false;
     ctx.nav.setDestination(best.lat, best.lon, best.label, true);
     if (ctx.DEST) ctx.DEST.poiKey = best.key;   // tag so the chain only continues for places you chose
-    ctx.toast('🏁 Next stop: floor it to ' + ctx.esc(best.label) + ' — follow the pink beam! 🏁', 2600);
+    ctx.toast('🏁 Next stop: floor it to ' + ctx.esc(best.label) + ' — follow the pink waypoint! 🏁', 2600);
   }
   function checkPOIs(now) {
     for (const poi of ctx.POIS) {
@@ -53,10 +53,15 @@ export function createPoi(ctx) {
       b.mesh.visible = show;
       if (!show) continue;
       const found = ctx.poiFound.has(b.poi.key);
-      b.mat.color.setHex(found ? 0x6dffa8 : 0xff7ad8);
+      if (b.mesh.userData.groundY == null || now - (b.mesh.userData._gyT || 0) > 650) {
+        b.mesh.userData.groundY = ctx.ground ? ctx.ground.actorGroundY(b.poi.x, b.poi.z, b.mesh.userData.groundY) : 0;
+        b.mesh.userData._gyT = now;
+      }
+      b.mesh.position.set(b.poi.x, (b.mesh.userData.groundY || 0) + 0.24, b.poi.z);
       const fade = clamp((d - 16) / 55, 0, 1) * clamp(1 - (d - 260) / 940, 0.3, 1);   // strong near, fades far
-      const pulse = (b.poi.key === nearestKey && !ctx.reduceMotion) ? 0.7 + 0.3 * Math.sin(now * 0.006) : 0.8;
-      b.mat.opacity = fade * 0.95 * pulse;
+      const activePulse = (b.poi.key === nearestKey && !ctx.reduceMotion) ? 1 + 0.055 * Math.sin(now * 0.006) : 1;
+      b.mesh.rotation.y = (b.poi.key === nearestKey && !ctx.reduceMotion) ? Math.sin(now * 0.0015) * 0.08 : 0;
+      b.mesh.userData.setState(found ? 0x6dffa8 : 0xff7ad8, fade * (found ? 0.46 : 0.92), activePulse);
     }
     // name-plates: legible only when you're close enough to actually be AT the place
     for (const l of ctx.poiLabels) {

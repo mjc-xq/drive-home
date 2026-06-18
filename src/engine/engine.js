@@ -275,16 +275,68 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.tripScore = 0;
   ctx.boost = 0, ctx.boostWas = false;                // 0..1 nitro meter — fills on skill, spends for a speed surge
 
-  // ---- POI beacons: a tall light-pillar over each real place, drawn THROUGH the world
-  // (depthTest off) so you can literally SEE your school / Meemaw's from across the
-  // neighbourhood and drive toward it. Pink = still to find, green = found; the nearest
-  // un-found one pulses. Only in Drive, faded in by distance. ----
+  function makeWaypointPad(color, scale = 1, renderOrder = 998) {
+    const group = new THREE.Group();
+    const mats = [];
+    const mat = (opacity, additive = false) => {
+      const m = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+        blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      });
+      mats.push({ mat: m, opacity });
+      return m;
+    };
+    const addFlat = (mesh, y) => {
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = y;
+      mesh.renderOrder = renderOrder;
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      return mesh;
+    };
+    addFlat(new THREE.Mesh(new THREE.CircleGeometry(3.8 * scale, 56), mat(0.16, true)), 0.02);
+    addFlat(new THREE.Mesh(new THREE.RingGeometry(4.8 * scale, 5.75 * scale, 72), mat(0.82)), 0.04);
+    addFlat(new THREE.Mesh(new THREE.RingGeometry(2.05 * scale, 2.45 * scale, 48), mat(0.58)), 0.06);
+    const core = addFlat(new THREE.Mesh(new THREE.CircleGeometry(0.78 * scale, 4), mat(0.9)), 0.08);
+    core.rotation.z = Math.PI / 4;
+    const tickGeo = new THREE.BoxGeometry(0.46 * scale, 0.05 * scale, 1.9 * scale);
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2;
+      const tick = new THREE.Mesh(tickGeo, mat(0.8));
+      tick.position.set(Math.sin(a) * 6.9 * scale, 0.12, Math.cos(a) * 6.9 * scale);
+      tick.rotation.y = a;
+      tick.renderOrder = renderOrder;
+      tick.frustumCulled = false;
+      group.add(tick);
+    }
+    group.userData.baseScale = 1;
+    group.userData.markerOpacity = 0;
+    group.userData.setState = (hex, alpha, pulse = 1) => {
+      group.userData.markerOpacity = alpha;
+      group.scale.setScalar(pulse);
+      for (const entry of mats) {
+        entry.mat.color.setHex(hex);
+        entry.mat.opacity = entry.opacity * alpha;
+      }
+    };
+    group.frustumCulled = false;
+    group.visible = false;
+    return group;
+  }
+
+  // ---- POI waypoints: low target pads over each real place, drawn THROUGH the world
+  // so they remain findable without a vertical beam. Pink = still to find, green = found;
+  // the nearest un-found one pulses. Only in Drive, faded in by distance. ----
   ctx.poiBeacons = ctx.POIS.map(poi => {
-    const geo = new THREE.CylinderGeometry(1.6, 3.4, 160, 16, 1, true);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xff5ad0, transparent: true, opacity: 0, depthWrite: false, depthTest: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
-    const m = new THREE.Mesh(geo, mat); m.position.set(poi.x, 74, poi.z); m.frustumCulled = false; m.renderOrder = 998; m.visible = false;
+    const m = makeWaypointPad(0xff5ad0, 1, 998);
+    m.position.set(poi.x, terrainAt(poi.x, poi.z) + 0.22, poi.z);
     ctx.scene.add(m);
-    return { poi, mesh: m, mat };
+    return { poi, mesh: m };
   });
   // floating name-plate over each real place, so arriving somewhere has identity in-world
   function makeLabelTex(text) {
@@ -466,9 +518,8 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.guideLine = new THREE.Mesh(ctx.guideGeo, new THREE.MeshBasicMaterial({ color: 0x28c9ff, transparent: true, opacity: 0.82, depthWrite: false, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, side: THREE.DoubleSide }));
   ctx.guideLine.renderOrder = 6; ctx.guideLine.visible = false; ctx.guideLine.frustumCulled = false;
   ctx.scene.add(ctx.guideLine);
-  ctx.destPin = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.4, 4),
-    new THREE.MeshBasicMaterial({ color: 0xffc21e, depthTest: false, transparent: true, opacity: 0.95 }));
-  ctx.destPin.rotation.x = Math.PI; ctx.destPin.renderOrder = 21; ctx.destPin.visible = false; ctx.destPin.frustumCulled = false;
+  ctx.destPin = makeWaypointPad(0xffc21e, 0.58, 21);
+  ctx.destPin.userData.setState(0xffc21e, 0.95, 1);
   ctx.scene.add(ctx.destPin);
   // "You are here" locator — a bright downward chevron + halo bobbing over the car, drawn
   // on top, so you can FIND the car in the high aerial / top-down views where it's tiny.
@@ -1554,7 +1605,7 @@ export function createEngine({ canvas, ui, emit }) {
     nudge: ctx.fn.applyP3DT,
     tiles: () => ctx.p3dtiles,
     setProcedural: (on) => { ctx.staticGroup.visible = on; },
-    beacons: () => ctx.poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +b.mat.opacity.toFixed(2), d: Math.round(Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z)) })),
+    beacons: () => ctx.poiBeacons.map(b => ({ key: b.poi.key, vis: b.mesh.visible, op: +(b.mesh.userData.markerOpacity || 0).toFixed(2), d: Math.round(Math.hypot(b.poi.x - ctx.car.x, b.poi.z - ctx.car.z)) })),
     // sweep spin; score = avg tile height at building centroids − at road points
     // (correct alignment => buildings high/roofs, roads low). Pick the max.
     calibrate: () => {
