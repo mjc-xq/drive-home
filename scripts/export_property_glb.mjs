@@ -133,7 +133,7 @@ function gableTris(rect, base, wallH) {
 // Emit a building into WALL triangles (facade UV: u = perimeter dist / TILE,
 // v = height / TILE -> tiled stucco+window texture) and ROOF triangles (cap +
 // gables, UV = nadir aerial projection -> real satellite roof imagery).
-const TILE = 3.0;
+const TILE = 5.0;   // bigger facade tile -> sparser windows (was a dense 3 m grid)
 const aerialUV = (X, Z) => aerialUVen(X + C[0], C[1] - Z);
 // Per-building wall colour from Street View (exports/buildings_color.json) and a
 // clean solid roof colour (NADIR aerial on pitched roofs looks wrong, so roofs are
