@@ -60,6 +60,14 @@ const D = JSON.parse(readFileSync(ex('dem_1m.json'), 'utf8'));
 const { cols, rows, h } = D;
 const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
 const cropHalf = dLat * 110540 / 2 - 4;                   // square crop half-width (m)
+// REAL terrain world bounds (the DEM patch may be off-centre from the house and is
+// narrower E-W than N-S), so a symmetric ±cropHalf box lets trees fall past the edge
+// into mid-air. Mirror the photo model: filter against these actual bounds.
+const tXmin = (D.lonW - LON0) * COSLAT * 111320 - C[0], tXmax = (D.lonE - LON0) * COSLAT * 111320 - C[0];
+const _zA = -((D.latN - LAT0) * 110540 - C[1]), _zB = -((D.latS - LAT0) * 110540 - C[1]);
+const tZmin = Math.min(_zA, _zB), tZmax = Math.max(_zA, _zB);
+// strictly inside the terrain (with margin) — used to drop out-of-range trees
+const inTerrain = (X, Z, m = 4) => X >= tXmin + m && X <= tXmax - m && Z >= tZmin + m && Z <= tZmax - m;
 // bilinear DEM sample at world X,Z
 const terrainAt = (X, Z) => {
   const [lat, lon] = worldToLL(X, Z);
@@ -77,6 +85,7 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   if (opts.colors) g.setAttribute('color', new THREE.Float32BufferAttribute(opts.colors, 3));
+  if (opts.uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(opts.uvs, 2));
   if (indices) g.setIndex(indices);
   g.computeVertexNormals();
   const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat' });
@@ -103,11 +112,31 @@ const GRASS_A = new THREE.Color(0x5c8f3a), GRASS_B = new THREE.Color(0x76a64a);
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
     const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; idx.push(a, c, b, b, c, d);
   }
-  var terrainMesh = mkMesh(pos, idx, 0xffffff, 'Terrain_Grass', { colors: col, flat: true });
+  // flat green BASE colour, NO per-vertex COLOR_0 — viewers like Quick Look render
+  // displayColor/vertex over the base, which washed the lawn to white. Base-only = green everywhere.
+  var terrainMesh = mkMesh(pos, idx, new THREE.Color(0.42, 0.6, 0.29), 'Terrain_Grass', { flat: true });
 }
 
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Stylized';
 scene.add(terrainMesh);
+
+// optional SATELLITE GROUND layer: same DTM geometry, textured with the real Google
+// aerial, sitting 15 cm UNDER the grass. Hide Terrain_Grass + Grass_Wind in Blender to
+// switch the ground from stylized lawn to satellite imagery.
+const AER = existsSync(ex('google_aerial.json')) ? JSON.parse(readFileSync(ex('google_aerial.json'), 'utf8')) : null;
+if (AER) {
+  const sPos = [], sUv = [], sIdx = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
+    const e = (lon - LON0) * COSLAT * 111320, n = (lat - LAT0) * 110540;
+    sPos.push(e - C[0], h[j * cols + i] - 0.15, -(n - C[1]));
+    sUv.push((e - AER.E0) / (AER.E1 - AER.E0), (AER.Nt - n) / (AER.Nt - AER.Nb));
+  }
+  for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
+    const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; sIdx.push(a, c, b, b, c, d);
+  }
+  scene.add(mkMesh(sPos, sIdx, 0xffffff, 'SatelliteGround', { uvs: sUv }));
+}
 
 const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
 const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
@@ -151,45 +180,81 @@ function ribbonPart(lineW, width, lift, posArr, idxArr) {
 }
 // Offset ribbon a fixed distance to one side of the centreline (for sidewalks).
 function offsetRibbon(lineW, sideOff, width, lift, posArr, idxArr) {
-  const off = [];
-  for (let k = 0; k < lineW.length; k++) {
-    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
-    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-    const nx = -dz, nz = dx; off.push([x + nx * sideOff, z + nz * sideOff]);
+  ribbonPart(offsetLine(lineW, sideOff), width, lift, posArr, idxArr);
+}
+// Offset a polyline a fixed distance along its LEFT normal (-dz, dx). Ported from
+// the photo model so the curbs/sidewalks track the road both sides.
+const offsetLine = (lw, d) => lw.map((p, k) => {
+  const a = lw[Math.max(0, k - 1)], b = lw[Math.min(lw.length - 1, k + 1)];
+  let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+  return [p[0] - dz * d, p[1] + dx * d];
+});
+// Dashed YELLOW centre line: 3 m dash / 3.5 m gap, ~0.28 m wide, just above the
+// asphalt. Each dash is two ground-following triangles. Ported from the photo model.
+function centreDashes(lw, halfW, lift, dPos) {
+  const ON = 3.0, OFF = 3.5; let draw = true, acc = 0;
+  for (let k = 1; k < lw.length; k++) {
+    const a = lw[k - 1], b = lw[k]; let dx = b[0] - a[0], dz = b[1] - a[1];
+    const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
+    let t = 0;
+    while (t < seg - 1e-6) {
+      const len = Math.min((draw ? ON : OFF) - acc, seg - t);
+      if (draw) {
+        const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
+        const y0 = terrainAt(x0, z0) + lift, y1 = terrainAt(x1, z1) + lift;
+        dPos.push(x0 + nx * halfW, y0, z0 + nz * halfW, x0 - nx * halfW, y0, z0 - nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW,
+                  x0 + nx * halfW, y0, z0 + nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW, x1 + nx * halfW, y1, z1 + nz * halfW);
+      }
+      t += len; acc += len;
+      if (acc >= (draw ? ON : OFF) - 1e-6) { draw = !draw; acc = 0; }
+    }
   }
-  ribbonPart(off, width, lift, posArr, idxArr);
 }
 
 const rPos = [], rIdx = [];                 // asphalt
 const swPos = [], swIdx = [];               // concrete sidewalks
-const cbPos = [], cbIdx = [];               // curbs
+const cbPos = [], cbIdx = [];               // raised light curbs
+const dPos = [];                            // dashed yellow centre line
 for (const r of S.roads || []) {
   const pl = r.p || r; if (!Array.isArray(pl)) continue;
   const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (lw.length < 2) continue;
   roadLines.push(lw);
   const roadW = r.w || 7;
-  ribbonPart(lw, roadW, 0.04, rPos, rIdx);
+  // asphalt raised ~0.3 m above grade so DEM crowns / cul-de-sac bumps don't poke through
+  ribbonPart(lw, roadW, 0.28, rPos, rIdx);
+  // raised light curbs (lip ABOVE the asphalt) flank every street
+  offsetRibbon(lw, roadW / 2 + 0.3, 0.55, 0.44, cbPos, cbIdx);
+  offsetRibbon(lw, -(roadW / 2 + 0.3), 0.55, 0.44, cbPos, cbIdx);
+  // dashed yellow centre line just above the asphalt
+  centreDashes(lw, 0.14, 0.34, dPos);
   // sidewalks flank residential/tertiary streets (skip narrow service lanes)
   if (r.k !== 'service') {
     const swDist = roadW / 2 + 1.6, swW = 1.5;
-    offsetRibbon(lw, swDist, swW, 0.10, swPos, swIdx);
-    offsetRibbon(lw, -swDist, swW, 0.10, swPos, swIdx);
-    // curbs: thin dark strips at the asphalt edge
-    offsetRibbon(lw, roadW / 2 + 0.2, 0.4, 0.07, cbPos, cbIdx);
-    offsetRibbon(lw, -(roadW / 2 + 0.2), 0.4, 0.07, cbPos, cbIdx);
+    offsetRibbon(lw, swDist, swW, 0.30, swPos, swIdx);
+    offsetRibbon(lw, -swDist, swW, 0.30, swPos, swIdx);
   }
 }
-if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x3a3a3e, 'Roads', { rough: 0.98 }));      // dark asphalt
+if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads', { rough: 0.98 }));       // dark asphalt
 if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { rough: 0.95 })); // light concrete
-if (cbIdx.length) scene.add(mkMesh(cbPos, cbIdx, 0x8d8a85, 'Curbs', { rough: 0.95 }));
+if (cbIdx.length) scene.add(mkMesh(cbPos, cbIdx, 0xcacaca, 'Curbs', { rough: 0.9 }));      // raised light curbs
+if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines', { rough: 0.6 }));      // dashed yellow centre line
 
 // ---- buildings: extrude footprints, flat colour per Street View ----------
 const COL = existsSync(ex('buildings_color.json')) ? JSON.parse(readFileSync(ex('buildings_color.json'), 'utf8')) : {};
+// Real per-roof aerial colour (exports/buildings_roof_color.json), keyed by building
+// index into scene.json buildings; values are LINEAR RGB. Used as the flat roof
+// colour when present — still NO photo texture, just a measured solid colour.
+const RCOL = existsSync(ex('buildings_roof_color.json')) ? JSON.parse(readFileSync(ex('buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const wallColor = ib => COL[ib] || STUCCO;
-// roof colour = a darker, slightly desaturated complement of the wall colour
+// WHOLE building takes its Street View colour (per the brief): the roof is the same
+// SV colour, just darkened ~0.8 for a little depth. (Was the aerial roof colour.)
 function roofColor(ib) {
+  return wallColor(ib).map(c => Math.max(0, c * 0.8));
+}
+function _unusedRoofColor(ib) {
+  if (RCOL[ib]) return RCOL[ib];
   const w = wallColor(ib);
   const m = (w[0] + w[1] + w[2]) / 3;
   return [Math.max(0.12, w[0] * 0.45 + m * 0.05), Math.max(0.12, w[1] * 0.45 + m * 0.05), Math.max(0.14, w[2] * 0.45 + m * 0.08)];
@@ -247,24 +312,66 @@ if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
   buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB), hW, hRf));
-  scene.add(mkMesh(hW.pos, null, 0xffffff, 'House_walls', { colors: hW.col, rough: 0.9 }));
-  scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col, rough: 0.85 }));
+  // base colour = building's own SV colour, so it renders in every viewer (not just COLOR_0)
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85 }));
 }
 const bW = { pos: [], col: [] }, bRf = { pos: [], col: [] };
+const wallGroups = [], roofGroups = [];   // per-building [start, count, colour] -> material array
 let nBld = 0, nSkip = 0;
 S.buildings.forEach((b, ib) => {
   if (b.house) return;
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }
   const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
   buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b), bW, bRf));
+  wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
+  roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
   nBld++;
 });
+// per-building MATERIALS (base colour = the SV colour) via geometry groups, so the colour
+// renders in every viewer — no reliance on per-vertex COLOR_0 (Quick Look ignores it).
+function groupedMesh(buf, groups, name, rough) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
+  g.computeVertexNormals();
+  const mats = groups.map(([start, count, col], i) => {
+    g.addGroup(start, count, i);
+    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: rough, metalness: 0, name: `${name}_${i}` });
+    m.side = THREE.DoubleSide; return m;
+  });
+  const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
+}
 if (bW.pos.length) {
-  scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { colors: bW.col, rough: 0.9 }));
-  scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col, rough: 0.85 }));
+  scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', 0.9));
+  scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', 0.85));
 }
 const onBuilding = (x, z) => buildingPolys.some(r => inPoly(x, z, r));
+
+// ---- Doors: one on each building's street-facing wall --------------------
+const dwPos = [], dwCol = [], DOORCOL = [0.24, 0.16, 0.10];
+for (const ring of buildingPolys) {
+  if (ring.length < 2) continue;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    if (Math.hypot(bx - ax, bz - az) < 1.6) continue;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, d = distToLines(mx, mz, roadLines, 1e9);
+    if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; }
+  }
+  if (!best) continue;
+  const [ax, az, bx, bz] = best, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+  let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
+  let nx = -ez, nz = ex;
+  if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+  const hw = 0.5, H = 2.1, base = terrainAt(mx, mz) - 0.1, cx = mx + nx * 0.07, cz = mz + nz * 0.07;
+  const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
+  const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
+  for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
+}
+if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
 
 // ---- creek centreline (for the riparian tree band) -----------------------
 let creekW = null;
@@ -403,21 +510,41 @@ async function loadTreeTemplates(file, opts) {
     }
   }
   templateScrap.push(tScene);                      // dispose the empty merged scene too
-  // measure each template's true upright height. The two source assets use
-  // DIFFERENT up-axes in their mesh data (Trees.glb is Z-up, Acacia is Y-up), so
-  // the caller passes heightAxis (1=Y, 2=Z). nominalH = that extent * node scale.
-  const ax = opts.heightAxis ?? 1;
+  // Measure each template's TRUE upright AABB in the orientation the asset author
+  // intended — i.e. with the template node's OWN rotation+scale applied but its
+  // translation dropped (that's just its slot in the source layout). Each source
+  // uses a different up-axis (Trees.glb nodes carry a -90°X rotation; Acacia is
+  // already Y-up), and that node rotation is what stands the mesh up, so we bake
+  // it into the AABB rather than guessing an axis. From the AABB we read:
+  //   nominalH  - upright height (Y extent)            -> scale to a target height
+  //   nominalW  - canopy width  (max of X,Z extents)   -> cap so no giant trees
+  //   baseY     - trunk base Y (AABB Y-min)            -> seat exactly on terrain
+  const compose = (t, q, s) => {
+    const [x, y, z, w] = q, x2 = x + x, y2 = y + y, z2 = z + z;
+    const xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
+    return [(1 - (yy + zz)) * s[0], (xy + wz) * s[0], (xz - wy) * s[0], 0, (xy - wz) * s[1], (1 - (xx + zz)) * s[1], (yz + wx) * s[1], 0, (xz + wy) * s[2], (yz - wx) * s[2], (1 - (xx + yy)) * s[2], 0, t[0], t[1], t[2], 1];
+  };
+  const matMul = (a, b) => { const r = new Array(16); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let s = 0; for (let k = 0; k < 4; k++) s += a[i * 4 + k] * b[k * 4 + j]; r[i * 4 + j] = s; } return r; };
+  const xform = (M, p) => [p[0] * M[0] + p[1] * M[4] + p[2] * M[8] + M[12], p[0] * M[1] + p[1] * M[5] + p[2] * M[9] + M[13], p[0] * M[2] + p[1] * M[6] + p[2] * M[10] + M[14]];
   return templates.map(t => {
-    const s = t.getScale();
-    let lo = 1e9, hi = -1e9;
-    const acc = nd => {
+    const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+    const rootM = compose([0, 0, 0], t.getRotation(), t.getScale());   // keep rotation+scale, drop translation
+    const acc = (nd, M) => {
       const m = nd.getMesh();
-      if (m) for (const p of m.listPrimitives()) { const a = p.getAttribute('POSITION'); lo = Math.min(lo, a.getMin([])[ax]); hi = Math.max(hi, a.getMax([])[ax]); }
-      nd.listChildren().forEach(acc);
+      if (m) for (const p of m.listPrimitives()) {
+        const a = p.getAttribute('POSITION'), mn = a.getMin([]), mx = a.getMax([]);
+        for (const cx of [mn[0], mx[0]]) for (const cy of [mn[1], mx[1]]) for (const cz of [mn[2], mx[2]]) {
+          const w = xform(M, [cx, cy, cz]); for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], w[k]); hi[k] = Math.max(hi[k], w[k]); }
+        }
+      }
+      nd.listChildren().forEach(c => acc(c, matMul(compose(c.getTranslation(), c.getRotation(), c.getScale()), M)));
     };
-    acc(t);
-    const nominalH = Math.max(0.01, (hi - lo) * Math.abs(s[ax]));
-    return { node: t, opts, nominalH };
+    acc(t, rootM);
+    const nominalH = Math.max(0.01, hi[1] - lo[1]);
+    // canopy width = horizontal BOUNDING DIAGONAL, so the cap holds for ANY yaw
+    // (a random yaw can otherwise project a lopsided canopy past a per-axis cap).
+    const nominalW = Math.max(0.01, Math.hypot(hi[0] - lo[0], hi[2] - lo[2]));
+    return { node: t, opts, nominalH, nominalW, baseY: lo[1] };
   });
 }
 
@@ -446,10 +573,21 @@ function cloneTree(template, name, X, Y, Z, scl, rotY) {
   return wrap;
 }
 
-const treeTemplates = [
-  ...await loadTreeTemplates('/Users/mcohen/Downloads/Trees.glb', { targetH: 7.5, hVar: 3.0, heightAxis: 2 }),   // Z-up mesh
-  ...await loadTreeTemplates('/Users/mcohen/Downloads/Acacia.glb', { targetH: 9.0, hVar: 3.5, heightAxis: 1 }),  // Y-up mesh
-];
+// Instance from the clean individual-tree library (exports/tree_lib, built by
+// build_tree_lib.py) — each file is ONE upright single tree (trunk base at origin).
+// The investigation confirmed the raw GLBs were already single trees (the 23 m Acacia
+// is one umbrella crown), so this is the same set, just normalised. NormalTrees ≤11 m
+// canopy; the Acacia feature ≤16 m. wCap caps canopy width so no giant trees ship.
+const TREE_LIB = path.join(ROOT, 'exports/tree_lib');
+const treeMan = JSON.parse(readFileSync(path.join(TREE_LIB, 'manifest.json'), 'utf8'));
+const treeTemplates = [];
+for (const tm of treeMan.trees) {
+  const opts = tm.feature ? { targetH: 9.0, hVar: 3.5, wCap: 16.0, feature: true }
+                          : { targetH: 7.5, hVar: 3.0, wCap: 11.0, feature: false };
+  treeTemplates.push(...await loadTreeTemplates(path.join(TREE_LIB, tm.file), opts));
+}
+const normalTpl = treeTemplates.filter(t => !t.opts.feature);
+const featureTpl = treeTemplates.filter(t => t.opts.feature);
 
 // a parent node grouping all trees (so the group is one tidy outliner entry,
 // but every child Tree_#### is still its own deletable object)
@@ -457,8 +595,11 @@ const treesParent = doc.createNode('Trees');
 mainScene.addChild(treesParent);
 
 // tree placement heuristic: dense riparian band along the creek, scattered yards,
-// avoiding buildings + roads.
-const treeOK = (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5;
+// avoiding buildings + roads. Every spot must be STRICTLY inside the real terrain
+// bounds (inTerrain), not just the symmetric ±cropHalf box, so no tree falls past
+// the E-W edge into mid-air.
+const TREE_RADIUS = 100;   // cluster trees around the property, not out to the patch edge
+const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5 && Math.hypot(x, z) <= TREE_RADIUS;
 const treeSpots = [];
 if (creekW) for (let k = 1; k < creekW.length; k++) {
   const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
@@ -472,19 +613,28 @@ if (creekW) for (let k = 1; k < creekW.length; k++) {
   }
 }
 for (let n = 0; n < 1400 && treeSpots.length < 230; n++) {
-  const x = (rand() * 2 - 1) * cropHalf, z = (rand() * 2 - 1) * cropHalf;
+  const x = tXmin + rand() * (tXmax - tXmin), z = tZmin + rand() * (tZmax - tZmin);
   if (treeOK(x, z) && distToLines(x, z, [creekW || []], 8) >= 8 && rand() < 0.4) treeSpots.push([x, z]);
 }
 
-let nTrees = 0;
+let nTrees = 0, nClampW = 0;
 for (const [x, z] of treeSpots) {
-  const t = treeTemplates[Math.floor(rand() * treeTemplates.length)];
+  // mostly everyday NormalTrees; an occasional Acacia feature tree near the creek
+  const useFeature = featureTpl.length && rand() < 0.12;
+  const pool = useFeature ? featureTpl : (normalTpl.length ? normalTpl : treeTemplates);
+  const t = pool[Math.floor(rand() * pool.length)];
   const o = t.opts;
   const targetH = o.targetH + (rand() - 0.5) * o.hVar;
-  // normalise to target height using the template's measured upright height.
-  const scl = (targetH / t.nominalH) * (0.85 + rand() * 0.3);
+  // scale to the target height, then CLAMP so the canopy never exceeds wCap (keeps
+  // out the 23 m-wide Acacia monster). Width scales with the same uniform factor.
+  let scl = (targetH / t.nominalH) * (0.85 + rand() * 0.3);
+  const wCapScl = o.wCap / t.nominalW;
+  if (scl > wCapScl) { scl = wCapScl; nClampW++; }
   const rotY = rand() * Math.PI * 2;
-  const Y = terrainAt(x, z) - 0.05;
+  // SEAT the trunk base on the terrain: the template's lowest point sits at baseY in
+  // its upright frame, so after the uniform scale it sits at baseY*scl above the wrap
+  // origin; placing the wrap at terrain - baseY*scl lands the trunk base on the ground.
+  const Y = terrainAt(x, z) - t.baseY * scl;
   const node = cloneTree(t, `Tree_${String(nTrees).padStart(4, '0')}`, x, Y, z, scl, rotY);
   treesParent.addChild(node);
   nTrees++;
@@ -498,6 +648,17 @@ for (const [x, z] of treeSpots) {
 for (const n of templateScrap) { try { n.dispose(); } catch { /* already gone */ } }
 const { prune } = await import('@gltf-transform/functions');
 await doc.transform(prune({ keepLeaves: false }), unpartition());   // drop orphans + single buffer
+// texture the optional SatelliteGround layer with the Google aerial JPEG
+const aerialJpg = ex('google_aerial.jpg');
+if (existsSync(aerialJpg)) {
+  const tex = doc.createTexture('satellite').setImage(new Uint8Array(readFileSync(aerialJpg))).setMimeType('image/jpeg');
+  for (const m of doc.getRoot().listMaterials()) {
+    if (/SatelliteGround/i.test(m.getName() || '')) {
+      m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(tex);
+      const ti = m.getBaseColorTextureInfo(); if (ti) { ti.setWrapS(33071); ti.setWrapT(33071); }
+    }
+  }
+}
 const out = ex('1840-dahill-stylized.glb');
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 
@@ -508,7 +669,7 @@ console.log('terrain:', D.source);
 console.log(`crop half: ${cropHalf.toFixed(0)} m`);
 console.log(`buildings: ${nBld} (${nSkip} skipped on owner lots)   houseIdx: ${houseIdx}`);
 console.log(`grass clumps (animated nodes): ${clumpNodes.length}   wind clip: ${animations.length ? animations[0].name + ' (' + animations[0].duration + 's loop)' : 'none'}`);
-console.log(`trees placed (separate nodes): ${nTrees}   templates: ${treeTemplates.length}`);
+console.log(`trees placed (separate nodes): ${nTrees}   templates: ${treeTemplates.length}   canopy-width clamped: ${nClampW}`);
 console.log('top-level meshes:\n' + sceneObjs.join('\n'));
 console.log(`animations in doc: ${doc.getRoot().listAnimations().map(a => a.getName()).join(', ')}`);
 console.log(`Tree_* nodes in doc: ${doc.getRoot().listNodes().filter(n => /^Tree_/.test(n.getName() || '')).length}`);

@@ -53,7 +53,7 @@ const aerialUVen = (e, n) => [(e - A.E0) / (A.E1 - A.E0), (A.Nt - n) / (A.Nt - A
 
 // ---- terrain: crisp 1 m DEM patch if present, else coarse Terrarium ------
 const DEMPATH = path.join(ROOT, 'exports/dem_1m.json');
-let terrainAt, terrainMesh, cropHalf, terrSrc;
+let terrainAt, terrainMesh, cropHalf, terrSrc, tXmin, tXmax, tZmin, tZmax;
 function mkMesh(positions, indices, color, name, opts = {}) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -73,6 +73,12 @@ if (existsSync(DEMPATH)) {
   const { cols, rows, h } = D;
   const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
   cropHalf = dLat * 110540 / 2 - 4;
+  // real terrain world bounds — the patch is narrower E-W than N-S (and may be off-centre
+  // from the house), so a symmetric ±cropHalf box let trees fall past the E-W edge into
+  // mid-air. Filter geometry against these actual bounds instead.
+  tXmin = (D.lonW - LON0) * COSLAT * 111320 - C[0]; tXmax = (D.lonE - LON0) * COSLAT * 111320 - C[0];
+  const _za = -((D.latN - LAT0) * 110540 - C[1]), _zb = -((D.latS - LAT0) * 110540 - C[1]);
+  tZmin = Math.min(_za, _zb); tZmax = Math.max(_za, _zb);
   terrSrc = D.source;
   // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon (curvature-correct).
   terrainAt = (X, Z) => {
@@ -99,7 +105,8 @@ if (existsSync(DEMPATH)) {
   throw new Error('exports/dem_1m.json missing — run: scripts/.venv/bin/python scripts/fetch_dem.py 400');
 }
 
-const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
+const inPatch = (X, Z) => X >= tXmin && X <= tXmax && Z >= tZmin && Z <= tZmax;
+const inTerrain = (X, Z, m = 5) => X >= tXmin + m && X <= tXmax - m && Z >= tZmin + m && Z <= tZmax - m;
 const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
 
 // ---- buildings: walls + flat eave cap + gabled roofs (ported from geom.js) -
@@ -127,10 +134,17 @@ const aerialUV = (X, Z) => aerialUVen(X + C[0], C[1] - Z);
 // solid). Walls = facade window texture x SV colour; roofs = solid shingle.
 const COL = existsSync(path.join(ROOT, 'exports/buildings_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_color.json'), 'utf8')) : {};
+// Real per-roof colour sampled from the aerial (fetch_roof_colors.py) — terracotta,
+// gray shingle, brown — instead of a random palette.
+const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
+  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const ROOFP = [[0.34, 0.32, 0.30], [0.40, 0.36, 0.31], [0.30, 0.30, 0.31], [0.37, 0.33, 0.29], [0.26, 0.26, 0.27]];
-const wallColor = ib => COL[ib] || STUCCO;
-const roofColor = ib => ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+const lighten = c => c.map(v => Math.min(1, v * 0.55 + 0.40));   // plausible wall from a roof colour
+// walls: Street View colour if known, else a light tint of the roof, else stucco
+const wallColor = ib => COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
+// roofs: real sampled colour, else the old palette
+const roofColor = ib => RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
 
 // push a roof triangle with upward-facing winding, solid roof colour (no texture)
 function pushUpTri(Rf, col, a, b, c) {
@@ -176,10 +190,13 @@ if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
   buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB, houseIdx), hW, hRf));
-  scene.add(mkMesh(hW.pos, null, 0xffffff, 'House_walls', { uvs: hW.uv, colors: hW.col }));
-  scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col }));
+  // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
+  // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', {}));
 }
 const bW = { pos: [], uv: [], col: [] }, bRf = { pos: [], col: [] };
+const wallGroups = [], roofGroups = [];   // per-building [start, count, colour] -> material array
 // Keep the OWNER'S two lots clear of any generated building except the house —
 // the back lot stays empty for a manually-placed shed. Parcel rings from parcels.json.
 const pip = (x, z, r) => { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, zi] = r[i], [xj, zj] = r[j]; if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) c = !c; } return c; };
@@ -192,16 +209,33 @@ S.buildings.forEach((b, ib) => {
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }     // never put others' buildings on the owner's lots
   const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
   buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b, ib), bW, bRf));
+  wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
+  roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
   nBld++;
 });
 // gap-fill LiDAR buildings DISABLED — they produced false structures (incl. one in
 // the back yard) and crossed property lines. The photoreal layer covers genuinely
 // missing buildings; the clean model stays trustworthy instead.
 const nFill = 0;
+// Per-building MATERIALS (base colour = the building's SV/satellite colour) via geometry
+// groups, one Buildings mesh each — colour renders in every viewer (no reliance on COLOR_0).
+function groupedMesh(buf, groups, name, withUV) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
+  if (withUV) g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uv, 2));
+  g.computeVertexNormals();
+  const mats = groups.map(([start, count, col], i) => {
+    g.addGroup(start, count, i);
+    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    m.side = THREE.DoubleSide; return m;
+  });
+  const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
+}
 if (bW.pos.length) {
-  scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { uvs: bW.uv, colors: bW.col }));
-  scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col }));
+  scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', true));
+  scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', false));
 }
 
 // roads (context) + collect world polylines for tree spacing
@@ -260,10 +294,10 @@ for (const r of S.roads || []) {
   const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (lw.length < 2) continue;
   roadLines.push(lw);
-  ribbon(lw, ROADW, 0.04, rPos, rIdx);                                   // asphalt
-  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.17, cuPos, cuIdx);     // left curb
-  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.17, cuPos, cuIdx);  // right curb
-  centreDashes(lw, 0.14, 0.06);                                          // dashed centre line
+  ribbon(lw, ROADW, 0.28, rPos, rIdx);                                   // asphalt — raised ~1 ft so DEM crowns/bumps don't poke through
+  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.44, cuPos, cuIdx);     // left curb (lip above asphalt)
+  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.44, cuPos, cuIdx);  // right curb
+  centreDashes(lw, 0.14, 0.34);                                          // dashed centre line just above asphalt
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
@@ -312,8 +346,34 @@ function distToLines(x, z, lines, max) {
   }
   return best;
 }
+
+// ---- Doors: a simple door on each building's street-facing wall ----------
+const dwPos = [], dwCol = [], DOORCOL = [0.26, 0.18, 0.12];
+for (const ring of buildingPolys) {
+  if (ring.length < 2) continue;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  let best = null, bestD = Infinity;                       // edge whose midpoint is nearest a road
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    if (Math.hypot(bx - ax, bz - az) < 1.6) continue;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, d = distToLines(mx, mz, roadLines, 1e9);
+    if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; }
+  }
+  if (!best) continue;
+  const [ax, az, bx, bz] = best, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+  let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
+  let nx = -ez, nz = ex;                                    // outward normal (away from centroid)
+  if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+  const hw = 0.5, H = 2.1, base = terrainAt(mx, mz) - 0.1, cx = mx + nx * 0.07, cz = mz + nz * 0.07;
+  const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
+  const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
+  for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
+}
+if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
+
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
+const TREE_RADIUS = 100;   // cluster trees near the property, not sprawling to the patch edge
 const TREESJSON = path.join(ROOT, 'exports/trees.json');
 let trees, treeSrc;
 if (existsSync(TREESJSON)) {
@@ -322,9 +382,9 @@ if (existsSync(TREESJSON)) {
   // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
   // house readable instead of buried.
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
-    .filter(([x, z]) => inPatch(x, z) && !onBuilding(x, z))
+    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS)
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
-  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} on-patch)`;
+  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m)`;
 } else {
   trees = [];
   treeSrc = 'heuristic (no LiDAR/OSM trees)';
@@ -401,7 +461,9 @@ for (const m of doc.getRoot().listMaterials()) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {
-    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(facadeTex);
+    // KEEP each wall's per-building base colour (the SV colour set in three) and just
+    // multiply the window texture over it -> wall = SV colour x windows, in every viewer.
+    m.setBaseColorTexture(facadeTex);
     m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
   }
 }
