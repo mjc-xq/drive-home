@@ -112,7 +112,9 @@ const GRASS_A = new THREE.Color(0x5c8f3a), GRASS_B = new THREE.Color(0x76a64a);
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
     const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; idx.push(a, c, b, b, c, d);
   }
-  var terrainMesh = mkMesh(pos, idx, 0xffffff, 'Terrain_Grass', { colors: col, flat: true });
+  // flat green BASE colour, NO per-vertex COLOR_0 — viewers like Quick Look render
+  // displayColor/vertex over the base, which washed the lawn to white. Base-only = green everywhere.
+  var terrainMesh = mkMesh(pos, idx, new THREE.Color(0.42, 0.6, 0.29), 'Terrain_Grass', { flat: true });
 }
 
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Stylized';
@@ -310,22 +312,40 @@ if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
   buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB), hW, hRf));
-  scene.add(mkMesh(hW.pos, null, 0xffffff, 'House_walls', { colors: hW.col, rough: 0.9 }));
-  scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col, rough: 0.85 }));
+  // base colour = building's own SV colour, so it renders in every viewer (not just COLOR_0)
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85 }));
 }
 const bW = { pos: [], col: [] }, bRf = { pos: [], col: [] };
+const wallGroups = [], roofGroups = [];   // per-building [start, count, colour] -> material array
 let nBld = 0, nSkip = 0;
 S.buildings.forEach((b, ib) => {
   if (b.house) return;
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }
   const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
   buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b), bW, bRf));
+  wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
+  roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
   nBld++;
 });
+// per-building MATERIALS (base colour = the SV colour) via geometry groups, so the colour
+// renders in every viewer — no reliance on per-vertex COLOR_0 (Quick Look ignores it).
+function groupedMesh(buf, groups, name, rough) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
+  g.computeVertexNormals();
+  const mats = groups.map(([start, count, col], i) => {
+    g.addGroup(start, count, i);
+    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: rough, metalness: 0, name: `${name}_${i}` });
+    m.side = THREE.DoubleSide; return m;
+  });
+  const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
+}
 if (bW.pos.length) {
-  scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { colors: bW.col, rough: 0.9 }));
-  scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col, rough: 0.85 }));
+  scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', 0.9));
+  scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', 0.85));
 }
 const onBuilding = (x, z) => buildingPolys.some(r => inPoly(x, z, r));
 
@@ -351,7 +371,7 @@ for (const ring of buildingPolys) {
   const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
   for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
 }
-if (dwPos.length) scene.add(mkMesh(dwPos, null, 0xffffff, 'Doors', { colors: dwCol }));
+if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
 
 // ---- creek centreline (for the riparian tree band) -----------------------
 let creekW = null;
