@@ -234,8 +234,10 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   tiles.displayActiveTiles = true;                      // keep off-camera tiles for ground raycasts
   // Cap resident tile memory below the iOS Safari WebGL budget — driving dwells
   // at ground level pull many leaf tiles; defaults (~430/322 MB) can OOM mobile.
-  tiles.lruCache.minBytesSize = 120 * 1024 * 1024;
-  tiles.lruCache.maxBytesSize = 200 * 1024 * 1024;
+  // Desktop gets a bigger budget so the crisper (low-errorTarget) tiles stay
+  // resident instead of thrashing. Caller picks the numbers per platform.
+  tiles.lruCache.minBytesSize = (opts.lruMinMB ?? 120) * 1024 * 1024;
+  tiles.lruCache.maxBytesSize = (opts.lruMaxMB ?? 200) * 1024 * 1024;
 
   // ReorientationPlugin owns tiles.group's transform (anchors the lat/lon to
   // the origin), so the scene-space offset that aligns the photoreal ground to
