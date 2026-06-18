@@ -82,22 +82,18 @@ if (existsSync(DEMPATH)) {
     const a = h[j * cols + i], b = h[j * cols + i + 1], c = h[(j + 1) * cols + i], d = h[(j + 1) * cols + i + 1];
     return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
   };
-  // aerial baked as PER-VERTEX colours (exports/terrain_colors.json) — rides with
-  // the geometry, so it can't slide in a texture/UV/USDZ export. Sampled per cell
-  // at its true position, so it aligns with the buildings (also placed by position).
-  const TCP = path.join(ROOT, 'exports/terrain_colors.json');
-  const TC = existsSync(TCP) ? JSON.parse(readFileSync(TCP, 'utf8')).rgb : null;
-  const pos = [], col = [], idx = [];
+  // aerial as a sharp TEXTURE (UVs); the USDZ is generated + verified separately.
+  const pos = [], uv = [], idx = [];
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
     const k = j * cols + i;
     const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
     const [E, N] = ENU.toEN(lat, lon); pos.push(E, h[k], -N);
-    if (TC) col.push(TC[k * 3], TC[k * 3 + 1], TC[k * 3 + 2]); else col.push(0.54, 0.6, 0.36);
+    const w = aerialUVll(lat, lon); uv.push(w[0], w[1]);
   }
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
     const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; idx.push(a, c, b, b, c, d);
   }
-  terrainMesh = mkMesh(pos, idx, 0xffffff, 'Terrain', { colors: col });
+  terrainMesh = mkMesh(pos, idx, 0xffffff, 'Terrain', { uvs: uv });
 } else {
   throw new Error('exports/dem_1m.json missing — run: scripts/.venv/bin/python scripts/fetch_dem.py 400');
 }
@@ -348,15 +344,17 @@ const out = path.join(ROOT, 'exports', '1840-dahill-property.glb');
 const { NodeIO } = await import('@gltf-transform/core');
 const io = new NodeIO();
 const doc = await io.readBinary(new Uint8Array(glb));
-// Terrain aerial is now per-vertex colour (no texture/UV — can't slide in export).
-// Only the wall facade stays a tiled texture.
-const facadeP = path.join(ROOT, 'exports/facade.png');
+const aerialP = path.join(ROOT, 'src/assets/aerial_opt.jpg'), facadeP = path.join(ROOT, 'exports/facade.png');
+const aerialTex = existsSync(aerialP) ? doc.createTexture('aerial').setImage(new Uint8Array(readFileSync(aerialP))).setMimeType('image/jpeg') : null;
 const facadeTex = existsSync(facadeP) ? doc.createTexture('facade').setImage(new Uint8Array(readFileSync(facadeP))).setMimeType('image/png') : null;
-const REPEAT = 10497;
+const REPEAT = 10497, CLAMP = 33071;
 let textured = 0;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
-  if (facadeTex && /walls/i.test(n)) {
+  if (aerialTex && /terrain/i.test(n)) {
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
+  } else if (facadeTex && /walls/i.test(n)) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(facadeTex);
     m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
   }
