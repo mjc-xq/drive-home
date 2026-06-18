@@ -906,6 +906,7 @@ export function createEngine({ canvas, ui, emit }) {
   ctx._orient = ctx.im.state.orientation;
   ctx.traceMode = false;
   ctx.imScoop = true;   // gate: when true, scoop uses InputManager (legacy scoop pointer handlers stand down)
+  ctx.imDrive = true;   // gate: when true (and NOT traceMode), drive uses InputManager; traceMode falls back to the legacy draw-to-drive handlers
   ctx.camYawS = 0, ctx.scPitch = 0.34, ctx.bagWarned = false, ctx.spotless = false, ctx.nearCar = false;
   ctx.scoopMoveYaw = 0, ctx.scoopMoveActive = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
@@ -1247,9 +1248,21 @@ export function createEngine({ canvas, ui, emit }) {
     const s = ctx.im.state;
     if (s.orientation !== ctx._orient) setOrientation(s.orientation);
     if (ctx.mode === 'scoop' && ctx.imScoop) {
-      ctx.inp2.jx = s.moveX; ctx.inp2.jy = s.moveY;                       // camera-relative twin-stick → the tuned scoop move
+      ctx.inp2.jx = s.moveX; ctx.inp2.jy = -s.moveY;                       // camera-relative twin-stick → the tuned scoop move
       if (s.lookX || s.lookY) { ctx.camYawS -= s.lookX; ctx.scPitch = clamp(ctx.scPitch + s.lookY, -0.2, 1.2); ctx.lastLookT = performance.now(); }   // right-thumb drag → orbit the follow cam
       if (s.zoomDelta) ctx.szoom = clamp(ctx.szoom * Math.exp(-s.zoomDelta * 0.12), 0.5, 2.4);   // pinch/wheel → scoop zoom (multiplier, like czoom)
+    } else if (ctx.mode === 'drive' && ctx.imDrive && !ctx.traceMode) {
+      ctx.inp2.jx = s.moveX; ctx.inp2.jy = -s.moveY;                       // twin-stick: jx steer, jy throttle(up)/brake(down) → the tuned car physics
+      if (s.lookX || s.lookY) {                                          // right-thumb drag → orbit the PRESERVED heading-up drive cam (same signs the legacy look used)
+        ctx.camOrbit.yaw = clamp(ctx.camOrbit.yaw - s.lookX, -2.4, 2.4);
+        ctx.camOrbit.pitch = clamp(ctx.camOrbit.pitch + s.lookY, -0.45, 0.8);
+        ctx.camOrbit.t = performance.now(); ctx._orbitUserSet = true;     // user grabbed the cam → stop the cinematic sweep
+      }
+      if (s.zoomDelta) {                                                  // pinch/wheel → czoom. czoom is a MULTIPLIER (not metres): bridge the additive delta so the tuned boom range is kept.
+        const td = ctx.controls.driveTopDown();
+        ctx.czoom = clamp(ctx.czoom / Math.exp(s.zoomDelta * 0.12), td ? 0.14 : 0.4, td ? 7 : 3.4);
+        ctx.controls.emitDriveZoom();
+      }
     }
   }
   ctx.fn.setOrientation = setOrientation;

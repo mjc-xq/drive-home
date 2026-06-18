@@ -62,6 +62,7 @@ export default function App() {
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
   const [orientation, setOrientation] = useState(() => (typeof window !== 'undefined' && window.innerHeight > window.innerWidth) ? 'portrait' : 'landscape');
+  const [traceMode, setTraceMode] = useState(false);   // drive: opt-in draw-to-drive (legacy handlers); else the joystick steers
   useEffect(() => {
     const onR = () => setOrientation(window.innerHeight > window.innerWidth ? 'portrait' : 'landscape');
     window.addEventListener('resize', onR); window.addEventListener('orientationchange', onR);
@@ -111,6 +112,7 @@ export default function App() {
         case 'subline': setSubline(p); break;
         case 'follow': setFollowing(p); break;
         case 'shiftLock': setShiftLock(p); break;
+        case 'traceMode': setTraceMode(p); break;
         case 'scoopHud': setScoopHud(p); break;
         case 'avatar': setScoopChar(p.name); if (p.actions) setScoopActions(p.actions); break;
         case 'house': setHouse(p); break;
@@ -382,9 +384,9 @@ export default function App() {
                     <span className="miIcon nav"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z" />{sound ? <><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M19 5.5a9 9 0 0 1 0 13" /></> : <path d="m22 9-6 6M16 9l6 6" />}</svg></span>
                     <span className="miTxt"><b>Sound</b><i className={sound ? 'nav' : 'off'}>{sound ? 'On' : 'Off'}</i></span>
                   </button>
-                  <button className={'menuItem' + (traceDrive ? ' on' : '')} onClick={() => { eng().traceDrive(); }}>
+                  <button className={'menuItem' + (traceMode ? ' on' : '')} onClick={() => { eng().setTraceMode(!traceMode); eng().traceDrive(); }}>
                     <span className="miIcon jump"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 19l14-9M5 19l3-6 6-3" /></svg></span>
-                    <span className="miTxt"><b>Trace</b><i className={traceDrive ? 'jump' : 'off'}>{traceDrive ? 'On' : 'Off'}</i></span>
+                    <span className="miTxt"><b>Draw to drive</b><i className={traceMode ? 'jump' : 'off'}>{traceMode ? 'On' : 'Off'}</i></span>
                   </button>
                   <button className="menuItem" onClick={() => { setCars(eng().getCars()); setCarPicker(true); setMenuOpen(false); }}>
                     <span className="miIcon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11l1-5h12l1 5" /><rect x="3" y="11" width="18" height="6" /></svg></span>
@@ -625,10 +627,11 @@ export default function App() {
             <button id="jumpBtn" className="btn primary icon" aria-label="Jump" onClick={() => eng().jump()}>🦘</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
             <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · ☰ menu: characters, actions &amp; exit</div>
-            {eng() && eng().im && <MobileControls input={eng().im} orientation={orientation} buttons={false} />}
           </div>
         )}
         <div id="joy" ref={el => (uiRefs.current.joy = el)}><div id="knob" ref={el => (uiRefs.current.knob = el)} /></div>
+        {eng() && eng().im && (mode === 'scoop' || (mode === 'drive' && !traceMode)) &&
+          <MobileControls input={eng().im} orientation={orientation} buttons={false} />}
         <div id="toast" role="status" aria-live="polite" aria-atomic="true" className={toast.show ? 'show' : ''} dangerouslySetInnerHTML={{ __html: toast.html }} />
         {attribution && (
           <div id="credits" aria-label="Map data attribution">

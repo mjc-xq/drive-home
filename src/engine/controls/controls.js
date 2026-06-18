@@ -50,7 +50,7 @@ export function createControls(ctx) {
     ctx.canvas.classList.remove('dragging');
   }
   function onPointerDown(e) {
-    if (ctx.mode === 'scoop' && ctx.imScoop) return;   // scoop input is owned by the unified InputManager
+    if ((ctx.mode === 'scoop' && ctx.imScoop) || (ctx.mode === 'drive' && ctx.imDrive && !ctx.traceMode)) return;   // scoop input is owned by the unified InputManager
     if (ctx.mode !== 'explore') {
       ctx.canvas.setPointerCapture(e.pointerId);
       // Overhead views: ONE finger draws-to-drive; a SECOND finger is a pinch-zoom (the
@@ -113,7 +113,7 @@ export function createControls(ctx) {
     }
   }
   function onPointerMove(e) {
-    if (ctx.mode === 'scoop' && ctx.imScoop) return;   // scoop input owned by InputManager
+    if ((ctx.mode === 'scoop' && ctx.imScoop) || (ctx.mode === 'drive' && ctx.imDrive && !ctx.traceMode)) return;   // scoop input owned by InputManager
     if (ctx.mode !== 'explore') {
       if (e.pointerId === ctx.navPtr) { ctx.navCurX = e.clientX; ctx.navCurY = e.clientY; if (Math.hypot(e.clientX - ctx.navDownX, e.clientY - ctx.navDownY) > 12) ctx.navMoved = true; ctx.controls.setNavFromPointer(e.clientX, e.clientY); return; }   // draw-to-drive
       if (e.pointerId === ctx.movePtr) {
@@ -175,7 +175,7 @@ export function createControls(ctx) {
     }
   }
   function onPointerEnd(e) {
-    if (ctx.mode === 'scoop' && ctx.imScoop) return;   // scoop input owned by InputManager
+    if ((ctx.mode === 'scoop' && ctx.imScoop) || (ctx.mode === 'drive' && ctx.imDrive && !ctx.traceMode)) return;   // scoop input owned by InputManager
     if (e.pointerId === ctx.navPtr) {
       ctx.navPtr = null;
       // A TAP (no drag) on a road point → route there ALONG the roads and auto-drive, not a
@@ -190,7 +190,7 @@ export function createControls(ctx) {
     if (!ctx.ptrs.size) ctx.canvas.classList.remove('dragging');
   }
   function onWheel(e) {
-    if (ctx.mode === 'scoop' && ctx.imScoop) return;   // scoop zoom owned by InputManager
+    if ((ctx.mode === 'scoop' && ctx.imScoop) || (ctx.mode === 'drive' && ctx.imDrive && !ctx.traceMode)) return;   // scoop zoom owned by InputManager
     e.preventDefault();
     if (ctx.mode === 'explore') ctx.ctl.gr = clamp(ctx.ctl.gr * Math.exp(e.deltaY * ctx.ZOOM_RATE), 14, 640);
     else if (ctx.mode === 'drive') { ctx.czoom = clamp(ctx.czoom * Math.exp(e.deltaY * ctx.ZOOM_RATE), ctx.controls.driveTopDown() ? 0.14 : 0.4, ctx.controls.driveTopDown() ? 7 : 3.4); ctx.controls.emitDriveZoom(); }
