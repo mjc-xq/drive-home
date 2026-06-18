@@ -29,9 +29,6 @@ export function createTileClip(ctx) {
   function updateTileClip(carX, carY, carZ, view) {
     const cutaway = ctx.p3dtiles && ctx.p3dtiles.cutaway;
     if (!cutaway) return;
-    // Aerial is a high map/locator view; cutaway artifacts are more noticeable than blockers.
-    // The car is already enlarged with an overhead marker there, so leave the photoreal world intact.
-    if (view && view.aerial) { clearTileClip(); return; }
     eye.copy(ctx.camera.position);
 
     // --- padded oriented car box, projected only to derive a rounded screen window ---
@@ -68,12 +65,14 @@ export function createTileClip(ctx) {
     }
     if (!visibleCorners) { clearTileClip(); return; }
 
+    const aerial = !!(view && view.aerial);
     const topdown = !!(view && view.topdown);
     const close = !!(view && !view.drone && !view.topdown && !view.aerial);
+    const aerialWide = aerial && (ctx.czoom || 1) > 2.2;
     const shortSide = Math.min(w, h);
-    const margin = topdown ? 32 : close ? 138 : 104;
-    const minR = topdown ? 54 : close ? 128 : 108;
-    const maxR = shortSide * (topdown ? 0.18 : close ? 0.42 : 0.34);
+    const margin = topdown ? 24 : aerial ? (aerialWide ? 18 : 34) : close ? 162 : 112;
+    const minR = topdown ? 48 : aerial ? (aerialWide ? 42 : 58) : close ? 138 : 112;
+    const maxR = shortSide * (topdown ? 0.16 : aerial ? (aerialWide ? 0.11 : 0.18) : close ? 0.46 : 0.34);
     const rxp = Math.min(maxR, Math.max(minR, (maxX - minX) * 0.5 + margin));
     const ryp = Math.min(maxR, Math.max(minR, (maxY - minY) * 0.5 + margin));
 
@@ -81,15 +80,16 @@ export function createTileClip(ctx) {
     cutaway.target.value.set(carX, carY + 1.05 * s, carZ);
     cutaway.baseY.value = carY + 0.55;
     cutaway.screen.value.set(cx, cy, rxp, ryp);
-    cutaway.minOpacity.value = close ? 0.14 : topdown ? 0.28 : 0.18;
-    cutaway.flatMinOpacity.value = close ? 0.86 : topdown ? 0.62 : 0.84;
-    cutaway.depthPad.value = topdown ? 0.15 : 0.35;
-    cutaway.groundPad.value = topdown ? 0.15 : 0.28;
-    cutaway.minHeight.value = topdown ? 0.95 : close ? 0.75 : 0.9;
-    // Top-down gets an extra world-space column so only blockers almost directly above the car
-    // are ghosted. Aerial is oblique, so a column projects as a visible strip; keep it screen-based.
-    cutaway.columnRadius.value = topdown ? Math.max(4.5, 2.0 * s) : 0;
-    cutaway.columnSoftness.value = topdown ? 2.2 : 1.0;
+    cutaway.minOpacity.value = close ? 0.06 : topdown ? 0.2 : aerial ? (aerialWide ? 0.36 : 0.18) : 0.14;
+    cutaway.flatMinOpacity.value = close ? 0.9 : topdown ? 0.76 : aerial ? 0.88 : 0.86;
+    cutaway.flatFadeHeight.value = close ? 2.4 : topdown ? 2.9 : aerial ? 3.8 : 2.8;
+    cutaway.depthPad.value = topdown || aerial ? 0.12 : 0.28;
+    cutaway.groundPad.value = topdown || aerial ? 0.12 : 0.2;
+    cutaway.minHeight.value = topdown ? 1.05 : aerial ? 1.25 : close ? 0.55 : 0.75;
+    // Overhead views get an extra world-space column so the cut only follows blockers
+    // almost directly over the car, instead of clearing a broad screen-shaped patch.
+    cutaway.columnRadius.value = topdown ? Math.max(4.0, 1.55 * s) : aerial ? Math.max(aerialWide ? 4.5 : 7.0, (aerialWide ? 0.9 : 1.45) * s) : 0;
+    cutaway.columnSoftness.value = topdown ? 1.8 : aerial ? 3.0 : 1.0;
   }
 
   return { updateTileClip, clearTileClip };
