@@ -228,13 +228,46 @@ function ribbon(lineW, width, lift, posArr, idxArr) {
     row++;
   }
 }
+// Good-looking roads: dark asphalt + raised light curbs both sides + dashed yellow
+// centre line (matches the reference). Separate named layers so each is editable.
+const ROADW = 7, cuPos = [], cuIdx = [], dPos = [];
+const offsetLine = (lw, d) => lw.map((p, k) => {
+  const a = lw[Math.max(0, k - 1)], b = lw[Math.min(lw.length - 1, k + 1)];
+  let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+  return [p[0] - dz * d, p[1] + dx * d];          // offset along the left normal (-dz, dx)
+});
+function centreDashes(lw, halfW, lift) {            // 3 m dash / 3.5 m gap, 0.28 m wide
+  const ON = 3.0, OFF = 3.5; let draw = true, acc = 0;
+  for (let k = 1; k < lw.length; k++) {
+    const a = lw[k - 1], b = lw[k]; let dx = b[0] - a[0], dz = b[1] - a[1];
+    const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
+    let t = 0;
+    while (t < seg - 1e-6) {
+      const len = Math.min((draw ? ON : OFF) - acc, seg - t);
+      if (draw) {
+        const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
+        const y0 = terrainAt(x0, z0) + lift, y1 = terrainAt(x1, z1) + lift;
+        dPos.push(x0 + nx * halfW, y0, z0 + nz * halfW, x0 - nx * halfW, y0, z0 - nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW,
+                  x0 + nx * halfW, y0, z0 + nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW, x1 + nx * halfW, y1, z1 + nz * halfW);
+      }
+      t += len; acc += len;
+      if (acc >= (draw ? ON : OFF) - 1e-6) { draw = !draw; acc = 0; }
+    }
+  }
+}
 for (const r of S.roads || []) {
   const pl = (r.p || r); if (!Array.isArray(pl)) continue;
   const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (lw.length < 2) continue;
-  roadLines.push(lw); ribbon(lw, 7, 0.04, rPos, rIdx);
+  roadLines.push(lw);
+  ribbon(lw, ROADW, 0.04, rPos, rIdx);                                   // asphalt
+  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.17, cuPos, cuIdx);     // left curb
+  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.17, cuPos, cuIdx);  // right curb
+  centreDashes(lw, 0.14, 0.06);                                          // dashed centre line
 }
-if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x555555, 'Roads'));
+if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
+if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
+if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
 // creek ribbon
 let creekW = null;
@@ -284,8 +317,14 @@ function distToLines(x, z, lines, max) {
 const TREESJSON = path.join(ROOT, 'exports/trees.json');
 let trees, treeSrc;
 if (existsSync(TREESJSON)) {
-  trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees;   // [x, z, canopyR, height]
-  treeSrc = 'LiDAR canopy 2021 (real)';
+  // Keep only trees that sit ON the terrain patch and OFF buildings, and clamp the noisy
+  // LiDAR canopy size/height (raw heights ran to 35 m towers; ~94 points fell beyond the
+  // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
+  // house readable instead of buried.
+  trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
+    .filter(([x, z]) => inPatch(x, z) && !onBuilding(x, z))
+    .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
+  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} on-patch)`;
 } else {
   trees = [];
   treeSrc = 'heuristic (no LiDAR/OSM trees)';
