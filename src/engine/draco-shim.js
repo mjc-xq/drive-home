@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 // Main-thread Draco decode, mirroring the official r128 worker logic.
 // The Claude-app artifact webview blocks Workers, WASM and eval, so the stock
@@ -71,3 +72,18 @@ export const DracoShim = {
     });
   }
 };
+
+// Make EVERY GLTFLoader Draco-capable by default, so any Draco-compressed GLB decodes
+// without wiring setDRACOLoader at each call site (loadParkedCar, the interior, animals,
+// dad/mom, … all use a bare `new GLTFLoader()`). The constructor sets this.dracoLoader = null
+// on the instance, so a plain prototype value would be shadowed — instead a prototype
+// accessor returns the shared shim whenever no decoder was explicitly set, and still honours
+// an explicit setDRACOLoader() (e.g. the tiles plugin's own loader). Idempotent; the import of
+// this module (via car.js → engine) runs before any loader is constructed.
+if (!Object.getOwnPropertyDescriptor(GLTFLoader.prototype, 'dracoLoader')?.get) {
+  Object.defineProperty(GLTFLoader.prototype, 'dracoLoader', {
+    configurable: true,
+    get() { return this._dracoLoader || DracoShim; },
+    set(v) { this._dracoLoader = v; },
+  });
+}
