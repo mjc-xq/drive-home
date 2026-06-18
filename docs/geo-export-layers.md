@@ -218,6 +218,14 @@ together with no offset — verified by rendering the property + photoreal in on
 scene (`exports/both_view.png`): generated buildings coincide with the photoreal
 shells, lot lines wrap the right parcels, trees land on the real canopy.
 
+**Building look:** roofs are a **solid shingle** colour (draping the nadir aerial on
+*pitched* roofs stretches/darkens and never lines up — so it's dropped). Walls use a
+tiled window facade **tinted per-building by a Street View colour guess**
+(`fetch_building_colors.py` → `buildings_color.json`: nearest pano, shot at the
+building, robust median of the facade band with sky/veg/ground rejected). Heights are
+from LiDAR. So the clean buildings read as real-coloured massing that coincides with
+the photoreal — not aerial-on-boxes.
+
 **Beyond this pipeline:** bespoke per-facade detail sharper than the photoreal needs
 **Street View** projection or hand-modelling in the engine — that's authoring work,
 not data extraction. The photoreal is the best automatic ground-level facade source.
