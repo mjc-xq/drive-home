@@ -516,7 +516,6 @@ export function createDrive(ctx) {
     const dispTarget = (_camV.aerial ? 4.4 : _camV.topdown ? 2.9 : 1.3) * _zoomGrow;
     ctx.car.dispScale = ctx.car.dispScale == null ? dispTarget : ctx.car.dispScale + (dispTarget - ctx.car.dispScale) * (1 - Math.exp(-dt * 6));
     ctx.car.group.scale.setScalar(ctx.car.dispScale);
-    ctx.carXray.update(ctx.car, _camV, dt);
     const overhead = _camV.aerial || _camV.topdown;
     // On arrival, briefly ease the camera's look-ahead to 0 so the car frames DEAD-CENTRE
     // (the constant look-ahead otherwise leaves it offset toward the bottom even when stopped).

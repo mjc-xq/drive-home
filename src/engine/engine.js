@@ -14,7 +14,6 @@ import { createCar, loadRealCar, loadParkedCar, loadDrivableCar, loadCarProto, c
 import { installDracoDecoder } from './draco-install.js';
 import { createAudio } from './audio.js';
 import { createGround } from './occlusion/ground-height.js';
-import { createCarXray } from './occlusion/car-xray.js';
 import { createTileClip } from './occlusion/tile-clip.js';
 import { createPrefetch } from './occlusion/prefetch.js';
 import { createGeo } from './nav/geo.js';
@@ -656,7 +655,6 @@ export function createEngine({ canvas, ui, emit }) {
     const photoOn = ctx.fn.photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
     if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = ctx.fn.photoModes(ctx.mode);
     if (ctx.mode !== 'drive' && ctx.tileClip) ctx.tileClip.clearTileClip();   // Drive-only visibility window; never leak into Explore/Scoop
-    if (ctx.mode !== 'drive' && ctx.carXray) ctx.carXray.hide();
     ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     ctx.carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
     if (ctx.ring) ctx.ring.visible = ctx.mode === 'explore';   // marker only makes sense from the air
@@ -777,7 +775,6 @@ export function createEngine({ canvas, ui, emit }) {
 
   ctx.disposed = false;
   ctx.car = createCar(ctx.scene);
-  ctx.carXray = createCarXray(ctx.scene);
   ctx.car.group.scale.setScalar(1.1);   // the player car renders ~10% bigger
   ctx.cancelCarLoad = null;
   // LAZY vehicle roster: each slot's GLB is only fetched when that car is actually driven (the
@@ -1057,7 +1054,6 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.trafficSys.hideTraffic();
     ctx.carLocator.visible = false;
     ctx.car.group.visible = false;
-    ctx.carXray.hide();
     if (ctx.groundPatch) ctx.groundPatch.visible = false;
     for (const s of ctx.labelSprites) s.visible = true;
     ctx.inp2.jx = ctx.inp2.jy = ctx.inp2.kx = ctx.inp2.ky = 0;

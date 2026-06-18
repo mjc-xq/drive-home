@@ -34,6 +34,7 @@ uniform vec4 dahillCutawayScreen;
 uniform float dahillCutawayBaseY;
 uniform float dahillCutawayMinOpacity;
 uniform float dahillCutawayFlatMinOpacity;
+uniform float dahillCutawayFlatFadeHeight;
 uniform float dahillCutawayDepthPad;
 uniform float dahillCutawayGroundPad;
 uniform float dahillCutawayMinHeight;
@@ -94,7 +95,13 @@ void dahillApplyCutaway() {
   if (fade <= 0.0) return;
   float upness = abs(normalize(vDahillCutawayWorldNormal).y);
   float flatness = smoothstep(0.72, 0.9, upness);
-  float floor = mix(dahillCutawayMinOpacity, dahillCutawayFlatMinOpacity, flatness);
+  float elevatedFlat = smoothstep(
+    dahillCutawayMinHeight + 0.35,
+    dahillCutawayMinHeight + max(0.36, dahillCutawayFlatFadeHeight),
+    heightAboveBase
+  );
+  float flatFloor = mix(dahillCutawayFlatMinOpacity, dahillCutawayMinOpacity, elevatedFlat);
+  float floor = mix(dahillCutawayMinOpacity, flatFloor, flatness);
   float keep = mix(1.0, floor, fade);
   if (dahillBayer4(gl_FragCoord.xy) > keep) discard;
 }
@@ -108,6 +115,7 @@ function installTileCutawayDither(material, cutaway) {
     shader.uniforms.dahillCutawayBaseY = cutaway.baseY;
     shader.uniforms.dahillCutawayMinOpacity = cutaway.minOpacity;
     shader.uniforms.dahillCutawayFlatMinOpacity = cutaway.flatMinOpacity;
+    shader.uniforms.dahillCutawayFlatFadeHeight = cutaway.flatFadeHeight;
     shader.uniforms.dahillCutawayDepthPad = cutaway.depthPad;
     shader.uniforms.dahillCutawayGroundPad = cutaway.groundPad;
     shader.uniforms.dahillCutawayMinHeight = cutaway.minHeight;
@@ -120,7 +128,7 @@ function installTileCutawayDither(material, cutaway) {
       .replace('#include <common>', `#include <common>\n${CUTAWAY_FRAGMENT_PARS}`)
       .replace('#include <alphatest_fragment>', 'dahillApplyCutaway();\n#include <alphatest_fragment>');
   };
-  material.customProgramCacheKey = () => 'dahill-tile-screen-cutaway-v2';
+  material.customProgramCacheKey = () => 'dahill-tile-screen-cutaway-v3';
 }
 
 export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
@@ -162,6 +170,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
     baseY: { value: 0 },
     minOpacity: { value: 0.18 },
     flatMinOpacity: { value: 0.8 },
+    flatFadeHeight: { value: 2.8 },
     depthPad: { value: 0.35 },
     groundPad: { value: 0.28 },
     minHeight: { value: 0.9 },
