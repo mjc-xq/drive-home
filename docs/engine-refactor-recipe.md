@@ -1,4 +1,4 @@
-# Engine decomposition — extraction recipe (in progress)
+# Engine decomposition — extraction recipe (COMPLETE: 4569 -> 1560 lines, 18 modules)
 
 The 4569-line `src/engine/engine.js` god-closure is being split into small modules under
 `src/engine/{core,nav,drive,scoop,house,crowd,camera,controls,occlusion,follow}/`.
