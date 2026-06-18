@@ -538,6 +538,7 @@ if (existsSync(TREESJSON)) {
   // house readable instead of buried.
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
     .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS
+      && !inMine(x, z)                                                         // owner's yard stays clear (too many trees)
       && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5))   // keep the front door clear
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
   treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m)`;
@@ -590,8 +591,10 @@ if (existsSync(PARCELSJSON)) {
     else { ribbon(closed, 0.5, 0.12, lPos, lIdx); }
     nParcels++;
   }
-  if (lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
-  if (yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
+  // property lines HIDDEN by default (set SHOW_LOTLINES=true to bring them back)
+  const SHOW_LOTLINES = false;
+  if (SHOW_LOTLINES && lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
+  if (SHOW_LOTLINES && yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
 }
 
 // ---- export GLB, then embed photo textures via gltf-transform -------------

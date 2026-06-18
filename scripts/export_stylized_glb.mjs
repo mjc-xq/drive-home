@@ -595,8 +595,10 @@ if (PARCELS.length) {
     if (p.mine) { ribbonPart(closed, 1.1, 0.22, yPos, yIdx); nMine++; }
     else ribbonPart(closed, 0.5, 0.12, lPos, lIdx);
   }
-  if (lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
-  if (yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
+  // property lines HIDDEN by default (set SHOW_LOTLINES=true to bring them back)
+  const SHOW_LOTLINES = false;
+  if (SHOW_LOTLINES && lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
+  if (SHOW_LOTLINES && yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
 }
 
 // ---- export the base GLB (terrain/roads/houses/grass + animation) --------
@@ -724,7 +726,8 @@ mainScene.addChild(treesParent);
 // the E-W edge into mid-air.
 const TREE_RADIUS = 150;   // wider tree band (still inside the terrain bounds)
 const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5 && Math.hypot(x, z) <= TREE_RADIUS
-  && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5);   // keep the front door clear
+  && !inMine(x, z)                                                        // owner's yard stays clear (too many trees)
+  && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5);  // keep the front door clear
 const treeSpots = [];
 if (creekW) for (let k = 1; k < creekW.length; k++) {
   const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
