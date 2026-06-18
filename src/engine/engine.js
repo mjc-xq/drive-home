@@ -31,6 +31,7 @@ import { createCam } from './camera/cameras.js';
 import { createScoop } from './scoop/scoop.js';
 import { createDrive } from './drive/drive.js';
 import { createControls } from './controls/controls.js';
+import { InputManager } from '../controls/InputManager.js';   // unified Roblox-style input (staged); bridged into ctx.inp2 per mode
 import { createNav } from './nav/nav.js';
 import aerialUrl from '../assets/aerial_opt.jpg';
 import carGlbUrl from '../assets/ferrari.glb';
@@ -174,12 +175,7 @@ export function createEngine({ canvas, ui, emit }) {
   // can still wander off, so nearestRoadPoint/resetToRoad search this wider graph instead.
   ctx.allRoadSegs = [];
   for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) ctx.allRoadSegs.push([W(r.p[k]), W(r.p[k + 1])]);
-  // geo <-> world, anchored at 1840 Dahill Lane. CURVATURE-CORRECT local ENU (East/North metres) so
-  // routes / jumps / the road-snap line up with the real photoreal-tile roads even far from home —
-  // the old flat-tangent version drifted ~d²/2R from the (curved-earth) tiles (~a lane at 5 km,
-  // ~30 m at 20 km). Identical to the flat math within a millimetre near home, so nothing local
-  // changes. Axis convention unchanged: world x = East, world z = -North, centred on C.
-  // geo <-> world (ENU anchored at 1840 Dahill Lane) — see nav/geo.js
+  // geo <-> world (home-anchored ENU near the house, global/invertible for navigation) — see nav/geo.js
   ctx.geo = createGeo();   // ctx.geo.{geoToWorld, worldToGeo}
   ctx.DEST = null;        // { x, z, label }
   ctx.soundOn = (() => { try { return localStorage.getItem('dahill.sound') !== '0'; } catch (e) { return true; } })();   // master sound on by default
@@ -191,6 +187,7 @@ export function createEngine({ canvas, ui, emit }) {
   // Soft-wall / gravity-well that keeps the car on the street: past LANE_HALF metres off the
   // nearest road it gets pulled back, ramping in softly and clamped to WALL_MAX m/s so it never
   // overpowers a deliberate drive (and fades as the player steers).
+  ctx.HOME_ROAD_RADIUS = 380;   // local procedural road graph coverage around the starting house
   ctx.LANE_HALF = 4.2, ctx.WALL_GAIN = 3.5, ctx.WALL_MAX = 9.0;
   ctx.offRoadT = 0;       // seconds the car has been stranded off the road (drives the auto-recover snap-back)
   ctx.recoverCooldown = 0;   // grace after a reset so the auto-recover can't immediately re-fire (no ping-pong → no "hidden car")
@@ -658,7 +655,7 @@ export function createEngine({ canvas, ui, emit }) {
   function applyModeVisuals() {
     const photoOn = ctx.fn.photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
     if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = ctx.fn.photoModes(ctx.mode);
-    if (ctx.p3dtiles && ctx.p3dtiles.clipPlanes && ctx.mode !== 'drive') ctx.p3dtiles.clipPlanes.length = 0;   // R8 cutaway is Drive-only; never slice the Explore high-orbit / Scoop
+    if (ctx.mode !== 'drive' && ctx.tileClip) ctx.tileClip.clearTileClip();   // Drive-only visibility window; never leak into Explore/Scoop
     ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
     ctx.carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
     if (ctx.ring) ctx.ring.visible = ctx.mode === 'explore';   // marker only makes sense from the air
@@ -902,6 +899,13 @@ export function createEngine({ canvas, ui, emit }) {
   ctx.LOOK_YAW_PER_SCREEN = 2.8, ctx.LOOK_PITCH_PER_SCREEN = 2.4, ctx.ZOOM_RATE = 0.0011, ctx.MOVE_DEADZONE = 0.10;   // screen-normalized free-look
   ctx.JOY_R = 66, ctx.JOY_MAX = 52;
   ctx.inp2 = { jx: 0, jy: 0, kx: 0, ky: 0, steer: 0, gas: 0, brake: 0, navActive: false, navX: 0, navZ: 0, hbrake: false, boost: false };
+  // Unified input: ONE InputManager owns ONE InputState; pumpInput() bridges it into ctx.inp2 + the
+  // tuned cameras each frame (see pumpInput). Drive keeps its own tuned cam/handlers (untouched for now);
+  // scoop's input source is swapped here. traceMode = the opt-in "draw to drive" alternate (default off).
+  ctx.im = new InputManager(ctx.canvas, { keyboard: false, wheel: true });   // keyboard stays on the legacy handler (tank-turn/Shift-lock/E/Space) for ALL modes; InputManager owns TOUCH + wheel
+  ctx._orient = ctx.im.state.orientation;
+  ctx.traceMode = false;
+  ctx.imScoop = true;   // gate: when true, scoop uses InputManager (legacy scoop pointer handlers stand down)
   ctx.camYawS = 0, ctx.scPitch = 0.34, ctx.bagWarned = false, ctx.spotless = false, ctx.nearCar = false;
   ctx.scoopMoveYaw = 0, ctx.scoopMoveActive = false;
   // Experimental "draw to drive": in the Top-down view, a drag projects the finger
@@ -1046,33 +1050,14 @@ export function createEngine({ canvas, ui, emit }) {
   function resetToRoad() {
     if (ctx.mode !== 'drive') return;
     if (ctx.followMode) ctx.follow.stopFollow();   // FIX·ROAD must OWN the snap — else the follow spring drags the car right back, so the button looks dead
-    // Build the candidate segment list: the live Google route (real roads, works
-    // even far from home) if we have one, else EVERY mapped road (any type) near the
-    // neighbourhood — the old residential/tertiary-only filter missed the road the
-    // car was actually on, so it teleported you somewhere random.
-    let bx = ctx.car.x, bz = ctx.car.z, bd = Infinity, dirX = 0, dirZ = 1, found = false;
-    const consider = (ax, az, bx2, bz2) => {
-      const vx = bx2 - ax, vz = bz2 - az, len2 = vx * vx + vz * vz || 1;
-      let t = ((ctx.car.x - ax) * vx + (ctx.car.z - az) * vz) / len2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const px = ax + vx * t, pz = az + vz * t;
-      const d = (px - ctx.car.x) * (px - ctx.car.x) + (pz - ctx.car.z) * (pz - ctx.car.z);
-      if (d < bd) { bd = d; bx = px; bz = pz; const L = Math.sqrt(len2); dirX = vx / L; dirZ = vz / L; found = true; }
-    };
-    const far = Math.hypot(ctx.car.x, ctx.car.z) > 320;
-    if (ctx.ROUTE && ctx.ROUTE.length > 1) {
-      for (let i = 0; i < ctx.ROUTE.length - 1; i++) consider(ctx.ROUTE[i].x, ctx.ROUTE[i].z, ctx.ROUTE[i + 1].x, ctx.ROUTE[i + 1].z);
-    } else if (far) {
-      // far from home: snap ONLY to the fetched OSM (Google-map) road network — NEVER the hood graph,
-      // which would teleport the car all the way back to the neighbourhood (the reported bug).
-      for (const s of ctx.osmRoadSegs) consider(s[0][0], s[0][1], s[1][0], s[1][1]);
-    } else {
-      for (const r of S.roads) for (let k = 0; k < r.p.length - 1; k++) { const a = W(r.p[k]), b = W(r.p[k + 1]); consider(a[0], a[1], b[0], b[1]); }
-    }
-    // Far from home with only sparse OSM coverage: if the nearest fetched road is still a long way off
-    // (≥120 m), don't fling the car all the way onto it — force a fresh fetch and leave it put (below).
-    const usedOSM = far && !(ctx.ROUTE && ctx.ROUTE.length > 1);
-    if (found && usedOSM && bd > 250 * 250) found = false;   // snap to a road within 250 m; only force a refetch if the nearest known road is genuinely far (stale/sparse OSM)
-    if (!found) {
+    const far = !ctx.roads.nearestRoadLocation(ctx.car.x, ctx.car.z, { includeRoute: false, includeOsm: false, includeHome: true, maxDistance: ctx.HOME_ROAD_RADIUS || 380 });
+    // Use the same road-graph projection as drive assist/follow: route first, then the live
+    // OSM graph around the current car, and only the home graph while actually near home.
+    let snap = ctx.roads.nearestRoadLocation(ctx.car.x, ctx.car.z, {
+      includeHome: !far,
+      maxDistance: far && !(ctx.ROUTE && ctx.ROUTE.length > 1) ? 250 : Infinity,
+    });
+    if (!snap) {
       if (far) {
         // No local road data yet (the OSM fetch hasn't landed). Force a fetch now and LEAVE THE CAR PUT
         // rather than flinging it home; the next tap snaps onto the real nearest road once it arrives.
@@ -1080,12 +1065,10 @@ export function createEngine({ canvas, ui, emit }) {
         ctx.toast('Finding the nearest road… try again in a sec 🛰️', 1600);
         return;
       }
-      // Near home: nearestRoadPoint consults the ROUTE + every mapped road, so it returns SOMETHING.
-      const p = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
-      bx = p.x; bz = p.z; found = true;
-      dirX = Math.sin(ctx.car.yaw); dirZ = Math.cos(ctx.car.yaw);   // no segment tangent on this path — keep the car's current facing rather than snapping it to due-south
+      snap = ctx.roads.nearestRoadLocation(ctx.car.x, ctx.car.z, { includeHome: true });
+      if (!snap) return;
     }
-    ctx.car.x = bx; ctx.car.z = bz; ctx.car.speed = 0; ctx.car.steer = 0; ctx.car.vlat = 0; ctx.car.revArmT = 0; ctx.car.groundY = null; ctx.car.yaw = Math.atan2(dirX, dirZ);
+    ctx.car.x = snap.x; ctx.car.z = snap.z; ctx.car.speed = 0; ctx.car.steer = 0; ctx.car.vlat = 0; ctx.car.revArmT = 0; ctx.car.groundY = null; ctx.car.yaw = Math.atan2(snap.tx, snap.tz);
     ctx.nav.clearRouteRail();   // if auto-drive is still on, reacquire rail arc from the snapped road point
     ctx.camInit = false; ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.inp2.navActive = false; ctx.recoverCooldown = 1.8;   // re-seat the chase/orbit cam at the new spot; grace so auto-recover can't immediately re-fire
     ctx.audio.blip && ctx.audio.blip();
@@ -1255,9 +1238,25 @@ export function createEngine({ canvas, ui, emit }) {
     const s = ctx._attrTarget.filter(a => a && a.type === 'string').map(a => a.value).filter(Boolean).join(' · ');
     if (s !== ctx._attrStr) { ctx._attrStr = s; ctx.emit('attribution', s); }
   }
+  function setOrientation(o) { ctx._orient = o; if (ctx.im) ctx.im.setOrientation(o); }
+  // Bridge the unified InputState into the engine's tuned consumers, ONE mapping per mode (no
+  // duplicated movement logic). Drive is untouched for now (keeps its legacy handlers); scoop's
+  // input source is swapped to the InputManager here.
+  function pumpInput(dt) {
+    ctx.im.update(dt);
+    const s = ctx.im.state;
+    if (s.orientation !== ctx._orient) setOrientation(s.orientation);
+    if (ctx.mode === 'scoop' && ctx.imScoop) {
+      ctx.inp2.jx = s.moveX; ctx.inp2.jy = s.moveY;                       // camera-relative twin-stick → the tuned scoop move
+      if (s.lookX || s.lookY) { ctx.camYawS -= s.lookX; ctx.scPitch = clamp(ctx.scPitch + s.lookY, -0.2, 1.2); ctx.lastLookT = performance.now(); }   // right-thumb drag → orbit the follow cam
+      if (s.zoomDelta) ctx.szoom = clamp(ctx.szoom * Math.exp(-s.zoomDelta * 0.12), 0.5, 2.4);   // pinch/wheel → scoop zoom (multiplier, like czoom)
+    }
+  }
+  ctx.fn.setOrientation = setOrientation;
   function loop(now) {
     if (ctx.disposed || ctx.paused || ctx.ctxLost) return;
     const rawDt = Math.min(0.05, (now - ctx.prev) / 1000); ctx.prev = now;
+    pumpInput(rawDt);   // unified input → ctx.inp2 + cameras (uses real-time dt so look/zoom aren't slow-mo'd)
     if (ctx.slowmoHold > 0) { ctx.slowmoHold -= rawDt; }              // hold the arrival slow-mo before recovering
     else ctx.timeScale += (1 - ctx.timeScale) * Math.min(1, rawDt * 4.5);   // recover from slow-mo back to real time
     const dt = rawDt * ctx.timeScale;
@@ -1392,6 +1391,7 @@ export function createEngine({ canvas, ui, emit }) {
     removeEventListener('focusout', onFocusOut);
     removeEventListener('blur', _clearKbd);
     ctx.follow.stopFollow();
+    if (ctx.im) ctx.im.dispose();
     if (window.visualViewport) {
       visualViewport.removeEventListener('resize', requestResize);
       visualViewport.removeEventListener('scroll', requestResize);
@@ -1427,6 +1427,8 @@ export function createEngine({ canvas, ui, emit }) {
 
   const api = {
     enterDrive: ctx.fn.enterDrive, exitDrive: ctx.fn.exitDrive, enterScoop: ctx.fn.enterScoop, exitScoop: ctx.fn.exitScoop,
+    im: ctx.im,                                                // the unified InputManager (MobileControls reads .joystick + .requestJump)
+    setTraceMode: (on) => { ctx.traceMode = !!on; ctx.emit('traceMode', ctx.traceMode); },   // opt-in 'draw to drive' alternate input (drive)
     toggleShiftLock: () => { ctx.shiftLock = !ctx.shiftLock; ctx.emit('shiftLock', ctx.shiftLock); },
     // hop: only from the ground; a keyboard Space also jumps (wired in onKeyDown)
     jump: () => { if (ctx.mode === 'scoop' && ctx.CHAR.airY <= 0 && ctx.CHAR.vy === 0) { ctx.CHAR.vy = 8.5; if (ctx.audio.blip) ctx.audio.blip(); } },
@@ -1515,7 +1517,7 @@ export function createEngine({ canvas, ui, emit }) {
   // tiny debug handle for headless verification + on-phone debugging
   window.__dahill = {
     api,
-    scoop: () => ({ scene: ctx.scoopScene, ready: !!ctx.interior, avatar: ctx.CHAR.avatar, entry: ctx.entryPt && ctx.entryPt.map(v => +v.toFixed(1)), char: [+ctx.CHAR.x.toFixed(1), +ctx.CHAR.z.toFixed(1)], dDoor: ctx.entryPt ? +Math.hypot(ctx.CHAR.x - ctx.entryPt[0], ctx.CHAR.z - ctx.entryPt[1]).toFixed(1) : null, occ: ctx.interior ? ctx.interior.occluders.length : 0, hiddenOcc: ctx.interior ? ctx.interior.occluders.filter(o => !o.visible).length : 0 }),
+    scoop: () => ({ scene: ctx.scoopScene, ready: !!ctx.interior, avatar: ctx.CHAR.avatar, entry: ctx.entryPt && ctx.entryPt.map(v => +v.toFixed(1)), char: [+ctx.CHAR.x.toFixed(1), +ctx.CHAR.z.toFixed(1)], dDoor: ctx.entryPt ? +Math.hypot(ctx.CHAR.x - ctx.entryPt[0], ctx.CHAR.z - ctx.entryPt[1]).toFixed(1) : null, occ: ctx.interior ? ctx.interior.occluders.length : 0, hiddenOcc: ctx.scoop && ctx.scoop.seeThrough ? ctx.scoop.seeThrough.occludedCount() : 0 }),
     crowd: () => ({ on: ctx.roadLifeOn, cece: !!ctx.ceceCrowd, drew: !!ctx.drewCrowd, spots: ctx.crowdSpots.map(s => ({ zone: s.zone, x: Math.round(s.rec.x), z: Math.round(s.rec.z), vis: s.rec.grp.visible, road: !!s.onRoadHt, scale: +s.rec.grp.scale.x.toFixed(2), y: +s.rec.grp.position.y.toFixed(1), dCar: Math.round(Math.hypot(s.rec.x - ctx.car.x, s.rec.z - ctx.car.z)) })) }),
     traffic: () => ({ on: ctx.roadLifeOn, total: ctx.traffic.length, visible: ctx.traffic.filter(c => c.group.visible).length, cars: ctx.traffic.map(c => ({ x: Math.round(c.x || 0), z: Math.round(c.z || 0), vis: c.group.visible, speed: c.speed })) }),
     p3dt: ctx.P3DT,                       // mutate {yOffset,xOffset,zOffset,spin} then call nudge()
