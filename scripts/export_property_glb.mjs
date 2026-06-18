@@ -34,7 +34,10 @@ const { makeGeoENU } = await import('../src/engine/coords.js');
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf8'));
-const C = S.center, A = S.aerial;                          // house centroid (flat ENU), aerial bounds
+const C = S.center;                                        // house centroid (flat ENU)
+let A = S.aerial;                                          // aerial bounds (flat ENU)
+const GAERIAL = path.join(ROOT, 'exports/google_aerial.json');
+if (existsSync(GAERIAL)) A = JSON.parse(readFileSync(GAERIAL, 'utf8'));   // prefer Google satellite
 // Curvature-correct ENU, identical to the frame the app's Google photoreal tiles
 // use (coords.js makeGeoENU), origin = house lat/lon. Replaces the old flat approx
 // (0.4%-low latitude constant) that drifted metres from Google with distance.
@@ -344,7 +347,9 @@ const out = path.join(ROOT, 'exports', '1840-dahill-property.glb');
 const { NodeIO } = await import('@gltf-transform/core');
 const io = new NodeIO();
 const doc = await io.readBinary(new Uint8Array(glb));
-const aerialP = path.join(ROOT, 'src/assets/aerial_opt.jpg'), facadeP = path.join(ROOT, 'exports/facade.png');
+const gAerialJpg = path.join(ROOT, 'exports/google_aerial.jpg');
+const aerialP = existsSync(gAerialJpg) ? gAerialJpg : path.join(ROOT, 'src/assets/aerial_opt.jpg');
+const facadeP = path.join(ROOT, 'exports/facade.png');
 const aerialTex = existsSync(aerialP) ? doc.createTexture('aerial').setImage(new Uint8Array(readFileSync(aerialP))).setMimeType('image/jpeg') : null;
 const facadeTex = existsSync(facadeP) ? doc.createTexture('facade').setImage(new Uint8Array(readFileSync(facadeP))).setMimeType('image/png') : null;
 const REPEAT = 10497, CLAMP = 33071;
