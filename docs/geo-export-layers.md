@@ -237,3 +237,41 @@ Uses the curvature-correct ENU horizontal + **orthometric elevation as Y** (matc
 the property DEM); the ~5 m earth-curvature drop at 8 km is intentionally omitted so
 the regional ground stays a clean datum. Camera far-clip must exceed the model size
 (`render_property.py` sets `clip_end = max(2000, span*5)`).
+
+## 8. Aerial-alignment bugs that cost days (read before touching `export_property_glb.mjs`)
+Two stacked bugs made the satellite texture look "metres off" / "creek through a
+parking lot," and each masked the other. Both are now fixed; do not reintroduce them.
+
+1. **Texture N-S flip.** glTF's texture origin is `v=0` at the TOP of the image. The
+   Google mosaic (`fetch_aerial_google.py`) is stored **north-up** (row 0 = north), so
+   north must map to **`v=0`**: `v = (Nt - n)/(Nt - Nb)`. The old formula used a
+   `mercY`-based V that put north at `v=1` → the ground rendered upside-down. (The
+   retired Mapbox photo was stored *south-up*, so the wrong formula looked fine until
+   the Google swap exposed it.)
+2. **Geometry/texture in different frames.** Geometry was placed with `makeGeoENU`
+   (curvature ENU, only needed to match the now-dropped Google **photoreal** tiles)
+   while the aerial UVs were flat → the two drifted metres apart, growing with
+   distance. **Fix: use flat ENU end-to-end** — terrain, buildings, creek, roads AND
+   aerial UVs all in the same flat ENU as the verified 2-D overlay
+   (`world = [e - C[0], -(n - C[1])]`, `u=(e-E0)/(E1-E0)`, `v=(Nt-n)/(Nt-Nb)`). The
+   3-D top-down render then equals the 2-D footprint-on-mosaic overlay by construction.
+
+**Verification that actually catches these:** render GLB→USDZ via `usdrecord` (Quick
+Look's engine); render terrain-only and full at the SAME ortho camera and blend 50% →
+every building must cover its roof and the blue creek must lie in the vegetated
+channel; landmark sides (apartment rows, large gray roof) must match fresh Google
+Static Maps (a flip swaps them N↔S). Residual building scatter (~1-3 m, both
+directions) is cadastral-footprint-vs-roof-overhang, not a frame error.
+
+The OSM creek centerline is crude (10-20 m off in places); `export_property_glb.mjs`
+snaps each vertex 60% toward the lowest bare-earth DEM within ±12 m perpendicular to
+flow so the ribbon sits in the real channel.
+
+## 9. Stylized (no-photo) variant + trees
+`export_stylized_glb.mjs` builds `1840-dahill-stylized.glb`: flat-green grass on the
+DEM (no photo textures), asphalt roads + concrete sidewalks/curbs, buildings
+flat-coloured from Street View, and **in-file animated grass** (per-clump glTF node
+animation, phase-offset by position). Trees for BOTH variants come from
+`Downloads/Trees.glb` (NormalTree_1..5) + `Acacia.glb`, instanced by `place_trees.py`
+as **individual `Tree_NNNN` objects** (one node per LiDAR-canopy position) so each is
+deletable in Blender — never merge them into one mesh.
