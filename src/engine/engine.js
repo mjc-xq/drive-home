@@ -852,11 +852,18 @@ export function createEngine({ canvas, ui, emit }) {
   ctx._halfExt = 0.5 * (Math.abs(ctx.entryU[0]) * (ctx.house.bbox[1] - ctx.house.bbox[0]) + Math.abs(ctx.entryU[1]) * (ctx.house.bbox[3] - ctx.house.bbox[2]));
   ctx.entryPt = [ctx.house.c[0] + ctx.entryU[0] * (ctx._halfExt + 1.6), ctx.house.c[1] + ctx.entryU[1] * (ctx._halfExt + 1.6)];
 
-  if (!ctx.flags.has('nointerior')) {
+  // LAZY interior: the house scan + its swapped-in furniture (couchy.usdz 13.8 MB, the three critter
+  // cages, …) total ~34 MB and are ONLY ever seen INSIDE the house in Scoop. Boot starts in explore→drive,
+  // so fetching all of it up front just starves the network for the Google 3D tiles that Drive actually
+  // shows (terrible on slow links). Defer the whole load until the player first enters Scoop; loaded once,
+  // fail-soft. (The `nointerior` flag still skips it entirely.)
+  ctx.ensureInterior = () => {
+    if (ctx.interior || ctx._interiorLoading || ctx.flags.has('nointerior')) return;
+    ctx._interiorLoading = true;
     ctx.modelLoadCancels.push(createInterior(ctx.scene, { cx: ctx.INT_CX, cz: ctx.INT_CZ, floorY: ctx.INT_FLOOR },
       mod => { ctx.interior = mod; ctx.interior.group.visible = ctx.scoopScene === 'interior'; ctx.crowd.placeInteriorDancers(); ctx.emit('house', { inside: ctx.scoopScene === 'interior', ready: true }); },
-      () => { /* fail-soft: the door pad just stays inert */ }));
-  }
+      () => { ctx._interiorLoading = false; /* fail-soft: the door pad just stays inert */ }));
+  };
 
   // ---- House NPCs: a small behaviour FSM (dad, mom) ------------------------------------------
   // They WANDER room to room — collision-checked (interior.collide, so no walking through walls /
@@ -931,6 +938,7 @@ export function createEngine({ canvas, ui, emit }) {
 
 
   function enterScoop() {
+    ctx.ensureInterior();   // kick off the ~34 MB house-interior load now (deferred from boot) so it's ready by the time the player walks to the door
     ctx.fn.setMode('scoop'); ctx.camInit = false; ctx.szoom = 1; ctx.camGroundRef = null; ctx.CHAR.groundY = null;   // fresh framing per scoop entry (pinch-zoom shouldn't leak in)
     ctx.houseSys.setInside(false);
     for (const s of ctx.labelSprites) s.visible = false;
