@@ -483,10 +483,11 @@ function distToLines(x, z, lines, max) {
   return best;
 }
 
-// ---- Doors: a simple door on each building's street-facing wall ----------
+// ---- Doors (+ the owner's driveway) --------------------------------------
 const dwPos = [], dwCol = [], DOORCOL = [0.26, 0.18, 0.12];
-for (const ring of buildingPolys) {
-  if (ring.length < 2) continue;
+let houseDoor = null, houseGarage = null;       // for the driveway, tree clear-zone, front fence
+buildingPolys.forEach((ring, bi) => {
+  if (ring.length < 2) return;
   const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   let best = null, bestD = Infinity;                       // edge whose midpoint is nearest a road
   for (let i = 0; i < ring.length; i++) {
@@ -495,17 +496,35 @@ for (const ring of buildingPolys) {
     const mx = (ax + bx) / 2, mz = (az + bz) / 2, d = distToLines(mx, mz, roadLines, 1e9);
     if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; }
   }
-  if (!best) continue;
-  const [ax, az, bx, bz] = best, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+  if (!best) return;
+  const [ax, az, bx, bz] = best;
   let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
   let nx = -ez, nz = ex;                                    // outward normal (away from centroid)
-  if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
-  const hw = 0.5, H = 2.1, base = terrainAt(mx, mz) - 0.1, cx = mx + nx * 0.07, cz = mz + nz * 0.07;
+  const m0x = (ax + bx) / 2, m0z = (az + bz) / 2;
+  if ((m0x - cen[0]) * nx + (m0z - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+  // The HOUSE garage is the road/NE (higher-X) end of its front wall, so put the door
+  // on the SW (lower-X) half, not the middle of the garage.
+  let t = 0.5;
+  if (bi === 0) t = (ax > bx) ? 0.72 : 0.28;
+  const dcx = ax + (bx - ax) * t, dcz = az + (bz - az) * t;
+  const hw = 0.5, H = 2.1, base = terrainAt(dcx, dcz) - 0.1, cx = dcx + nx * 0.07, cz = dcz + nz * 0.07;
   const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
   const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
   for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
-}
+  if (bi === 0) { houseDoor = [dcx, dcz]; houseGarage = (ax > bx) ? [ax, az] : [bx, bz]; }
+});
 if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
+
+// Driveway: house garage (road/NE corner) -> nearest road point, light concrete ribbon.
+if (houseGarage) {
+  let bp = null, bd = Infinity;
+  for (const lw of roadLines) for (const [x, z] of lw) { const d = Math.hypot(x - houseGarage[0], z - houseGarage[1]); if (d < bd) { bd = d; bp = [x, z]; } }
+  if (bp && bd < 70) {
+    const dvPos = [], dvIdx = [];
+    ribbon([houseGarage, [(houseGarage[0] + bp[0]) / 2, (houseGarage[1] + bp[1]) / 2], bp], 3.6, 0.05, dvPos, dvIdx);
+    if (dvIdx.length) scene.add(mkMesh(dvPos, dvIdx, 0x8f8c86, 'Driveway'));
+  }
+}
 
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
@@ -518,7 +537,8 @@ if (existsSync(TREESJSON)) {
   // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
   // house readable instead of buried.
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
-    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS)
+    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS
+      && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5))   // keep the front door clear
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
   treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m)`;
 } else {
