@@ -190,10 +190,13 @@ if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
   buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB, houseIdx), hW, hRf));
-  scene.add(mkMesh(hW.pos, null, 0xffffff, 'House_walls', { uvs: hW.uv, colors: hW.col }));
-  scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col }));
+  // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
+  // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', {}));
 }
 const bW = { pos: [], uv: [], col: [] }, bRf = { pos: [], col: [] };
+const wallGroups = [], roofGroups = [];   // per-building [start, count, colour] -> material array
 // Keep the OWNER'S two lots clear of any generated building except the house —
 // the back lot stays empty for a manually-placed shed. Parcel rings from parcels.json.
 const pip = (x, z, r) => { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, zi] = r[i], [xj, zj] = r[j]; if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) c = !c; } return c; };
@@ -206,16 +209,33 @@ S.buildings.forEach((b, ib) => {
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }     // never put others' buildings on the owner's lots
   const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
   buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b, ib), bW, bRf));
+  wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
+  roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
   nBld++;
 });
 // gap-fill LiDAR buildings DISABLED — they produced false structures (incl. one in
 // the back yard) and crossed property lines. The photoreal layer covers genuinely
 // missing buildings; the clean model stays trustworthy instead.
 const nFill = 0;
+// Per-building MATERIALS (base colour = the building's SV/satellite colour) via geometry
+// groups, one Buildings mesh each — colour renders in every viewer (no reliance on COLOR_0).
+function groupedMesh(buf, groups, name, withUV) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
+  if (withUV) g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uv, 2));
+  g.computeVertexNormals();
+  const mats = groups.map(([start, count, col], i) => {
+    g.addGroup(start, count, i);
+    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    m.side = THREE.DoubleSide; return m;
+  });
+  const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
+}
 if (bW.pos.length) {
-  scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { uvs: bW.uv, colors: bW.col }));
-  scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col }));
+  scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', true));
+  scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', false));
 }
 
 // roads (context) + collect world polylines for tree spacing
@@ -349,7 +369,7 @@ for (const ring of buildingPolys) {
   const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
   for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
 }
-if (dwPos.length) scene.add(mkMesh(dwPos, null, 0xffffff, 'Doors', { colors: dwCol }));
+if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
 
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
@@ -441,7 +461,9 @@ for (const m of doc.getRoot().listMaterials()) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {
-    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(facadeTex);
+    // KEEP each wall's per-building base colour (the SV colour set in three) and just
+    // multiply the window texture over it -> wall = SV colour x windows, in every viewer.
+    m.setBaseColorTexture(facadeTex);
     m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
   }
 }
