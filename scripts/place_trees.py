@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""Instance the real tree models (Downloads/Trees.glb NormalTree_1..5 + Acacia.glb)
-at the positions in exports/trees_placed.json, each as a SEPARATE, individually
+"""Instance INDIVIDUAL single-tree models from the clean library
+(exports/tree_lib/tree_NN.glb, built by scripts/build_tree_lib.py) at the
+positions in exports/trees_placed.json, each as a SEPARATE, individually
 deletable object (Tree_0001, Tree_0002, ...), on top of the property GLB.
+
+Why a library instead of the raw Trees.glb/Acacia.glb: the investigation
+(scripts/_investigate_trees.py + _investigate_acacia.py, see
+exports/tree_lib/_investigation.json) confirmed every source mesh is ONE single
+tree - Trees.glb holds 5 normal trees, Acacia.glb holds 1 large umbrella acacia
+(its 23 m span is the natural crown, a single ~2 m trunk column, not a clump).
+The library normalises each into its own file with the trunk base at the origin,
+so here we import each library tree once and link-duplicate it per placement.
 
 Output: exports/1840-dahill-property-trees.glb  (open in Blender; delete any tree).
 
@@ -12,8 +21,8 @@ import bpy, os, json, math, random
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROP = os.path.join(ROOT, "exports/1840-dahill-property.glb")
 OUT = os.path.join(ROOT, "exports/1840-dahill-property-trees.glb")
-TREES_GLB = "/Users/mcohen/Downloads/Trees.glb"
-ACACIA_GLB = "/Users/mcohen/Downloads/Acacia.glb"
+LIB = os.path.join(ROOT, "exports/tree_lib")
+MANIFEST = json.load(open(os.path.join(LIB, "manifest.json")))
 PLACED = json.load(open(os.path.join(ROOT, "exports/trees_placed.json")))["trees"]
 rng = random.Random(1840)
 
@@ -37,20 +46,28 @@ def bake_upright(objs):
     return meshes
 
 
+def load_template(entry):
+    """Import one library tree; return its (single) upright mesh, tagged feature."""
+    meshes = bake_upright(import_glb(os.path.join(LIB, entry["file"])))
+    m = meshes[0]
+    m.name = f"_tmpl_{entry['file'].replace('.glb', '')}"
+    m["feature"] = entry["feature"]
+    m.hide_set(True)
+    return m
+
+
 bpy.ops.wm.read_factory_settings(use_empty=True)
 import_glb(PROP)                                   # property scene (no trees)
-templates = bake_upright(import_glb(TREES_GLB)) + bake_upright(import_glb(ACACIA_GLB))
-for t in templates:                                # park templates off-scene; deleted after instancing
-    t.hide_set(True)
+templates = [load_template(e) for e in MANIFEST["trees"]]
 
-# After import + transform bake the trees stand in world +Z (Blender convention).
-# Print dims to confirm Z is the height before instancing.
+# After import + bake each library tree stands in world +Z (Blender convention)
+# with its trunk base at z~0. Print dims to confirm Z is the height.
 for t in templates:
     d = t.dimensions
-    print(f"[place] template {t.name!r} dims=({d.x:.1f},{d.y:.1f},{d.z:.1f})")
+    print(f"[place] template {t.name!r} dims=({d.x:.1f},{d.y:.1f},{d.z:.1f}) feature={t['feature']}")
 
-normals = [o for o in templates if o.name.startswith("NormalTree")]
-acacia = [o for o in templates if o.name.startswith("Acacia")]
+normals = [o for o in templates if not o["feature"]]
+features = [o for o in templates if o["feature"]]
 
 
 def zext(o):
@@ -70,8 +87,8 @@ def zmin(o):
 coll = bpy.context.scene.collection
 made = 0
 for t in PLACED:
-    big = t["canopyR"] >= 4.0 and acacia and rng.random() < 0.10   # occasional feature tree
-    src = rng.choice(acacia if big else normals)
+    big = t["canopyR"] >= 4.0 and features and rng.random() < 0.10   # occasional feature tree
+    src = rng.choice(features if big else normals)
     inst = src.copy()                              # linked dup: separate OBJECT, shared mesh data
     coll.objects.link(inst)
     inst.hide_set(False)
@@ -83,7 +100,7 @@ for t in PLACED:
     nw = xyext(src) or 1.0
     target = t["height"] * (1.1 if big else 1.0)
     wcap = 16.0 if big else 11.0                   # cap canopy width so no 40 m monster trees
-    s = max(0.2, min(target / nh, wcap / nw))
+    s = max(0.2, min(target / nh, wcap / nw)) * rng.uniform(0.92, 1.12)  # natural size variety
     inst.scale = (s, s, s)
     # world pos: glTF (x, base, z) -> Blender (x, -z, base); seat trunk base on terrain
     inst.location = (t["x"], -t["z"], t["base"] - zmin(src) * s)
@@ -93,4 +110,5 @@ for t in templates:                                # remove unused template orig
     bpy.data.objects.remove(t, do_unlink=True)
 
 bpy.ops.export_scene.gltf(filepath=OUT, export_format='GLB', use_visible=False)
-print(f"[place] instanced {made} trees -> {OUT} ({os.path.getsize(OUT)//1024} KB)")
+print(f"[place] instanced {made} trees from {len(templates)}-tree library -> {OUT} "
+      f"({os.path.getsize(OUT) // 1024} KB)")
