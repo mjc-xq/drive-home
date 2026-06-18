@@ -275,3 +275,24 @@ animation, phase-offset by position). Trees for BOTH variants come from
 `Downloads/Trees.glb` (NormalTree_1..5) + `Acacia.glb`, instanced by `place_trees.py`
 as **individual `Tree_NNNN` objects** (one node per LiDAR-canopy position) so each is
 deletable in Blender — never merge them into one mesh.
+
+## 10. Fences (post-step, both variants)
+`place_fences.py` tiles three fence GLBs from `Downloads/` along the owner's parcel
+lines (`parcels.json` lots 50/113, world `p.ring` coords), seated on the DEM terrain,
+mirroring `place_trees.py` — each tiled section is a separate, deletable object
+(`FenceGreen_/FencePink_/FenceRed_/FenceBlack_NNNN`) under a `Fences` empty:
+* **GREEN** `Fence Section.glb` — the two long side boundaries (road→creek).
+* **PINK** `Picket fence.glb` — the shared edge between the two owner lots.
+* **RED** `Fence.glb` — the back lot boundary nearest the creek.
+* **BLACK** `Picket fence.glb` — short front-yard run off the house's road corners.
+
+It runs as a POST-step over the SAME output file so fences land in BOTH models:
+* PHOTO: `…export_property_glb.mjs → place_trees.py → place_fences.py` (default arg
+  `exports/1840-dahill-property-trees.glb`).
+* STYLIZED: `…export_stylized_glb.mjs → place_fences.py -- exports/1840-dahill-stylized.glb`.
+
+Picket runs (PINK/BLACK) divide each segment into a whole number of equal panels so
+they terminate exactly at corners; GREEN/RED tile whole panels plus a fractional stub.
+The `Fence.glb` template runs along native Y, so it is rotated −90° about Z (baked into
+mesh data) to share the common +X length convention. Colours stay in each GLB's own
+material base colour (Quick Look/usdrecord ignore `COLOR_0`).

@@ -26,6 +26,9 @@
 // scene.json polygons are already e/n, so w2(e,n) = [e-C[0], -(n-C[1])].
 //
 // Run:  node scripts/export_stylized_glb.mjs
+// Full STYLIZED pipeline (fences must land in the final file):
+//   node scripts/export_stylized_glb.mjs
+//   blender --background --python scripts/place_fences.py -- exports/1840-dahill-stylized.glb
 import { readFileSync, mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -37,6 +40,8 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
     readAsDataURL(b) { b.arrayBuffer().then(x => { this.result = `data:${b.type || 'application/octet-stream'};base64,${Buffer.from(x).toString('base64')}`; this.onloadend && this.onloadend(); }); }
   };
 }
+
+import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, fanDisc, ringAnnulus, trimEndInward } from './road_prep.mjs';
 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
@@ -178,20 +183,22 @@ function ribbonPart(lineW, width, lift, posArr, idxArr) {
     if (k > 0) { const a = off - 2, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
   }
 }
-// Offset ribbon a fixed distance to one side of the centreline (for sidewalks).
-function offsetRibbon(lineW, sideOff, width, lift, posArr, idxArr) {
-  ribbonPart(offsetLine(lineW, sideOff), width, lift, posArr, idxArr);
-}
-// Offset a polyline a fixed distance along its LEFT normal (-dz, dx). Ported from
-// the photo model so the curbs/sidewalks track the road both sides.
+// Offset a polyline a fixed distance along its LEFT normal (-dz, dx), with a mitre
+// clamp so curbs/sidewalks don't pinch / self-cross on sharp corners.
 const offsetLine = (lw, d) => lw.map((p, k) => {
   const a = lw[Math.max(0, k - 1)], b = lw[Math.min(lw.length - 1, k + 1)];
+  let ax = p[0] - a[0], az = p[1] - a[1], bx = b[0] - p[0], bz = b[1] - p[1];
+  const la = Math.hypot(ax, az) || 1, lb = Math.hypot(bx, bz) || 1;
+  ax /= la; az /= la; bx /= lb; bz /= lb;
   let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-  return [p[0] - dz * d, p[1] + dx * d];
+  const cosHalf = Math.sqrt(Math.max(0, (1 + (ax * bx + az * bz)) / 2));
+  const m = d / Math.max(0.35, cosHalf);
+  return [p[0] - dz * m, p[1] + dx * m];
 });
 // Dashed YELLOW centre line: 3 m dash / 3.5 m gap, ~0.28 m wide, just above the
-// asphalt. Each dash is two ground-following triangles. Ported from the photo model.
-function centreDashes(lw, halfW, lift, dPos) {
+// asphalt. Each dash is two ground-following triangles. skip() drops dashes that
+// fall inside a junction / cul-de-sac bulb.
+function centreDashes(lw, halfW, lift, dPos, skip) {
   const ON = 3.0, OFF = 3.5; let draw = true, acc = 0;
   for (let k = 1; k < lw.length; k++) {
     const a = lw[k - 1], b = lw[k]; let dx = b[0] - a[0], dz = b[1] - a[1];
@@ -199,7 +206,8 @@ function centreDashes(lw, halfW, lift, dPos) {
     let t = 0;
     while (t < seg - 1e-6) {
       const len = Math.min((draw ? ON : OFF) - acc, seg - t);
-      if (draw) {
+      const mx = a[0] + dx * (t + len / 2), mz = a[1] + dz * (t + len / 2);
+      if (draw && !(skip && skip(mx, mz))) {
         const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
         const y0 = terrainAt(x0, z0) + lift, y1 = terrainAt(x1, z1) + lift;
         dPos.push(x0 + nx * halfW, y0, z0 + nz * halfW, x0 - nx * halfW, y0, z0 - nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW,
@@ -210,30 +218,133 @@ function centreDashes(lw, halfW, lift, dPos) {
     }
   }
 }
+// Curb/sidewalk ribbon that skips quads whose centreline sample is within R_TRIM of
+// a junction (no curb/sidewalk across an intersection). Takes an ALREADY-offset line.
+function skipRibbon(lineW, width, lift, posArr, idxArr, skip) {
+  const dense = [lineW[0]];
+  for (let k = 1; k < lineW.length; k++) {
+    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(seg / 2.5));
+    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
+  }
+  lineW = dense;
+  const hw = width / 2; let prev = null;
+  for (let k = 0; k < lineW.length; k++) {
+    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
+    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
+    if (skip && skip(x, z)) { prev = null; continue; }
+    const off = posArr.length / 3;
+    posArr.push(lx, terrainAt(lx, lz) + lift, lz, rx, terrainAt(rx, rz) + lift, rz);
+    if (prev !== null) { const a = prev, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
+    prev = off;
+  }
+}
 
 const rPos = [], rIdx = [];                 // asphalt
 const swPos = [], swIdx = [];               // concrete sidewalks
 const cbPos = [], cbIdx = [];               // raised light curbs
 const dPos = [];                            // dashed yellow centre line
+// Roads must reach the patch edge but NOT hang past it into the void: the terrain
+// mesh only covers the DEM patch, and terrainAt clamps beyond it, so any ribbon
+// vertex past the patch floats. Clip roads to the patch (cropHalf, ~4 m inside the
+// ±200 m terrain) so they run edge-to-edge while every vertex stays on real ground.
+const ROAD_HALF = cropHalf;
+
+// shared junction / dead-end vertex map (same logic + data as the photo model)
+const vertHit = buildVertHit(S.roads || [], w2);
+// bulbs / end-caps / junction pads only where they fully sit on terrain (use the
+// real patch bounds with a margin, not the symmetric ROAD_HALF box, so no disc
+// edge spills past the terrain into the void)
+const inHalf = (x, z) => inTerrain(x, z, 14);
+const isCourt = r => r.k === 'residential' || /court|ct\b|cul/i.test(r.n || '');
+const R_TRIM_FOR = w => w / 2 + 0.5;
+const junctionPts = [], junctionWidth = new Map(), junctionMaxRank = new Map();
 for (const r of S.roads || []) {
   const pl = r.p || r; if (!Array.isArray(pl)) continue;
-  const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
-  if (lw.length < 2) continue;
-  roadLines.push(lw);
-  const roadW = r.w || 7;
-  // asphalt raised ~0.3 m above grade so DEM crowns / cul-de-sac bumps don't poke through
-  ribbonPart(lw, roadW, 0.28, rPos, rIdx);
-  // raised light curbs (lip ABOVE the asphalt) flank every street
-  offsetRibbon(lw, roadW / 2 + 0.3, 0.55, 0.44, cbPos, cbIdx);
-  offsetRibbon(lw, -(roadW / 2 + 0.3), 0.55, 0.44, cbPos, cbIdx);
-  // dashed yellow centre line just above the asphalt
-  centreDashes(lw, 0.14, 0.34, dPos);
-  // sidewalks flank residential/tertiary streets (skip narrow service lanes)
-  if (r.k !== 'service') {
-    const swDist = roadW / 2 + 1.6, swW = 1.5;
-    offsetRibbon(lw, swDist, swW, 0.30, swPos, swIdx);
-    offsetRibbon(lw, -swDist, swW, 0.30, swPos, swIdx);
+  const sp = roadSpec(r), rk = roadRank(r);
+  for (const [e, n] of pl) {
+    const [x, z] = w2(e, n), k = vkey(x, z);
+    if ((vertHit.get(k) || 0) >= 2) {
+      if (!junctionPts.some(p => p[0] === x && p[1] === z)) junctionPts.push([x, z]);
+      junctionWidth.set(k, Math.max(junctionWidth.get(k) || 0, sp.width));
+      junctionMaxRank.set(k, Math.max(junctionMaxRank.get(k) || 0, rk));
+    }
   }
+}
+// cul-de-sac bulb centres (computed first so dashes/curbs can avoid them)
+const bulbs = [];
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl) || !isCourt(r)) continue;
+  const spec = roadSpec(r);
+  for (const end of [0, 1]) {
+    const i = end ? pl.length - 1 : 0, j = end ? pl.length - 2 : 1;
+    if (j < 0 || j >= pl.length) continue;
+    const tip = w2(...pl[i]), prev = w2(...pl[j]);
+    if (!inHalf(tip[0], tip[1])) continue;
+    if ((vertHit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;
+    let tx = tip[0] - prev[0], tz = tip[1] - prev[1]; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
+    const R = Math.max(6, Math.min(12, spec.width * 1.6));
+    bulbs.push({ cx: tip[0] + tx * (R - spec.width / 2), cz: tip[1] + tz * (R - spec.width / 2), R });
+  }
+}
+const skipNearJunction = (x, z) => junctionPts.some(([px, pz]) => {
+  const w = junctionWidth.get(vkey(px, pz)) || 7; const r = R_TRIM_FOR(w);
+  const dx = x - px, dz = z - pz; return dx * dx + dz * dz < r * r;
+}) || bulbs.some(({ cx, cz, R }) => { const dx = x - cx, dz = z - cz; return dx * dx + dz * dz < R * R; });
+
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl)) continue;
+  const lwRaw = pl.map(([e, n]) => w2(e, n));
+  const spec = roadSpec(r), rk = roadRank(r);
+  for (let piece of clipPolylineToBox(lwRaw, ROAD_HALF)) {
+    for (const which of ['first', 'last']) {
+      const tip = which === 'first' ? piece[0] : piece[piece.length - 1];
+      const k = vkey(tip[0], tip[1]);
+      if ((vertHit.get(k) || 0) >= 2 && (junctionMaxRank.get(k) || 0) > rk) {
+        trimEndInward(piece, which, R_TRIM_FOR(junctionWidth.get(k) || spec.width));
+      }
+    }
+    piece = smoothLine(piece);
+    if (piece.length < 2) continue;
+    roadLines.push(piece);
+    ribbonPart(piece, spec.width, 0.28, rPos, rIdx);                                     // asphalt
+    skipRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, 0.44, cbPos, cbIdx, skipNearJunction);
+    skipRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, 0.44, cbPos, cbIdx, skipNearJunction);
+    if (spec.lanes >= 2) centreDashes(piece, 0.14, 0.34, dPos, skipNearJunction);
+    if (!spec.isService) {                          // sidewalks flank residential/tertiary
+      const swDist = spec.width / 2 + 1.6, swW = 1.5;
+      skipRibbon(offsetLine(piece, swDist), swW, 0.30, swPos, swIdx, skipNearJunction);
+      skipRibbon(offsetLine(piece, -swDist), swW, 0.30, swPos, swIdx, skipNearJunction);
+    }
+  }
+}
+// cul-de-sac bulbs (court) + service end-caps + junction blend pads
+const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + 0.28, z); return o; };
+const emitCurb = (x, z) => { const o = cbPos.length / 3; cbPos.push(x, terrainAt(x, z) + 0.44, z); return o; };
+for (const { cx, cz, R } of bulbs) {
+  fanDisc(cx, cz, R, 24, emitAsphalt, rIdx);
+  ringAnnulus(cx, cz, R, R + 0.3, 24, emitCurb, cbIdx);
+}
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl) || isCourt(r)) continue;
+  const spec = roadSpec(r);
+  for (const end of [0, 1]) {
+    const i = end ? pl.length - 1 : 0, j = end ? pl.length - 2 : 1;
+    if (j < 0 || j >= pl.length) continue;
+    const tip = w2(...pl[i]);
+    if (!inHalf(tip[0], tip[1])) continue;
+    if ((vertHit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;
+    fanDisc(tip[0], tip[1], spec.width / 2, 12, emitAsphalt, rIdx);   // service rounded end
+  }
+}
+// junction blend pads: a small asphalt fillet (radius = half the widest road, so it
+// just fills the corner, never a big black coin over rooftops) centred on each
+// real junction vertex that sits on terrain.
+for (const [px, pz] of junctionPts) {
+  if (!inHalf(px, pz)) continue;
+  const w = junctionWidth.get(vkey(px, pz)) || 7;
+  fanDisc(px, pz, w / 2 + 0.4, 20, emitAsphalt, rIdx);
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads', { rough: 0.98 }));       // dark asphalt
 if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { rough: 0.95 })); // light concrete
@@ -598,7 +709,7 @@ mainScene.addChild(treesParent);
 // avoiding buildings + roads. Every spot must be STRICTLY inside the real terrain
 // bounds (inTerrain), not just the symmetric ±cropHalf box, so no tree falls past
 // the E-W edge into mid-air.
-const TREE_RADIUS = 100;   // cluster trees around the property, not out to the patch edge
+const TREE_RADIUS = 150;   // wider tree band (still inside the terrain bounds)
 const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5 && Math.hypot(x, z) <= TREE_RADIUS;
 const treeSpots = [];
 if (creekW) for (let k = 1; k < creekW.length; k++) {

@@ -16,6 +16,10 @@
 // Blender's glTF importer converts Y-up -> Z-up on import.
 //
 // Run:  node scripts/export_property_glb.mjs
+// Full PHOTO pipeline (fences must land in the final file):
+//   node scripts/export_property_glb.mjs
+//   blender --background --python scripts/place_trees.py   # -> 1840-dahill-property-trees.glb
+//   blender --background --python scripts/place_fences.py  # rewrites that same file
 import { readFileSync, mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -27,6 +31,8 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
     readAsDataURL(b) { b.arrayBuffer().then(x => { this.result = `data:${b.type || 'application/octet-stream'};base64,${Buffer.from(x).toString('base64')}`; this.onloadend && this.onloadend(); }); }
   };
 }
+
+import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, fanDisc, ringAnnulus, trimEndInward } from './road_prep.mjs';
 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
@@ -264,13 +270,28 @@ function ribbon(lineW, width, lift, posArr, idxArr) {
 }
 // Good-looking roads: dark asphalt + raised light curbs both sides + dashed yellow
 // centre line (matches the reference). Separate named layers so each is editable.
-const ROADW = 7, cuPos = [], cuIdx = [], dPos = [];
+// Width/lanes per class (roadSpec); roads clipped to ROAD_HALF (> terrain) so they
+// run off the patch edge; centrelines smoothed (Catmull-Rom) for real curves; courts
+// get turnaround bulbs and junctions get one clean asphalt pad (see road_prep.mjs).
+// Roads must reach the patch edge but NOT hang past it into the void: the terrain
+// mesh only covers the DEM patch, and terrainAt clamps beyond it, so any ribbon
+// vertex past the patch floats. Clip roads to the patch (cropHalf, ~4 m inside the
+// ±200 m terrain) so they run edge-to-edge while every vertex stays on real ground.
+const ROAD_HALF = cropHalf;
+const cuPos = [], cuIdx = [], dPos = [];
+// offset a polyline along its left normal, with a mitre clamp so curbs don't pinch /
+// self-cross on sharp corners (offset scaled by 1/max(0.35,cos(halfTurn))).
 const offsetLine = (lw, d) => lw.map((p, k) => {
   const a = lw[Math.max(0, k - 1)], b = lw[Math.min(lw.length - 1, k + 1)];
+  let ax = p[0] - a[0], az = p[1] - a[1], bx = b[0] - p[0], bz = b[1] - p[1];
+  const la = Math.hypot(ax, az) || 1, lb = Math.hypot(bx, bz) || 1;
+  ax /= la; az /= la; bx /= lb; bz /= lb;
   let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-  return [p[0] - dz * d, p[1] + dx * d];          // offset along the left normal (-dz, dx)
+  const cosHalf = Math.sqrt(Math.max(0, (1 + (ax * bx + az * bz)) / 2));   // cos(halfTurn)
+  const m = d / Math.max(0.35, cosHalf);
+  return [p[0] - dz * m, p[1] + dx * m];          // offset along the left normal (-dz, dx)
 });
-function centreDashes(lw, halfW, lift) {            // 3 m dash / 3.5 m gap, 0.28 m wide
+function centreDashes(lw, halfW, lift, skip) {      // 3 m dash / 3.5 m gap, 0.28 m wide
   const ON = 3.0, OFF = 3.5; let draw = true, acc = 0;
   for (let k = 1; k < lw.length; k++) {
     const a = lw[k - 1], b = lw[k]; let dx = b[0] - a[0], dz = b[1] - a[1];
@@ -278,7 +299,8 @@ function centreDashes(lw, halfW, lift) {            // 3 m dash / 3.5 m gap, 0.2
     let t = 0;
     while (t < seg - 1e-6) {
       const len = Math.min((draw ? ON : OFF) - acc, seg - t);
-      if (draw) {
+      const mx = a[0] + dx * (t + len / 2), mz = a[1] + dz * (t + len / 2);
+      if (draw && !(skip && skip(mx, mz))) {        // no centre line through junctions / bulbs
         const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
         const y0 = terrainAt(x0, z0) + lift, y1 = terrainAt(x1, z1) + lift;
         dPos.push(x0 + nx * halfW, y0, z0 + nz * halfW, x0 - nx * halfW, y0, z0 - nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW,
@@ -289,15 +311,129 @@ function centreDashes(lw, halfW, lift) {            // 3 m dash / 3.5 m gap, 0.2
     }
   }
 }
+// curb ribbon that skips samples within R_TRIM of a junction (no curb across an
+// intersection). Densify + offset already done by the caller; here we just drop
+// quads whose midpoint is near a junction.
+function curbRibbon(lineW, width, lift, posArr, idxArr, skip) {
+  const dense = [lineW[0]];
+  for (let k = 1; k < lineW.length; k++) {
+    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(seg / 2.5));
+    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
+  }
+  lineW = dense;
+  const hw = width / 2;
+  let prev = null;                                  // [lx,lz,rx,rz, off] of previous emitted row
+  for (let k = 0; k < lineW.length; k++) {
+    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
+    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
+    if (skip && skip(x, z)) { prev = null; continue; }     // gap the curb at the junction
+    const off = posArr.length / 3;
+    posArr.push(lx, terrainAt(lx, lz) + lift, lz, rx, terrainAt(rx, rz) + lift, rz);
+    if (prev !== null) { const a = prev, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
+    prev = off;
+  }
+}
+
+// shared junction/dead-end vertex map and rank lookup
+const vertHit = buildVertHit(S.roads || [], w2);
+const junctionPts = [];                            // world XZ of every junction vertex
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl)) continue;
+  for (const [e, n] of pl) { const [x, z] = w2(e, n); if ((vertHit.get(vkey(x, z)) || 0) >= 2 && !junctionPts.some(p => p[0] === x && p[1] === z)) junctionPts.push([x, z]); }
+}
+const R_TRIM_FOR = w => w / 2 + 0.5;
+// at a junction vertex, the widest road meeting there (drives trim distance + pad size)
+const junctionWidth = new Map();                   // vkey -> max road width at that vertex
+const junctionMaxRank = new Map();
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl)) continue;
+  const sp = roadSpec(r), rk = roadRank(r);
+  for (const [e, n] of pl) {
+    const [x, z] = w2(e, n), k = vkey(x, z);
+    if ((vertHit.get(k) || 0) >= 2) {
+      junctionWidth.set(k, Math.max(junctionWidth.get(k) || 0, sp.width));
+      junctionMaxRank.set(k, Math.max(junctionMaxRank.get(k) || 0, rk));
+    }
+  }
+}
+// cul-de-sac bulb centres (computed first so dashes can avoid them too)
+// bulbs / end-caps / junction pads only where they fully sit on terrain (use the
+// real patch bounds with a margin, not the symmetric ROAD_HALF box, so no disc
+// edge spills past the terrain into the void)
+const inHalf = (x, z) => inTerrain(x, z, 14);
+const isCourt = r => r.k === 'residential' || /court|ct\b|cul/i.test(r.n || '');
+const bulbs = [];                                  // {cx,cz,R} for residential courts
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl)) continue;
+  const spec = roadSpec(r); if (!isCourt(r)) continue;
+  for (const end of [0, 1]) {
+    const i = end ? pl.length - 1 : 0, j = end ? pl.length - 2 : 1;
+    if (j < 0 || j >= pl.length) continue;
+    const tip = w2(...pl[i]), prev = w2(...pl[j]);
+    if (!inHalf(tip[0], tip[1])) continue;
+    if ((vertHit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;
+    let tx = tip[0] - prev[0], tz = tip[1] - prev[1]; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
+    const R = Math.max(6, Math.min(12, spec.width * 1.6));
+    bulbs.push({ cx: tip[0] + tx * (R - spec.width / 2), cz: tip[1] + tz * (R - spec.width / 2), R });
+  }
+}
+const skipNearJunction = (x, z) => junctionPts.some(([px, pz]) => {
+  const w = junctionWidth.get(vkey(px, pz)) || 7; const r = R_TRIM_FOR(w);
+  const dx = x - px, dz = z - pz; return dx * dx + dz * dz < r * r;
+}) || bulbs.some(({ cx, cz, R }) => { const dx = x - cx, dz = z - cz; return dx * dx + dz * dz < R * R; });
+
 for (const r of S.roads || []) {
   const pl = (r.p || r); if (!Array.isArray(pl)) continue;
-  const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
-  if (lw.length < 2) continue;
-  roadLines.push(lw);
-  ribbon(lw, ROADW, 0.28, rPos, rIdx);                                   // asphalt — raised ~1 ft so DEM crowns/bumps don't poke through
-  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.44, cuPos, cuIdx);     // left curb (lip above asphalt)
-  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.44, cuPos, cuIdx);  // right curb
-  centreDashes(lw, 0.14, 0.34);                                          // dashed centre line just above asphalt
+  const lwRaw = pl.map(([e, n]) => w2(e, n));
+  const spec = roadSpec(r), rk = roadRank(r);
+  for (let piece of clipPolylineToBox(lwRaw, ROAD_HALF)) {
+    // trim each end that meets a HIGHER-ranked road inward so the side street butts up
+    for (const which of ['first', 'last']) {
+      const tip = which === 'first' ? piece[0] : piece[piece.length - 1];
+      const k = vkey(tip[0], tip[1]);
+      if ((vertHit.get(k) || 0) >= 2 && (junctionMaxRank.get(k) || 0) > rk) {
+        trimEndInward(piece, which, R_TRIM_FOR(junctionWidth.get(k) || spec.width));
+      }
+    }
+    piece = smoothLine(piece);
+    if (piece.length < 2) continue;
+    roadLines.push(piece);
+    ribbon(piece, spec.width, 0.28, rPos, rIdx);                                        // asphalt
+    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, 0.44, cuPos, cuIdx, skipNearJunction);
+    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, 0.44, cuPos, cuIdx, skipNearJunction);
+    if (spec.lanes >= 2) centreDashes(piece, 0.14, 0.34, skipNearJunction);
+  }
+}
+// cul-de-sac bulbs / service end-caps at true dead-ends inside ROAD_HALF.
+// Court bulbs were precomputed above (reused here so dashes/curbs avoided them);
+// service stubs just get a small rounded end-cap (no fake roundabout).
+const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + 0.28, z); return o; };
+const emitCurb = (x, z) => { const o = cuPos.length / 3; cuPos.push(x, terrainAt(x, z) + 0.44, z); return o; };
+for (const { cx, cz, R } of bulbs) {
+  fanDisc(cx, cz, R, 24, emitAsphalt, rIdx);
+  ringAnnulus(cx, cz, R, R + 0.3, 24, emitCurb, cuIdx);
+}
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl) || isCourt(r)) continue;
+  const spec = roadSpec(r);
+  for (const end of [0, 1]) {
+    const i = end ? pl.length - 1 : 0, j = end ? pl.length - 2 : 1;
+    if (j < 0 || j >= pl.length) continue;
+    const tip = w2(...pl[i]);
+    if (!inHalf(tip[0], tip[1])) continue;
+    if ((vertHit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;   // not a dead-end
+    fanDisc(tip[0], tip[1], spec.width / 2, 12, emitAsphalt, rIdx);  // service: rounded end
+  }
+}
+// junction blend pads: a small asphalt fillet (radius = half the widest road, so it
+// just fills the corner, never a big black coin over rooftops) centred on each
+// real junction vertex that sits on terrain.
+for (const [px, pz] of junctionPts) {
+  if (!inHalf(px, pz)) continue;
+  const w = junctionWidth.get(vkey(px, pz)) || 7;
+  fanDisc(px, pz, w / 2 + 0.4, 20, emitAsphalt, rIdx);
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
@@ -373,7 +509,7 @@ if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Do
 
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
-const TREE_RADIUS = 100;   // cluster trees near the property, not sprawling to the patch edge
+const TREE_RADIUS = 150;   // wider tree band (still inside the terrain bounds)
 const TREESJSON = path.join(ROOT, 'exports/trees.json');
 let trees, treeSrc;
 if (existsSync(TREESJSON)) {
