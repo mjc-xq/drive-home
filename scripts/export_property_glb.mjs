@@ -367,6 +367,7 @@ function distToLines(x, z, lines, max) {
 }
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
+const TREE_RADIUS = 100;   // keep trees clustered around the property, not sprawling to the patch edge
 const TREESJSON = path.join(ROOT, 'exports/trees.json');
 let trees, treeSrc;
 if (existsSync(TREESJSON)) {
@@ -375,9 +376,9 @@ if (existsSync(TREESJSON)) {
   // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
   // house readable instead of buried.
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
-    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z))   // strictly on the terrain
+    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS)
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
-  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} on-patch)`;
+  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m of the house)`;
 } else {
   trees = [];
   treeSrc = 'heuristic (no LiDAR/OSM trees)';
