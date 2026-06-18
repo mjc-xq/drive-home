@@ -687,7 +687,7 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.fn.applyP3DT();
       let tries = 0;
       ctx.p3dtiles.addEventListener('load-model', () => {
-        if (!ctx.tilesReady) { ctx.tilesReady = true; ctx.emit('photoreal', true); }
+        if (!ctx.tilesReady) { ctx.tilesReady = true; ctx.emit('photoreal', true); if (ctx.startCrowdLoad) ctx.startCrowdLoad(); }   // first tiles are up → the scene is visible, so NOW pull in the crowd rigs (deferred from boot)
         // Vertically align the photoreal ground to the procedural terrain as the
         // street tiles stream (Explore/Drive only — Scoop never shows tiles).
         if (tries < 24) { tries++; ctx.fn.alignP3DT(); }
@@ -756,11 +756,21 @@ export function createEngine({ canvas, ui, emit }) {
   ctx._crowdReplaceT = 0, ctx._crowdVisT = 0;   // debounce the slider re-pool; throttle the nearest-N visibility scan
   ctx._crowdN = 0, ctx._crowdPlaced = false, ctx._placedNoAdults = false;
   if (!ctx.flags.has('nochar')) {
-    loadCeceCrowd(c => { if (!ctx.disposed) ctx.ceceCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
-    loadDrewCrowd(c => { if (!ctx.disposed) ctx.drewCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
-    loadDadCrowd(c => { if (!ctx.disposed) ctx.dadCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
-    loadMomCrowd(c => { if (!ctx.disposed) ctx.momCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
-    setTimeout(() => ctx.crowd._doPlace(), 9000);   // …but don't let a slow Dad/Mom rig hold the whole crowd hostage
+    // DEPRIORITISE the crowd rigs (~21 MB: cece+drew+dad+mom) behind the photoreal tiles. On a slow
+    // network these pedestrian GLBs would otherwise contend with the Google 3D tiles that ARE the
+    // visible scene, so first paint drags. Start them once the first tiles land (scene is up) — or
+    // after a fallback delay covering the no-key / procedural-fallback path where tiles never arrive.
+    // Idempotent; placement still self-heals via _onCrowd re-pool if a rig lands after _doPlace.
+    ctx.startCrowdLoad = () => {
+      if (ctx._crowdLoadStarted || ctx.disposed) return;
+      ctx._crowdLoadStarted = true;
+      loadCeceCrowd(c => { if (!ctx.disposed) ctx.ceceCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
+      loadDrewCrowd(c => { if (!ctx.disposed) ctx.drewCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
+      loadDadCrowd(c => { if (!ctx.disposed) ctx.dadCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
+      loadMomCrowd(c => { if (!ctx.disposed) ctx.momCrowd = c; ctx.crowd._onCrowd(); }, () => ctx.crowd._onCrowd());
+      setTimeout(() => { if (!ctx.disposed) ctx.crowd._doPlace(); }, 9000);   // …but don't let a slow Dad/Mom rig hold the whole crowd hostage
+    };
+    setTimeout(() => ctx.startCrowdLoad(), 6000);   // fallback: start anyway if tiles never signal ready (no key / procedural world)
   } else ctx.nav.geocodePOIs();
   ctx._crowdHitT = 0;
 
