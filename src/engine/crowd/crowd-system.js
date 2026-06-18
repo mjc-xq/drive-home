@@ -5,6 +5,10 @@ import { CECE_HEIGHT_M, DREW_HEIGHT_M } from '../drew.js';
 // Pedestrian crowd: placement + density of the CeCe/Drew/Dad/Mom dancers on sidewalks and
 // at POIs, the nearest-N visibility cap, and the car hit-launch.
 export function createCrowd(ctx) {
+  // Reused scratch for the ~9 Hz visibility scan so it allocates ZERO heap per scan (the old
+  // `const cand = [], prio = []` + per-spot `{sp,d2}` objects were a reliable mobile GC spike).
+  const _cand = [], _prio = [], _slotPool = []; let _slotN = 0;
+  const _takeSlot = (sp, d2) => { const s = _slotN < _slotPool.length ? _slotPool[_slotN] : (_slotPool[_slotN] = { sp: null, d2: 0 }); _slotN++; s.sp = sp; s.d2 = d2; return s; };
   const cleanPct = () => Math.max(0, Math.round(100 * (1 - ctx.POOPS.length / POOP_ACTIVE_CAP)));
   // Pick a street/scatter pedestrian: mostly the CeCe/Drew kids, with the occasional grown-up Dad/Mom
   // mixed in (taller, distinct models). Falls back to the kids if the adult rigs haven't loaded.
@@ -215,19 +219,19 @@ export function createCrowd(ctx) {
       if (now - ctx._crowdVisT > 110) {
         ctx._crowdVisT = now;
         const CULL2 = 240 * 240;
-        const cand = [], prio = [];   // prio = POI-cluster dancers (Stanton/Canyon/XQ/Meemaw) near you — shown FIRST so the
-        let _reloc = 0;               // street peds that follow the car don't eat all the slots and hide the cluster you drove to.
+        _cand.length = 0; _prio.length = 0; _slotN = 0;   // prio = POI-cluster dancers shown FIRST so street peds
+        let _reloc = 0;                                   // following the car don't hide the cluster you drove to.
         for (const sp of ctx.crowdSpots) {
           if (sp.zone === 'yard' || sp.zone === 'interior') { sp.rec.grp.visible = false; continue; }
           const d2 = (sp.rec.x - ctx.car.x) ** 2 + (sp.rec.z - ctx.car.z) ** 2;
-          if (d2 < CULL2) { (sp.zone === 'street' ? cand : prio).push({ sp, d2 }); continue; }
+          if (d2 < CULL2) { (sp.zone === 'street' ? _cand : _prio).push(_takeSlot(sp, d2)); continue; }
           sp.rec.grp.visible = false;
           if (sp.zone === 'street' && _reloc < 8) { ctx.crowd.relocateStreetSpot(sp); _reloc++; }   // budgeted: a few culled street peds follow you onto local roads each scan
         }
-        prio.sort((a, b) => a.d2 - b.d2); cand.sort((a, b) => a.d2 - b.d2);
+        _prio.sort((a, b) => a.d2 - b.d2); _cand.sort((a, b) => a.d2 - b.d2);
         let _shown = 0;
-        for (const c of prio) { const v = _shown < ctx.CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // POI clusters first
-        for (const c of cand) { const v = _shown < ctx.CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // then the nearest street peds
+        for (const c of _prio) { const v = _shown < ctx.CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // POI clusters first
+        for (const c of _cand) { const v = _shown < ctx.CROWD_VIS_CAP; c.sp.rec.grp.visible = v; if (v) _shown++; }   // then the nearest street peds
       }
       for (const sp of ctx.crowdSpots) if (sp.rec.grp.visible) ctx.crowd.settleCrowdSpot(sp, dt);   // settle ground height each frame for the visible few
     } else {

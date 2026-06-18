@@ -22,7 +22,7 @@ describe('curvature-correct geo<->ENU projection', () => {
     }
   });
 
-  it('round-trips geo -> ENU -> geo: sub-cm near home, sub-metre far (tangent-plane U=0 error)', () => {
+  it('round-trips geo -> ENU -> geo near home and across the visible hemisphere', () => {
     // near home: essentially exact
     {
       const lat = GEO0.lat + 0.001, lon = GEO0.lon - 0.001;
@@ -30,13 +30,28 @@ describe('curvature-correct geo<->ENU projection', () => {
       expect(Math.abs(rl - lat)).toBeLessThan(2e-7);   // < ~2 cm
       expect(Math.abs(ro - lon)).toBeLessThan(2e-7);
     }
-    // 22 km out: the flat tangent plane's U=0 reconstruction is off by ~cm — way under a lane, fine
-    // for routing (Google snaps to roads). Just confirm it's bounded.
+    // 22 km out: still exact enough that fetched roads and Google routes land where they were requested.
     {
       const lat = 37.8044, lon = -122.2740;
       const { lat: rl, lon: ro } = enu.toGeo(...enu.toEN(lat, lon));
-      expect(Math.abs(rl - lat)).toBeLessThan(5e-6);   // < ~55 cm
-      expect(Math.abs(ro - lon)).toBeLessThan(5e-6);
+      expect(Math.abs(rl - lat)).toBeLessThan(2e-7);
+      expect(Math.abs(ro - lon)).toBeLessThan(2e-7);
+    }
+    // Across the continent: the old inverse projected to the U=0 tangent plane and was
+    // hundreds of km wrong; the ray/ellipsoid inverse keeps road fetches reversible.
+    {
+      const lat = 40.7128, lon = -74.0060;
+      const { lat: rl, lon: ro } = enu.toGeo(...enu.toEN(lat, lon));
+      expect(Math.abs(rl - lat)).toBeLessThan(2e-7);
+      expect(Math.abs(ro - lon)).toBeLessThan(2e-7);
+    }
+  });
+
+  it('round-trips far-side world locations through the global fallback', () => {
+    for (const [lat, lon] of [[-33.8688, 151.2093], [-33.9249, 18.4241], [64.1466, -21.9426]]) {
+      const { lat: rl, lon: ro } = enu.toGeo(...enu.toEN(lat, lon));
+      expect(Math.abs(rl - lat)).toBeLessThan(2e-7);
+      expect(Math.abs(ro - lon)).toBeLessThan(2e-7);
     }
   });
 

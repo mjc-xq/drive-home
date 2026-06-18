@@ -1,62 +1,36 @@
 import * as THREE from 'three';
 
-// Drive-mode tile cutaway — the photoreal tiles between the camera and the car are sliced away
-// so the car is always visible. The occluding volume is the CONVEX HULL of the eye (camera) and
-// a padded oriented car box: every sightline of a pinhole camera passes through the eye, so the
-// rays that reach the car form the cone from the eye to the car box, and anything inside that
-// cone (between eye and car) is exactly what can hide the car. We hand tiles3d.js the OUTWARD-
-// normal face planes of that hull; with clipIntersection=true a fragment is discarded iff it is
-// behind EVERY plane — i.e. inside the hull — so only the true occluders are cut.
-//
-// Why this beats the old flat-cap corridor: the hull tapers along the real sightline (no bizarre
-// flat strip), tall/wide occluders can't leak past a cap, and TERRAIN IS NEVER CUT — the hull's
-// lower boundary is the eye→car-BASE sightline, which rises above the road everywhere except
-// directly under the car (where the car covers it). One code path serves every camera angle
-// (chase / cruise / overhead / aerial); overhead simply becomes a near-vertical hull.
-//
-// The clipPlanes array is OWNED by tiles3d.js (shared by every tile material, clipIntersection=true).
-// We always write EXACTLY N planes (padding spare slots with no-op planes) so the per-fragment
-// clip-plane count never changes — a changing count forces Three.js to recompile tile shaders.
+// Drive-mode tile visibility window. The old version built a box/cone from the car bounds, which
+// could read as a square chunk missing from the Google tiles. This version behaves more like a
+// polished third-person/isometric game: project the car to screen, draw an oval "keep the subject
+// readable" window around it, and let the tile shader dissolve only tile fragments that are:
+//   1. inside that oval,
+//   2. physically between the camera and car, and
+//   3. above the road-level sightline.
+// The result keeps the car unobstructed without cutting a boxy hole through the street.
 export function createTileClip(ctx) {
-  // Base (dispScale=1) padded car box. Footprint + roof scale with car.dispScale so the cut
-  // matches the rendered car (which is blown up 3–9× in overhead/aerial); FLOOR_PAD does NOT
-  // scale — it is the fixed margin that keeps the road (and graded road) out of the cut.
+  // Base (dispScale=1) padded car box. We only use its projected footprint to size the oval.
   const CAR_HALF_LEN = 2.3, CAR_HALF_WID = 1.05;   // ~4.6 m × 2.1 m car
-  const PAD_LEN = 0.9, PAD_WID = 0.7;              // margin so the car never clips its own edges + a thin surround
-  const ROOF = 1.95;                               // box top above the road (covers a tall van + margin)
-  const FLOOR_PAD = 0.5;                           // box bottom above the road → terrain stays below the cut
-  const CLOSE_GUARD = 5;                           // eye within 5 m of the car → don't cut (showcase orbit / nose-in)
-  const N = 9;                                     // FIXED plane count = max hull faces (3–5 back faces + 4–6 silhouette edges)
-  const EPS = 1e-5;
+  const PAD_LEN = 1.15, PAD_WID = 0.9;
+  const ROOF = 2.15;
+  const FLOOR_PAD = 0.35;
+  const CLOSE_GUARD = 4.5;
+  const C = Array.from({ length: 8 }, () => new THREE.Vector3());
+  const eye = new THREE.Vector3(), ctr = new THREE.Vector3(), projected = new THREE.Vector3();
 
-  // 12 box edges as corner-index pairs. Corner index bits: b0 = forward sign, b1 = right sign, b2 = up.
-  const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
-
-  const pool = Array.from({ length: N }, () => new THREE.Plane());   // reused every frame (zero per-frame allocation)
-  const C = Array.from({ length: 8 }, () => new THREE.Vector3());    // box corners
-  const eye = new THREE.Vector3(), ctr = new THREE.Vector3();
-  const n = new THREE.Vector3(), ab = new THREE.Vector3(), ae = new THREE.Vector3(), tmp = new THREE.Vector3();
-  const UP = new THREE.Vector3(0, 1, 0);
-
-  // commit the pool (first `used` slots are real planes; pad the rest with no-ops that don't change
-  // the clipIntersection result, then publish to the shared array without reallocating it)
-  function commit(clip, used, noopBehind) {
-    for (let i = used; i < N; i++) {
-      // padding: clipIntersection discards a fragment only if it's behind ALL planes. A plane that
-      // every fragment is BEHIND (constant −1e9) leaves the real planes in charge (use when cutting);
-      // a plane every fragment is IN FRONT of (constant +1e9) forces "kept" (use for no-cut).
-      pool[i].normal.copy(UP); pool[i].constant = noopBehind ? -1e9 : 1e9;
-    }
-    for (let i = 0; i < N; i++) clip[i] = pool[i];
-    clip.length = N;
+  function clearTileClip() {
+    const cutaway = ctx.p3dtiles && ctx.p3dtiles.cutaway;
+    if (!cutaway) return;
+    cutaway.screen.value.set(0, 0, 0, 0);
+    if (ctx.p3dtiles.clipPlanes) ctx.p3dtiles.clipPlanes.length = 0;
   }
 
-  function updateTileClip(carX, carY, carZ /*, view */) {
-    const clip = ctx.p3dtiles && ctx.p3dtiles.clipPlanes;
-    if (!clip) return;
+  function updateTileClip(carX, carY, carZ, view) {
+    const cutaway = ctx.p3dtiles && ctx.p3dtiles.cutaway;
+    if (!cutaway) return;
     eye.copy(ctx.camera.position);
 
-    // --- padded oriented car box (scaled to the rendered car) ---
+    // --- padded oriented car box, projected only to derive a rounded screen window ---
     const s = Math.max(0.5, ctx.car.dispScale || 1);
     const hl = (CAR_HALF_LEN + PAD_LEN) * s, hw = (CAR_HALF_WID + PAD_WID) * s;
     const yb = carY + FLOOR_PAD, yt = carY + ROOF * s;
@@ -68,43 +42,43 @@ export function createTileClip(ctx) {
     }
     ctr.set(carX, (yb + yt) / 2, carZ);
 
-    // --- guard: eye too close / inside the box → no occlusion needed ---
-    if (eye.distanceTo(ctr) < CLOSE_GUARD) { commit(clip, 0, false); return; }
+    if (eye.distanceTo(ctr) < CLOSE_GUARD) { clearTileClip(); return; }
 
-    let used = 0;
-    const tryFace = (nx, ny, nz, px, py, pz) => {
-      // back face of the hull ⇔ eye on the inner (negative) side of this outward-normal box face
-      if (nx * (eye.x - px) + ny * (eye.y - py) + nz * (eye.z - pz) <= EPS && used < N) {
-        const p = pool[used++]; p.normal.set(nx, ny, nz); p.constant = -(nx * px + ny * py + nz * pz);
-      }
-    };
-    // 6 box faces (outward normal + a point on the face = box centre + normal·halfExtent)
-    tryFace(fx, 0, fz, ctr.x + fx * hl, ctr.y, ctr.z + fz * hl);      // +forward
-    tryFace(-fx, 0, -fz, ctr.x - fx * hl, ctr.y, ctr.z - fz * hl);    // −forward
-    tryFace(rx, 0, rz, ctr.x + rx * hw, ctr.y, ctr.z + rz * hw);      // +right
-    tryFace(-rx, 0, -rz, ctr.x - rx * hw, ctr.y, ctr.z - rz * hw);    // −right
-    tryFace(0, 1, 0, ctr.x, yt, ctr.z);                               // +up
-    tryFace(0, -1, 0, ctr.x, yb, ctr.z);                             // −up
+    const w = ctx._rw || ctx.canvas.clientWidth || innerWidth || 1;
+    const h = ctx._rh || ctx.canvas.clientHeight || innerHeight || 1;
+    ctx.camera.updateMatrixWorld();
+    ctr.project(ctx.camera);
+    if (ctr.z < -1 || ctr.z > 1) { clearTileClip(); return; }
+    const cx = (ctr.x * 0.5 + 0.5) * w;
+    const cy = (ctr.y * 0.5 + 0.5) * h;
 
-    // 12 box edges → the plane through (eye, A, B) is a hull (silhouette) face iff every box corner
-    // is on its inner side. This builds the tapered cone walls from the eye to the car silhouette.
-    for (const [ia, ib] of EDGES) {
-      if (used >= N) break;
-      const A = C[ia], B = C[ib];
-      ab.subVectors(B, A); ae.subVectors(eye, A);
-      n.crossVectors(ab, ae);
-      const len = n.length();
-      if (len < EPS) continue;                                         // eye colinear with the edge
-      n.multiplyScalar(1 / len);
-      if (n.dot(tmp.subVectors(ctr, A)) > 0) n.negate();               // orient OUTWARD (away from the box centre)
-      let supporting = true;
-      for (let i = 0; i < 8; i++) { if (n.dot(tmp.subVectors(C[i], A)) > EPS) { supporting = false; break; } }
-      if (!supporting) continue;                                       // corners on both sides → interior edge, skip
-      const p = pool[used++]; p.normal.copy(n); p.constant = -n.dot(A);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, visibleCorners = 0;
+    for (let i = 0; i < 8; i++) {
+      projected.copy(C[i]).project(ctx.camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+      const px = (projected.x * 0.5 + 0.5) * w;
+      const py = (projected.y * 0.5 + 0.5) * h;
+      minX = Math.min(minX, px); maxX = Math.max(maxX, px);
+      minY = Math.min(minY, py); maxY = Math.max(maxY, py);
+      visibleCorners++;
     }
+    if (!visibleCorners) { clearTileClip(); return; }
 
-    commit(clip, used, true);
+    const shortSide = Math.min(w, h);
+    const margin = view && view.aerial ? 62 : view && view.topdown ? 74 : 86;
+    const minR = view && view.aerial ? 68 : view && view.topdown ? 82 : 96;
+    const maxR = shortSide * (view && view.aerial ? 0.26 : 0.34);
+    const rxp = Math.min(maxR, Math.max(minR, (maxX - minX) * 0.5 + margin));
+    const ryp = Math.min(maxR, Math.max(minR, (maxY - minY) * 0.5 + margin));
+
+    cutaway.eye.value.copy(eye);
+    cutaway.target.value.set(carX, carY + 1.05 * s, carZ);
+    cutaway.baseY.value = carY + 0.45;
+    cutaway.screen.value.set(cx, cy, rxp, ryp);
+    cutaway.minOpacity.value = 0.0;
+    cutaway.depthPad.value = 0.35;
+    cutaway.groundPad.value = 0.28;
   }
 
-  return { updateTileClip };
+  return { updateTileClip, clearTileClip };
 }

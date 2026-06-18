@@ -233,7 +233,7 @@ export function createNav(ctx) {
       if (!maps.places) { res([]); return; }
       if (!ctx._acSvc) ctx._acSvc = new maps.places.AutocompleteService();
       if (!ctx._acTok) ctx._acTok = new maps.places.AutocompleteSessionToken();
-      ctx._acSvc.getPlacePredictions({ input: q, sessionToken: ctx._acTok, componentRestrictions: { country: 'us' } }, (preds, status) => {
+      ctx._acSvc.getPlacePredictions({ input: q, sessionToken: ctx._acTok }, (preds, status) => {
         const out = (status === 'OK' && preds) ? preds.slice(0, 4).map(p => ({ description: p.description, placeId: p.place_id })) : [];
         ctx._acCache.set(key, out);
         if (ctx._acCache.size > 40) ctx._acCache.delete(ctx._acCache.keys().next().value);
@@ -486,7 +486,7 @@ export function createNav(ctx) {
     const cs = [ctx.geo.worldToGeo(fx - R, fz - R), ctx.geo.worldToGeo(fx + R, fz - R), ctx.geo.worldToGeo(fx - R, fz + R), ctx.geo.worldToGeo(fx + R, fz + R)];
     const lats = cs.map(c => c.lat), lons = cs.map(c => c.lon);
     const s = Math.min(...lats).toFixed(6), n = Math.max(...lats).toFixed(6), w = Math.min(...lons).toFixed(6), e = Math.max(...lons).toFixed(6);
-    const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
+    const q = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});out geom;`;
     const body = 'data=' + encodeURIComponent(q);
     const tryMirror = (n) => {
       if (n >= ctx.OVERPASS_MIRRORS.length) { ctx._osmFetching = false; return; }   // all mirrors down: keep the last roads, retry next box
