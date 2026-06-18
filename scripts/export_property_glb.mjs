@@ -140,18 +140,6 @@ const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const ROOFP = [[0.34, 0.32, 0.30], [0.40, 0.36, 0.31], [0.30, 0.30, 0.31], [0.37, 0.33, 0.29], [0.26, 0.26, 0.27]];
-// Real Google Street View facades projected onto street-facing walls of the
-// playable-core buildings (scripts/fetch_sv_facades.py -> exports/sv_facades.json).
-// Each such wall edge gets its OWN primitive + material carrying its SV crop;
-// the remaining walls keep the shared tiled facade. Keyed building -> edge -> rec.
-const SV = existsSync(path.join(ROOT, 'exports/sv_facades.json'))
-  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/sv_facades.json'), 'utf8')) : { walls: [] };
-const svByBld = new Map();
-for (const w of SV.walls || []) {
-  if (!svByBld.has(w.building)) svByBld.set(w.building, new Map());
-  svByBld.get(w.building).set(w.edge, w);
-}
-const svOut = [];   // { ib, edge, pos:[], uv:[] } one entry per SV-textured wall
 const lighten = c => c.map(v => Math.min(1, v * 0.55 + 0.40));   // plausible wall from a roof colour
 // walls: Street View colour if known, else a light tint of the roof, else stucco
 const wallColor = ib => COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
@@ -164,30 +152,14 @@ function pushUpTri(Rf, col, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
 }
-// SV crop padding above the eave (matches WALL_PAD in fetch_sv_facades.py) — the
-// crop spans world height 0..(wallH+SV_PAD), so the wall top samples partway up.
-const SV_PAD = 0.6;
 // W = {pos,uv,col} facade walls (window texture x wallC);  Rf = {pos,col} solid roof
-function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, ib) {
+function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
-  const svEdges = (ib != null && svByBld.get(ib)) || null;
   let dist = 0;
   for (let i = 0; i < ring.length; i++) {           // walls
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
     const seg = Math.hypot(xj - xi, zj - zi), u0 = dist / TILE, u1 = (dist + seg) / TILE; dist += seg;
-    if (svEdges && svEdges.has(i)) {                // street-facing wall -> real SV crop
-      // crop V: 0 at top (wallH+SV_PAD) .. 1 at ground (0). Wall bottom samples
-      // V=1 (ground), wall top samples V = SV_PAD/(wallH+SV_PAD) (eave + pad).
-      const vTop = SV_PAD / (wallH + SV_PAD), vBot = 1.0;
-      svOut.push({
-        ib, edge: i,
-        pos: [xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi],
-        // u left->right along the wall A->B; v as above
-        uv: [0, vBot, 1, vBot, 1, vTop, 0, vBot, 1, vTop, 0, vTop],
-      });
-      continue;                                     // keep this edge OFF the shared facade
-    }
     W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
     W.uv.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
     for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
@@ -203,7 +175,7 @@ function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, ib) {
   return ring;
 }
 const emitBuilding = (b, ib, base, wallH, W, Rf) =>
-  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf, ib);
+  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf);
 
 // ---- assemble ------------------------------------------------------------
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
@@ -244,17 +216,6 @@ const nFill = 0;
 if (bW.pos.length) {
   scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { uvs: bW.uv, colors: bW.col }));
   scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col }));
-}
-
-// ---- Street View facade walls: one primitive + material per textured wall --
-// Material name SVWall_b<ib>_e<edge> lets the gltf-transform pass below attach the
-// matching exports/sv_facades/*.jpg crop. White baseColorFactor so the photo is
-// unmodulated. These were diverted out of the shared facade buffers above.
-let nSV = 0;
-for (const w of svOut) {
-  const m = mkMesh(w.pos, null, 0xffffff, `SVWall_b${w.ib}_e${w.edge}`, { uvs: w.uv });
-  m.material.name = `SVWall_b${w.ib}_e${w.edge}`;   // unique -> unique texture
-  scene.add(m); nSV++;
 }
 
 // roads (context) + collect world polylines for tree spacing
@@ -365,9 +326,34 @@ function distToLines(x, z, lines, max) {
   }
   return best;
 }
+
+// ---- Doors: a simple door on each building's street-facing wall ----------
+const dwPos = [], dwCol = [], DOORCOL = [0.26, 0.18, 0.12];
+for (const ring of buildingPolys) {
+  if (ring.length < 2) continue;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  let best = null, bestD = Infinity;                       // edge whose midpoint is nearest a road
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    if (Math.hypot(bx - ax, bz - az) < 1.6) continue;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, d = distToLines(mx, mz, roadLines, 1e9);
+    if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; }
+  }
+  if (!best) continue;
+  const [ax, az, bx, bz] = best, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+  let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
+  let nx = -ez, nz = ex;                                    // outward normal (away from centroid)
+  if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+  const hw = 0.5, H = 2.1, base = terrainAt(mx, mz) - 0.1, cx = mx + nx * 0.07, cz = mz + nz * 0.07;
+  const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
+  const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
+  for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
+}
+if (dwPos.length) scene.add(mkMesh(dwPos, null, 0xffffff, 'Doors', { colors: dwCol }));
+
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
-const TREE_RADIUS = 100;   // keep trees clustered around the property, not sprawling to the patch edge
+const TREE_RADIUS = 100;   // cluster trees near the property, not sprawling to the patch edge
 const TREESJSON = path.join(ROOT, 'exports/trees.json');
 let trees, treeSrc;
 if (existsSync(TREESJSON)) {
@@ -378,7 +364,7 @@ if (existsSync(TREESJSON)) {
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
     .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS)
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
-  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m of the house)`;
+  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m)`;
 } else {
   trees = [];
   treeSrc = 'heuristic (no LiDAR/OSM trees)';
@@ -447,23 +433,11 @@ const aerialP = existsSync(gAerialJpg) ? gAerialJpg : path.join(ROOT, 'src/asset
 const facadeP = path.join(ROOT, 'exports/facade.png');
 const aerialTex = existsSync(aerialP) ? doc.createTexture('aerial').setImage(new Uint8Array(readFileSync(aerialP))).setMimeType('image/jpeg') : null;
 const facadeTex = existsSync(facadeP) ? doc.createTexture('facade').setImage(new Uint8Array(readFileSync(facadeP))).setMimeType('image/png') : null;
-// one SV texture per textured wall, keyed by material name SVWall_b<ib>_e<edge>
-const svTexByName = new Map();
-for (const w of SV.walls || []) {
-  const p = path.join(ROOT, 'exports', w.image);
-  if (!existsSync(p)) continue;
-  const name = `SVWall_b${w.building}_e${w.edge}`;
-  svTexByName.set(name, doc.createTexture(name).setImage(new Uint8Array(readFileSync(p))).setMimeType('image/jpeg'));
-}
 const REPEAT = 10497, CLAMP = 33071;
-let textured = 0, svTextured = 0;
+let textured = 0;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
-  if (svTexByName.has(n)) {                          // real Street View facade crop
-    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(svTexByName.get(n));
-    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
-    m.setRoughnessFactor(0.95).setMetallicFactor(0); svTextured++;
-  } else if (aerialTex && /terrain/i.test(n)) {
+  if (aerialTex && /terrain/i.test(n)) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {
@@ -474,11 +448,9 @@ for (const m of doc.getRoot().listMaterials()) {
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 
 const objs = [];
-scene.traverse(o => { if (o.isMesh && !/^SVWall_/.test(o.name)) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
-const svBldSet = new Set(svOut.map(w => w.ib));
+scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
 console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
-console.log(`  + ${nSV} SVWall_* meshes (real Street View) across ${svBldSet.size} buildings: [${[...svBldSet].sort((a,b)=>a-b).join(', ')}]`);
-console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls) + ${svTextured} Street View facade crops`);
+console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);

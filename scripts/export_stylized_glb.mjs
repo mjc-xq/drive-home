@@ -85,6 +85,7 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   if (opts.colors) g.setAttribute('color', new THREE.Float32BufferAttribute(opts.colors, 3));
+  if (opts.uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(opts.uvs, 2));
   if (indices) g.setIndex(indices);
   g.computeVertexNormals();
   const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat' });
@@ -116,6 +117,24 @@ const GRASS_A = new THREE.Color(0x5c8f3a), GRASS_B = new THREE.Color(0x76a64a);
 
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Stylized';
 scene.add(terrainMesh);
+
+// optional SATELLITE GROUND layer: same DTM geometry, textured with the real Google
+// aerial, sitting 15 cm UNDER the grass. Hide Terrain_Grass + Grass_Wind in Blender to
+// switch the ground from stylized lawn to satellite imagery.
+const AER = existsSync(ex('google_aerial.json')) ? JSON.parse(readFileSync(ex('google_aerial.json'), 'utf8')) : null;
+if (AER) {
+  const sPos = [], sUv = [], sIdx = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
+    const e = (lon - LON0) * COSLAT * 111320, n = (lat - LAT0) * 110540;
+    sPos.push(e - C[0], h[j * cols + i] - 0.15, -(n - C[1]));
+    sUv.push((e - AER.E0) / (AER.E1 - AER.E0), (AER.Nt - n) / (AER.Nt - AER.Nb));
+  }
+  for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
+    const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; sIdx.push(a, c, b, b, c, d);
+  }
+  scene.add(mkMesh(sPos, sIdx, 0xffffff, 'SatelliteGround', { uvs: sUv }));
+}
 
 const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
 const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
@@ -227,9 +246,12 @@ const COL = existsSync(ex('buildings_color.json')) ? JSON.parse(readFileSync(ex(
 const RCOL = existsSync(ex('buildings_roof_color.json')) ? JSON.parse(readFileSync(ex('buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const wallColor = ib => COL[ib] || STUCCO;
-// roof colour = the building's REAL aerial colour if we have one, else fall back to
-// a darker, slightly desaturated complement of the wall colour.
+// WHOLE building takes its Street View colour (per the brief): the roof is the same
+// SV colour, just darkened ~0.8 for a little depth. (Was the aerial roof colour.)
 function roofColor(ib) {
+  return wallColor(ib).map(c => Math.max(0, c * 0.8));
+}
+function _unusedRoofColor(ib) {
   if (RCOL[ib]) return RCOL[ib];
   const w = wallColor(ib);
   const m = (w[0] + w[1] + w[2]) / 3;
@@ -306,6 +328,30 @@ if (bW.pos.length) {
   scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col, rough: 0.85 }));
 }
 const onBuilding = (x, z) => buildingPolys.some(r => inPoly(x, z, r));
+
+// ---- Doors: one on each building's street-facing wall --------------------
+const dwPos = [], dwCol = [], DOORCOL = [0.24, 0.16, 0.10];
+for (const ring of buildingPolys) {
+  if (ring.length < 2) continue;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    if (Math.hypot(bx - ax, bz - az) < 1.6) continue;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, d = distToLines(mx, mz, roadLines, 1e9);
+    if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; }
+  }
+  if (!best) continue;
+  const [ax, az, bx, bz] = best, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+  let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
+  let nx = -ez, nz = ex;
+  if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+  const hw = 0.5, H = 2.1, base = terrainAt(mx, mz) - 0.1, cx = mx + nx * 0.07, cz = mz + nz * 0.07;
+  const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
+  const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
+  for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
+}
+if (dwPos.length) scene.add(mkMesh(dwPos, null, 0xffffff, 'Doors', { colors: dwCol }));
 
 // ---- creek centreline (for the riparian tree band) -----------------------
 let creekW = null;
@@ -575,6 +621,17 @@ for (const [x, z] of treeSpots) {
 for (const n of templateScrap) { try { n.dispose(); } catch { /* already gone */ } }
 const { prune } = await import('@gltf-transform/functions');
 await doc.transform(prune({ keepLeaves: false }), unpartition());   // drop orphans + single buffer
+// texture the optional SatelliteGround layer with the Google aerial JPEG
+const aerialJpg = ex('google_aerial.jpg');
+if (existsSync(aerialJpg)) {
+  const tex = doc.createTexture('satellite').setImage(new Uint8Array(readFileSync(aerialJpg))).setMimeType('image/jpeg');
+  for (const m of doc.getRoot().listMaterials()) {
+    if (/SatelliteGround/i.test(m.getName() || '')) {
+      m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(tex);
+      const ti = m.getBaseColorTextureInfo(); if (ti) { ti.setWrapS(33071); ti.setWrapT(33071); }
+    }
+  }
+}
 const out = ex('1840-dahill-stylized.glb');
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
 
