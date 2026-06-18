@@ -460,10 +460,11 @@ if (bW.pos.length) {
 }
 const onBuilding = (x, z) => buildingPolys.some(r => inPoly(x, z, r));
 
-// ---- Doors: one on each building's street-facing wall --------------------
+// ---- Doors (+ the owner's driveway) --------------------------------------
 const dwPos = [], dwCol = [], DOORCOL = [0.24, 0.16, 0.10];
-for (const ring of buildingPolys) {
-  if (ring.length < 2) continue;
+let houseDoor = null, houseGarage = null;
+buildingPolys.forEach((ring, bi) => {
+  if (ring.length < 2) return;
   const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   let best = null, bestD = Infinity;
   for (let i = 0; i < ring.length; i++) {
@@ -472,17 +473,29 @@ for (const ring of buildingPolys) {
     const mx = (ax + bx) / 2, mz = (az + bz) / 2, d = distToLines(mx, mz, roadLines, 1e9);
     if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; }
   }
-  if (!best) continue;
-  const [ax, az, bx, bz] = best, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+  if (!best) return;
+  const [ax, az, bx, bz] = best;
   let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
-  let nx = -ez, nz = ex;
-  if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
-  const hw = 0.5, H = 2.1, base = terrainAt(mx, mz) - 0.1, cx = mx + nx * 0.07, cz = mz + nz * 0.07;
+  let nx = -ez, nz = ex; const m0x = (ax + bx) / 2, m0z = (az + bz) / 2;
+  if ((m0x - cen[0]) * nx + (m0z - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+  let t = 0.5; if (bi === 0) t = (ax > bx) ? 0.72 : 0.28;   // house: door on SW (non-garage) half
+  const dcx = ax + (bx - ax) * t, dcz = az + (bz - az) * t;
+  const hw = 0.5, H = 2.1, base = terrainAt(dcx, dcz) - 0.1, cx = dcx + nx * 0.07, cz = dcz + nz * 0.07;
   const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
   const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
   for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
-}
+  if (bi === 0) { houseDoor = [dcx, dcz]; houseGarage = (ax > bx) ? [ax, az] : [bx, bz]; }
+});
 if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
+if (houseGarage) {                                  // driveway: garage (road/NE) -> nearest road
+  let bp = null, bd = Infinity;
+  for (const lw of roadLines) for (const [x, z] of lw) { const d = Math.hypot(x - houseGarage[0], z - houseGarage[1]); if (d < bd) { bd = d; bp = [x, z]; } }
+  if (bp && bd < 70) {
+    const dvP = [], dvI = [];
+    ribbonPart([houseGarage, [(houseGarage[0] + bp[0]) / 2, (houseGarage[1] + bp[1]) / 2], bp], 3.6, 0.05, dvP, dvI);
+    if (dvI.length) scene.add(mkMesh(dvP, dvI, new THREE.Color(0.62, 0.61, 0.58), 'Driveway'));
+  }
+}
 
 // ---- creek centreline (for the riparian tree band) -----------------------
 let creekW = null;
@@ -710,7 +723,8 @@ mainScene.addChild(treesParent);
 // bounds (inTerrain), not just the symmetric ±cropHalf box, so no tree falls past
 // the E-W edge into mid-air.
 const TREE_RADIUS = 150;   // wider tree band (still inside the terrain bounds)
-const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5 && Math.hypot(x, z) <= TREE_RADIUS;
+const treeOK = (x, z) => inTerrain(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5 && Math.hypot(x, z) <= TREE_RADIUS
+  && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5);   // keep the front door clear
 const treeSpots = [];
 if (creekW) for (let k = 1; k < creekW.length; k++) {
   const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
