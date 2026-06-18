@@ -1,0 +1,515 @@
+// Build a NO-PHOTO, stylized, game-ready GLB of the 1840 Dahill Lane neighborhood.
+// Everything is flat-shaded solid colour — NO satellite / photographic ground or
+// building textures (the only bitmaps are the stylized bark/leaf maps that ship
+// inside the provided tree GLBs). Output: exports/1840-dahill-stylized.glb.
+//
+// Named, separately-deletable objects:
+//   Terrain_Grass     - flat-shaded green DTM following exports/dem_1m.json.
+//   Grass_Wind        - parent of hundreds of instanced grass-blade clumps. Each
+//                       clump is its OWN node and is swayed by a looping glTF node
+//                       animation ("GrassWind") -> the grass MOVES in any viewer
+//                       that plays animations (Blender, three.js, Quick Look).
+//   Roads / Sidewalks / Curbs - real ribbon geometry along scene.json roads[].
+//   House_walls / House_roof  - the owner's extruded footprint.
+//   Buildings_walls / Buildings_roofs - every other footprint, coloured per
+//                       exports/buildings_color.json (flat colour, no photo).
+//   Tree_#### nodes   - each tree from Trees.glb / Acacia.glb is its OWN named
+//                       node (never merged) so it can be deleted individually in
+//                       Blender. Grouped under the "Trees" node. Scale/rotation
+//                       varies per tree.
+//   YourLots / LotLines - parcel outlines; the owner's two lots highlighted, the
+//                       back lot left empty (no building).
+//
+// Frame: flat-ENU, glTF Y-up, metres, origin at house centroid C (scene.json.center).
+//   e = (lon-LON0)*cos(LAT0)*111320 ; n = (lat-LAT0)*110540
+//   worldX = e - C[0] ; worldZ = -(n - C[1])
+// scene.json polygons are already e/n, so w2(e,n) = [e-C[0], -(n-C[1])].
+//
+// Run:  node scripts/export_stylized_glb.mjs
+import { readFileSync, mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+globalThis.self = globalThis;
+if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary packer shim
+  globalThis.FileReader = class {
+    readAsArrayBuffer(b) { b.arrayBuffer().then(x => { this.result = x; this.onloadend && this.onloadend(); }); }
+    readAsDataURL(b) { b.arrayBuffer().then(x => { this.result = `data:${b.type || 'application/octet-stream'};base64,${Buffer.from(x).toString('base64')}`; this.onloadend && this.onloadend(); }); }
+  };
+}
+
+const THREE = await import('three');
+const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const ex = f => path.join(ROOT, 'exports', f);
+const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf8'));
+const C = S.center;                                       // house centroid (flat ENU)
+
+// ---- flat-ENU frame (exactly as specified) -------------------------------
+const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * Math.PI / 180);
+const w2 = (e, n) => [e - C[0], -(n - C[1])];                          // scene.json e/n -> world X,Z
+// world X,Z -> lat/lon (inverse of the flat frame) for sampling the DEM grid
+const worldToLL = (X, Z) => {
+  const e = X + C[0], n = -Z + C[1];
+  return [LAT0 + n / 110540, LON0 + e / (COSLAT * 111320)];
+};
+
+// ---- terrain: 1 m bare-earth DTM as flat-shaded grass ---------------------
+const D = JSON.parse(readFileSync(ex('dem_1m.json'), 'utf8'));
+const { cols, rows, h } = D;
+const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
+const cropHalf = dLat * 110540 / 2 - 4;                   // square crop half-width (m)
+// bilinear DEM sample at world X,Z
+const terrainAt = (X, Z) => {
+  const [lat, lon] = worldToLL(X, Z);
+  let fi = (lon - D.lonW) / dLon * cols - 0.5, fj = (D.latN - lat) / dLat * rows - 0.5;
+  fi = Math.max(0, Math.min(cols - 1.001, fi)); fj = Math.max(0, Math.min(rows - 1.001, fj));
+  const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
+  const a = h[j * cols + i], b = h[j * cols + i + 1], c = h[(j + 1) * cols + i], d = h[(j + 1) * cols + i + 1];
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+};
+
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rand = mulberry32(1840);
+
+function mkMesh(positions, indices, color, name, opts = {}) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  if (opts.colors) g.setAttribute('color', new THREE.Float32BufferAttribute(opts.colors, 3));
+  if (indices) g.setIndex(indices);
+  g.computeVertexNormals();
+  const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat' });
+  if (opts.colors) m.vertexColors = true;
+  if (opts.flat) m.flatShading = true;
+  m.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
+}
+
+// Build the grass terrain. Two flat green tones blended by a hashed value so the
+// flat-shaded triangles read as a stylized lawn rather than one solid sheet.
+const GRASS_A = new THREE.Color(0x5c8f3a), GRASS_B = new THREE.Color(0x76a64a);
+{
+  const pos = [], col = [], idx = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const lat = D.latN - (j + 0.5) / rows * dLat, lon = D.lonW + (i + 0.5) / cols * dLon;
+    const e = (lon - LON0) * COSLAT * 111320, n = (lat - LAT0) * 110540;
+    const X = e - C[0], Z = -(n - C[1]);
+    pos.push(X, h[j * cols + i], Z);
+    const t = (Math.sin(i * 12.9898 + j * 78.233) * 43758.5453) % 1;     // hashed mottle
+    const c = GRASS_A.clone().lerp(GRASS_B, Math.abs(t));
+    col.push(c.r, c.g, c.b);
+  }
+  for (let j = 0; j < rows - 1; j++) for (let i = 0; i < cols - 1; i++) {
+    const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; idx.push(a, c, b, b, c, d);
+  }
+  var terrainMesh = mkMesh(pos, idx, 0xffffff, 'Terrain_Grass', { colors: col, flat: true });
+}
+
+const scene = new THREE.Scene(); scene.name = '1840_Dahill_Stylized';
+scene.add(terrainMesh);
+
+const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
+const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
+function inPoly(x, z, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, zi] = ring[i], [xj, zj] = ring[j];
+    if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function distToLines(x, z, lines, max) {
+  let best = max;
+  for (const lw of lines) for (let k = 1; k < lw.length; k++) {
+    const [ax, az] = lw[k - 1], [bx, bz] = lw[k]; let dx = bx - ax, dz = bz - az;
+    const L2 = dx * dx + dz * dz || 1; let t = ((x - ax) * dx + (z - az) * dz) / L2; t = Math.max(0, Math.min(1, t));
+    best = Math.min(best, Math.hypot(x - (ax + t * dx), z - (az + t * dz)));
+  }
+  return best;
+}
+
+// ---- roads + sidewalks + curbs (real ribbon geometry) --------------------
+const roadLines = [];        // world centrelines (for tree/grass avoidance)
+function ribbonPart(lineW, width, lift, posArr, idxArr) {
+  const dense = [lineW[0]];
+  for (let k = 1; k < lineW.length; k++) {
+    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(seg / 2.5));
+    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
+  }
+  lineW = dense;
+  const hw = width / 2;
+  for (let k = 0; k < lineW.length; k++) {
+    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
+    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
+    const off = posArr.length / 3;
+    posArr.push(lx, terrainAt(lx, lz) + lift, lz, rx, terrainAt(rx, rz) + lift, rz);
+    if (k > 0) { const a = off - 2, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
+  }
+}
+// Offset ribbon a fixed distance to one side of the centreline (for sidewalks).
+function offsetRibbon(lineW, sideOff, width, lift, posArr, idxArr) {
+  const off = [];
+  for (let k = 0; k < lineW.length; k++) {
+    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
+    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const nx = -dz, nz = dx; off.push([x + nx * sideOff, z + nz * sideOff]);
+  }
+  ribbonPart(off, width, lift, posArr, idxArr);
+}
+
+const rPos = [], rIdx = [];                 // asphalt
+const swPos = [], swIdx = [];               // concrete sidewalks
+const cbPos = [], cbIdx = [];               // curbs
+for (const r of S.roads || []) {
+  const pl = r.p || r; if (!Array.isArray(pl)) continue;
+  const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
+  if (lw.length < 2) continue;
+  roadLines.push(lw);
+  const roadW = r.w || 7;
+  ribbonPart(lw, roadW, 0.04, rPos, rIdx);
+  // sidewalks flank residential/tertiary streets (skip narrow service lanes)
+  if (r.k !== 'service') {
+    const swDist = roadW / 2 + 1.6, swW = 1.5;
+    offsetRibbon(lw, swDist, swW, 0.10, swPos, swIdx);
+    offsetRibbon(lw, -swDist, swW, 0.10, swPos, swIdx);
+    // curbs: thin dark strips at the asphalt edge
+    offsetRibbon(lw, roadW / 2 + 0.2, 0.4, 0.07, cbPos, cbIdx);
+    offsetRibbon(lw, -(roadW / 2 + 0.2), 0.4, 0.07, cbPos, cbIdx);
+  }
+}
+if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x3a3a3e, 'Roads', { rough: 0.98 }));      // dark asphalt
+if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { rough: 0.95 })); // light concrete
+if (cbIdx.length) scene.add(mkMesh(cbPos, cbIdx, 0x8d8a85, 'Curbs', { rough: 0.95 }));
+
+// ---- buildings: extrude footprints, flat colour per Street View ----------
+const COL = existsSync(ex('buildings_color.json')) ? JSON.parse(readFileSync(ex('buildings_color.json'), 'utf8')) : {};
+const STUCCO = [0.82, 0.78, 0.70];
+const wallColor = ib => COL[ib] || STUCCO;
+// roof colour = a darker, slightly desaturated complement of the wall colour
+function roofColor(ib) {
+  const w = wallColor(ib);
+  const m = (w[0] + w[1] + w[2]) / 3;
+  return [Math.max(0.12, w[0] * 0.45 + m * 0.05), Math.max(0.12, w[1] * 0.45 + m * 0.05), Math.max(0.14, w[2] * 0.45 + m * 0.08)];
+}
+const TILE = 3.0;
+function gableTris(rect, base, wallH) {
+  let [rcx, rcy, w, d, deg] = rect;
+  let L = w, Sp = d, ang = deg * Math.PI / 180;
+  if (d > w) { L = d; Sp = w; ang += Math.PI / 2; }
+  const rise = Math.min(2.6, Math.max(0.85, Sp * 0.30));
+  const ov = 0.45, hw = L / 2 + ov, hd = Sp / 2 + ov, y0 = wallH - 0.04, y1 = wallH - 0.04 + rise;
+  const A = [-hw, y0, -hd], B = [hw, y0, -hd], Cc = [hw, y0, hd], Dd = [-hw, y0, hd], R1 = [-hw, y1, 0], R2 = [hw, y1, 0];
+  const seq = [A, R1, R2, A, R2, B, Cc, R2, R1, Cc, R1, Dd, B, R2, Cc, A, Dd, R1];
+  const ca = Math.cos(ang), sa = Math.sin(ang), [tx, tz] = w2(rcx, rcy), out = [];
+  for (const [x, y, z] of seq) out.push(x * ca + z * sa + tx, y + base, -x * sa + z * ca + tz);
+  return out;
+}
+function pushUpTri(Rf, col, a, b, c) {
+  const ux = b[0] - a[0], uz = b[2] - a[2], vx = c[0] - a[0], vz = c[2] - a[2];
+  const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
+  for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
+}
+function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf) {
+  if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
+  const yb = base, yt = base + wallH;
+  for (let i = 0; i < ring.length; i++) {
+    const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
+    W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
+    for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+  }
+  const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));
+  for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, []))
+    pushUpTri(Rf, roofC, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
+  if (roofRects) for (const r of roofRects) {
+    const g = gableTris(r, base, wallH);
+    for (let k = 0; k < g.length; k += 9)
+      pushUpTri(Rf, roofC, [g[k], g[k + 1], g[k + 2]], [g[k + 3], g[k + 4], g[k + 5]], [g[k + 6], g[k + 7], g[k + 8]]);
+  }
+  return ring;
+}
+const emitBuilding = (b, ib, base, wallH, W, Rf) =>
+  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf);
+const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
+
+// owner's parcels: skip foreign buildings on them; keep the back lot empty
+const pip = (x, z, r) => inPoly(x, z, r);
+const PARCELS = existsSync(ex('parcels.json')) ? (JSON.parse(readFileSync(ex('parcels.json'), 'utf8')).parcels || []) : [];
+const MINE = PARCELS.filter(p => p.mine).map(p => p.ring);
+const inMine = (x, z) => MINE.some(r => pip(x, z, r));
+
+const buildingPolys = [];
+const houseIdx = S.buildings.findIndex(b => b.house);
+const hW = { pos: [], col: [] }, hRf = { pos: [], col: [] };
+if (houseIdx >= 0) {
+  const houseB = S.buildings[houseIdx];
+  const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
+  buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB), hW, hRf));
+  scene.add(mkMesh(hW.pos, null, 0xffffff, 'House_walls', { colors: hW.col, rough: 0.9 }));
+  scene.add(mkMesh(hRf.pos, null, 0xffffff, 'House_roof', { colors: hRf.col, rough: 0.85 }));
+}
+const bW = { pos: [], col: [] }, bRf = { pos: [], col: [] };
+let nBld = 0, nSkip = 0;
+S.buildings.forEach((b, ib) => {
+  if (b.house) return;
+  const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
+  if (inMine(cw[0], cw[1])) { nSkip++; return; }
+  const base = terrainAt(cw[0], cw[1]) - 0.5;
+  buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b), bW, bRf));
+  nBld++;
+});
+if (bW.pos.length) {
+  scene.add(mkMesh(bW.pos, null, 0xffffff, 'Buildings_walls', { colors: bW.col, rough: 0.9 }));
+  scene.add(mkMesh(bRf.pos, null, 0xffffff, 'Buildings_roofs', { colors: bRf.col, rough: 0.85 }));
+}
+const onBuilding = (x, z) => buildingPolys.some(r => inPoly(x, z, r));
+
+// ---- creek centreline (for the riparian tree band) -----------------------
+let creekW = null;
+if (S.creek && S.creek.p) {
+  creekW = S.creek.p.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
+  if (creekW.length >= 2) {
+    const cPos = [], cIdx = []; ribbonPart(creekW, 6, 0.05, cPos, cIdx);
+    scene.add(mkMesh(cPos, cIdx, 0x3a78c2, 'Creek_SanLorenzo', { rough: 0.4 }));
+  }
+}
+
+// ---- ANIMATED grass-blade clumps (looping glTF node animation) -----------
+// Each clump is a low-poly fan of blades and is ITS OWN named node. A looping
+// "GrassWind" clip rotates every clump's quaternion about Z with a per-clump
+// phase offset (derived from world position) so a wind gust appears to sweep
+// across the field. The clip is exported into the GLB, so the grass animates
+// in any viewer that auto-plays animations (Blender, three.js, Quick Look).
+function bladeClumpGeometry() {
+  // a few crossed quads, pivot at the base (y=0), ~0.55 m tall
+  const pos = [], col = [];
+  const base = new THREE.Color(0x4f8a30), tip = new THREE.Color(0x9fd45f);
+  const blades = 5;
+  for (let bI = 0; bI < blades; bI++) {
+    const ang = (bI / blades) * Math.PI * 2 + rand() * 0.6;
+    const r = 0.06 + rand() * 0.10, hgt = 0.42 + rand() * 0.30, lean = 0.06 + rand() * 0.05;
+    const bx = Math.cos(ang) * r, bz = Math.sin(ang) * r, wdt = 0.035;
+    const px = -Math.sin(ang) * wdt, pz = Math.cos(ang) * wdt;     // blade-width axis
+    const tx = bx + Math.cos(ang) * lean, tz = bz + Math.sin(ang) * lean;
+    // two tris forming a tapered blade
+    const A = [bx - px, 0, bz - pz], B = [bx + px, 0, bz + pz], T = [tx, hgt, tz];
+    for (const [v, c] of [[A, base], [B, base], [T, tip]]) { pos.push(...v); col.push(c.r, c.g, c.b); }
+    for (const [v, c] of [[B, base], [A, base], [T, tip]]) { pos.push(...v); col.push(c.r, c.g, c.b); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+const grassMat = new THREE.MeshStandardMaterial({ name: 'Grass_mat', vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+const grassGroup = new THREE.Group(); grassGroup.name = 'Grass_Wind';
+scene.add(grassGroup);
+
+// scatter clumps on open ground only (off roads/sidewalks/buildings, near grade)
+const grassOK = (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5;
+const clumpNodes = [];
+const GRID = 9;                                  // metres between candidate clumps
+const MAXCLUMPS = 520;                           // keep the GLB lean
+for (let z = -cropHalf; z <= cropHalf && clumpNodes.length < MAXCLUMPS; z += GRID) {
+  for (let x = -cropHalf; x <= cropHalf && clumpNodes.length < MAXCLUMPS; x += GRID) {
+    const jx = x + (rand() - 0.5) * GRID * 0.8, jz = z + (rand() - 0.5) * GRID * 0.8;
+    if (!grassOK(jx, jz) || rand() < 0.45) continue;
+    const clump = new THREE.Mesh(bladeClumpGeometry(), grassMat);
+    clump.name = `GrassClump_${String(clumpNodes.length).padStart(4, '0')}`;
+    const s = 1.4 + rand() * 1.8;                // clump footprint scale
+    clump.scale.set(s, 1.2 + rand() * 1.3, s);
+    clump.position.set(jx, terrainAt(jx, jz), jz);
+    clump.rotation.y = rand() * Math.PI * 2;
+    grassGroup.add(clump);
+    clumpNodes.push(clump);
+  }
+}
+// Build the looping wind animation: each clump sways about its local Z axis.
+// Sample a sine sweep at keyframes; phase offset by position -> travelling gust.
+const animations = [];
+if (clumpNodes.length) {
+  const PERIOD = 3.0, KEYS = 13;                                   // 3 s loop
+  const times = Array.from({ length: KEYS }, (_, k) => k / (KEYS - 1) * PERIOD);
+  const tracks = [];
+  const axis = new THREE.Vector3(0, 0, 1), q = new THREE.Quaternion();
+  for (const clump of clumpNodes) {
+    const phase = (clump.position.x * 0.05 + clump.position.z * 0.03);  // gust sweep
+    const amp = 0.13 + rand() * 0.06;                                   // sway radians
+    const vals = [];
+    for (let k = 0; k < KEYS; k++) {
+      const t = times[k] / PERIOD * Math.PI * 2;
+      const ang = Math.sin(t + phase) * amp + Math.sin(t * 2.3 + phase) * amp * 0.25;
+      q.setFromAxisAngle(axis, ang);
+      vals.push(q.x, q.y, q.z, q.w);
+    }
+    // bind by node UUID so the exporter resolves the right node regardless of name
+    tracks.push(new THREE.QuaternionKeyframeTrack(`${clump.uuid}.quaternion`, times.slice(), vals));
+  }
+  animations.push(new THREE.AnimationClip('GrassWind', PERIOD, tracks));
+}
+
+// ---- parcel outlines (owner lots highlighted) ----------------------------
+let nMine = 0;
+if (PARCELS.length) {
+  const lPos = [], lIdx = [], yPos = [], yIdx = [];
+  for (const p of PARCELS) {
+    const ring = p.ring.map(([x, z]) => [x, z]);
+    if (ring.length < 2) continue;
+    // skip parcels entirely outside the terrain crop (keeps the frame tight)
+    if (!ring.some(([x, z]) => Math.abs(x) <= cropHalf + 2 && Math.abs(z) <= cropHalf + 2)) continue;
+    const closed = ring[0][0] === ring[ring.length - 1][0] ? ring : ring.concat([ring[0]]);
+    if (p.mine) { ribbonPart(closed, 1.1, 0.22, yPos, yIdx); nMine++; }
+    else ribbonPart(closed, 0.5, 0.12, lPos, lIdx);
+  }
+  if (lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
+  if (yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
+}
+
+// ---- export the base GLB (terrain/roads/houses/grass + animation) --------
+const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false, animations });
+mkdirSync(path.join(ROOT, 'exports'), { recursive: true });
+
+// ---- place TREES: instance Trees.glb + Acacia.glb, one node per tree -----
+// Done with @gltf-transform so each placed tree is a separate, named scene node
+// (a copy of the source tree's node subtree) -> individually deletable in Blender.
+const { NodeIO } = await import('@gltf-transform/core');
+const { mergeDocuments, unpartition } = await import('@gltf-transform/functions');
+const io = new NodeIO();
+const doc = await io.readBinary(new Uint8Array(glb));
+const root = doc.getRoot();
+const mainScene = root.getDefaultScene() || root.listScenes()[0];
+
+// Merged tree-template scene-roots to remove after cloning (so the original
+// template nodes — placed at +200 m, scale 100 — don't ship in the GLB and get
+// rendered far off the patch by Blender, which imports every node in the file).
+const templateScrap = [];
+// load tree source docs and merge their data into our doc, then clone per instance
+async function loadTreeTemplates(file, opts) {
+  const src = await io.read(file);
+  const map = mergeDocuments(doc, src);           // copies meshes/materials/textures in
+  const srcScene = src.getRoot().getDefaultScene() || src.getRoot().listScenes()[0];
+  const tScene = map.get(srcScene);               // counterpart scene in our doc
+  // collect candidate template nodes (those that carry a mesh, possibly nested)
+  const templates = [];
+  for (const top of tScene.listChildren()) {
+    templateScrap.push(top);                       // dispose this whole subtree later
+    if (top.getMesh()) templates.push(top);
+    else {
+      const walk = nd => { if (nd.getMesh()) templates.push(nd); nd.listChildren().forEach(walk); };
+      walk(top);
+    }
+  }
+  templateScrap.push(tScene);                      // dispose the empty merged scene too
+  // measure each template's true upright height. The two source assets use
+  // DIFFERENT up-axes in their mesh data (Trees.glb is Z-up, Acacia is Y-up), so
+  // the caller passes heightAxis (1=Y, 2=Z). nominalH = that extent * node scale.
+  const ax = opts.heightAxis ?? 1;
+  return templates.map(t => {
+    const s = t.getScale();
+    let lo = 1e9, hi = -1e9;
+    const acc = nd => {
+      const m = nd.getMesh();
+      if (m) for (const p of m.listPrimitives()) { const a = p.getAttribute('POSITION'); lo = Math.min(lo, a.getMin([])[ax]); hi = Math.max(hi, a.getMax([])[ax]); }
+      nd.listChildren().forEach(acc);
+    };
+    acc(t);
+    const nominalH = Math.max(0.01, (hi - lo) * Math.abs(s[ax]));
+    return { node: t, opts, nominalH };
+  });
+}
+
+// deep-clone a template node subtree into a fresh node placed in the main scene
+function cloneTree(template, name, X, Y, Z, scl, rotY) {
+  // clone the template subtree. The ROOT clone keeps the template's scale/rotation
+  // (which make the mesh stand upright at its built size) but DROPS the template's
+  // own translation — that is just its arbitrary slot in the source layout, not
+  // something we want propagated into our placement.
+  const cloneNode = (srcNode, isRoot) => {
+    const nn = doc.createNode();
+    if (srcNode.getMesh()) nn.setMesh(srcNode.getMesh());
+    const r = srcNode.getRotation(), s = srcNode.getScale();
+    nn.setTranslation(isRoot ? [0, 0, 0] : [...srcNode.getTranslation()]);
+    nn.setRotation([...r]); nn.setScale([...s]);
+    for (const c of srcNode.listChildren()) nn.addChild(cloneNode(c, false));
+    return nn;
+  };
+  const node = cloneNode(template.node, true);
+  // wrap in a placement node: scale (normalises to target height) -> yaw -> place
+  const wrap = doc.createNode(name);
+  wrap.addChild(node);
+  wrap.setScale([scl, scl, scl]);
+  wrap.setRotation([0, Math.sin(rotY / 2), 0, Math.cos(rotY / 2)]);
+  wrap.setTranslation([X, Y, Z]);
+  return wrap;
+}
+
+const treeTemplates = [
+  ...await loadTreeTemplates('/Users/mcohen/Downloads/Trees.glb', { targetH: 7.5, hVar: 3.0, heightAxis: 2 }),   // Z-up mesh
+  ...await loadTreeTemplates('/Users/mcohen/Downloads/Acacia.glb', { targetH: 9.0, hVar: 3.5, heightAxis: 1 }),  // Y-up mesh
+];
+
+// a parent node grouping all trees (so the group is one tidy outliner entry,
+// but every child Tree_#### is still its own deletable object)
+const treesParent = doc.createNode('Trees');
+mainScene.addChild(treesParent);
+
+// tree placement heuristic: dense riparian band along the creek, scattered yards,
+// avoiding buildings + roads.
+const treeOK = (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 4.5) >= 4.5;
+const treeSpots = [];
+if (creekW) for (let k = 1; k < creekW.length; k++) {
+  const [ax, az] = creekW[k - 1], [bx, bz] = creekW[k]; let dx = bx - ax, dz = bz - az;
+  const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
+  for (let sgt = 0; sgt < seg; sgt += 6) {
+    const cx = ax + dx * sgt, cz = az + dz * sgt;
+    for (const side of [1, -1]) if (rand() < 0.7) {
+      const off = 6 + rand() * 11, x = cx + nx * off * side, z = cz + nz * off * side;
+      if (treeOK(x, z)) treeSpots.push([x, z]);
+    }
+  }
+}
+for (let n = 0; n < 1400 && treeSpots.length < 230; n++) {
+  const x = (rand() * 2 - 1) * cropHalf, z = (rand() * 2 - 1) * cropHalf;
+  if (treeOK(x, z) && distToLines(x, z, [creekW || []], 8) >= 8 && rand() < 0.4) treeSpots.push([x, z]);
+}
+
+let nTrees = 0;
+for (const [x, z] of treeSpots) {
+  const t = treeTemplates[Math.floor(rand() * treeTemplates.length)];
+  const o = t.opts;
+  const targetH = o.targetH + (rand() - 0.5) * o.hVar;
+  // normalise to target height using the template's measured upright height.
+  const scl = (targetH / t.nominalH) * (0.85 + rand() * 0.3);
+  const rotY = rand() * Math.PI * 2;
+  const Y = terrainAt(x, z) - 0.05;
+  const node = cloneTree(t, `Tree_${String(nTrees).padStart(4, '0')}`, x, Y, z, scl, rotY);
+  treesParent.addChild(node);
+  nTrees++;
+}
+
+// ---- write final GLB ------------------------------------------------------
+// Remove the original tree templates (and their now-empty merged scenes) so they
+// don't ship in the GLB; Blender imports EVERY node in a file, and the templates
+// sit at +200 m / scale 100, which would render far off the patch. The placed
+// Tree_#### clones reference the shared Mesh datablocks, so those survive.
+for (const n of templateScrap) { try { n.dispose(); } catch { /* already gone */ } }
+const { prune } = await import('@gltf-transform/functions');
+await doc.transform(prune({ keepLeaves: false }), unpartition());   // drop orphans + single buffer
+const out = ex('1840-dahill-stylized.glb');
+writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
+
+// ---- report ---------------------------------------------------------------
+const sceneObjs = [];
+scene.traverse(o => { if (o.isMesh && o.parent === scene) sceneObjs.push(`  ${o.name.padEnd(20)} ${o.geometry.attributes.position.count} verts`); });
+console.log('terrain:', D.source);
+console.log(`crop half: ${cropHalf.toFixed(0)} m`);
+console.log(`buildings: ${nBld} (${nSkip} skipped on owner lots)   houseIdx: ${houseIdx}`);
+console.log(`grass clumps (animated nodes): ${clumpNodes.length}   wind clip: ${animations.length ? animations[0].name + ' (' + animations[0].duration + 's loop)' : 'none'}`);
+console.log(`trees placed (separate nodes): ${nTrees}   templates: ${treeTemplates.length}`);
+console.log('top-level meshes:\n' + sceneObjs.join('\n'));
+console.log(`animations in doc: ${doc.getRoot().listAnimations().map(a => a.getName()).join(', ')}`);
+console.log(`Tree_* nodes in doc: ${doc.getRoot().listNodes().filter(n => /^Tree_/.test(n.getName() || '')).length}`);
+console.log(`wrote ${out} (${(statSync(out).size / 1024 / 1024).toFixed(1)} MB)`);
