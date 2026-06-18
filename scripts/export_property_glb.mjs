@@ -51,7 +51,11 @@ const mercY = lat => Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2));
 const aLatN = LAT0 + A.Nt / 110540, aLatS = LAT0 + A.Nb / 110540;
 const aLonW = LON0 + A.E0 / (COSLAT * 111320), aLonE = LON0 + A.E1 / (COSLAT * 111320);
 const aMyN = mercY(aLatN), aMyS = mercY(aLatS);
-const aerialUVll = (lat, lon) => [(lon - aLonW) / (aLonE - aLonW), (mercY(lat) - aMyS) / (aMyN - aMyS)];
+// V: glTF's texture origin is v=0 at the TOP of the image, and the aerial mosaic is
+// stored north-up (top row = north) -> north must map to v=0. (The old Mapbox photo
+// was stored south-up, so the inverse looked right until we swapped in the north-up
+// Google mosaic, which then rendered upside-down / N-S flipped.)
+const aerialUVll = (lat, lon) => [(lon - aLonW) / (aLonE - aLonW), (aMyN - mercY(lat)) / (aMyN - aMyS)];
 
 // ---- terrain: crisp 1 m DEM patch if present, else coarse Terrarium ------
 const DEMPATH = path.join(ROOT, 'exports/dem_1m.json');
