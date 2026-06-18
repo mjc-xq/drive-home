@@ -663,6 +663,7 @@ export function createEngine({ canvas, ui, emit }) {
   // zOffset + spin (deg) translate/rotate the photoreal world about the house so
   // it matches the procedural frame (spawns + collision). Spin pivots on origin.
   ctx.P3DT = { yOffset: 32, xOffset: 0, zOffset: 0, spin: 0 };
+  ctx.homeYOffset = ctx.P3DT.yOffset;   // the home-aligned ground offset, restored when driving back into the home frame (far driving repurposes yOffset to hold ground continuity)
   const applyP3DT = () => {
     if (!ctx.p3dtiles || !ctx.p3dtiles.holder) return;
     const h = ctx.p3dtiles.holder;
@@ -743,9 +744,66 @@ export function createEngine({ canvas, ui, emit }) {
     const adjust = terrainAt(0, 0) - ys[ys.length >> 1];
     if (Math.abs(adjust) > 18) return false;  // garbage (rays hit roofs/voids/coarse tiles) — retry
     ctx.P3DT.yOffset = clamp(ctx.P3DT.yOffset + adjust, 8, 56);
+    ctx.homeYOffset = ctx.P3DT.yOffset;   // remember the aligned home ground so far-driving can restore it on return
     ctx.fn.applyP3DT();
     ctx.alignDone = true;
     return true;
+  }
+  // ---- keep the tile frame following the car on long FREE-ROAM drives ----------
+  // setPhotorealAnchor only re-bases on JUMPS. A continuous drive far from the
+  // current anchor would otherwise grow the render coords (toward float32's limit)
+  // and let the home-anchored ENU tangent-plane bow away from the real curved
+  // ground (the "drive far → worse" report). So while driving outside the home
+  // game area we slide the tile anchor + render origin along under the car. Both
+  // the camera and the tiles use renderOrigin, and yOffset is pinned to the car's
+  // current ground, so a re-base shifts everything together — no visible jump.
+  const REANCHOR_HOME_RADIUS = 30000;   // within 30 km of home = the home game frame (all POIs/coins live here); render origin stays at home
+  const REANCHOR_STEP = 12000;          // outside it, re-centre once the car has drifted ~12 km from the live anchor
+  // Smoothly re-base the photoreal frame onto (latR, lonR) at world (x, z). `remote`
+  // = anchored away from home (hide the home-only props). Preserves the car's
+  // on-screen position (renderOrigin = car) and ground height (yOffset = the car's
+  // current ground), so already-streamed tiles slide under the car seamlessly.
+  function reanchorDriveFrame(latR, lonR, x, z, remote, yOff) {
+    if (!ctx.p3dtiles || !ctx.p3dtiles.setGeoAnchor) return;
+    const wasRemote = ctx.remoteView;
+    ctx.tileAnchor = { lat: latR, lon: lonR, x, z, label: remote ? 'Far' : 'Home' };
+    ctx.renderOrigin = { x, z };
+    ctx.remoteView = remote;
+    ctx.alignDone = true;                       // skip the home-yard sampler; yOffset is set explicitly below
+    if (Number.isFinite(yOff)) ctx.P3DT.yOffset = yOff;
+    ctx.p3dtiles.setGeoAnchor(latR, lonR);      // re-orient ENU onto the car (no rebuild, no cache flush → tiles just shift with the group)
+    ctx.fn.applyP3DT();
+    if (remote && !wasRemote) {                 // crossing OUT of the home area: retire the home-only props (they're already far behind)
+      if (ctx.trafficSys) ctx.trafficSys.hideTraffic();
+      if (ctx.crowd) ctx.crowd.hideCrowd();
+      if (ctx.poi && ctx.poi.hideBeacons) ctx.poi.hideBeacons();
+      for (const c of ctx.coins) c.mesh.visible = false;
+    }
+    if (remote !== wasRemote) ctx.fn.applyModeVisuals();   // toggle procedural/parked-car visibility for the home↔far switch
+    ctx._tilesUpdT = 0;
+  }
+  ctx._reanchorT = 0;
+  function updateDriveAnchor(now) {
+    if (ctx.flags.has('flat') || !ctx.p3dtiles || !ctx.p3dtiles.holder.visible) return;
+    if (now - ctx._reanchorT < 500) return;     // ~2 Hz is plenty; re-basing is cheap but not free
+    ctx._reanchorT = now;
+    const distHome = Math.hypot(ctx.car.x, ctx.car.z);
+    if (distHome < REANCHOR_HOME_RADIUS) {
+      // back inside the home game area → restore the exact home frame (origin 0,
+      // home anchor, aligned home ground, props back on).
+      if (ctx.remoteView || ctx.renderOrigin.x || ctx.renderOrigin.z) {
+        reanchorDriveFrame(houseLat, houseLon, 0, 0, false, ctx.homeYOffset);
+        ctx.car.groundY = null; ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.camInit = false;   // re-seat on the home ground reference
+      }
+      return;
+    }
+    const dr = Math.hypot(ctx.car.x - ctx.renderOrigin.x, ctx.car.z - ctx.renderOrigin.z);
+    if (ctx.remoteView && dr < REANCHOR_STEP) return;   // already centred recently
+    const g = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
+    if (!g || !Number.isFinite(g.lat) || !Number.isFinite(g.lon)) return;
+    // pin yOffset to the car's current ground so the re-orient doesn't pop it up/down
+    const yOff = ctx.car.groundY != null ? ctx.car.groundY : ctx.P3DT.yOffset;
+    reanchorDriveFrame(g.lat * ctx.DEG, g.lon * ctx.DEG, ctx.car.x, ctx.car.z, true, yOff);
   }
   // ---- tile prefetch ----------------------------------------------------------
   // A small, low-res "scout" camera swept ALONG the active route ahead of the car so the
@@ -1490,6 +1548,7 @@ export function createEngine({ canvas, ui, emit }) {
     ctx.updateAnimals(dt, now, (ctx.mode === 'scoop' && ctx.scoopScene === 'yard') ? ctx.CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
     if (!ctx.remoteView) ctx.crowd.updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch — home-only, off when teleported away
     if (ctx.mode === 'drive') {
+      updateDriveAnchor(now);   // slide the tile frame under the car on long drives — BEFORE updateDrive so its camera offset matches the new origin this same frame
       ctx.drive.updateDrive(dt, now);
     } else if (ctx.mode === 'scoop') {
       ctx.scoop.updateScoop(dt, now);
