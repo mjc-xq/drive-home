@@ -164,12 +164,8 @@ const emitBuilding = (b, ib, base, wallH, W, Rf) =>
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
 scene.add(terrainMesh);
 
-// real roof heights from LiDAR (exports/buildings_height.json, keyed by building
-// index) so the generated buildings match the photoreal instead of OSM/4.5 m guesses
-const HGT = existsSync(path.join(ROOT, 'exports/buildings_height.json'))
-  ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_height.json'), 'utf8')) : {};
-const fullH = (b, ib) => { const lh = HGT[ib]; return (lh && lh > 2.2) ? lh : (b.h || 4.5); };
-const wallHeight = (b, ib) => { const H = fullH(b, ib); return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
+// OSM/Overture height (or a sane default) — NOT LiDAR (the LiDAR heights were noisy)
+const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
 const houseIdx = S.buildings.findIndex(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
 const hW = { pos: [], uv: [], col: [] }, hRf = { pos: [], col: [] };
