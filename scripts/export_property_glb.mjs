@@ -53,7 +53,7 @@ const aerialUVen = (e, n) => [(e - A.E0) / (A.E1 - A.E0), (A.Nt - n) / (A.Nt - A
 
 // ---- terrain: crisp 1 m DEM patch if present, else coarse Terrarium ------
 const DEMPATH = path.join(ROOT, 'exports/dem_1m.json');
-let terrainAt, terrainMesh, cropHalf, terrSrc;
+let terrainAt, terrainMesh, cropHalf, terrSrc, tXmin, tXmax, tZmin, tZmax;
 function mkMesh(positions, indices, color, name, opts = {}) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -73,6 +73,12 @@ if (existsSync(DEMPATH)) {
   const { cols, rows, h } = D;
   const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
   cropHalf = dLat * 110540 / 2 - 4;
+  // real terrain world bounds — the patch is narrower E-W than N-S (and may be off-centre
+  // from the house), so a symmetric ±cropHalf box let trees fall past the E-W edge into
+  // mid-air. Filter geometry against these actual bounds instead.
+  tXmin = (D.lonW - LON0) * COSLAT * 111320 - C[0]; tXmax = (D.lonE - LON0) * COSLAT * 111320 - C[0];
+  const _za = -((D.latN - LAT0) * 110540 - C[1]), _zb = -((D.latS - LAT0) * 110540 - C[1]);
+  tZmin = Math.min(_za, _zb); tZmax = Math.max(_za, _zb);
   terrSrc = D.source;
   // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon (curvature-correct).
   terrainAt = (X, Z) => {
@@ -99,7 +105,8 @@ if (existsSync(DEMPATH)) {
   throw new Error('exports/dem_1m.json missing — run: scripts/.venv/bin/python scripts/fetch_dem.py 400');
 }
 
-const inPatch = (X, Z) => Math.abs(X) <= cropHalf && Math.abs(Z) <= cropHalf;
+const inPatch = (X, Z) => X >= tXmin && X <= tXmax && Z >= tZmin && Z <= tZmax;
+const inTerrain = (X, Z, m = 5) => X >= tXmin + m && X <= tXmax - m && Z >= tZmin + m && Z <= tZmax - m;
 const centroidEN = p => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length], [0, 0]);
 
 // ---- buildings: walls + flat eave cap + gabled roofs (ported from geom.js) -
@@ -267,10 +274,10 @@ for (const r of S.roads || []) {
   const lw = pl.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
   if (lw.length < 2) continue;
   roadLines.push(lw);
-  ribbon(lw, ROADW, 0.04, rPos, rIdx);                                   // asphalt
-  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.17, cuPos, cuIdx);     // left curb
-  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.17, cuPos, cuIdx);  // right curb
-  centreDashes(lw, 0.14, 0.06);                                          // dashed centre line
+  ribbon(lw, ROADW, 0.28, rPos, rIdx);                                   // asphalt — raised ~1 ft so DEM crowns/bumps don't poke through
+  ribbon(offsetLine(lw, ROADW / 2 + 0.3), 0.55, 0.44, cuPos, cuIdx);     // left curb (lip above asphalt)
+  ribbon(offsetLine(lw, -(ROADW / 2 + 0.3)), 0.55, 0.44, cuPos, cuIdx);  // right curb
+  centreDashes(lw, 0.14, 0.34);                                          // dashed centre line just above asphalt
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
@@ -329,7 +336,7 @@ if (existsSync(TREESJSON)) {
   // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
   // house readable instead of buried.
   trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
-    .filter(([x, z]) => inPatch(x, z) && !onBuilding(x, z))
+    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z))   // strictly on the terrain
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
   treeSrc = `LiDAR canopy 2021 (real; ${trees.length} on-patch)`;
 } else {
