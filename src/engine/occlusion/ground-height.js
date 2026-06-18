@@ -17,8 +17,12 @@ export function createGround(ctx) {
     // Cast from `fromY` (default high). Casting from just above an actor skips
     // tree canopies / eaves overhead, so we read the ROAD under them, not the
     // canopy — that's what keeps the car from climbing trees.
+    // The tiles are drawn in render space (logical − renderOrigin), so probe there;
+    // the hit Y is unaffected (the holder only offsets X/Z), so the caller's logical
+    // height stays correct. renderOrigin is 0 near home → identical there.
     const oy = fromY != null ? fromY : 600;
-    _downRay.set(_gO.set(x, oy, z), _gD); _downRay.far = oy + 700; _gHits.length = 0;
+    const rx = x - ctx.renderOrigin.x, rz = z - ctx.renderOrigin.z;
+    _downRay.set(_gO.set(rx, oy, rz), _gD); _downRay.far = oy + 700; _gHits.length = 0;
     ctx.p3dtiles.raycast(_downRay, _gHits);
     return _gHits.length ? _gHits[0].point.y : null;
   }
@@ -52,16 +56,21 @@ export function createGround(ctx) {
     const base = prevY != null ? prevY : tA;
     let y = rawTileY(x, z, base + 2.2);
     if (y == null) y = rawTileY(x, z, base + 10);
-    if (y == null && prevY != null) y = rawTileY(x, z, base + 26);
-    if (y == null && prevY == null) y = rawTileY(x, z);
+    if (y == null) y = rawTileY(x, z, base + 26);
+    if (y == null) y = rawTileY(x, z);                            // full-height last resort: also recovers after a teleport to ground far ABOVE the held height (e.g. Paris), which the incremental casts can't reach
     if (y == null) return prevY != null ? prevY : tA;             // tile not streamed yet: hold height
+    if (prevY == null) return y;
+    // A continent-scale teleport lands on ground hundreds of metres off the held
+    // height; that's a real elevation change, not a tree/roof blob, so SNAP to it
+    // instead of crawling +1.5 m/frame (which would strand the camera under the map).
+    if (Math.abs(y - prevY) > 50) return y;
     // Out here terrainAt is just a clamped edge value — useless as a reference — so
     // bound by CONTINUITY instead: a real road never steps UP more than ~1.5 m
     // between samples, but a photogrammetry tree/roof blob does, so reject the
     // sudden climb (ride the surface beneath it) while letting the car settle
     // downhill freely. This is what keeps the car off the treetops out on the open
     // road, where there's no procedural topology to clamp against.
-    return prevY != null ? clamp(y, prevY - 6, prevY + 1.5) : y;
+    return clamp(y, prevY - 6, prevY + 1.5);
   }
 
   return { rawTileY, groundAt, actorGroundY };
