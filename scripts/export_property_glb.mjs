@@ -240,6 +240,18 @@ if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x555555, 'Roads'));
 let creekW = null;
 if (S.creek && S.creek.p) {
   creekW = S.creek.p.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
+  // OSM centerline is crude; pull each vertex toward the channel bottom (lowest bare-earth
+  // DEM within +/-R perpendicular to flow) so the ribbon sits IN the real creek, not beside it.
+  if (creekW.length >= 3) {
+    const R = 12;
+    creekW = creekW.map((p, i) => {
+      const a = creekW[Math.max(0, i - 1)], b = creekW[Math.min(creekW.length - 1, i + 1)];
+      let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+      const nx = -dz, nz = dx; let bx = p[0], bz = p[1], bh = terrainAt(p[0], p[1]);
+      for (let t = -R; t <= R; t += 2) { const x = p[0] + nx * t, z = p[1] + nz * t, h = terrainAt(x, z); if (h < bh) { bh = h; bx = x; bz = z; } }
+      return [p[0] + (bx - p[0]) * 0.6, p[1] + (bz - p[1]) * 0.6];   // gentle 60% nudge
+    });
+  }
   if (creekW.length >= 2) {
     const cPos = [], cIdx = []; ribbon(creekW, 10, 0.05, cPos, cIdx);
     const cr = mkMesh(cPos, cIdx, 0x3a78c2, 'Creek_SanLorenzo'); cr.material.name = 'Creek_mat'; scene.add(cr);
