@@ -649,6 +649,15 @@ export function createEngine({ canvas, ui, emit }) {
   const houseLat = (LAT0 + C[1] / 110540) * ctx.DEG;
   const houseLon = (LON0 + C[0] / (COSLAT * 111320)) * ctx.DEG;
   ctx.tileAnchor = { lat: houseLat, lon: houseLon, x: 0, z: 0, label: 'Home' };
+  // Floating render origin: the LOGICAL world point that is drawn at world (0,0).
+  // The whole game runs in one home-anchored ENU frame, so a global teleport (e.g.
+  // Paris) gives car/camera world coords in the MILLIONS of metres — past float32's
+  // usable range, where the tile renderer's bounds/error math collapses and nothing
+  // draws. So at a remote anchor we draw that anchor at the origin and shift every
+  // rendered position (car, camera, tiles, ground/occlusion raycasts) by this
+  // offset. It stays {0,0} near home, so the common case is byte-for-byte unchanged.
+  ctx.renderOrigin = { x: 0, z: 0 };
+  ctx.remoteView = false;   // true once anchored far from home: hide the home-only props (coins, traffic, beacons, parked cars)
   // live-tunable photoreal placement (window.__dahill.p3dt; call nudge()).
   // yOffset lifts the photoreal ground to the procedural terrain height; xOffset/
   // zOffset + spin (deg) translate/rotate the photoreal world about the house so
@@ -658,8 +667,11 @@ export function createEngine({ canvas, ui, emit }) {
     if (!ctx.p3dtiles || !ctx.p3dtiles.holder) return;
     const h = ctx.p3dtiles.holder;
     const a = ctx.tileAnchor || { x: 0, z: 0 };
+    const ro = ctx.renderOrigin;
     h.rotation.y = ctx.P3DT.spin * ctx.DEG;
-    h.position.set((a.x || 0) + ctx.P3DT.xOffset, ctx.P3DT.yOffset, (a.z || 0) + ctx.P3DT.zOffset);
+    // Draw the anchor at the render origin: near home (ro = 0) this is the anchor's
+    // own world coord as before; at a remote anchor (ro = anchor) it lands at ~0.
+    h.position.set((a.x || 0) - ro.x + ctx.P3DT.xOffset, ctx.P3DT.yOffset, (a.z || 0) - ro.z + ctx.P3DT.zOffset);
     h.updateMatrixWorld(true);
   };
   function setPhotorealAnchor(lat, lon, x, z, label, force) {
@@ -668,7 +680,25 @@ export function createEngine({ canvas, ui, emit }) {
     const d = Math.hypot(x - (cur.x || 0), z - (cur.z || 0));
     if (!force && d < 80000) return false;   // home/Bay Area stays in the original ENU tile frame
     ctx.tileAnchor = { lat: lat * ctx.DEG, lon: lon * ctx.DEG, x, z, label: label || 'Map' };
-    ctx.alignDone = Math.hypot(x, z) > 80000;   // remote frames cannot use the home-yard alignment sampler
+    const remote = Math.hypot(x, z) > 80000;   // a continent-scale teleport, past where the home ENU frame keeps float32 precision
+    ctx.alignDone = remote;                      // remote frames cannot use the home-yard alignment sampler
+    // Move the render origin onto the new anchor so it draws near (0,0); near-home
+    // anchors keep the origin at home. The home-only props belong only to the home
+    // frame, so retire them when teleporting out (per-frame gates keep them off
+    // while remote and bring them back on return).
+    ctx.renderOrigin = remote ? { x, z } : { x: 0, z: 0 };
+    ctx.remoteView = remote;
+    if (remote) {
+      if (ctx.trafficSys) ctx.trafficSys.hideTraffic();
+      if (ctx.crowd) ctx.crowd.hideCrowd();
+      if (ctx.poi && ctx.poi.hideBeacons) ctx.poi.hideBeacons();
+      for (const c of ctx.coins) c.mesh.visible = false;
+      // Drop the held ground height + camera vertical refs so the probe re-finds the
+      // new location's elevation from scratch (Paris ground sits hundreds of metres
+      // off the home height) and the chase cam re-seats on it instead of underground.
+      ctx.car.groundY = null;
+      ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.camInit = false;
+    }
     ctx.tilesReady = false; ctx.emit('photoreal', false);
     ctx._tileWarmUntil = performance.now() + 14000;
     ctx._tileWarmOn = false;
@@ -784,8 +814,10 @@ export function createEngine({ canvas, ui, emit }) {
     const photoOn = ctx.fn.photoModes(ctx.mode) && ctx.p3dtiles && ctx.tilesReady;
     if (ctx.p3dtiles) ctx.p3dtiles.holder.visible = ctx.fn.photoModes(ctx.mode);
     if (ctx.mode !== 'drive' && ctx.tileClip) ctx.tileClip.clearTileClip();   // Drive-only visibility window; never leak into Explore/Scoop
-    ctx.staticGroup.visible = ctx.mode === 'scoop' || !photoOn;   // procedural in Scoop, or as the no-tiles fallback
-    ctx.carsGroup.visible = ctx.mode === 'drive' || ctx.mode === 'scoop';   // parked cars: ground modes only
+    // The procedural neighbourhood + parked cars belong to the home frame; at a
+    // remote anchor they'd float around the origin in front of the teleported view.
+    ctx.staticGroup.visible = (ctx.mode === 'scoop' || !photoOn) && !ctx.remoteView;   // procedural in Scoop, or as the no-tiles fallback
+    ctx.carsGroup.visible = (ctx.mode === 'drive' || ctx.mode === 'scoop') && !ctx.remoteView;   // parked cars: ground modes only
     if (ctx.ring) ctx.ring.visible = ctx.mode === 'explore';   // marker only makes sense from the air
     // SHADOWS only in Scoop: in Drive/Explore the procedural receivers are hidden and the
     // Google tiles are MeshBasicMaterial (can't receive), so a full extra depth pass each
@@ -1151,6 +1183,16 @@ export function createEngine({ canvas, ui, emit }) {
   // ---------- drive mode ----------
   function enterDrive() {
     ctx.fn.setMode('drive'); ctx.camInit = false;
+    // A fresh drive spawns at the home driveway, so restore the home tile frame +
+    // render origin if a previous drive teleported the anchor far away (Paris etc.) —
+    // otherwise the home-spawned car would land off in render space. No-op normally.
+    if (ctx.remoteView) {
+      ctx.renderOrigin = { x: 0, z: 0 };
+      ctx.remoteView = false;
+      ctx.tileAnchor = { lat: houseLat, lon: houseLon, x: 0, z: 0, label: 'Home' };
+      ctx.alignDone = false;
+      if (ctx.fn.rebuildPhotorealTiles) ctx.fn.rebuildPhotorealTiles();
+    }
     ctx.houseSys.setInside(false);
     ctx.nav.clearDestination();
     if (ctx.navMarker) ctx.navMarker.visible = false;
@@ -1447,7 +1489,7 @@ export function createEngine({ canvas, ui, emit }) {
     const dt = rawDt * ctx.timeScale;
     if (ctx.waterMat) ctx.waterMat.uniforms.uTime.value = now * 0.001; // flowing creek
     ctx.updateAnimals(dt, now, (ctx.mode === 'scoop' && ctx.scoopScene === 'yard') ? ctx.CHAR : null); // ambient life every mode; spooks away from the player while scooping the yard
-    ctx.crowd.updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch
+    if (!ctx.remoteView) ctx.crowd.updateCrowd(dt, now);   // dancing CeCe/Drew crowd (mode + distance gated) + hit-launch — home-only, off when teleported away
     if (ctx.mode === 'drive') {
       ctx.drive.updateDrive(dt, now);
     } else if (ctx.mode === 'scoop') {
