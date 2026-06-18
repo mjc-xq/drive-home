@@ -17,21 +17,28 @@ const BASIS_CDN = 'https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/libs/
 
 const CUTAWAY_VERTEX_PARS = `
 varying vec3 vDahillCutawayWorldPos;
+varying vec3 vDahillCutawayWorldNormal;
 `;
 
 const CUTAWAY_VERTEX_BODY = `
 vDahillCutawayWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vDahillCutawayWorldNormal = normalize(mat3(modelMatrix) * normal);
 `;
 
 const CUTAWAY_FRAGMENT_PARS = `
 varying vec3 vDahillCutawayWorldPos;
+varying vec3 vDahillCutawayWorldNormal;
 uniform vec3 dahillCutawayEye;
 uniform vec3 dahillCutawayTarget;
 uniform vec4 dahillCutawayScreen;
 uniform float dahillCutawayBaseY;
 uniform float dahillCutawayMinOpacity;
+uniform float dahillCutawayFlatMinOpacity;
 uniform float dahillCutawayDepthPad;
 uniform float dahillCutawayGroundPad;
+uniform float dahillCutawayMinHeight;
+uniform float dahillCutawayColumnRadius;
+uniform float dahillCutawayColumnSoftness;
 
 float dahillBayer4(vec2 p) {
   vec2 q = floor(mod(p, 4.0));
@@ -72,13 +79,23 @@ void dahillApplyCutaway() {
   float along = dot(vDahillCutawayWorldPos - dahillCutawayEye, dir);
   if (along <= dahillCutawayDepthPad || along >= targetDist - dahillCutawayDepthPad) return;
 
+  float heightAboveBase = vDahillCutawayWorldPos.y - dahillCutawayBaseY;
+  if (heightAboveBase < dahillCutawayMinHeight) return;
+
   float lineY = mix(dahillCutawayEye.y, dahillCutawayBaseY, clamp(along / targetDist, 0.0, 1.0));
   if (vDahillCutawayWorldPos.y < lineY - dahillCutawayGroundPad) return;
 
   vec2 ellipse = (gl_FragCoord.xy - dahillCutawayScreen.xy) / dahillCutawayScreen.zw;
   float fade = 1.0 - smoothstep(0.78, 1.14, length(ellipse));
+  if (dahillCutawayColumnRadius > 0.0) {
+    float columnDist = length(vDahillCutawayWorldPos.xz - dahillCutawayTarget.xz);
+    fade *= 1.0 - smoothstep(dahillCutawayColumnRadius, dahillCutawayColumnRadius + dahillCutawayColumnSoftness, columnDist);
+  }
   if (fade <= 0.0) return;
-  float keep = mix(1.0, dahillCutawayMinOpacity, fade);
+  float upness = abs(normalize(vDahillCutawayWorldNormal).y);
+  float flatness = smoothstep(0.72, 0.9, upness);
+  float floor = mix(dahillCutawayMinOpacity, dahillCutawayFlatMinOpacity, flatness);
+  float keep = mix(1.0, floor, fade);
   if (dahillBayer4(gl_FragCoord.xy) > keep) discard;
 }
 `;
@@ -90,8 +107,12 @@ function installTileCutawayDither(material, cutaway) {
     shader.uniforms.dahillCutawayScreen = cutaway.screen;
     shader.uniforms.dahillCutawayBaseY = cutaway.baseY;
     shader.uniforms.dahillCutawayMinOpacity = cutaway.minOpacity;
+    shader.uniforms.dahillCutawayFlatMinOpacity = cutaway.flatMinOpacity;
     shader.uniforms.dahillCutawayDepthPad = cutaway.depthPad;
     shader.uniforms.dahillCutawayGroundPad = cutaway.groundPad;
+    shader.uniforms.dahillCutawayMinHeight = cutaway.minHeight;
+    shader.uniforms.dahillCutawayColumnRadius = cutaway.columnRadius;
+    shader.uniforms.dahillCutawayColumnSoftness = cutaway.columnSoftness;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${CUTAWAY_VERTEX_PARS}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${CUTAWAY_VERTEX_BODY}`);
@@ -99,7 +120,7 @@ function installTileCutawayDither(material, cutaway) {
       .replace('#include <common>', `#include <common>\n${CUTAWAY_FRAGMENT_PARS}`)
       .replace('#include <alphatest_fragment>', 'dahillApplyCutaway();\n#include <alphatest_fragment>');
   };
-  material.customProgramCacheKey = () => 'dahill-tile-screen-cutaway-v1';
+  material.customProgramCacheKey = () => 'dahill-tile-screen-cutaway-v2';
 }
 
 export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
@@ -139,9 +160,13 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
     target: { value: new THREE.Vector3() },
     screen: { value: new THREE.Vector4(0, 0, 0, 0) },
     baseY: { value: 0 },
-    minOpacity: { value: 0.0 },
+    minOpacity: { value: 0.18 },
+    flatMinOpacity: { value: 0.8 },
     depthPad: { value: 0.35 },
     groundPad: { value: 0.28 },
+    minHeight: { value: 0.9 },
+    columnRadius: { value: 0 },
+    columnSoftness: { value: 1 },
   };
   tiles.registerPlugin({
     name: 'DAHILL_LOOK',
