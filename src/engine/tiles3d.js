@@ -8,10 +8,9 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 
 // Google Photorealistic 3D Tiles streamed into the scene. The tileset is in
-// geocentric ECEF; ReorientationPlugin re-bases it so the house lat/lon sits at
-// the world origin, Y-up — matching this scene's local-meters frame. Tiles are
-// Draco-compressed with KTX2 textures, so DRACO + KTX2 decoders are wired in
-// (loaded from CDN — fine, since photoreal tiles are an online feature anyway).
+// geocentric ECEF; ReorientationPlugin re-bases it so the active geo anchor sits
+// at the local tile origin, Y-up. The engine can move that anchor for global
+// jumps while placing the holder at the car's world coordinate.
 const DRACO_CDN = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const BASIS_CDN = 'https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/libs/basis/';
 
@@ -196,10 +195,33 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
     }
   });
   tiles.registerPlugin(new TilesFadePlugin());
-  tiles.registerPlugin(new ReorientationPlugin({
+  const reorientation = new ReorientationPlugin({
     lat: opts.lat, lon: opts.lon, height: opts.height ?? 0,
     azimuth: opts.azimuth ?? 0, recenter: true
-  }));
+  });
+  tiles.registerPlugin(reorientation);
+  tiles.reorientation = reorientation;
+  tiles.setGeoAnchor = (lat, lon, height = opts.height ?? 0) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+    reorientation.lat = lat;
+    reorientation.lon = lon;
+    reorientation.height = height;
+    if (tiles.root) reorientation.transformLatLonHeightToOrigin(lat, lon, height, opts.azimuth ?? 0);
+    if (tiles.holder) tiles.holder.updateMatrixWorld(true);
+    else tiles.group.updateMatrixWorld(true);
+    if (tiles.resetFailedTiles) tiles.resetFailedTiles();
+    return true;
+  };
+  tiles.flushTileCache = () => {
+    const cache = tiles.lruCache;
+    if (!cache || !cache.markAllUnused) return;
+    const minBytes = cache.minBytesSize, minSize = cache.minSize;
+    cache.minBytesSize = 0; cache.minSize = 0;
+    cache.markAllUnused();
+    if (cache.unloadUnusedContent) cache.unloadUnusedContent();
+    if (cache.scheduleUnload) cache.scheduleUnload();
+    cache.minBytesSize = minBytes; cache.minSize = minSize;
+  };
   // flatten the play-area ground (driveway/yard) — shapes added by the engine
   // once alignment settles. Vertices are flattened in the TILESET LOCAL frame.
   const flatten = new TileFlatteningPlugin();
@@ -222,6 +244,7 @@ export function createPhotorealTiles(scene, camera, renderer, opts = {}) {
   holder.add(tiles.group);
   scene.add(holder);
   tiles.holder = holder;
+  holder.updateMatrixWorld(true);
 
   // Full teardown for engine.dispose(): frees all streamed tile geom/textures,
   // the Draco/KTX2 worker pools, and detaches the holder. The biggest GPU pool

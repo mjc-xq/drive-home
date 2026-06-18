@@ -264,6 +264,7 @@ export function createNav(ctx) {
     const onLocalRoad = np && np.d < 90;
     if (onLocalRoad) { ctx.car.x = np.x; ctx.car.z = np.z; }
     else if (np && ctx.fn.insideBuilding(ctx.car.x, ctx.car.z)) { ctx.car.x = np.x; ctx.car.z = np.z; }
+    if (ctx.fn.setPhotorealAnchor) ctx.fn.setPhotorealAnchor(lat, lon, ctx.car.x, ctx.car.z, label);
     ctx.nav.clearDestination();
     ctx.nav.settleAfterTeleport();
     ctx.toast('📍 Jumped to ' + ctx.esc(label || 'there'), 1500);
@@ -295,6 +296,7 @@ export function createNav(ctx) {
           // de-wedge: if the route end still sits inside a footprint, slide to the nearest road
           const np = ctx.roads.nearestRoadPoint(ctx.car.x, ctx.car.z);
           if (np && (np.d < 90 || ctx.fn.insideBuilding(ctx.car.x, ctx.car.z))) { ctx.car.x = np.x; ctx.car.z = np.z; }
+          if (ctx.fn.setPhotorealAnchor) ctx.fn.setPhotorealAnchor(end.lat(), end.lng(), ctx.car.x, ctx.car.z, 'Road');
           ctx._jumpSnap = null;   // Google curb landed first — consume the stamp so the OSM-fetch snap won't double-fire
           ctx.nav.settleAfterTeleport();   // re-seat camera/ground refs (was leaving camGroundRef stale → floating cam)
         }
