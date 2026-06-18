@@ -44,7 +44,7 @@ import { useEffect, useRef, useState } from 'react';
  * @param {() => void} [props.onJump]  Called when the jump action button is tapped.
  * @returns {JSX.Element}
  */
-export default function MobileControls({ input, orientation, onJump }) {
+export default function MobileControls({ input, orientation, onJump, buttons = true }) {
   // The joystick base diameter scales with the viewport but caps at 70px so it
   // never dominates a small phone. Recomputed on resize/orientation change.
   const [baseSize, setBaseSize] = useState(() => joySize());
@@ -70,17 +70,17 @@ export default function MobileControls({ input, orientation, onJump }) {
       const js = (input && input.joystick) || null;
       const knob = knobRef.current;
       const base = baseRef.current;
+      const active = !!(js && js.active);
+      // FLOATING stick: the base appears at the touch-down point (baseX/baseY) and hides when
+      // released; the knob offsets from the base by knobX/knobY. (TouchJoystick recentres on touch.)
+      if (base) {
+        base.style.display = active ? 'block' : 'none';
+        if (active) { base.style.left = (js.baseX || 0) + 'px'; base.style.top = (js.baseY || 0) + 'px'; }
+      }
       if (knob) {
         const x = (js && js.knobX) || 0;
         const y = (js && js.knobY) || 0;
         knob.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
-      }
-      // Toggle the "active" class only on change to avoid layout thrash.
-      const active = !!(js && js.active);
-      if (base && base.dataset.active !== String(active)) {
-        base.dataset.active = String(active);
-        base.classList.toggle('mc-active', active);
-        if (knob) knob.classList.toggle('mc-active', active);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -120,7 +120,8 @@ export default function MobileControls({ input, orientation, onJump }) {
         />
       </div>
 
-      {/* ── BOTTOM-RIGHT: action-button cluster ── */}
+      {/* ── BOTTOM-RIGHT: action-button cluster (optional — the host HUD may supply its own) ── */}
+      {buttons && (
       <div className="mcButtons" onPointerDown={swallow}>
         <button
           type="button"
@@ -138,6 +139,7 @@ export default function MobileControls({ input, orientation, onJump }) {
           </svg>
         </button>
       </div>
+      )}
     </div>
   );
 }
@@ -169,11 +171,11 @@ const MC_CSS = `
 
 /* ── floating MOVE joystick (bottom-LEFT) ── */
 .mobileControls .mcJoyBase{
-  position:absolute;
-  left:max(16px, env(safe-area-inset-left));
-  bottom:max(24px, env(safe-area-inset-bottom));
+  position:fixed;            /* FLOATING: the rAF loop sets left/top to the touch point + centres it */
+  transform:translate(-50%, -50%);
+  display:none;             /* shown (block) only while a finger is down */
   border-radius:50%;
-  pointer-events:auto;
+  pointer-events:none;      /* the InputManager already owns the canvas pointer; the base is purely visual */
   touch-action:none;
   background:radial-gradient(circle at 50% 50%, rgba(20,28,46,.30), rgba(10,14,22,.42));
   border:1.5px solid rgba(45,140,255,.55);

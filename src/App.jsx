@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createEngine } from './engine/engine.js';
+import MobileControls from './ui/MobileControls.jsx';   // unified on-screen joystick (scoop; drive later)
 
 // Reusable address box with live Google Places autocomplete. `suggest(text)` returns
 // [{description, placeId}]; picking one calls onPick(item); typing + submit calls onText.
@@ -60,6 +61,12 @@ export default function App() {
   const [subline, setSubline] = useState('Hayward, CA');
   const [shiftLock, setShiftLock] = useState(false);
   const [scoopHud, setScoopHud] = useState({ name: '🥄 Trowel', bag: 0, cap: 6, total: 0, clean: 100 });
+  const [orientation, setOrientation] = useState(() => (typeof window !== 'undefined' && window.innerHeight > window.innerWidth) ? 'portrait' : 'landscape');
+  useEffect(() => {
+    const onR = () => setOrientation(window.innerHeight > window.innerWidth ? 'portrait' : 'landscape');
+    window.addEventListener('resize', onR); window.addEventListener('orientationchange', onR);
+    return () => { window.removeEventListener('resize', onR); window.removeEventListener('orientationchange', onR); };
+  }, []);
   const [scoopMenuOpen, setScoopMenuOpen] = useState(false);   // collapsible Scoop side menu
   const [scoopChar, setScoopChar] = useState('drew');          // which avatar you control (Drew/CeCe)
   const [scoopActions, setScoopActions] = useState([]);        // the active avatar's emote buttons
@@ -618,6 +625,7 @@ export default function App() {
             <button id="jumpBtn" className="btn primary icon" aria-label="Jump" onClick={() => eng().jump()}>🦘</button>
             {nearCar && <button id="getInCar" className="btn primary" onClick={() => eng().driveFromScoop()}>Get in &amp; drive 🚗</button>}
             <div id="lookHint" className="chip">left to move · drag to look · 🦘 jump · ☰ menu: characters, actions &amp; exit</div>
+            {eng() && eng().im && <MobileControls input={eng().im} orientation={orientation} buttons={false} />}
           </div>
         )}
         <div id="joy" ref={el => (uiRefs.current.joy = el)}><div id="knob" ref={el => (uiRefs.current.knob = el)} /></div>
