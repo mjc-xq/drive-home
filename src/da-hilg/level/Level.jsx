@@ -308,7 +308,7 @@ export function Level({ onReady }) {
           radius={38}
           innerRadius={0.4}
           count={85000}
-          bladeHeight={0.4}
+          bladeHeight={0.22}
           paveMask={paveMask.texture}
           maskMin={paveMask.min}
           maskSize={paveMask.size}

@@ -14,6 +14,7 @@ import {
   greetedAtom,
   pausedAtom,
 } from '../state/atoms.js';
+import { showFacadesAtom, showWaterAtom, showGrassAtom } from '../state/settingsAtoms.js';
 import { CHARACTERS } from '../constants.js';
 import { setVolumes } from '../audio/sfx.js';
 import { pushToast } from './hudEvents.js';
@@ -29,6 +30,10 @@ export default function HudMenu() {
   const [open, setOpen] = useAtom(pausedAtom);
   const [cameraMode, setCameraMode] = useAtom(cameraModeAtom);
   const [settings, setSettings] = useAtom(settingsAtom);
+  // Graphics layer toggles live in the menu alongside audio (single settings surface).
+  const [showFacades, setShowFacades] = useAtom(showFacadesAtom);
+  const [showWater, setShowWater] = useAtom(showWaterAtom);
+  const [showGrass, setShowGrass] = useAtom(showGrassAtom);
   const mode = useAtomValue(gameModeAtom);
   const [, setScore] = useAtom(scoreAtom);
   const [, setWon] = useAtom(wonAtom);
@@ -155,6 +160,14 @@ export default function HudMenu() {
             value={settings.lookSens ?? 1}
             onChange={(v) => patch('lookSens', v)}
           />
+
+          {/* GRAPHICS — the optional world layers (were a separate ⚙ panel before). */}
+          <div className="dhKick" style={kickStyle}>
+            GRAPHICS
+          </div>
+          <Toggle label="Photo facades" checked={showFacades} onChange={setShowFacades} />
+          <Toggle label="Fancy water" checked={showWater} onChange={setShowWater} />
+          <Toggle label="Grass" checked={showGrass} onChange={setShowGrass} />
 
           {/* HOW TO PLAY */}
           <div className="dhKick" style={kickStyle}>
