@@ -247,6 +247,28 @@ export default function Minimap() {
         ctx.drawImage(road.canvas, srcX, srcY, size, size, 0, 0, size, size);
       }
 
+      // Map boundary outline — the edge of the walkable block. Drawn as a dashed warm
+      // line that appears as you approach the rim (cross it and you warp to the border).
+      const bounds = levelMeta.bounds;
+      if (bounds) {
+        const c0 = liveProj.worldToMap(bounds.minX, bounds.minZ, px, pz);
+        const c1 = liveProj.worldToMap(bounds.maxX, bounds.minZ, px, pz);
+        const c2 = liveProj.worldToMap(bounds.maxX, bounds.maxZ, px, pz);
+        const c3 = liveProj.worldToMap(bounds.minX, bounds.maxZ, px, pz);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,200,90,0.55)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(c0[0], c0[1]);
+        ctx.lineTo(c1[0], c1[1]);
+        ctx.lineTo(c2[0], c2[1]);
+        ctx.lineTo(c3[0], c3[1]);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
+
       // discovered safe-zone pips (--go), player-locked north-up
       const zonePos = zonePosRef.current;
       const safePos = zonePos?.safe;
