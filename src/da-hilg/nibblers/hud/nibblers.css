@@ -1,0 +1,446 @@
+/* Nibblers HUD — .nb-* styles layered on the framework HUD tokens.
+ *
+ * This cluster mounts INSIDE the framework's `.dahilg-hud` root, so every token
+ * (--nav/--go/--jump/--reverse/--coin, --hud-glass/--hud-line/--hud-shadow/
+ * --hud-blur, --safe-*) and the global reduced-motion block cascade down for free.
+ * We add only the new widgets here, prefixed `.nb-`, in the same visual language:
+ * square dark glass (radius 0), AGC tabular numbers, Chakra Petch kickers, the
+ * five accents. Pointer-events stay none (nothing here is interactive).
+ *
+ * Imported by NibblersHud.jsx alongside the framework hud.css. */
+
+/* ── Cluster root ──────────────────────────────────────────────────────────── */
+.nb-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* exposes a single visibility driver the Vignette transitions against */
+  --nb-vis: 1;
+}
+
+/* shared glass primitive (mirrors .dh-panel; local so we don't depend on order) */
+.nb-panel {
+  background: var(--hud-glass);
+  border: 1px solid var(--hud-line);
+  box-shadow: var(--hud-shadow);
+  backdrop-filter: var(--hud-blur);
+  -webkit-backdrop-filter: var(--hud-blur);
+  border-radius: 0;
+}
+
+.nb-num {
+  font-family: 'AGC', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.nb-kick {
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 8px;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* ── Vignette (full-screen visibility overlay) ─────────────────────────────── */
+.nb-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0; /* behind every widget, above the canvas */
+  /* edge alpha driven inline by --nb-edge (= 1 - visibilityFactor, capped) */
+  background: radial-gradient(
+    120% 120% at 50% 50%,
+    rgba(6, 8, 12, 0) 30%,
+    rgba(6, 8, 12, var(--nb-edge, 0)) 100%
+  );
+  opacity: 1;
+  transition: background 0.4s ease;
+  will-change: background;
+}
+/* a faint living edge-crawl when heavily overwhelmed (decorative, motion only) */
+.nb-vignette::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--nb-crawl, 0);
+  background: radial-gradient(
+      120% 120% at 50% 50%,
+      transparent 62%,
+      rgba(255, 82, 71, 0.05) 100%
+    );
+  mix-blend-mode: screen;
+  animation: nb-crawl 6s ease-in-out infinite;
+  transition: opacity 0.5s ease;
+}
+@keyframes nb-crawl {
+  0%,
+  100% {
+    transform: scale(1.02);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+/* ── MarkedIndicator (top-center) ──────────────────────────────────────────── */
+.nb-marked {
+  position: absolute;
+  top: calc(56px + var(--safe-t));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px 11px;
+  z-index: 2;
+  animation: nb-marked-slam 0.32s cubic-bezier(0.18, 0.9, 0.3, 1.2) both;
+}
+@keyframes nb-marked-slam {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.85);
+  }
+  60% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.04);
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+  }
+}
+.nb-marked-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nb-marked-word {
+  font-family: 'AGC', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--reverse);
+  text-shadow: 0 0 12px rgba(255, 82, 71, 0.55);
+  /* steady breathing pulse; rate set inline by --nb-pulse (scales with tier) */
+  animation: nb-marked-pulse var(--nb-pulse, 1.1s) ease-in-out infinite;
+}
+@keyframes nb-marked-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    text-shadow: 0 0 8px rgba(255, 82, 71, 0.4);
+  }
+  50% {
+    opacity: 1;
+    text-shadow: 0 0 16px rgba(255, 82, 71, 0.9);
+  }
+}
+.nb-marked-timer {
+  font-family: 'AGC', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.82);
+}
+/* attraction tier ramp: 5 segments fill + redden with the tier */
+.nb-ramp {
+  display: flex;
+  gap: 3px;
+}
+.nb-ramp-seg {
+  width: 22px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.16);
+  transition: background 0.28s ease, box-shadow 0.28s ease;
+}
+.nb-ramp-seg.is-on {
+  background: var(--reverse);
+  box-shadow: 0 0 7px rgba(255, 82, 71, 0.7);
+}
+
+/* ── SwarmCount (top-left, under the framework state strip) ────────────────── */
+.nb-swarm {
+  position: absolute;
+  top: calc(54px + var(--safe-t));
+  left: calc(12px + var(--safe-l));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 12px 9px;
+  min-width: 116px;
+  z-index: 2;
+}
+.nb-swarm-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.nb-swarm-val {
+  font-family: 'AGC', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  font-size: 17px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: #fff;
+  transition: color 0.22s ease;
+}
+.nb-swarm-val.is-warn {
+  color: var(--coin);
+}
+.nb-swarm-val.is-crit {
+  color: var(--reverse);
+}
+/* one-shot jiggle on attach/stomp (class toggled + reflow-restart) */
+.nb-swarm-val.is-pop {
+  animation: nb-num-pop 0.22s ease-out;
+}
+@keyframes nb-num-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ── HealthBar (top-left, below SwarmCount; de-emphasized) ─────────────────── */
+.nb-health {
+  position: absolute;
+  top: calc(118px + var(--safe-t));
+  left: calc(12px + var(--safe-l));
+  width: 116px;
+  z-index: 2;
+  opacity: 0.82;
+}
+.nb-health-track {
+  position: relative;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--hud-line);
+  overflow: hidden;
+}
+.nb-health-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  background: var(--go);
+  transition: width 0.3s ease, background 0.3s ease;
+}
+.nb-health-fill.is-mid {
+  background: var(--coin);
+}
+.nb-health-fill.is-low {
+  background: var(--reverse);
+}
+/* drain shimmer overlay — speed/intensity rises inline via --nb-drain */
+.nb-health-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: var(--nb-drain, 0);
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: nb-shimmer 1.1s linear infinite;
+}
+@keyframes nb-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+/* ── ObjectiveHint (bottom-center) ─────────────────────────────────────────── */
+.nb-hint {
+  position: absolute;
+  bottom: calc(86px + var(--safe-b));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px 7px;
+  z-index: 2;
+  white-space: nowrap;
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.82);
+  transition: color 0.3s ease;
+  animation: nb-hint-swap 0.3s ease both;
+}
+.nb-hint.is-marked {
+  color: var(--nav);
+}
+.nb-hint.is-crit {
+  color: var(--reverse);
+}
+@keyframes nb-hint-swap {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ── SafeBanner (center wash) ──────────────────────────────────────────────── */
+.nb-safe {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  animation: nb-safe-out 2.2s ease-out forwards;
+}
+.nb-safe::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    100% 100% at 50% 50%,
+    rgba(43, 232, 79, 0.28) 0%,
+    rgba(43, 232, 79, 0) 70%
+  );
+}
+.nb-safe-word {
+  position: relative;
+  font-family: 'AGC', system-ui, sans-serif;
+  font-weight: 900;
+  font-size: clamp(40px, 10vw, 92px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--go);
+  text-shadow: 0 0 26px rgba(43, 232, 79, 0.6);
+  animation: nb-safe-word 0.5s cubic-bezier(0.18, 0.9, 0.3, 1.2) both;
+}
+.nb-safe-sub {
+  position: relative;
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.78);
+  animation: nb-safe-sub 0.5s ease both 0.1s;
+}
+@keyframes nb-safe-word {
+  0% {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes nb-safe-sub {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes nb-safe-out {
+  0%,
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ── Minimap (bottom-right) ────────────────────────────────────────────────── */
+.nb-minimap {
+  position: absolute;
+  right: calc(12px + var(--safe-r));
+  bottom: calc(16px + var(--safe-b));
+  padding: 5px;
+  z-index: 2;
+  line-height: 0;
+}
+.nb-minimap canvas {
+  display: block;
+  border-radius: 0;
+}
+.nb-minimap-n {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'AGC', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1;
+  pointer-events: none;
+}
+.nb-minimap-count {
+  position: absolute;
+  bottom: 5px;
+  right: 7px;
+  font-family: 'AGC', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--go);
+  line-height: 1;
+  text-shadow: 0 0 6px rgba(43, 232, 79, 0.5);
+  pointer-events: none;
+}
+
+/* ── Reduced motion ────────────────────────────────────────────────────────── */
+/* The framework hud.css already neutralizes animations/transitions inside
+ * .dahilg-hud; this block hardens the Nibblers-specific decorative motion so the
+ * informational darkening/fill stays but the living crawl + shimmer stop. */
+@media (prefers-reduced-motion: reduce) {
+  .nb-vignette {
+    transition: none !important;
+  }
+  .nb-vignette::after {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .nb-health-fill::after {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .nb-marked-word,
+  .nb-swarm-val.is-pop,
+  .nb-safe,
+  .nb-safe-word,
+  .nb-safe-sub,
+  .nb-marked,
+  .nb-hint {
+    animation: none !important;
+  }
+}

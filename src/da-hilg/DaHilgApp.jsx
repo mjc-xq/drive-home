@@ -1,0 +1,74 @@
+// DaHilgApp — the root composition for the Da Hilg game. It does three things and
+// nothing more:
+//   1. Wraps BOTH the DOM HUD and the <Canvas> tree in <Provider store={daHilgStore}>
+//      so they read/write one shared Jotai store (HUD via hooks, sim imperatively).
+//   2. Mounts the DOM HUD (which owns the LoadingVeil / LockOverlay via atoms).
+//   3. Wraps the Canvas in drei <KeyboardControls map={keyMap}> and installs the
+//      pointer-lock + edge-key input hooks.
+//
+// Per-frame work lives entirely in <GameSystems> (inside <Scene>); this component
+// is pure composition. No StrictMode anywhere up the tree (main.jsx).
+
+import { Suspense, useEffect } from 'react';
+import { Provider } from 'jotai';
+import { Canvas } from '@react-three/fiber';
+import { KeyboardControls } from '@react-three/drei';
+
+import { daHilgStore } from './state/store.js';
+import { CAM_FOV, FP_NEAR, CAM_FAR } from './constants.js';
+import { keyMap } from './input/keyMap.js';
+import { usePointerLock } from './input/usePointerLock.js';
+import { useEdgeKeys } from './input/useEdgeKeys.js';
+import { useLevelMeta } from './level/levelMeta.js';
+import { initNibblers } from './nibblers/index.js';
+
+import SceneEnv from './scene/SceneEnv.jsx';
+import Scene from './scene/Scene.jsx';
+import DaHilgHud from './hud/DaHilgHud.jsx';
+
+/**
+ * Input hooks live in their own tiny component so they sit *inside* the Provider
+ * (they read/write the shared store) but *outside* the Canvas (they bind window
+ * listeners and own the pointer-lock lifecycle, not the R3F render loop).
+ */
+function InputLayer() {
+  usePointerLock();
+  useEdgeKeys();
+  return null;
+}
+
+export default function DaHilgApp() {
+  // Kick off the level-metadata fetch once. It populates the plain refs.levelMeta
+  // singleton (offset/groundY/spawns), which unblocks the registry build, zone
+  // placement, and the physics unpause. Side-effect only; the ref is read directly.
+  useLevelMeta();
+
+  // Reset the nibbler swarm to a clean state on mount (fresh load / HMR).
+  useEffect(() => {
+    initNibblers();
+  }, []);
+
+  return (
+    <Provider store={daHilgStore}>
+      {/* DOM HUD overlay — owns the loading veil / lock overlay via atoms. */}
+      <DaHilgHud />
+
+      {/* Desktop pointer-lock + edge-key verbs (Tab/V/E/1-3/Esc). */}
+      <InputLayer />
+
+      {/* Held movement keys are read transiently inside the sim via getKeys(). */}
+      <KeyboardControls map={keyMap}>
+        <Canvas
+          shadows
+          dpr={[1, 2]}
+          camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
+        >
+          <SceneEnv />
+          <Suspense fallback={null}>
+            <Scene />
+          </Suspense>
+        </Canvas>
+      </KeyboardControls>
+    </Provider>
+  );
+}
