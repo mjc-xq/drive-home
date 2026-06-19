@@ -125,7 +125,22 @@ for (const [rx, label] of [
   [/^Collision_Roads$/, 'road collision layer'],
   [/^Collision_Buildings$/, 'building collision layer'],
   [/^LOD_Buildings_Low$/, 'low building LOD layer'],
+  // clean collection grouping from organize_layers.py (group nodes are empties)
+  [/^Neighborhood$/, 'Neighborhood root group'],
+  [/^Buildings$/, 'Buildings group'],
+  [/^Roads & Paths$/, 'Roads & Paths group'],
+  [/^Creek$/, 'Creek group'],
+  [/^Vegetation$/, 'Vegetation group'],
+  [/^Trees$/, 'Trees group'],
+  [/^Grass in the Wind$/, 'Grass in the Wind group'],
+  [/^Fences$/, 'Fences group'],
+  [/^Helpers$/, 'Helpers group'],
 ]) requireNode(names, rx, label);
+
+// grass-in-the-wind must be present AND animated (the looping GrassWind clip)
+if (!doc.getRoot().listAnimations().some(a => /GrassWind/.test(a.getName() || ''))) {
+  fail.push('missing GrassWind animation (grass in the wind)');
+}
 
 if (existsSync(path.join(ROOT, 'exports/map_surfaces_osm.json'))) {
   const ms = JSON.parse(readFileSync(path.join(ROOT, 'exports/map_surfaces_osm.json'), 'utf8'));

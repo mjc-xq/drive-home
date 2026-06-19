@@ -792,79 +792,16 @@ if (S.creek && S.creek.p) {
 }
 
 // ---- ANIMATED grass-blade clumps (looping glTF node animation) -----------
-// Each clump is a low-poly fan of blades and is ITS OWN named node. A looping
-// "GrassWind" clip rotates every clump's quaternion about Z with a per-clump
-// phase offset (derived from world position) so a wind gust appears to sweep
-// across the field. The clip is exported into the GLB, so the grass animates
-// in any viewer that auto-plays animations (Blender, three.js, Quick Look).
-function bladeClumpGeometry() {
-  // a few crossed quads, pivot at the base (y=0), ~0.55 m tall
-  const pos = [], col = [];
-  const base = new THREE.Color(0x4f8a30), tip = new THREE.Color(0x9fd45f);
-  const blades = 5;
-  for (let bI = 0; bI < blades; bI++) {
-    const ang = (bI / blades) * Math.PI * 2 + rand() * 0.6;
-    const r = 0.06 + rand() * 0.10, hgt = 0.42 + rand() * 0.30, lean = 0.06 + rand() * 0.05;
-    const bx = Math.cos(ang) * r, bz = Math.sin(ang) * r, wdt = 0.035;
-    const px = -Math.sin(ang) * wdt, pz = Math.cos(ang) * wdt;     // blade-width axis
-    const tx = bx + Math.cos(ang) * lean, tz = bz + Math.sin(ang) * lean;
-    // two tris forming a tapered blade
-    const A = [bx - px, 0, bz - pz], B = [bx + px, 0, bz + pz], T = [tx, hgt, tz];
-    for (const [v, c] of [[A, base], [B, base], [T, tip]]) { pos.push(...v); col.push(c.r, c.g, c.b); }
-    for (const [v, c] of [[B, base], [A, base], [T, tip]]) { pos.push(...v); col.push(c.r, c.g, c.b); }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  g.computeVertexNormals();
-  return g;
-}
-const grassMat = new THREE.MeshStandardMaterial({ name: 'Grass_mat', vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
-const grassGroup = new THREE.Group(); grassGroup.name = 'Grass_Wind';
-scene.add(grassGroup);
-
-// scatter clumps on open ground only (off roads/sidewalks/buildings, near grade)
-const grassOK = (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5;
-const clumpNodes = [];
-const GRID = 9;                                  // metres between candidate clumps
-const MAXCLUMPS = 520;                           // keep the GLB lean
-for (let z = -cropHalf; z <= cropHalf && clumpNodes.length < MAXCLUMPS; z += GRID) {
-  for (let x = -cropHalf; x <= cropHalf && clumpNodes.length < MAXCLUMPS; x += GRID) {
-    const jx = x + (rand() - 0.5) * GRID * 0.8, jz = z + (rand() - 0.5) * GRID * 0.8;
-    if (!grassOK(jx, jz) || rand() < 0.45) continue;
-    const clump = new THREE.Mesh(bladeClumpGeometry(), grassMat);
-    clump.name = `GrassClump_${String(clumpNodes.length).padStart(4, '0')}`;
-    const s = 1.4 + rand() * 1.8;                // clump footprint scale
-    clump.scale.set(s, 1.2 + rand() * 1.3, s);
-    clump.position.set(jx, terrainAt(jx, jz), jz);
-    clump.rotation.y = rand() * Math.PI * 2;
-    grassGroup.add(clump);
-    clumpNodes.push(clump);
-  }
-}
-// Build the looping wind animation: each clump sways about its local Z axis.
-// Sample a sine sweep at keyframes; phase offset by position -> travelling gust.
-const animations = [];
-if (clumpNodes.length) {
-  const PERIOD = 3.0, KEYS = 13;                                   // 3 s loop
-  const times = Array.from({ length: KEYS }, (_, k) => k / (KEYS - 1) * PERIOD);
-  const tracks = [];
-  const axis = new THREE.Vector3(0, 0, 1), q = new THREE.Quaternion();
-  for (const clump of clumpNodes) {
-    const phase = (clump.position.x * 0.05 + clump.position.z * 0.03);  // gust sweep
-    const amp = 0.13 + rand() * 0.06;                                   // sway radians
-    const vals = [];
-    for (let k = 0; k < KEYS; k++) {
-      const t = times[k] / PERIOD * Math.PI * 2;
-      const ang = Math.sin(t + phase) * amp + Math.sin(t * 2.3 + phase) * amp * 0.25;
-      q.setFromAxisAngle(axis, ang);
-      vals.push(q.x, q.y, q.z, q.w);
-    }
-    // bind by node UUID so the exporter resolves the right node regardless of name
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${clump.uuid}.quaternion`, times.slice(), vals));
-  }
-  animations.push(new THREE.AnimationClip('GrassWind', PERIOD, tracks));
-}
+// Built by the shared scripts/grass_wind.mjs (also used by the photo exporter):
+// each clump is its own `GrassClump_####` node under a `Grass_Wind` group, and a
+// looping "GrassWind" clip sways them with a per-clump phase offset so a gust
+// sweeps the field. Exported into the GLB -> auto-plays in any viewer.
+const { buildGrassWind } = await import('./grass_wind.mjs');
+const grass = buildGrassWind({
+  THREE, scene, rand, terrainAt, cropHalf,
+  openGround: (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5,
+});
+const animations = grass.clip ? [grass.clip] : [];
 
 // ---- parcel outlines (owner lots highlighted) ----------------------------
 let nMine = 0;
@@ -1230,7 +1167,7 @@ scene.traverse(o => { if (o.isMesh && o.parent === scene) sceneObjs.push(`  ${o.
 console.log('terrain:', D.source);
 console.log(`crop half: ${cropHalf.toFixed(0)} m`);
 console.log(`buildings: ${nBld} (${nSkip} skipped on owner lots)   houseIdx: ${houseIdx}`);
-console.log(`grass clumps (animated nodes): ${clumpNodes.length}   wind clip: ${animations.length ? animations[0].name + ' (' + animations[0].duration + 's loop)' : 'none'}`);
+console.log(`grass clumps (animated nodes): ${grass.count}   wind clip: ${animations.length ? animations[0].name + ' (' + animations[0].duration + 's loop)' : 'none'}`);
 console.log(`trees placed (separate nodes): ${nTrees}   templates: ${treeTemplates.length}   canopy-width clamped: ${nClampW}`);
 console.log(`owner-lot tree spots from LiDAR: ${ownerTreeSpots.length}`);
 console.log('top-level meshes:\n' + sceneObjs.join('\n'));
