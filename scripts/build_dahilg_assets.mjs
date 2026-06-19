@@ -159,7 +159,9 @@ console.log('\n=== Da Hilg asset build ===');
 //    named collision/helper nodes. Drop the hidden LOD_Buildings_Low duplicate.
 // -------------------------------------------------------------------------------------
 console.log('\n[1/4] level.glb');
-const LEVEL_SRC = SRC('exports', '1840-dahill-property.glb');
+// The full, textured, tree+fence-rich neighborhood export (always grab the freshest
+// from exports/ when re-importing — see docs/dahilg-neighborhood-export.md).
+const LEVEL_SRC = SRC('exports', '1840-dahill-property-trees.glb');
 const levelSrcBytes = statSync(LEVEL_SRC).size;
 const levelDoc = await io.read(LEVEL_SRC);
 {
