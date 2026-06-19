@@ -757,8 +757,9 @@ export function createEngine({ canvas, ui, emit }) {
   // game area we slide the tile anchor + render origin along under the car. Both
   // the camera and the tiles use renderOrigin, and yOffset is pinned to the car's
   // current ground, so a re-base shifts everything together — no visible jump.
-  const REANCHOR_HOME_RADIUS = 30000;   // within 30 km of home = the home game frame (all POIs/coins live here); render origin stays at home
-  const REANCHOR_STEP = 12000;          // outside it, re-centre once the car has drifted ~12 km from the live anchor
+  const REANCHOR_HOME_RADIUS = 30000;   // beyond 30 km of home = leave the home game frame (all POIs/coins live within it)
+  const REANCHOR_HOME_BACK = 26000;     // ...but only RETURN to the home frame inside 26 km — a 4 km hysteresis band so a car skirting the boundary can't flip home↔far (and thrash props) every tick
+  const REANCHOR_STEP = 12000;          // while far, re-centre once the car has drifted ~12 km from the live anchor
   // Smoothly re-base the photoreal frame onto (latR, lonR) at world (x, z). `remote`
   // = anchored away from home (hide the home-only props). Preserves the car's
   // on-screen position (renderOrigin = car) and ground height (yOffset = the car's
@@ -788,17 +789,20 @@ export function createEngine({ canvas, ui, emit }) {
     if (now - ctx._reanchorT < 500) return;     // ~2 Hz is plenty; re-basing is cheap but not free
     ctx._reanchorT = now;
     const distHome = Math.hypot(ctx.car.x, ctx.car.z);
-    if (distHome < REANCHOR_HOME_RADIUS) {
-      // back inside the home game area → restore the exact home frame (origin 0,
-      // home anchor, aligned home ground, props back on).
-      if (ctx.remoteView || ctx.renderOrigin.x || ctx.renderOrigin.z) {
-        reanchorDriveFrame(houseLat, houseLon, 0, 0, false, ctx.homeYOffset);
-        ctx.car.groundY = null; ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.camInit = false;   // re-seat on the home ground reference
-      }
+    const offHome = ctx.remoteView || ctx.renderOrigin.x || ctx.renderOrigin.z;   // currently anchored away from home?
+    if (!offHome) {
+      if (distHome < REANCHOR_HOME_RADIUS) return;            // home frame, still inside the home area → nothing to do
+      // else: just crossed OUT — fall through to the remote re-anchor below
+    } else if (distHome < REANCHOR_HOME_BACK) {
+      // well back inside the home area (hysteresis) → restore the exact home frame
+      reanchorDriveFrame(houseLat, houseLon, 0, 0, false, ctx.homeYOffset);
+      ctx.car.groundY = null; ctx.camGroundRef = null; ctx.camFloorRef = null; ctx.camInit = false;   // re-seat on the home ground reference
       return;
+    } else {
+      // still far → only re-centre once the car has drifted REANCHOR_STEP from the live anchor
+      const dr = Math.hypot(ctx.car.x - ctx.renderOrigin.x, ctx.car.z - ctx.renderOrigin.z);
+      if (dr < REANCHOR_STEP) return;
     }
-    const dr = Math.hypot(ctx.car.x - ctx.renderOrigin.x, ctx.car.z - ctx.renderOrigin.z);
-    if (ctx.remoteView && dr < REANCHOR_STEP) return;   // already centred recently
     const g = ctx.geo.worldToGeo(ctx.car.x, ctx.car.z);
     if (!g || !Number.isFinite(g.lat) || !Number.isFinite(g.lon)) return;
     // pin yOffset to the car's current ground so the re-orient doesn't pop it up/down
@@ -1247,6 +1251,7 @@ export function createEngine({ canvas, ui, emit }) {
       ctx.renderOrigin = { x: 0, z: 0 };
       ctx.remoteView = false;
       ctx.tileAnchor = { lat: houseLat, lon: houseLon, x: 0, z: 0, label: 'Home' };
+      ctx.P3DT.yOffset = ctx.homeYOffset;   // far driving repurposed yOffset to hold ground continuity — restore the home ground before alignP3DT re-runs, else the home tiles seat at the far elevation for a beat
       ctx.alignDone = false;
       if (ctx.fn.rebuildPhotorealTiles) ctx.fn.rebuildPhotorealTiles();
     }
