@@ -13,6 +13,10 @@
 //                               by the cul-de-sac and junction logic.
 //   vkey(x, z)                - the quantization key used by buildVertHit.
 //   roadSpec(r)               - { width, lanes, isService } from r.k / r.w.
+//   isCulDeSacRoad(r)         - true only for named courts/cul-de-sacs needing bulbs.
+//   snapCreekToChannel(...)   - pull a creek centreline toward the DEM channel bottom.
+//   buildSidewalkConnectors(...) - rounded sidewalk returns around intersections.
+//   buildSidewalkEndCaps(...) - U-shaped sidewalk returns at residential dead ends.
 //   fanDisc / ringAnnulus     - triangle-fan disc + curb annulus (callbacks emit
 //                               into the caller's pos/idx arrays so the exporter
 //                               controls terrain height + lift).
@@ -117,12 +121,20 @@ export function buildVertHit(roads, w2) {
 }
 
 // ---- width / lanes from class ---------------------------------------------
+// Realistic carriageway widths. OSM r.w (when present) is often a thin centreline
+// hint; clamp named streets to a class FLOOR so roads never render too narrow.
+// Service ways are driveways/parking aisles in this export, so keep them driveway
+// sized instead of inflating them to a full residential street.
 export function roadSpec(r) {
   const k = r.k;
-  if (k === 'tertiary') return { width: r.w || 9, lanes: 2, isService: false };
-  if (k === 'residential') return { width: r.w || 7.5, lanes: 2, isService: false };
-  if (k === 'service') return { width: r.w || 4.5, lanes: 1, isService: true };
-  return { width: r.w || 7, lanes: 2, isService: false };
+  const w = +r.w || 0;
+  if (k === 'tertiary') return { width: Math.max(11, w), lanes: 2, isService: false };
+  if (k === 'residential') return { width: Math.max(9, w), lanes: 2, isService: false };
+  if (k === 'service') {
+    const service = String(r.s || '').toLowerCase();
+    return { width: service === 'parking_aisle' ? 5.0 : 3.6, lanes: 1, isService: true };
+  }
+  return { width: Math.max(9, w), lanes: 2, isService: false };
 }
 // rank for junction priority (higher wins / runs unbroken)
 export function roadRank(r) {
@@ -131,6 +143,202 @@ export function roadRank(r) {
   if (k === 'residential') return 2;
   if (k === 'service') return 1;
   return 2;
+}
+
+// Only named courts / cul-de-sac style roads should get a bulb. Treating every
+// residential dead-end as a court creates big black discs on ordinary road stubs
+// and clipped OSM segments.
+export function isCulDeSacRoad(r) {
+  const name = String(r?.n || '').toLowerCase();
+  return /\b(court|ct|cul[- ]?de[- ]?sac|circle|cir)\b/.test(name);
+}
+
+// Pull each creek vertex toward the lowest DEM point along a perpendicular probe.
+// The raw OSM waterway is a centreline hint; the bare-earth DEM is the best local
+// evidence for the actual channel. A small smoothing pass removes vertex-to-vertex
+// zig-zag from the probe while preserving the broad path.
+export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
+  const radius = opts.radius ?? 18;
+  const step = opts.step ?? 1.5;
+  const strength = opts.strength ?? 0.9;
+  const smoothPasses = opts.smoothPasses ?? 2;
+  if (!Array.isArray(lineW) || lineW.length < 3) return (lineW || []).map(p => [p[0], p[1]]);
+
+  let out = lineW.map((p, i) => {
+    const a = lineW[Math.max(0, i - 1)], b = lineW[Math.min(lineW.length - 1, i + 1)];
+    let dx = b[0] - a[0], dz = b[1] - a[1];
+    const L = Math.hypot(dx, dz) || 1;
+    dx /= L; dz /= L;
+    const nx = -dz, nz = dx;
+    let bx = p[0], bz = p[1], bh = terrainAt(p[0], p[1]);
+    for (let t = -radius; t <= radius + 1e-6; t += step) {
+      const x = p[0] + nx * t, z = p[1] + nz * t;
+      const h = terrainAt(x, z);
+      if (h < bh) { bh = h; bx = x; bz = z; }
+    }
+    return [p[0] + (bx - p[0]) * strength, p[1] + (bz - p[1]) * strength];
+  });
+
+  for (let pass = 0; pass < smoothPasses; pass++) {
+    const sm = out.map(p => [p[0], p[1]]);
+    for (let i = 1; i < out.length - 1; i++) {
+      sm[i] = [
+        (out[i - 1][0] + out[i][0] * 2 + out[i + 1][0]) / 4,
+        (out[i - 1][1] + out[i][1] * 2 + out[i + 1][1]) / 4,
+      ];
+    }
+    out = sm;
+  }
+  return out;
+}
+
+// Build rounded sidewalk connector arcs around each road junction. The main sidewalk
+// ribbons run parallel to road centrelines and are intentionally gapped near
+// intersections; these arcs sew those ends together around the curb return instead
+// of leaving squared-off, non-meeting strips.
+export function buildSidewalkConnectors(roads, w2, opts = {}) {
+  const sideGap = opts.sideGap ?? 2.2;         // centre of walk = road edge + gap
+  const leadExtra = opts.leadExtra ?? 1.2;     // how far along each arm before curving
+  const maxGap = opts.maxGapRad ?? (145 * Math.PI / 180);
+  const minGap = opts.minGapRad ?? (18 * Math.PI / 180);
+  const step = opts.step ?? 2.2;
+  const inPatch = opts.inPatch || (() => true);
+  const hit = buildVertHit(roads, w2);
+  const byJunction = new Map();
+
+  const addArm = (key, j, r, vi, ni) => {
+    if (roadSpec(r).isService) return;         // driveways/service roads do not get sidewalks
+    const p = w2(...j), q = w2(...r.p[ni]);
+    let dx = q[0] - p[0], dz = q[1] - p[1];
+    const L = Math.hypot(dx, dz);
+    if (L < 0.5) return;
+    dx /= L; dz /= L;
+    const spec = roadSpec(r);
+    const sideDist = spec.width / 2 + sideGap;
+    const lead = Math.max(3.0, Math.min(8.0, spec.width / 2 + leadExtra));
+    let bucket = byJunction.get(key);
+    if (!bucket) {
+      bucket = { c: p, pts: [] };
+      byJunction.set(key, bucket);
+    }
+    const armKey = `${key}/${vi}/${ni}/${r.n || r.k || ''}`;
+    for (const side of [1, -1]) {
+      const nx = -dz * side, nz = dx * side;
+      const x = p[0] + dx * lead + nx * sideDist;
+      const z = p[1] + dz * lead + nz * sideDist;
+      if (!inPatch(x, z)) continue;
+      bucket.pts.push({ x, z, a: Math.atan2(z - p[1], x - p[0]), armKey, side, dx, dz });
+    }
+  };
+
+  for (const r of roads || []) {
+    const pl = r.p || r;
+    if (!Array.isArray(pl)) continue;
+    for (let i = 0; i < pl.length; i++) {
+      const p = w2(...pl[i]);
+      const key = vkey(p[0], p[1]);
+      if ((hit.get(key) || 0) < 2) continue;
+      if (i > 0) addArm(key, pl[i], r, i, i - 1);
+      if (i < pl.length - 1) addArm(key, pl[i], r, i, i + 1);
+    }
+  }
+
+  const arcs = [];
+  const normGap = (a0, a1) => {
+    let g = a1 - a0;
+    while (g <= 0) g += Math.PI * 2;
+    return g;
+  };
+  for (const { c, pts } of byJunction.values()) {
+    // Merge duplicate endpoints from split OSM ways that share the same arm.
+    const unique = [];
+    for (const p of pts.sort((a, b) => a.a - b.a)) {
+      if (!unique.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 0.8)) unique.push(p);
+    }
+    // If two road ways meet as a straight continuation, the corner-return arcs below
+    // intentionally skip the ~180 degree gap. Add same-side straight bridges so the
+    // sidewalk remains continuous through split OSM ways and simple through-junctions.
+    for (let i = 0; i < unique.length; i++) {
+      for (let j = i + 1; j < unique.length; j++) {
+        const p0 = unique[i], p1 = unique[j];
+        if (p0.armKey === p1.armKey) continue;
+        const dot = p0.dx * p1.dx + p0.dz * p1.dz;
+        if (dot > -0.92) continue;                  // only near-collinear arms
+        if (p0.side !== -p1.side) continue;          // same physical side of the road
+        if (Math.hypot(p0.x - p1.x, p0.z - p1.z) > 18) continue;
+        arcs.push([[p0.x, p0.z], [p1.x, p1.z]]);
+      }
+    }
+
+    if (unique.length < 3) continue;
+    for (let i = 0; i < unique.length; i++) {
+      const p0 = unique[i], p1 = unique[(i + 1) % unique.length];
+      if (p0.armKey === p1.armKey) continue;       // never bridge across one road mouth
+      const gap = normGap(p0.a, p1.a);
+      if (gap < minGap || gap > maxGap) continue;
+      const r0 = Math.hypot(p0.x - c[0], p0.z - c[1]);
+      const r1 = Math.hypot(p1.x - c[0], p1.z - c[1]);
+      const steps = Math.max(2, Math.ceil(gap * Math.max(r0, r1) / step));
+      const arc = [];
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const a = p0.a + gap * t;
+        const rr = r0 * (1 - t) + r1 * t;
+        const x = c[0] + Math.cos(a) * rr;
+        const z = c[1] + Math.sin(a) * rr;
+        if (!inPatch(x, z)) continue;
+        arc.push([x, z]);
+      }
+      if (arc.length >= 2) arcs.push(arc);
+    }
+  }
+  return arcs;
+}
+
+// Build U-shaped sidewalk returns around ordinary residential dead ends. These are
+// distinct from court bulbs: the road stays a normal terminal street, but the walks
+// on each side meet around the end instead of stopping as two unrelated strips.
+export function buildSidewalkEndCaps(roads, w2, opts = {}) {
+  const sideGap = opts.sideGap ?? 2.2;
+  const step = opts.step ?? 2.0;
+  const inPatch = opts.inPatch || (() => true);
+  const isCourt = opts.isCourt || isCulDeSacRoad;
+  const hit = buildVertHit(roads, w2);
+  const arcs = [];
+
+  for (const r of roads || []) {
+    const pl = r.p || r;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    const spec = roadSpec(r);
+    if (spec.isService || isCourt(r)) continue;
+
+    for (const end of [0, pl.length - 1]) {
+      const tip = w2(...pl[end]);
+      const key = vkey(tip[0], tip[1]);
+      if ((hit.get(key) || 0) > 1) continue;
+      if (!inPatch(tip[0], tip[1])) continue;
+
+      const prev = w2(...pl[end === 0 ? 1 : pl.length - 2]);
+      let tx = tip[0] - prev[0], tz = tip[1] - prev[1];
+      const L = Math.hypot(tx, tz);
+      if (L < 0.5) continue;
+      tx /= L; tz /= L;
+
+      const radius = spec.width / 2 + sideGap;
+      const theta = Math.atan2(tz, tx);
+      const steps = Math.max(6, Math.ceil(Math.PI * radius / step));
+      const arc = [];
+      for (let s = 0; s <= steps; s++) {
+        const a = theta + Math.PI / 2 - Math.PI * s / steps;
+        const x = tip[0] + Math.cos(a) * radius;
+        const z = tip[1] + Math.sin(a) * radius;
+        if (!inPatch(x, z)) continue;
+        arc.push([x, z]);
+      }
+      if (arc.length >= 2) arcs.push(arc);
+    }
+  }
+  return arcs;
 }
 
 // ---- triangle-fan disc + curb annulus ------------------------------------
@@ -184,4 +392,180 @@ export function nearAny(x, z, pts, r) {
   const r2 = r * r;
   for (const [px, pz] of pts) { const dx = x - px, dz = z - pz; if (dx * dx + dz * dz < r2) return true; }
   return false;
+}
+
+// ---- sidewalks derived from PARCEL front edges ---------------------------
+// Real sidewalks border the property line and follow its curve. We build them from
+// the parcel rings (parcels.json, WORLD coords): an edge is "road-facing" when its
+// midpoint sits in a band just outside the carriageway (close enough to be the front
+// edge, far enough to not be IN the road). Consecutive road-facing edges of a parcel
+// are chained into a polyline so the ribbon curves continuously along the lot line.
+// Returns an array of world polylines, each pushed STREET-SIDE of the property line
+// by `inset` metres (so the concrete ribbon hugs the line on the road side).
+//
+//   parcels   : [{ ring:[[x,z],...] }]  world XZ rings
+//   roadSegs  : [[ [ax,az],[bx,bz] ], ...]  world road centreline segments + half-widths
+//   opts.bandMin / bandMax : how far (m) an edge midpoint may sit from a road centre
+//                            to count as front-facing (defaults 4.5 .. 13)
+//   opts.inset : push toward the road by this many m (default 0.4) so the ribbon
+//                sits just street-side of the property line
+//   opts.inPatch(x,z) : keep only edges whose midpoint is on terrain (optional)
+export function distToSegs(px, pz, segs) {
+  let best = Infinity;
+  for (const [a, b] of segs) {
+    let dx = b[0] - a[0], dz = b[1] - a[1];
+    const L2 = dx * dx + dz * dz || 1;
+    let t = ((px - a[0]) * dx + (pz - a[1]) * dz) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(px - (a[0] + t * dx), pz - (a[1] + t * dz));
+    if (d < best) best = d;
+  }
+  return best;
+}
+export function buildParcelSidewalks(parcels, roadSegs, opts = {}) {
+  const bandMin = opts.bandMin ?? 4.5;
+  const bandMax = opts.bandMax ?? 13;
+  const inset = opts.inset ?? 0.4;
+  const inPatch = opts.inPatch || (() => true);
+  const minEdge = opts.minEdge ?? 1.2;           // drop tiny ring nicks
+  const out = [];
+  for (const p of parcels) {
+    const ring = p.ring || p; if (!Array.isArray(ring) || ring.length < 3) continue;
+    const N = ring.length;
+    // closed ring: detect duplicate last==first
+    const closed = Math.hypot(ring[0][0] - ring[N - 1][0], ring[0][1] - ring[N - 1][1]) < 1e-6;
+    const M = closed ? N - 1 : N;                  // count of distinct vertices
+    // mark each edge i (vertex i -> i+1) as road-facing or not. A front edge must:
+    //  - have its MIDPOINT in the carriageway-side band (just outside the curb)
+    //  - have BOTH endpoints reasonably close to a road (rejects a side lot line that
+    //    only grazes the band at its near corner then angles off across the yard)
+    //  - run roughly PARALLEL to the nearest road (|sin angle| small) so we trace the
+    //    frontage, not a driveway/side line stabbing toward the street.
+    const endMax = opts.endMax ?? (bandMax + 4);
+    const maxSin = opts.maxSin ?? 0.55;            // <= ~33deg off the road tangent
+    const facing = new Array(M).fill(false);
+    for (let i = 0; i < M; i++) {
+      const a = ring[i], b = ring[(i + 1) % M];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < minEdge) continue;
+      const mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
+      if (!inPatch(mx, mz)) continue;
+      const d = distToSegs(mx, mz, roadSegs);
+      if (d < bandMin || d > bandMax) continue;
+      if (distToSegs(a[0], a[1], roadSegs) > endMax || distToSegs(b[0], b[1], roadSegs) > endMax) continue;
+      const near = nearestRoadTangent(mx, mz, roadSegs);
+      if (near) {
+        let ex = (b[0] - a[0]) / len, ez = (b[1] - a[1]) / len;
+        const sin = Math.abs(ex * near[1] - ez * near[0]);   // |edge x roadDir|
+        if (sin > maxSin) continue;
+      }
+      facing[i] = true;
+    }
+    // chain consecutive facing edges (wrapping) into runs of vertices
+    const used = new Array(M).fill(false);
+    for (let s = 0; s < M; s++) {
+      if (!facing[s] || used[s]) continue;
+      // walk back to the start of this run
+      let start = s;
+      while (facing[(start - 1 + M) % M] && (start - 1 + M) % M !== s) start = (start - 1 + M) % M;
+      const verts = [];
+      let i = start;
+      do {
+        verts.push([ring[i][0], ring[i][1]]);
+        used[i] = true;
+        const nxt = (i + 1) % M;
+        if (!facing[i]) break;
+        verts.push([ring[nxt][0], ring[nxt][1]]);
+        i = nxt;
+      } while (facing[i] && i !== start);
+      // dedupe consecutive identical pts
+      const poly = [];
+      for (const v of verts) if (!poly.length || Math.hypot(v[0] - poly[poly.length - 1][0], v[1] - poly[poly.length - 1][1]) > 1e-6) poly.push(v);
+      if (poly.length < 2) continue;
+      // push the run toward the road (street-side of the property line). Determine the
+      // inward (toward road) normal per vertex from the nearest road centre point.
+      const pushed = poly.map(([x, z]) => {
+        // gradient of distance-to-roads ~ direction AWAY from road; we want toward it
+        const near = nearestRoadPoint(x, z, roadSegs);
+        if (!near) return [x, z];
+        let dx = near[0] - x, dz = near[1] - z; const L = Math.hypot(dx, dz) || 1;
+        return [x + dx / L * inset, z + dz / L * inset];
+      });
+      out.push(pushed);
+    }
+  }
+  return out;
+}
+function nearestRoadPoint(px, pz, segs) {
+  let best = null, bestD = Infinity;
+  for (const [a, b] of segs) {
+    let dx = b[0] - a[0], dz = b[1] - a[1];
+    const L2 = dx * dx + dz * dz || 1;
+    let t = ((px - a[0]) * dx + (pz - a[1]) * dz) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a[0] + t * dx, cz = a[1] + t * dz;
+    const d = Math.hypot(px - cx, pz - cz);
+    if (d < bestD) { bestD = d; best = [cx, cz]; }
+  }
+  return best;
+}
+// Unit tangent of the road segment nearest to (px,pz).
+function nearestRoadTangent(px, pz, segs) {
+  let best = null, bestD = Infinity;
+  for (const [a, b] of segs) {
+    let dx = b[0] - a[0], dz = b[1] - a[1];
+    const L = Math.hypot(dx, dz) || 1;
+    const L2 = L * L;
+    let t = ((px - a[0]) * dx + (pz - a[1]) * dz) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a[0] + t * dx, cz = a[1] + t * dz;
+    const d = Math.hypot(px - cx, pz - cz);
+    if (d < bestD) { bestD = d; best = [dx / L, dz / L]; }
+  }
+  return best;
+}
+
+// ---- join sidewalk runs so they MEET at intersections --------------------
+// buildParcelSidewalks emits one run per lot, so consecutive lots and corner lots
+// leave gaps where the user sees "ends that don't meet". We greedily concatenate any
+// two runs whose endpoints are within `thresh` m — but ONLY if the straight bridge
+// between them does NOT cross a road centreline (so we never sew a sidewalk across the
+// street; only along a frontage or around a corner). smoothLine() (applied by the
+// caller) then rounds the joined corner, giving the curved corners at intersections.
+function segsIntersect(p1, p2, p3, p4) {
+  const d = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const d1 = d(p3, p4, p1), d2 = d(p3, p4, p2), d3 = d(p1, p2, p3), d4 = d(p1, p2, p4);
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+}
+export function joinSidewalkRuns(runs, roadSegs, thresh = 8) {
+  runs = runs.map(r => r.slice());
+  const crossesRoad = (a, b) => roadSegs.some(([c, d]) => segsIntersect(a, b, c, d));
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer:
+    for (let i = 0; i < runs.length; i++) {
+      for (let j = i + 1; j < runs.length; j++) {
+        const A = runs[i], B = runs[j];
+        // (endIndexA, endIndexB, reverseA so it ENDS at the join, reverseB so it STARTS at the join)
+        const combos = [
+          [A.length - 1, 0, false, false], [A.length - 1, B.length - 1, false, true],
+          [0, 0, true, false], [0, B.length - 1, true, true],
+        ];
+        for (const [ai, bi, revA, revB] of combos) {
+          const pa = A[ai], pb = B[bi];
+          const dist = Math.hypot(pa[0] - pb[0], pa[1] - pb[1]);
+          if (dist > thresh) continue;
+          if (dist > 0.5 && crossesRoad(pa, pb)) continue;       // never bridge across the road
+          const a2 = revA ? A.slice().reverse() : A.slice();      // ends at pa
+          const b2 = revB ? B.slice().reverse() : B.slice();      // starts at pb
+          // drop a duplicate join vertex when the ends already coincide
+          const join = dist <= 0.5 ? a2.concat(b2.slice(1)) : a2.concat(b2);
+          runs.splice(j, 1); runs.splice(i, 1, join);
+          merged = true; break outer;
+        }
+      }
+    }
+  }
+  return runs;
 }

@@ -197,7 +197,7 @@ ROAD_KIND_MAP = {
     "tertiary": "tertiary",
     "service": "service",
 }
-ROAD_WIDTHS = {"residential": 7.5, "tertiary": 9.0, "service": 4.5}
+ROAD_WIDTHS = {"residential": 7.5, "tertiary": 9.0, "service": 3.6}
 
 
 def build_roads():
@@ -218,13 +218,12 @@ def build_roads():
         kind = ROAD_KIND_MAP.get(tags.get("highway"))
         if kind is None:
             continue
-        # skip private driveways and parking-lot aisles; keep real service roads
-        if kind == "service" and tags.get("service") in ("driveway", "parking_aisle"):
-            continue
         pts = [[round(v, 2) for v in ll_to_en(g["lat"], g["lon"])] for g in el["geometry"]]
         if len(pts) < 2:
             continue
         road = {"p": pts, "k": kind}
+        if kind == "service" and tags.get("service"):
+            road["s"] = tags["service"]
         name = tags.get("name")
         if name:
             road["n"] = name
