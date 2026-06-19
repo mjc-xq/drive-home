@@ -8,7 +8,9 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, Suspense } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
+import { useAtomValue } from 'jotai';
 import { cameraRig } from '../state/refs.js';
+import { perfModeAtom } from '../state/settingsAtoms.js';
 
 // Sun direction (shared by the sky + the key light so highlights line up).
 const SUN_DIR = [90, 70, 50];
@@ -116,6 +118,20 @@ export default function SceneEnv() {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const camera = useThree((s) => s.camera);
+  const perfMode = useAtomValue(perfModeAtom);
+
+  // Performance mode skips the sun shadow pass entirely (~5 ms/frame). Toggling the
+  // shadow map on/off changes material programs, so force a one-time recompile of the
+  // scene materials when it flips (rare, user-initiated). Defaults to perf ON → off.
+  useEffect(() => {
+    gl.shadowMap.enabled = !perfMode;
+    gl.shadowMap.needsUpdate = true;
+    scene.traverse((o) => {
+      if (!o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) if (m) m.needsUpdate = true;
+    });
+  }, [gl, scene, perfMode]);
 
   // DEV-only inspection handle (stripped from production). Handy in playtesting.
   useEffect(() => {

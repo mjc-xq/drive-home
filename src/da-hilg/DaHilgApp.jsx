@@ -10,12 +10,13 @@
 // is pure composition. No StrictMode anywhere up the tree (main.jsx).
 
 import { Suspense, useEffect } from 'react';
-import { Provider } from 'jotai';
+import { Provider, useAtomValue } from 'jotai';
 import { Canvas } from '@react-three/fiber';
 import { KeyboardControls } from '@react-three/drei';
 import * as THREE from 'three';
 
 import { daHilgStore } from './state/store.js';
+import { perfModeAtom } from './state/settingsAtoms.js';
 import { CAM_FOV, FP_NEAR, CAM_FAR, LEVEL_URL, CHARACTER_URL } from './constants.js';
 import { DaHilgPreloader } from './loaders.js';
 import { keyMap } from './input/keyMap.js';
@@ -41,6 +42,17 @@ function InputLayer() {
   usePointerLock();
   useEdgeKeys();
   return null;
+}
+
+/**
+ * Mounts the post-processing composer ONLY when performance mode is off. In perf mode
+ * (the default) PostFX is absent, so RenderLoop falls back to a plain gl.render and we
+ * skip the bloom/AO/SMAA passes entirely. Lives inside the Canvas (and the Provider) so
+ * it can read the atom; toggling it cleanly mounts/unmounts the composer.
+ */
+function PostFXGate() {
+  const perfMode = useAtomValue(perfModeAtom);
+  return perfMode ? null : <PostFX />;
 }
 
 export default function DaHilgApp() {
@@ -75,9 +87,10 @@ export default function DaHilgApp() {
           <Suspense fallback={null}>
             <Scene />
           </Suspense>
-          {/* Post-processing composer. Mounts after the scene; publishes a composer
-              that RenderLoop drives as the SOLE priority-100 render (composited). */}
-          <PostFX />
+          {/* Post-processing composer (only when performance mode is off). Mounts after
+              the scene; publishes a composer that RenderLoop drives as the SOLE
+              priority-100 render (composited). In perf mode RenderLoop plain-renders. */}
+          <PostFXGate />
         </Canvas>
       </KeyboardControls>
     </Provider>
