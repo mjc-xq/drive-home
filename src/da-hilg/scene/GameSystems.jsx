@@ -24,6 +24,7 @@ import { updateInput } from '../input/useInput.js';
 import { stepMotion } from '../systems/stepMotion.js';
 import { trySnapActor } from '../systems/spawnSnap.js';
 import { updateAnimation } from '../systems/animationSystem.js';
+import { clampToBoundary } from '../systems/boundarySystem.js';
 import { flushZones } from '../systems/zoneSystem.js';
 import { updateGreet } from '../systems/greetSystem.js';
 import { commitReactive } from '../systems/commitReactive.js';
@@ -76,6 +77,10 @@ export default function GameSystems() {
         : null;
       if (intent) stepMotion(actor, intent, ctx);
     });
+
+    // ── 3b. Map boundary: warp the player to a random border spot if they cross the
+    //        walkable edge (after motion, before animation/zones read the position). ──
+    clampToBoundary(ctx);
 
     // ── 4. Animation (reads motion produced in step 3, strictly after) ──
     registry.forEach((actor) => {
