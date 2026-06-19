@@ -1,88 +1,86 @@
-// updateNibblerZones(ctx) — the marked / discovered / scatter edge system.
+// updateNibblerZones(ctx) — the marked / safe / scatter system, the heart of the loop.
 //
-// Runs in the nibblers branch AFTER flushZones, so the active player's
-// actor.zonesActive Set is already reconciled this frame. We read it (NOT the raw
-// sensor queue), look each id up in zoneRegistry.byId for its def (type/label/
-// discover), and edge-detect against a tiny module snapshot so every store.set
-// fires only on a transition — same change-gated discipline as commitReactive.
+// SAFE vs DANGER is decided GEOMETRICALLY in 2D (XZ), NOT via Rapier sensor volumes.
+// The neighborhood is a hill, so fixed-height sensor AABBs miss a ground-standing
+// player whose Y varies with the terrain (the old bug: you could never get marked, and
+// even the home zone didn't register). Here we test the player's XZ against each safe
+// zone's footprint, ignore Y entirely, and treat EVERYWHERE OUTSIDE a safe zone as
+// danger — so the open neighborhood is the threat:
 //
-// SAFE WINS over danger:
-//   • If the player is in any 'safe' zone:
-//       - if the swarm is marked → clearAndScatter(now) + markedAtom=false +
-//         green safe/scatter toast
-//       - if a 'safe' def has discover:true and its id is not yet in
-//         discoveredSafeZonesAtom → append it (permanent reveal) + toast
-//         green discovery toast
-//       - set currentSafeZoneAtom = label
-//   • Else if a 'danger' zone is present AND the swarm is not marked →
-//       armMarked(now) + markedAtom=true + red danger toast; set
-//       currentSafeZoneAtom = null. Marked persists outside danger
-//       (only a safe zone clears it).
-//     Danger enter/exit also emits a transient event for HUD/minimap feedback.
+//   • In a safe zone  → if marked, scatter the horde + clear the mark; reveal/discover
+//                       the zone; publish its label.
+//   • Outside ALL safe zones → arm the mark (the swarm spawns + chases). Reaching any
+//     safe zone clears it.
+//
+// All store writes are edge-gated (same discipline as commitReactive).
 
-import { byId } from '../../zones/zoneRegistry.js';
 import { pushToast, emit } from '../../hud/hudEvents.js';
 import {
   markedAtom,
   discoveredSafeZonesAtom,
-  revealedDangerZonesAtom,
   currentSafeZoneAtom,
 } from '../state/nibblerAtoms.js';
 import { swarm } from '../swarm/swarmState.js';
 import { armMarked, clearAndScatter, setScatterCenter } from './markedSystem.js';
-import { DEV_FAST_MARK } from '../devFlags.js';
+import { buildNibblersZones } from '../zones/zoneConfig.nibblers.js';
 
-/** Last currentSafeZone label we wrote, so we only set the atom on change. */
+/** Memoized safe-zone footprints (XZ rectangles), built once from the zone config. */
+let safeRects = null;
+/** Last currentSafeZone label written, so the atom only changes on a transition. */
 let lastSafeLabel = null;
-/** Last danger-zone id the active player was inside; edge-gates HUD/minimap pulses. */
-let lastDangerId = null;
+
+/** Reset memoization (call on a fresh level / mode re-enter if ever needed). */
+export function resetNibblerZones() {
+  safeRects = null;
+  lastSafeLabel = null;
+}
+
+/** Build the XZ rectangles for every 'safe' zone once levelMeta is available. */
+function ensureSafeRects(levelMeta) {
+  if (safeRects) return safeRects;
+  const zones = buildNibblersZones(levelMeta).filter((z) => z.type === 'safe');
+  safeRects = zones.map((z) => ({
+    id: z.id,
+    label: z.label ?? null,
+    discover: !!z.discover,
+    minX: z.position[0] - z.size[0] / 2,
+    maxX: z.position[0] + z.size[0] / 2,
+    minZ: z.position[2] - z.size[2] / 2,
+    maxZ: z.position[2] + z.size[2] / 2,
+  }));
+  return safeRects;
+}
 
 /**
- * Read the active player's reconciled zone set and drive marked/discovered/scatter
- * on the edges. All store writes are edge-only.
- * @param {object} ctx per-frame ctx { store, registry, activePlayerId, now }
+ * Decide safe/danger from the active player's XZ position and drive marked/discovered/
+ * scatter on the edges.
+ * @param {object} ctx per-frame ctx { store, registry, activePlayerId, now, levelMeta }
  */
 export function updateNibblerZones(ctx) {
   const player = ctx.registry.get(ctx.activePlayerId);
   if (!player) return;
+  const rects = ensureSafeRects(ctx.levelMeta);
 
-  // Scan the player's current zones (already reconciled by flushZones).
-  let safeLabel = null; // label of any safe zone we're in
+  const px = player.motion.pos.x;
+  const pz = player.motion.pos.z;
+
+  // Which safe zone (if any) is the player standing over? (2D point-in-rectangle.)
   let inSafe = false;
-  let inDanger = false;
-  let dangerId = null;
-  let dangerLabel = null;
-  let revealDangerId = null;
-  let discoverableSafeId = null; // a discover:true safe zone we're standing in
-
-  player.zonesActive.forEach((zid) => {
-    const def = byId.get(zid);
-    if (!def) return;
-    if (def.type === 'safe') {
+  let safeLabel = null;
+  let discoverableSafeId = null;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (px >= r.minX && px <= r.maxX && pz >= r.minZ && pz <= r.maxZ) {
       inSafe = true;
-      if (def.label != null) safeLabel = def.label;
-      if (def.discover && discoverableSafeId == null) discoverableSafeId = def.id;
-    } else if (def.type === 'danger') {
-      inDanger = true;
-      if (def.reveal && revealDangerId == null) revealDangerId = def.id;
-      if (dangerId == null) {
-        dangerId = def.id;
-        dangerLabel = def.label || 'Danger Zone';
-      }
+      if (r.label != null) safeLabel = r.label;
+      if (r.discover && discoverableSafeId == null) discoverableSafeId = r.id;
     }
-  });
+  }
 
-  // ── SAFE WINS ────────────────────────────────────────────────────────────
+  // ── SAFE ──────────────────────────────────────────────────────────────────
   if (inSafe) {
-    if (lastDangerId !== null) {
-      emit('dangerZoneExited', { id: lastDangerId });
-      lastDangerId = null;
-    }
-
-    // Marked → safe: clear the mark and scatter the whole horde OFF the player
-    // (seed the scatter center to the player's feet — otherwise it radiates from
-    // world origin). flushZones already toasts 'Safe — <label>', so we fire the
-    // distinct relief beat instead of duplicating it.
+    // Marked → safe: scatter the whole horde OFF the player (seed the scatter center
+    // to the player's feet so it radiates from them, not world origin) and clear.
     if (swarm.marked) {
       setScatterCenter(player.motion.pos);
       clearAndScatter(ctx.now);
@@ -91,7 +89,7 @@ export function updateNibblerZones(ctx) {
       pushToast('Nibblers scattered!', 'greet');
     }
 
-    // First-time discovery of this safe zone → append to the permanent set.
+    // First-time discovery → append to the permanent revealed set.
     if (discoverableSafeId) {
       const discovered = ctx.store.get(discoveredSafeZonesAtom);
       if (!discovered.includes(discoverableSafeId)) {
@@ -100,44 +98,22 @@ export function updateNibblerZones(ctx) {
       }
     }
 
-    // Current safe-zone label (edge-gated).
     if (lastSafeLabel !== safeLabel) {
       lastSafeLabel = safeLabel;
       ctx.store.set(currentSafeZoneAtom, safeLabel);
     }
-    return; // safe overrides danger
+    return;
   }
 
-  // ── DANGER (only when not already marked) ────────────────────────────────
-  // DEV_FAST_MARK (?fastmark) treats everywhere-outside-safe as danger, so the swarm
-  // spawns within ~1 s for testing without hunting for a real danger zone.
-  if (inDanger && dangerId !== lastDangerId) {
-    lastDangerId = dangerId;
-    emit('dangerZoneEntered', { id: dangerId, label: dangerLabel });
-  } else if (!inDanger && lastDangerId !== null) {
-    emit('dangerZoneExited', { id: lastDangerId });
-    lastDangerId = null;
-  }
-
-  if (revealDangerId) {
-    const revealed = ctx.store.get(revealedDangerZonesAtom);
-    if (!revealed.includes(revealDangerId)) {
-      ctx.store.set(revealedDangerZonesAtom, [...revealed, revealDangerId]);
-    }
-  }
-
-  if ((inDanger || DEV_FAST_MARK) && !swarm.marked) {
+  // ── DANGER (everywhere outside a safe zone) ────────────────────────────────
+  // The open neighborhood is the threat: stepping off safe ground arms the mark and
+  // the swarm spawns + closes in. Only reaching a safe zone clears it.
+  if (!swarm.marked) {
     armMarked(ctx.now);
     ctx.store.set(markedAtom, true);
-    pushToast(
-      DEV_FAST_MARK
-        ? 'DEV fast-mark — nibblers incoming'
-        : `${dangerLabel || 'Danger Zone'} — find a Safe Zone`,
-      'tag',
-    );
+    pushToast('Marked — get to a Safe Zone!', 'tag');
   }
 
-  // Left every safe zone — clear the current-safe-zone label (edge-gated).
   if (lastSafeLabel !== null) {
     lastSafeLabel = null;
     ctx.store.set(currentSafeZoneAtom, null);
