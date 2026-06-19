@@ -93,9 +93,11 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   if (opts.uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(opts.uvs, 2));
   if (indices) g.setIndex(indices);
   g.computeVertexNormals();
-  const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat' });
+  const opacity = opts.opacity ?? 1;
+  const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat', transparent: opacity < 1, opacity });
   if (opts.colors) m.vertexColors = true;
   if (opts.flat) m.flatShading = true;
+  if (opacity < 1) m.depthWrite = false;
   m.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
 }
@@ -558,6 +560,7 @@ const MINE = PARCELS.filter(p => p.mine).map(p => p.ring);
 const inMine = (x, z) => MINE.some(r => pip(x, z, r));
 
 const buildingPolys = [];
+const buildingCollision = [];
 const houseIdx = S.buildings.findIndex(b => b.house);
 const hW = { pos: [], col: [] }, hRf = { pos: [], col: [] };
 const hD = { glass: [], trim: [] };
@@ -568,6 +571,7 @@ if (houseIdx >= 0) {
   houseWallH = wallHeight(houseB);
   houseRing = emitBuilding(houseB, houseIdx, base, houseWallH, hW, hRf, hD, { house: true, autoWindows: false });
   buildingPolys.push(houseRing);
+  buildingCollision.push({ ring: houseRing, base, h: houseWallH });
   // base colour = building's own SV colour, so it renders in every viewer (not just COLOR_0)
   scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9 }));
   scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85 }));
@@ -583,8 +587,11 @@ S.buildings.forEach((b, ib) => {
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }
   const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const h = wallHeight(b);
   const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
-  buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b), bW, bRf, bD, {}));
+  const ring = emitBuilding(b, ib, base, h, bW, bRf, bD, {});
+  buildingPolys.push(ring);
+  buildingCollision.push({ ring, base, h });
   wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
   roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
   nBld++;
@@ -808,6 +815,68 @@ if (PARCELS.length) {
   if (SHOW_LOTLINES && lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
   if (SHOW_LOTLINES && yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
 }
+
+// ---- Game-level collision / LOD proxies ----------------------------------
+function appendIndexed(srcPos, srcIdx, dstPos, dstIdx) {
+  if (!srcPos.length || !srcIdx.length) return;
+  const base = dstPos.length / 3;
+  dstPos.push(...srcPos);
+  for (const i of srcIdx) dstIdx.push(base + i);
+}
+function pushExtrudedRing(pos, idx, ring, base, h) {
+  if (!ring || ring.length < 3) return;
+  const off = pos.length / 3;
+  for (const [x, z] of ring) pos.push(x, base, z);
+  for (const [x, z] of ring) pos.push(x, base + h, z);
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    idx.push(off + i, off + j, off + n + j, off + i, off + n + j, off + n + i);
+  }
+  const tris = THREE.ShapeUtils.triangulateShape(ring.map(([x, z]) => new THREE.Vector2(x, z)), []);
+  for (const [a, b, c] of tris) idx.push(off + n + a, off + n + b, off + n + c);
+}
+function pushTreeCylinder(pos, idx, x, z, radius, height) {
+  const sides = 8, base = pos.length / 3, y0 = terrainAt(x, z), y1 = y0 + height;
+  for (let k = 0; k < sides; k++) {
+    const a = k / sides * Math.PI * 2;
+    const px = x + Math.cos(a) * radius, pz = z + Math.sin(a) * radius;
+    pos.push(px, y0, pz, px, y1, pz);
+  }
+  for (let k = 0; k < sides; k++) {
+    const j = (k + 1) % sides;
+    idx.push(base + k * 2, base + j * 2, base + j * 2 + 1, base + k * 2, base + j * 2 + 1, base + k * 2 + 1);
+  }
+}
+function addGameLevelLayers() {
+  const tPos = [], tIdx = [], step = 8;
+  const xs = [], zs = [];
+  for (let x = tXmin; x <= tXmax + 0.01; x += step) xs.push(Math.min(x, tXmax));
+  for (let z = tZmin; z <= tZmax + 0.01; z += step) zs.push(Math.min(z, tZmax));
+  for (const z of zs) for (const x of xs) tPos.push(x, terrainAt(x, z), z);
+  for (let j = 0; j < zs.length - 1; j++) for (let i = 0; i < xs.length - 1; i++) {
+    const a = j * xs.length + i, b = a + 1, c = a + xs.length, d = c + 1;
+    tIdx.push(a, c, b, b, c, d);
+  }
+  if (tIdx.length) scene.add(mkMesh(tPos, tIdx, 0xff00ff, 'Collision_Terrain', { opacity: 0 }));
+
+  const roadColPos = [], roadColIdx = [];
+  for (const [p, ix] of [[rPos, rIdx], [drvPos, drvIdx], [drvSrcPos, drvSrcIdx], [parkSrcPos, parkSrcIdx], [swPos, swIdx], [swSrcPos, swSrcIdx], [xwalkPos, xwalkIdx]]) appendIndexed(p, ix, roadColPos, roadColIdx);
+  if (roadColIdx.length) scene.add(mkMesh(roadColPos, roadColIdx, 0x00ffff, 'Collision_Roads', { opacity: 0 }));
+
+  const bPos = [], bIdx = [];
+  for (const b of buildingCollision) pushExtrudedRing(bPos, bIdx, b.ring, b.base, b.h);
+  if (bIdx.length) {
+    scene.add(mkMesh(bPos, bIdx, 0xff00ff, 'Collision_Buildings', { opacity: 0 }));
+    scene.add(mkMesh(bPos, bIdx, 0x808080, 'LOD_Buildings_Low', { opacity: 0 }));
+  }
+
+  const placed = existsSync(ex('trees_placed.json')) ? JSON.parse(readFileSync(ex('trees_placed.json'), 'utf8')).trees || [] : [];
+  const trPos = [], trIdx = [];
+  for (const t of placed) pushTreeCylinder(trPos, trIdx, t.x, t.z, Math.max(0.28, Math.min(0.55, (t.canopyR || 2.5) * 0.16)), Math.max(2.2, Math.min(4.2, (t.height || 7) * 0.38)));
+  if (trIdx.length) scene.add(mkMesh(trPos, trIdx, 0x00ff00, 'Collision_Trees', { opacity: 0 }));
+}
+addGameLevelLayers();
 
 // ---- export the base GLB (terrain/roads/houses/grass + animation) --------
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false, animations });
