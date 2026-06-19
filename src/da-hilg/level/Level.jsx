@@ -19,6 +19,7 @@ import { LEVEL_URL } from '../constants.js';
 import { showFacadesAtom, showWaterAtom, showGrassAtom } from '../state/settingsAtoms.js';
 import { CreekWater, computeCreekBounds, hideCreekClutter } from './CreekWater.jsx';
 import { WindGrass } from './WindGrass.jsx';
+import { InstanceCulling } from './InstanceCulling.jsx';
 
 const LEVEL_SOURCE = LEVEL_URL;
 
@@ -314,6 +315,9 @@ export function Level({ onReady }) {
           maskSize={paveMask.size}
         />
       )}
+      {/* Per-instance frustum + distance culling for the tree InstancedMeshes — only
+          draw the trees actually on screen / nearby (trees are ~85% of the triangles). */}
+      <InstanceCulling scene={scene} />
       {collider && (
         <RigidBody type="fixed" colliders={false}>
           <TrimeshCollider args={[collider.vertices, collider.indices]} />

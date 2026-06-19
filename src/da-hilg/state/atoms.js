@@ -17,8 +17,9 @@ export const activePlayerIdAtom = atom(CHARACTERS[0]);
 export const rolesAtom = atom(charMap('npc'));        // id -> 'player' | 'npc'
 export const npcStatesAtom = atom(charMap('idle'));   // id -> fsm/anim glyph
 
-// Camera + input UX.
-export const cameraModeAtom = atom('first');  // 'first' | 'third'
+// Camera + input UX. Da Hilg boots in third-person (you see your character + the swarm
+// climbing on you); press V or the pause-menu Camera switch for first-person.
+export const cameraModeAtom = atom('third');  // 'first' | 'third'
 export const pausedAtom = atom(false);
 export const pointerLockedAtom = atom(false);
 

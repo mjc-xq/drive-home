@@ -7,9 +7,9 @@ import { cameraRig } from '../state/refs.js';
 import { discoveredSafeZonesAtom, revealedDangerZonesAtom } from './state/nibblerAtoms.js';
 
 /**
- * Reset the swarm to a clean empty state. Da Hilg is a first-person game, so we leave
- * the camera in first-person on entry (the player toggles to third-person with V — or
- * the pause-menu Camera switch — to watch the attached swarm climb on the body).
+ * Reset the swarm to a clean empty state and boot the camera in third-person so the
+ * player sees their character and the swarm climbing on the body (press V — or the
+ * pause-menu Camera switch — for first-person).
  */
 export function initNibblers() {
   resetSwarm();
@@ -29,7 +29,7 @@ export function initNibblers() {
     daHilgStore.set(revealedDangerZonesAtom, ['danger_drive', ...revealedDanger]);
   }
   if (isNibblersMode()) {
-    daHilgStore.set(cameraModeAtom, 'first');
-    cameraRig.mode = 'first';
+    daHilgStore.set(cameraModeAtom, 'third');
+    cameraRig.mode = 'third';
   }
 }
