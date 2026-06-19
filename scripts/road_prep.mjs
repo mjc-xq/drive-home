@@ -318,10 +318,20 @@ export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
 // ribbons run parallel to road centrelines and are intentionally gapped near
 // intersections; these arcs sew those ends together around the curb return instead
 // of leaving squared-off, non-meeting strips.
+// A paved ribbon (sidewalk/curb/road) draped on terrain. By default this emits only
+// the flat TOP sheet at `terrain + lift` — which, on a raised lift (sidewalks at +26 cm,
+// curbs at +34 cm), reads as a slab HOVERING above the lawn with an open gap at its edges.
+// Pass `skirt` (the slab thickness, e.g. the lift) to also drop a vertical edge wall from
+// the slab's two long edges down to ground level, closing that gap so the slab meets the
+// terrain like a poured curb/sidewalk instead of floating. The skirt's foot sits at
+// terrain + `skirtFoot` (a hair above grade to avoid z-fighting with the lawn). Because the
+// road-edge collider copies these same buffers, the skirt is consistent for the player too.
 export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, opts = {}) {
   const skip = opts.skip || null;
   const alongStep = opts.alongStep ?? 1.5;
   const crossStep = opts.crossStep ?? 0.75;
+  const skirt = opts.skirt ?? 0;            // >0 emits side walls down to grade
+  const skirtFoot = opts.skirtFoot ?? 0.02; // wall foot height above terrain
   const dense = [lineW[0]];
   for (let k = 1; k < lineW.length; k++) {
     const a = lineW[k - 1], b = lineW[k];
@@ -334,10 +344,12 @@ export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, 
   if (cols % 2 === 1) cols++; // include a centre sample, where DEM ridges often poke through.
   const hw = width / 2;
   let prevBase = null;
+  // Per cross-section edge verts (slab edge + its ground-foot vert), to stitch skirt walls.
+  let prevEdge = null;        // { lTop, lFoot, rTop, rFoot } indices of the previous section
 
   for (let k = 0; k < dense.length; k++) {
     const [x, z] = dense[k];
-    if (skip && skip(x, z)) { prevBase = null; continue; }
+    if (skip && skip(x, z)) { prevBase = null; prevEdge = null; continue; }
     const p = dense[Math.max(0, k - 1)], q = dense[Math.min(dense.length - 1, k + 1)];
     let dx = q[0] - p[0], dz = q[1] - p[1];
     const L = Math.hypot(dx, dz) || 1;
@@ -355,7 +367,26 @@ export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, 
         idxArr.push(a, d, b, b, d, e);
       }
     }
+
+    let edge = null;
+    if (skirt > 0) {
+      // Two foot verts at grade directly below the slab's left/right edges. The slab top
+      // edges are the first (c=0) and last (c=cols) verts of this cross-section.
+      const lpx = x + nx * -hw, lpz = z + nz * -hw;
+      const rpx = x + nx * hw, rpz = z + nz * hw;
+      const lFoot = posArr.length / 3;
+      posArr.push(lpx, terrainAt(lpx, lpz) + skirtFoot, lpz);
+      const rFoot = posArr.length / 3;
+      posArr.push(rpx, terrainAt(rpx, rpz) + skirtFoot, rpz);
+      edge = { lTop: base, lFoot, rTop: base + cols, rFoot };
+      if (prevEdge) {
+        // left wall (wind outward-facing) and right wall, two tris each.
+        idxArr.push(prevEdge.lTop, edge.lTop, prevEdge.lFoot, edge.lTop, edge.lFoot, prevEdge.lFoot);
+        idxArr.push(prevEdge.rTop, prevEdge.rFoot, edge.rTop, edge.rTop, prevEdge.rFoot, edge.rFoot);
+      }
+    }
     prevBase = base;
+    prevEdge = edge;
   }
 }
 
