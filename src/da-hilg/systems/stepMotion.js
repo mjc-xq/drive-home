@@ -71,7 +71,11 @@ export function stepMotion(actor, intent, ctx) {
     mx /= mag;
     mz /= mag;
   }
-  const speed = (intent.run ? RUN_SPEED : WALK_SPEED) * nibblerPenalty.speedMul;
+  let speed = (intent.run ? RUN_SPEED : WALK_SPEED) * nibblerPenalty.speedMul;
+  // Overwhelm cap (crawl when downed, 0 when pinned) — only the swarmed player, so the
+  // background NPCs don't freeze when the player is buried.
+  const isPlayer = actor.id === ctx.activePlayerId;
+  if (isPlayer && speed > nibblerPenalty.moveCap) speed = nibblerPenalty.moveCap;
   const targetVX = mx * speed;
   const targetVZ = mz * speed;
 
@@ -91,7 +95,7 @@ export function stepMotion(actor, intent, ctx) {
   // Remember a fresh jump press so it survives the last few airborne frames.
   if (intent.jump) m.jumpBufferedT = now;
 
-  if (bufferedJump && (wasGrounded || canCoyote)) {
+  if (bufferedJump && (wasGrounded || canCoyote) && (!isPlayer || nibblerPenalty.canJump)) {
     m.velY = JUMP_VELOCITY * nibblerPenalty.jumpMul;
     m.lastGroundedT = -1; // consume coyote
     m.jumpBufferedT = -1; // consume buffer

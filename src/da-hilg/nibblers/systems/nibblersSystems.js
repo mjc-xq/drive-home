@@ -23,6 +23,7 @@ import { spawnPolicy } from '../swarm/spawner.js';
 import { updateSwarm } from '../swarm/updateSwarm.js';
 import { updateAttachment } from '../swarm/attachment.js';
 import { updatePenalty } from './penaltySystem.js';
+import { updateOverwhelm } from './overwhelmSystem.js';
 import { updateHealthDrain } from './healthDrain.js';
 import { updateStomp } from './stompSystem.js';
 import { commitNibblers } from './commitNibblers.js';
@@ -46,6 +47,7 @@ export function updateNibblers(ctx) {
   updateSwarm(ctx);
   updateAttachment(ctx);
   updatePenalty(ctx);
+  updateOverwhelm(ctx);
   updateHealthDrain(ctx);
   updateStomp(ctx);
   // Publish to the real-NPC pool LAST — after every system that moves or retires a
