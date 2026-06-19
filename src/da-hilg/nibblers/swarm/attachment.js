@@ -66,7 +66,9 @@ function hash01(s) {
  * same mood (matches the band selection in updateSwarm so there's no per-frame flicker).
  */
 function attachedClip(i) {
-  return seed[i] < 0.34 ? CLIP_DANCE : CLIP_ATTACK;
+  // Most attached nibblers slam/attack the body; a small minority dance for visual
+  // variety so the pile is not a perfectly synced chorus line.
+  return seed[i] < 0.22 ? CLIP_DANCE : CLIP_ATTACK;
 }
 
 /**

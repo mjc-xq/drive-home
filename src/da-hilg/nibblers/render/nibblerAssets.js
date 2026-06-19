@@ -28,7 +28,7 @@ let ready = false;
  * @property {number} vertCount
  * @property {number} rows
  * @property {number} frameCount
- * @property {Object} clips  { idle:{row,frames}, run, jump, emote }
+ * @property {Object} clips  { idle:{row,frames}, run, attack, dance }
  * @property {number[]} posMin
  * @property {number[]} posMax
  * @property {number[]} nrmMin

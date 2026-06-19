@@ -20,6 +20,11 @@ export const gameModeAtom = atom('nibblers'); // 'nibblers' | 'greet'
 // initNibblers() re-seeds this on every (re)mount so it survives a mode re-enter.
 export const discoveredSafeZonesAtom = atom(['safe_home']); // string[] of zone ids
 
+// Danger zones the player has learned about. Seed one near-home hazard so the
+// minimap always communicates both sides of the loop from the first frame:
+// green = safety, red = danger. Additional hidden danger zones append on contact.
+export const revealedDangerZonesAtom = atom(['danger_drive']); // string[] of zone ids
+
 // Marked elapsed seconds (1 Hz) + the attraction tier 0..4 (for HUD ramp).
 export const markedTimerAtom = atom(0);
 export const attractionTierAtom = atom(0);

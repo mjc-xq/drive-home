@@ -53,14 +53,14 @@ export const CLIP_ATTACK = 2;
 export const CLIP_DANCE = 3;
 
 // ── Attraction timeline (seconds-marked → target active count) ──────────────
-// Spec bands: 0-30s 2-5, 30-60s 10-20, 60-90s 25-40, 90-120s 50-80, 120s+ 100+.
+// Tuned for the real skinned-NPC pool: readable pressure by 30s, near-cap by 90s.
 export const ATTRACTION = [
   { t: 30, lo: 2, hi: 5 },
-  { t: 60, lo: 10, hi: 20 },
-  { t: 90, lo: 25, hi: 40 },
-  { t: 120, lo: 50, hi: 80 },
+  { t: 60, lo: 8, hi: 14 },
+  { t: 90, lo: 14, hi: 22 },
+  { t: 120, lo: 22, hi: 28 },
 ];
-export const ATTRACTION_GROWTH = 1.5;     // extra active/sec past 120s
+export const ATTRACTION_GROWTH = 0.6;     // extra active/sec past 120s
 // Slots kept free for fall/scatter/attached. With a small NPC pool the throttle cap
 // (render/throttle.js) is the real limiter, so this only needs a couple of slots of
 // headroom so a freshly-attached NPC never starves a new spawn.
@@ -109,17 +109,20 @@ export const EJECT_UP = 0.45;             // peak upward shove (m)
 export const EJECT_VELY_TRIGGER = 1.0;    // player velY crossing up past this also fires
 
 // ── Movement penalties (a = attachedCount) ──────────────────────────────────
-export const SPEED_MUL_K = 70;            // speedMul = clamp(1/(1+a/K), MIN, 1)
-export const SPEED_MUL_MIN = 0.12;
-export const JUMP_MUL_K = 45;             // jumpMul  = clamp(1/(1+a/K)^1.3, MIN, 1)
-export const JUMP_MUL_MIN = 0.05;
-export const VIS_K = 260;                 // visibility = clamp(1-(a/K)^0.85, MIN, 1)
+// Tuned for the current 32-NPC pool. The old 512-swarm constants made 5-15 riders
+// barely noticeable, so attachments now create readable drag/dimming while leaving
+// an escape path before the pile reaches the hard cap.
+export const SPEED_MUL_K = 22;            // speedMul = clamp(1/(1+a/K), MIN, 1)
+export const SPEED_MUL_MIN = 0.22;
+export const JUMP_MUL_K = 18;             // jumpMul  = clamp(1/(1+a/K)^1.3, MIN, 1)
+export const JUMP_MUL_MIN = 0.18;
+export const VIS_K = 44;                  // visibility = clamp(1-(a/K)^0.85, MIN, 1)
 export const VIS_POW = 0.85;
-export const VIS_MIN = 0.18;
+export const VIS_MIN = 0.26;
 
 // ── Health drain ────────────────────────────────────────────────────────────
-export const HEALTH_DRAIN_PER_ATTACH = 0.04; // HP/s per attached, capped
-export const HEALTH_DRAIN_CAP = 2.5;         // HP/s max
+export const HEALTH_DRAIN_PER_ATTACH = 0.09; // HP/s per attached, capped
+export const HEALTH_DRAIN_CAP = 3.2;         // HP/s max
 export const HEALTH_REGEN = 5;               // HP/s recovered when nothing is attached
 export const HEALTH_COMMIT_HZ = 1.5;
 

@@ -1,6 +1,6 @@
 // SwarmCount — top-left square-glass readout: ACTIVE (chasing) + ATTACHED (riding
 // you). AGC tabular numbers so 9→10→100 never reflows. Both values tint as they
-// climb past thresholds (--coin past 50, --reverse past 100). A one-shot pop/jiggle
+// climb past thresholds tuned to the 32-NPC pool. A one-shot pop/jiggle
 // fires on the 'nibblerAttach' / 'nibblerStomp' transient pulses (hudEvents, NOT an
 // atom) — the count "nips" up/down.
 //
@@ -12,12 +12,14 @@ import { useAtomValue } from 'jotai';
 import { activeNibblersAtom, attachedCountAtom } from '../state/nibblerAtoms.js';
 import { on } from '../../hud/hudEvents.js';
 
-const WARN_AT = 50; // --coin
-const CRIT_AT = 100; // --reverse
+const ACTIVE_WARN_AT = 10; // --coin
+const ACTIVE_CRIT_AT = 22; // --reverse
+const ATTACHED_WARN_AT = 3; // --coin
+const ATTACHED_CRIT_AT = 8; // --reverse
 
-function tintClass(n) {
-  if (n > CRIT_AT) return ' is-crit';
-  if (n > WARN_AT) return ' is-warn';
+function tintClass(n, warnAt, critAt) {
+  if (n >= critAt) return ' is-crit';
+  if (n >= warnAt) return ' is-warn';
   return '';
 }
 
@@ -51,7 +53,7 @@ export default function SwarmCount() {
       <div className="nb-swarm-row">
         <span className="nb-kick">Active</span>
         <span
-          className={`nb-swarm-val${tintClass(active)}`}
+          className={`nb-swarm-val${tintClass(active, ACTIVE_WARN_AT, ACTIVE_CRIT_AT)}`}
           aria-label={`${active} nibblers active`}
         >
           {active}
@@ -61,12 +63,17 @@ export default function SwarmCount() {
         <span className="nb-kick">Attached</span>
         <span
           ref={attachedRef}
-          className={`nb-swarm-val${tintClass(attached)}`}
+          className={`nb-swarm-val${tintClass(attached, ATTACHED_WARN_AT, ATTACHED_CRIT_AT)}`}
           aria-label={`${attached} nibblers attached`}
         >
           {attached}
         </span>
       </div>
+      {attached > 0 && (
+        <div className="nb-swarm-effect" aria-live="polite">
+          Slowed / jump weakened / draining
+        </div>
+      )}
     </div>
   );
 }

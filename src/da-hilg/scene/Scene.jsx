@@ -24,6 +24,7 @@ import CameraRig from '../camera/CameraRig.jsx';
 import RenderLoop from './RenderLoop.jsx';
 import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
 import { NibblerNpcs } from '../nibblers/index.js';
+import SafeZoneBeacons from '../nibblers/render/SafeZoneBeacons.jsx';
 
 export default function Scene() {
   // Start paused; release one tick after the level (and thus its collider) is up.
@@ -61,6 +62,8 @@ export default function Scene() {
           <NibblerNpcs />
         </Suspense>
       )}
+      {/* Glowing pillars at every safe zone so they're findable in-world. */}
+      {mode === 'nibblers' && <SafeZoneBeacons />}
       <GameSystems />
       {/* Camera lives inside <Physics> because its third-person collision ray
           uses useRapier(); priority 10 still runs it after the sim each frame. */}

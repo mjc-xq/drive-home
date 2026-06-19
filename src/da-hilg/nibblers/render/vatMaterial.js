@@ -54,24 +54,29 @@ export function makeVatMaterial(assets) {
   const vertCount = meta.vertCount;
   const rows = meta.rows;
   const clips = meta.clips || {};
-  const band = (name, fallbackRow) =>
-    clips[name] ? clips[name].row : fallbackRow;
-  const bandFrames = (name) =>
-    clips[name] ? clips[name].frames : meta.frameCount || 1;
+  const clipMeta = (names) => {
+    for (const name of names) if (clips[name]) return clips[name];
+    return null;
+  };
+  const band = (names, fallbackRow) =>
+    clipMeta(names)?.row ?? fallbackRow;
+  const bandFrames = (names) =>
+    clipMeta(names)?.frames ?? meta.frameCount ?? 1;
 
-  // Clip-row table indexed by aClip (0 idle | 1 run | 2 jump | 3 emote), matching
-  // the CLIP_* constants. Read starting rows + per-clip frame counts from meta.
+  // Clip-row table indexed by aClip (0 idle | 1 run | 2 attack | 3 dance), matching
+  // the CLIP_* constants and the VAT builder's [idle, run, attack, dance] bands.
+  // Older manifests used jump/emote names, so keep aliases as a compatibility fallback.
   const clipRow = new THREE.Vector4(
-    band('idle', 0),
-    band('run', 0),
-    band('jump', 0),
-    band('emote', 0),
+    band(['idle'], 0),
+    band(['run'], 0),
+    band(['attack', 'jump'], 0),
+    band(['dance', 'emote'], 0),
   );
   const clipFrames = new THREE.Vector4(
-    bandFrames('idle'),
-    bandFrames('run'),
-    bandFrames('jump'),
-    bandFrames('emote'),
+    bandFrames(['idle']),
+    bandFrames(['run']),
+    bandFrames(['attack', 'jump']),
+    bandFrames(['dance', 'emote']),
   );
 
   const posMin = meta.posMin || [0, 0, 0];
@@ -146,8 +151,8 @@ export function makeVatMaterial(assets) {
         ${glVid ? vidDecl : ''}
         float nibU = (${vidExpr} + 0.5) / uVertCount;
         float nibCr = nibClipRow(aClip);
-        float nibCf = nibClipFrames(aClip);
-        float nibFrame = nibCr + floor(aPhase * nibCf);
+        float nibCf = max(1.0, nibClipFrames(aClip));
+        float nibFrame = nibCr + floor(fract(aPhase) * nibCf);
         float nibV = (nibFrame + 0.5) / uRows;
         vec3 nibPosSample = texture2D(uVatPos, vec2(nibU, nibV)).xyz;
         transformed = mix(uPosMin, uPosMax, nibPosSample);`,
@@ -162,8 +167,8 @@ export function makeVatMaterial(assets) {
         ${glVid ? vidDecl : ''}
         float nibNU = (${vidExpr} + 0.5) / uVertCount;
         float nibNCr = nibClipRow(aClip);
-        float nibNCf = nibClipFrames(aClip);
-        float nibNFrame = nibNCr + floor(aPhase * nibNCf);
+        float nibNCf = max(1.0, nibClipFrames(aClip));
+        float nibNFrame = nibNCr + floor(fract(aPhase) * nibNCf);
         float nibNV = (nibNFrame + 0.5) / uRows;
         vec3 nibNrmSample = texture2D(uVatNrm, vec2(nibNU, nibNV)).xyz;
         objectNormal = normalize(mix(uNrmMin, uNrmMax, nibNrmSample));`,

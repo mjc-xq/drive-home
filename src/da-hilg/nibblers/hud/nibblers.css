@@ -173,7 +173,7 @@
   flex-direction: column;
   gap: 7px;
   padding: 8px 12px 9px;
-  min-width: 116px;
+  min-width: 164px;
   z-index: 2;
 }
 .nb-swarm-row {
@@ -202,6 +202,16 @@
 .nb-swarm-val.is-pop {
   animation: nb-num-pop 0.22s ease-out;
 }
+.nb-swarm-effect {
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.72);
+}
 @keyframes nb-num-pop {
   0% {
     transform: scale(1);
@@ -219,7 +229,7 @@
   position: absolute;
   top: calc(118px + var(--safe-t));
   left: calc(12px + var(--safe-l));
-  width: 116px;
+  width: 164px;
   z-index: 2;
   opacity: 0.82;
 }
@@ -298,6 +308,120 @@
   to {
     opacity: 1;
     transform: translate(-50%, 0);
+  }
+}
+
+/* ── ControlsHint (bottom-left) ───────────────────────────────────────────── */
+.nb-controls {
+  position: absolute;
+  left: calc(12px + var(--safe-l));
+  right: calc(220px + var(--safe-r));
+  bottom: calc(16px + var(--safe-b));
+  max-width: 430px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 10px 9px;
+  z-index: 2;
+  color: rgba(255, 255, 255, 0.78);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.nb-controls.is-safe {
+  border-color: rgba(43, 232, 79, 0.5);
+  box-shadow: 0 0 18px rgba(43, 232, 79, 0.14), var(--hud-shadow);
+}
+.nb-controls.is-danger {
+  border-color: rgba(255, 82, 71, 0.55);
+  box-shadow: 0 0 18px rgba(255, 82, 71, 0.16), var(--hud-shadow);
+}
+.nb-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+}
+.nb-key {
+  min-width: 34px;
+  padding: 2px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  font-family: 'AGC', system-ui, sans-serif;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.88);
+}
+.nb-control-status {
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.25;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* ── NibblerFeedback (transient screen pulses) ────────────────────────────── */
+.nb-feedback {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: nb-feedback-out 0.76s ease-out forwards;
+}
+.nb-feedback::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+}
+.nb-feedback.is-attach {
+  color: var(--reverse);
+}
+.nb-feedback.is-attach::before,
+.nb-feedback.is-danger::before {
+  border-color: rgba(255, 82, 71, 0.42);
+  box-shadow: inset 0 0 48px rgba(255, 82, 71, 0.24);
+}
+.nb-feedback.is-danger {
+  color: var(--reverse);
+}
+.nb-feedback.is-stomp {
+  color: var(--coin);
+}
+.nb-feedback.is-stomp::before {
+  border-color: rgba(255, 200, 61, 0.42);
+  box-shadow: inset 0 0 48px rgba(255, 200, 61, 0.18);
+}
+.nb-feedback-text {
+  position: relative;
+  font-family: 'AGC', system-ui, sans-serif;
+  font-weight: 900;
+  font-size: clamp(20px, 4vw, 46px);
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: 0 0 18px currentColor;
+}
+@keyframes nb-feedback-out {
+  0% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
   }
 }
 
@@ -417,6 +541,62 @@
   text-shadow: 0 0 6px rgba(43, 232, 79, 0.5);
   pointer-events: none;
 }
+.nb-minimap-legend {
+  position: absolute;
+  left: 7px;
+  bottom: 5px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+  line-height: 1;
+}
+.nb-minimap-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: 'Chakra Petch', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.58);
+  text-transform: uppercase;
+}
+.nb-minimap-key::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  display: inline-block;
+}
+.nb-minimap-key.is-safe::before {
+  background: var(--go);
+  transform: rotate(45deg);
+  box-shadow: 0 0 5px rgba(43, 232, 79, 0.62);
+}
+.nb-minimap-key.is-danger::before {
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 7px solid var(--reverse);
+  width: 0;
+  height: 0;
+  background: transparent;
+  box-shadow: 0 0 5px rgba(255, 82, 71, 0.45);
+}
+.nb-minimap-key.is-danger.is-live {
+  color: var(--reverse);
+  text-shadow: 0 0 6px rgba(255, 82, 71, 0.65);
+}
+
+@media (max-width: 760px) {
+  .nb-controls {
+    right: calc(12px + var(--safe-r));
+    bottom: calc(210px + var(--safe-b));
+    max-width: none;
+  }
+  .nb-hint {
+    bottom: calc(268px + var(--safe-b));
+  }
+}
 
 /* ── Reduced motion ────────────────────────────────────────────────────────── */
 /* The framework hud.css already neutralizes animations/transitions inside
@@ -440,7 +620,8 @@
   .nb-safe-word,
   .nb-safe-sub,
   .nb-marked,
-  .nb-hint {
+  .nb-hint,
+  .nb-feedback {
     animation: none !important;
   }
 }

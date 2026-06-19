@@ -11,7 +11,7 @@
 import { daHilgStore } from '../state/store.js';
 import { activePlayerIdAtom } from '../state/atoms.js';
 
-/** @typedef {{id:string, type:string, npcGroup?:string, event?:string, label?:string}} ZoneDef */
+/** @typedef {{id:string, type:string, npcGroup?:string, event?:string, label?:string, discover?:boolean, reveal?:boolean, marker?:boolean, active?:boolean}} ZoneDef */
 
 /** actorId -> Set<zoneId> currently occupied. Mutated by flushZones, read everywhere. */
 export const actorZones = new Map();
