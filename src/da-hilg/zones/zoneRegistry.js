@@ -123,14 +123,3 @@ export function playerNoticeGroups() {
   }
   return out;
 }
-
-/**
- * Movement speed multiplier for an actor from any 'speed' zones it occupies.
- * Inert for v1 (no speed zones authored) — always returns 1. The consumer
- * (stepMotion) already multiplies by this, so adding a speed zone later is data-only.
- * @param {string} _actorId
- * @returns {number}
- */
-export function speedMultiplierFor(_actorId) {
-  return 1;
-}

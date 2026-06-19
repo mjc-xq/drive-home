@@ -101,7 +101,6 @@ export const INVERT_Y = false;
 
 // ── Frame ───────────────────────────────────────────────────────────────────
 export const DT_CLAMP = 1 / 30;          // never integrate a hitch larger than this
-export const SMOOTH_ACCEL = 14;          // exponential smoothing rates: 1 - exp(-rate*dt)
 export const SMOOTH_CAM = 12;            // boom/position follow — a touch of cinematic lag
 export const SMOOTH_LOOK = 22;           // look target chases fast so aim stays crisp
 export const SMOOTH_BOOM_IN = 60;        // collision shrink: snap in to never clip a wall
@@ -135,7 +134,6 @@ export const STUCK_TIME = 0.6;           // realized<<desired for this long → 
 
 // ── Scoring ─────────────────────────────────────────────────────────────────
 export const SCORE_FIRST_GREET = 100;
-export const SCORE_EMOTE_NEAR = 10;
 
 // ── HUD accent palette (mirrors the driving HUD tokens) ─────────────────────
 export const COLORS = {
