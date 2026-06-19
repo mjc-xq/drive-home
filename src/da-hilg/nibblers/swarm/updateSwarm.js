@@ -8,7 +8,8 @@
 //   3. per nibbler: dispatch on state → seek/drift/separate/integrate/transition
 //   4. advance emote phase + pick the clip band
 //   5. recompute swarm.activeCount
-//   6. publish each live slot to its pooled NPC (position/face/scale/clip + tick mixer)
+// (the pooled NPCs are published by nibblersSystems AFTER updateAttachment, so attached
+//  nibblers render with this frame's anchor — not from this function.)
 
 import {
   MAX_NIBBLERS,
@@ -50,7 +51,6 @@ import {
 import { free } from './swarmState.js';
 import { buildGrid } from './grid.js';
 import { seekTo, separate, integrate, tryJumpAndAttach } from './nibblerFSM.js';
-import { publishToNpcPool } from '../render/npcPool.js';
 
 const NOTICE_R2 = NOTICE_RADIUS * NOTICE_RADIUS;
 const SPAWN_SETTLE_T = 0.3; // seconds of pop-in before WANDER
@@ -207,9 +207,7 @@ export function updateSwarm(ctx) {
   }
 
   swarm.activeCount = active;
-
-  // 4) Drive the real-NPC pool: position/face/scale/clip each live slot's NPC and
-  //    advance its AnimationMixer with the SHARED dt (no second sim loop). A no-op
-  //    until NibblerNpcs has mounted at least one NPC.
-  publishToNpcPool(dt);
+  // NOTE: the real-NPC pool is published by nibblersSystems AFTER updateAttachment, so
+  // attached nibblers (positioned by updateAttachment, which runs after updateSwarm) are
+  // rendered with THIS frame's anchor, not last frame's.
 }
