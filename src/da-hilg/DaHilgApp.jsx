@@ -17,6 +17,7 @@ import * as THREE from 'three';
 
 import { daHilgStore } from './state/store.js';
 import { perfModeAtom } from './state/settingsAtoms.js';
+import { deviceTier } from './state/deviceTier.js';
 import { CAM_FOV, FP_NEAR, CAM_FAR, LEVEL_URL, CHARACTER_URL } from './constants.js';
 import { DaHilgPreloader } from './loaders.js';
 import { keyMap } from './input/keyMap.js';
@@ -78,7 +79,8 @@ export default function DaHilgApp() {
       <KeyboardControls map={keyMap}>
         <Canvas
           shadows={{ type: THREE.PCFShadowMap }}
-          dpr={[1, 2]}
+          dpr={[1, deviceTier.dprMax]}
+          gl={{ powerPreference: 'high-performance', stencil: false }}
           camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
         >
           <SceneEnv />

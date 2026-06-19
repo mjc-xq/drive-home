@@ -11,6 +11,7 @@ import { useGLTF } from '@react-three/drei';
 import { useAtomValue } from 'jotai';
 import { cameraRig } from '../state/refs.js';
 import { perfModeAtom } from '../state/settingsAtoms.js';
+import { deviceTier } from '../state/deviceTier.js';
 
 // Sun direction (shared by the sky + the key light so highlights line up).
 const SUN_DIR = [90, 70, 50];
@@ -183,8 +184,8 @@ export default function SceneEnv() {
         intensity={3.2}
         color="#fff1d6"
         castShadow
-        shadow-mapSize-width={4096}
-        shadow-mapSize-height={4096}
+        shadow-mapSize-width={deviceTier.shadowSize}
+        shadow-mapSize-height={deviceTier.shadowSize}
         shadow-camera-near={1}
         shadow-camera-far={400}
         shadow-camera-left={-150}
