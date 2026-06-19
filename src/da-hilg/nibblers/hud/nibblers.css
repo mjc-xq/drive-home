@@ -334,28 +334,6 @@
   border-color: rgba(255, 82, 71, 0.55);
   box-shadow: 0 0 18px rgba(255, 82, 71, 0.16), var(--hud-shadow);
 }
-.nb-control-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px 8px;
-  font-family: 'Chakra Petch', system-ui, sans-serif;
-  font-size: 11px;
-  line-height: 1.2;
-  letter-spacing: 0.02em;
-}
-.nb-key {
-  min-width: 34px;
-  padding: 2px 5px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.08);
-  font-family: 'AGC', system-ui, sans-serif;
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 1;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.88);
-}
 .nb-control-status {
   font-family: 'Chakra Petch', system-ui, sans-serif;
   font-weight: 500;

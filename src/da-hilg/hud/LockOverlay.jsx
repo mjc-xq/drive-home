@@ -1,7 +1,6 @@
 // Desktop click-to-play. Shown when the game is playing but the pointer isn't
-// locked (fresh load, or after Esc). Clicking requests pointer lock so mouse-look
-// + WASD engage. Touch devices have no pointer lock, so this is gated to fine
-// pointers only.
+// locked (fresh load, or after Esc). Clicking requests pointer lock. Touch devices
+// have no pointer lock, so this is gated to fine pointers only.
 //
 // Lock acquisition: usePointerLock owns the lifecycle and updates pointerLockedAtom
 // on the real `pointerlockchange` event. We don't reach into its internals; we just
@@ -22,9 +21,10 @@ function requestLock() {
   // requestPointerLock can throw if called without a user gesture; we're inside a
   // click handler so it's gesture-backed, but guard anyway.
   try {
-    canvas?.requestPointerLock?.();
+    const result = canvas?.requestPointerLock?.();
+    result?.catch?.(() => {});
   } catch (err) {
-    console.warn('[LockOverlay] requestPointerLock failed', err);
+    /* keep the click-to-play overlay visible */
   }
 }
 
@@ -50,26 +50,6 @@ export default function LockOverlay() {
       <div className="dh-lock-card">
         <div className="dh-lock-title">Da Hilg</div>
         <div className="dh-lock-sub">Click to play</div>
-        <div className="dh-lock-hints">
-          <span>
-            <b>WASD</b> move
-          </span>
-          <span>
-            <b>Mouse</b> look
-          </span>
-          <span>
-            <b>Space</b> jump
-          </span>
-          <span>
-            <b>E</b> greet
-          </span>
-          <span>
-            <b>Tab</b> switch
-          </span>
-          <span>
-            <b>V</b> camera
-          </span>
-        </div>
       </div>
     </div>
   );

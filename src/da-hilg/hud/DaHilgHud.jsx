@@ -91,7 +91,7 @@ export default function DaHilgHud() {
 
   return (
     <div className="dahilg-hud">
-      {/* Bridges drei useProgress → loadProgressAtom + flips phase to playing. */}
+      {/* Bridges DefaultLoadingManager -> loadProgressAtom + flips phase to playing. */}
       <ProgressBridge />
 
       {/* Always-on veils. */}
