@@ -75,8 +75,12 @@ RUNS = [
     # literally put the fence in the water. Judgement: run it ~5 m inside the bank.
     {"name": "FenceRed", "glb": f"{DL}/Fence.glb",
      "polyline": [[-28.83, -22.64], [-27.0, -31.0], [-25.5, -39.0], [-17.11, -39.91]]},
+    # front-yard picket on the DOOR half (SW), garage is the road/NE end so the fence
+    # is on the other half. Starts at the house SW front corner, runs out ~2 m into the
+    # (shallow) front yard and along toward the door; the open NE end is the GATE on the
+    # door->driveway path. Kept inside the parcel's road-side line.
     {"name": "FenceBlack", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[12.06, 2.53], [15.5, 7], [8.68, 14.12]]},
+     "polyline": [[3.16, -10.01], [4.63, -11.05], [7.77, -6.64]]},
 ]
 
 # per-asset unit scale (-> meters), whether the native run axis is Y not X, and a
