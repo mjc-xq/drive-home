@@ -14,7 +14,7 @@
 import { useEffect } from 'react';
 import { daHilgStore } from '../state/store.js';
 import { registry, cameraRig, levelMeta, activePlayer } from '../state/refs.js';
-import { activePlayerIdAtom, cameraModeAtom, pausedAtom, pointerLockedAtom } from '../state/atoms.js';
+import { activePlayerIdAtom, cameraModeAtom } from '../state/atoms.js';
 import { EMOTE_SLOT } from '../animation/clips.js';
 import { cycleSwitch } from '../systems/switchSystem.js';
 import { requestGreet } from '../systems/greetSystem.js';
@@ -77,16 +77,8 @@ export function useEdgeKeys() {
           if (player && clip) requestEmote(player, clip);
           break;
         }
-        case 'Escape': {
-          const paused = !daHilgStore.get(pausedAtom);
-          daHilgStore.set(pausedAtom, paused);
-          if (paused) {
-            // Drop the pointer lock so the pause menu is clickable.
-            if (document.pointerLockElement) document.exitPointerLock?.();
-            daHilgStore.set(pointerLockedAtom, false);
-          }
-          break;
-        }
+        // Esc is owned by HudMenu (toggles the pause menu); the browser also exits
+        // pointer lock on Esc natively, so we don't handle it here.
         default:
           break;
       }

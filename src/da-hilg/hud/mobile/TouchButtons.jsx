@@ -6,8 +6,8 @@
 // emote wheel atom. GREET glows when a family member is greetable (canGreetAtom).
 
 import { useAtom, useAtomValue } from 'jotai';
-import { canGreetAtom, emoteOpenAtom } from '../../state/atoms.js';
-import { input, cameraRig, registry, clock } from '../../state/refs.js';
+import { canGreetAtom, emoteOpenAtom, activePlayerIdAtom } from '../../state/atoms.js';
+import { input, cameraRig, registry, levelMeta, clock } from '../../state/refs.js';
 import { daHilgStore } from '../../state/store.js';
 import { requestGreet } from '../../systems/greetSystem.js';
 import { cycleSwitch } from '../../systems/switchSystem.js';
@@ -24,10 +24,12 @@ function lightCtx() {
     registry,
     input,
     cameraRig,
-    levelMeta: null,
-    now: clock.now,
+    levelMeta,
+    now: clock.now || performance.now(),
     dt: 0,
-    activePlayerId: cameraRig.targetId,
+    // Read the active id from the atom (authoritative), mirroring useEdgeKeys'
+    // buildCtxLite — cameraRig.targetId can lag during the switch grace window.
+    activePlayerId: daHilgStore.get(activePlayerIdAtom),
   };
 }
 

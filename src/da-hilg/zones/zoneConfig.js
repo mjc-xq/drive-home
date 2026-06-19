@@ -16,16 +16,6 @@ const SAFE_PAD_Y = 2;
 const SAFE_MIN_HEIGHT = 6;
 
 /**
- * Recenter a raw-coord point by subtracting the level offset.
- * @param {number[]} p  [x,y,z] in raw level coords
- * @param {number[]} offset  levelMeta.offset
- * @returns {[number,number,number]}
- */
-function recenter(p, offset) {
-  return [p[0] - offset[0], p[1] - offset[1], p[2] - offset[2]];
-}
-
-/**
  * Build the home_safe def by fitting it to the (recentered) house bounding box.
  * Falls back to a sensible box at origin if the meta has no usable houseBox.
  * @param {import('../state/refs.js').levelMeta} levelMeta
@@ -33,7 +23,6 @@ function recenter(p, offset) {
  */
 function buildHomeSafe(levelMeta) {
   const box = levelMeta.houseBox;
-  const offset = levelMeta.offset || [0, 0, 0];
   const hasBox =
     box &&
     Array.isArray(box.min) &&
@@ -45,8 +34,10 @@ function buildHomeSafe(levelMeta) {
     return { id: 'home_safe', type: 'safe', position: [0, 3, 0], size: [26, 6, 26] };
   }
 
-  const min = recenter(box.min, offset);
-  const max = recenter(box.max, offset);
+  // houseBox already ships in RECENTERED coords (matching actors/ground) — use
+  // it directly. (Subtracting the offset again drops it ~37 m underground.)
+  const min = box.min;
+  const max = box.max;
 
   // Center of the recentered box, padded out to include the porch/yard skirt.
   const cx = (min[0] + max[0]) / 2;

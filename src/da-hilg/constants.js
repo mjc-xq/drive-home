@@ -84,7 +84,7 @@ export const SMOOTH_BOOM = 12;
 
 // ── Animation ───────────────────────────────────────────────────────────────
 export const IDLE_SPEED_EPS = 0.15;      // below this horizontal speed → idle
-export const RUN_ANIM_THRESH = 3.2;      // at/above → run clip
+export const RUN_ANIM_THRESH = 4.5;      // at/above → run clip (between WALK 3.2 and RUN 6)
 export const FADE_LOCO = 0.18;
 export const FADE_IDLE = 0.2;
 export const FADE_JUMP = 0.1;

@@ -53,12 +53,10 @@ function bakeCollider(scene) {
   const positions = [];
   const indices = [];
   let base = 0;
-  let meshCount = 0;
   const v = new THREE.Vector3();
 
   scene.traverse((o) => {
     if (!o.isMesh || !(o.name || '').startsWith('Collision_')) return;
-    meshCount++;
     const pos = o.geometry.attributes.position;
     // IMPORTANT: the GLB positions are int16/normalized (KHR_mesh_quantization),
     // with the real ×scale on the node. Reading via fromBufferAttribute()
@@ -78,17 +76,9 @@ function bakeCollider(scene) {
     base += pos.count;
   });
 
-  // Bring-up sanity: print the recentered world Y span (expect ground ≈ 0..~15).
-  let minY = Infinity, maxY = -Infinity;
-  for (let i = 1; i < positions.length; i += 3) {
-    if (positions[i] < minY) minY = positions[i];
-    if (positions[i] > maxY) maxY = positions[i];
-  }
   return {
     vertices: new Float32Array(positions),
     indices: new Uint32Array(indices),
-    meshCount,
-    yRange: [minY, maxY],
   };
 }
 

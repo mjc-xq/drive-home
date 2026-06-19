@@ -38,10 +38,15 @@ export function trySnapActor(actor, ctx) {
   );
   if (!hit) return false;
 
-  const feetY = RAY_ORIGIN_Y - hit.timeOfImpact + 0.02; // recentered ground + a sliver
+  const feetY = RAY_ORIGIN_Y - hit.timeOfImpact; // sit exactly on the surface
   ref.rigid.setTranslation({ x: p.x, y: feetY + CAPSULE_CENTER_Y, z: p.z }, true);
   p.set(p.x, feetY, p.z);
   actor.ai.home.copy(p); // re-anchor NPC wander to the true spawn height
+  // Seed ground state so the first post-snap frame isn't read as airborne (which
+  // would briefly latch the jump anim before settling).
+  actor.motion.velY = 0;
+  actor.motion.grounded = true;
+  actor.motion.lastGroundedT = ctx.now;
   ref._snapped = true;
   return true;
 }

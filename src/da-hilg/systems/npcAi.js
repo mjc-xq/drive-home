@@ -26,12 +26,14 @@ import {
 import { playerIsSafe, playerNoticeGroups } from '../zones/zoneRegistry.js';
 import { pickWander } from './pointsOfInterest.js';
 import { onNpcTouch } from './greetSystem.js';
+import { requestEmote } from './animationSystem.js';
 
 // Reused scratch so the hot loop never allocates.
 const _intent = { move: { x: 0, z: 0 }, run: false, jump: false, action: null };
 const _away = new THREE.Vector3();
 const WANDER_REACH = 1.2; // within this of the POI counts as "arrived"
 const COOLDOWN_DRIFT = 0.3; // tiny idle drift fraction during cooldown
+const WANDER_TIMEOUT_MS = 7000; // abandon an unreachable stroll target after this
 
 /**
  * Is the active player a valid target for this NPC right now?
@@ -45,7 +47,10 @@ const COOLDOWN_DRIFT = 0.3; // tiny idle drift fraction during cooldown
 function targetable(actor, ctx, dist) {
   if (playerIsSafe()) return false;
   const group = actor.ai && actor.ai.group;
-  if (group) return playerNoticeGroups().has(group);
+  // A zone-bound NPC needs BOTH: the player inside its notice group AND within
+  // NOTICE_RADIUS. (Without the distance gate, a map-sized notice zone makes
+  // every NPC permanently target the player, so they never get to wander.)
+  if (group) return playerNoticeGroups().has(group) && dist <= NOTICE_RADIUS;
   return dist <= NOTICE_RADIUS;
 }
 
@@ -88,11 +93,19 @@ function seek(actor, toX, toZ, sign, frac, dt) {
       ai.stuckT = 0;
     }
     if (ai.stuckT > STUCK_TIME) {
-      // Perpendicular nudge (rotate +90° about Y): (x,z) -> (z,-x).
-      const nx = dz;
-      const nz = -dx;
+      // Perpendicular nudge to round the obstacle, alternating sides. Decay the
+      // timer so the nudge is a brief burst, then we re-aim at the real goal —
+      // otherwise a wedged NPC rotates 90° every frame forever and grinds in place.
+      const sgn = ai._stuckSign || (ai._stuckSign = Math.random() < 0.5 ? 1 : -1);
+      const nx = dz * sgn;
+      const nz = -dx * sgn;
       dx = nx;
       dz = nz;
+      ai.stuckT -= dt * 2; // burst, then re-seek
+      if (ai.stuckT <= 0) {
+        ai.stuckT = 0;
+        ai._stuckSign = 0; // pick a fresh side next time we wedge
+      }
     }
   } else {
     ai.stuckT = 0;
@@ -109,6 +122,8 @@ function enterWander(actor, ctx) {
   // Stash the look/emote hints for arrival; faceTarget is applied on reach.
   actor.ai._wanderLookAt = w.lookAt || null;
   actor.ai._wanderEmote = w.emote || null;
+  // Give up a stroll that takes too long (wedged on terrain) and re-decide.
+  actor.ai.wanderUntil = (ctx && ctx.now ? ctx.now : 0) + WANDER_TIMEOUT_MS;
   actor.fsm = 'wander';
 }
 
@@ -175,6 +190,12 @@ export function npcStep(actor, ctx, dt) {
         actor.fsm = 'chase';
         break;
       }
+      // Stroll taking too long (wedged) — settle briefly, then pick a new target.
+      if (now >= (ai.wanderUntil || 0)) {
+        actor.fsm = 'idle';
+        ai.dwellUntil = now + 600;
+        break;
+      }
       const dest = ai.wanderTo;
       if (!dest) {
         enterWander(actor, ctx);
@@ -187,11 +208,11 @@ export function npcStep(actor, ctx, dt) {
         ai.dwellUntil =
           now + (WANDER_DWELL_MIN + Math.random() * (WANDER_DWELL_MAX - WANDER_DWELL_MIN)) * 1000;
         ai.faceTarget = ai._wanderLookAt || null;
+        // Rarely react at the landmark (wave at the mailbox, cheer at the creek).
+        // Route through requestEmote — the canonical path that owns motion.action;
+        // intent.action is never consumed for NPCs.
         if (ai._wanderEmote && Math.random() < 0.25) {
-          // Lazy import avoided: animationSystem.requestEmote is the canonical
-          // path, but greetSystem already owns the emote helper import graph.
-          // We set action on the intent so the animation system picks it up.
-          _intent.action = ai._wanderEmote;
+          requestEmote(actor, ai._wanderEmote, { faceTarget: ai._wanderLookAt || null });
         }
         break;
       }
@@ -238,8 +259,16 @@ export function npcStep(actor, ctx, dt) {
         break;
       }
       // Aim for a point well behind us relative to the player so we keep backing
-      // away even if the player follows: pos + (pos - player) * 8.
-      _away.set(pos.x - ppos.x, 0, pos.z - ppos.z);
+      // away even if the player follows: pos + (pos - player) * 8. When we're
+      // right on top of the player (the post-touch case) the away vector is ~0,
+      // so pick a deterministic heading instead of standing still for 3 s.
+      let ax = pos.x - ppos.x;
+      let az = pos.z - ppos.z;
+      if (Math.hypot(ax, az) < 1e-3) {
+        ax = Math.cos(now * 0.001);
+        az = Math.sin(now * 0.001);
+      }
+      _away.set(ax, 0, az).normalize();
       const fleeX = pos.x + _away.x * 8;
       const fleeZ = pos.z + _away.z * 8;
       actor.ai._npcRun = true;
