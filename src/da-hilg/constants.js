@@ -51,8 +51,8 @@ export const TP_COLLISION_SKIN = 0.25;
 export const FP_FORWARD_NUDGE = 0.06;
 
 // ── Movement ────────────────────────────────────────────────────────────────
-export const WALK_SPEED = 3.2;
-export const RUN_SPEED = 6.0;
+export const WALK_SPEED = 4.6;
+export const RUN_SPEED = 8.2;
 export const ACCEL_GROUND = 14;
 export const ACCEL_AIR = 3;
 export const JUMP_VELOCITY = 5.2;
@@ -65,10 +65,16 @@ export const JUMP_BUFFER = 0.1;    // seconds a queued jump stays valid
 export const KCC_OFFSET = 0.01;          // collider skin width
 export const MAX_SLOPE_CLIMB_DEG = 50;
 export const MIN_SLOPE_SLIDE_DEG = 38;
-export const AUTOSTEP_HEIGHT = 0.35;     // climb curbs/steps up to this
-export const AUTOSTEP_MIN_WIDTH = 0.2;
-export const SNAP_TO_GROUND = 0.3;
+export const AUTOSTEP_HEIGHT = 0.5;      // climb curbs/steps/sidewalks up to this
+export const AUTOSTEP_MIN_WIDTH = 0.15;
+export const SNAP_TO_GROUND = 0.6;       // hug the hill's slopes so feet stay planted
 export const CHARACTER_MASS = 75;
+
+// The character meshes are authored facing +Z (toward the camera in third-person);
+// add PI so the visible body faces its travel/look direction (away from the camera).
+export const MODEL_FACING_OFFSET = Math.PI;
+// Idle clip (a boxer's warmup) is bouncy — slow it to a calm ready-sway, not a dance.
+export const IDLE_TIMESCALE = 0.5;
 
 // ── Look ────────────────────────────────────────────────────────────────────
 export const LOOK_SENSITIVITY = 0.0022;  // rad per pixel (mouse)

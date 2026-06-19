@@ -1,54 +1,231 @@
 {
-  "vertCount": 519,
-  "rows": 96,
-  "frameCount": 24,
-  "clips": {
-    "idle": {
-      "row": 0,
-      "frames": 24
+  "version": 2,
+  "order": [
+    "mike",
+    "kelli",
+    "cece",
+    "drew"
+  ],
+  "characters": {
+    "mike": {
+      "vertCount": 497,
+      "rows": 96,
+      "frameCount": 24,
+      "clips": {
+        "idle": {
+          "row": 0,
+          "frames": 24
+        },
+        "run": {
+          "row": 24,
+          "frames": 24
+        },
+        "attack": {
+          "row": 48,
+          "frames": 24
+        },
+        "dance": {
+          "row": 72,
+          "frames": 24
+        }
+      },
+      "posMin": [
+        -0.772949,
+        -0.012077,
+        -0.68252
+      ],
+      "posMax": [
+        0.996363,
+        1.70659,
+        0.63085
+      ],
+      "nrmMin": [
+        -0.99993,
+        -0.999994,
+        -0.99999
+      ],
+      "nrmMax": [
+        0.999992,
+        1,
+        0.999908
+      ],
+      "layout": "pos+nrm in separate pngs",
+      "posTexture": "nibbler.mike.vat.pos.png",
+      "nrmTexture": "nibbler.mike.vat.nrm.png",
+      "colorTexture": "nibbler.mike.tex.webp",
+      "proxy": "nibbler.mike.proxy.glb",
+      "aVertexId": "attribute",
+      "attributeName": "_VERTEXID",
+      "textureWidth": 497,
+      "textureHeight": 96,
+      "filter": "nearest",
+      "encoding": "RGB = (val - min) / (max - min) in 0..255; A unused. Decode: val = min + (rgb/255)*(max-min).",
+      "note": "Sample texel (x=vertexId, y=clip.row+frame). World-meters, feet at y~=0, rig faces +Z. colorTexture sampled by the proxy UV."
     },
-    "run": {
-      "row": 24,
-      "frames": 24
+    "kelli": {
+      "vertCount": 482,
+      "rows": 96,
+      "frameCount": 24,
+      "clips": {
+        "idle": {
+          "row": 0,
+          "frames": 24
+        },
+        "run": {
+          "row": 24,
+          "frames": 24
+        },
+        "attack": {
+          "row": 48,
+          "frames": 24
+        },
+        "dance": {
+          "row": 72,
+          "frames": 24
+        }
+      },
+      "posMin": [
+        -0.628491,
+        -0.04794,
+        -0.820502
+      ],
+      "posMax": [
+        1.121241,
+        1.777753,
+        0.681505
+      ],
+      "nrmMin": [
+        -0.999968,
+        -0.999963,
+        -0.999994
+      ],
+      "nrmMax": [
+        1,
+        1,
+        0.999995
+      ],
+      "layout": "pos+nrm in separate pngs",
+      "posTexture": "nibbler.kelli.vat.pos.png",
+      "nrmTexture": "nibbler.kelli.vat.nrm.png",
+      "colorTexture": "nibbler.kelli.tex.webp",
+      "proxy": "nibbler.kelli.proxy.glb",
+      "aVertexId": "attribute",
+      "attributeName": "_VERTEXID",
+      "textureWidth": 482,
+      "textureHeight": 96,
+      "filter": "nearest",
+      "encoding": "RGB = (val - min) / (max - min) in 0..255; A unused. Decode: val = min + (rgb/255)*(max-min).",
+      "note": "Sample texel (x=vertexId, y=clip.row+frame). World-meters, feet at y~=0, rig faces +Z. colorTexture sampled by the proxy UV."
     },
-    "jump": {
-      "row": 48,
-      "frames": 24
+    "cece": {
+      "vertCount": 645,
+      "rows": 96,
+      "frameCount": 24,
+      "clips": {
+        "idle": {
+          "row": 0,
+          "frames": 24
+        },
+        "run": {
+          "row": 24,
+          "frames": 24
+        },
+        "attack": {
+          "row": 48,
+          "frames": 24
+        },
+        "dance": {
+          "row": 72,
+          "frames": 24
+        }
+      },
+      "posMin": [
+        -0.753079,
+        -0.057416,
+        -0.762149
+      ],
+      "posMax": [
+        1.032356,
+        1.873306,
+        0.787127
+      ],
+      "nrmMin": [
+        -0.999998,
+        -0.99994,
+        -0.999979
+      ],
+      "nrmMax": [
+        1,
+        1,
+        0.99999
+      ],
+      "layout": "pos+nrm in separate pngs",
+      "posTexture": "nibbler.cece.vat.pos.png",
+      "nrmTexture": "nibbler.cece.vat.nrm.png",
+      "colorTexture": "nibbler.cece.tex.webp",
+      "proxy": "nibbler.cece.proxy.glb",
+      "aVertexId": "attribute",
+      "attributeName": "_VERTEXID",
+      "textureWidth": 645,
+      "textureHeight": 96,
+      "filter": "nearest",
+      "encoding": "RGB = (val - min) / (max - min) in 0..255; A unused. Decode: val = min + (rgb/255)*(max-min).",
+      "note": "Sample texel (x=vertexId, y=clip.row+frame). World-meters, feet at y~=0, rig faces +Z. colorTexture sampled by the proxy UV."
     },
-    "emote": {
-      "row": 72,
-      "frames": 24
+    "drew": {
+      "vertCount": 647,
+      "rows": 96,
+      "frameCount": 24,
+      "clips": {
+        "idle": {
+          "row": 0,
+          "frames": 24
+        },
+        "run": {
+          "row": 24,
+          "frames": 24
+        },
+        "attack": {
+          "row": 48,
+          "frames": 24
+        },
+        "dance": {
+          "row": 72,
+          "frames": 24
+        }
+      },
+      "posMin": [
+        -0.863715,
+        -0.104454,
+        -0.789805
+      ],
+      "posMax": [
+        1.016231,
+        1.912677,
+        0.814711
+      ],
+      "nrmMin": [
+        -0.999988,
+        -0.999909,
+        -0.999955
+      ],
+      "nrmMax": [
+        0.999963,
+        1,
+        0.999989
+      ],
+      "layout": "pos+nrm in separate pngs",
+      "posTexture": "nibbler.drew.vat.pos.png",
+      "nrmTexture": "nibbler.drew.vat.nrm.png",
+      "colorTexture": "nibbler.drew.tex.webp",
+      "proxy": "nibbler.drew.proxy.glb",
+      "aVertexId": "attribute",
+      "attributeName": "_VERTEXID",
+      "textureWidth": 647,
+      "textureHeight": 96,
+      "filter": "nearest",
+      "encoding": "RGB = (val - min) / (max - min) in 0..255; A unused. Decode: val = min + (rgb/255)*(max-min).",
+      "note": "Sample texel (x=vertexId, y=clip.row+frame). World-meters, feet at y~=0, rig faces +Z. colorTexture sampled by the proxy UV."
     }
-  },
-  "posMin": [
-    -1.255118,
-    -0.047426,
-    -0.950716
-  ],
-  "posMax": [
-    1.743788,
-    1.888735,
-    3.205502
-  ],
-  "nrmMin": [
-    -0.999966,
-    -0.999971,
-    -0.999998
-  ],
-  "nrmMax": [
-    0.999998,
-    1,
-    0.99997
-  ],
-  "layout": "pos+nrm in separate pngs",
-  "posTexture": "nibbler.vat.pos.png",
-  "nrmTexture": "nibbler.vat.nrm.png",
-  "aVertexId": "attribute",
-  "attributeName": "_VERTEXID",
-  "aVertexIdNote": "Read float attribute _VERTEXID per vertex and round() it -> exact 0..vertCount-1 (meshopt reorders vertices, so values are a permutation, but each is an exact integer id). Use as the VAT texture column (x).",
-  "textureWidth": 519,
-  "textureHeight": 96,
-  "filter": "nearest",
-  "encoding": "RGB = (val - min) / (max - min) in 0..255; A unused. Decode: val = min + (rgb/255)*(max-min).",
-  "note": "Sample texel (x=vertexId, y=clip.row+frame). World-meters, feet at y~=0, rig faces +Z."
+  }
 }

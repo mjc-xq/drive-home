@@ -1,21 +1,24 @@
-// <SwarmRenderer/> — mounts the ONE InstancedMesh that draws the entire horde,
-// wires the three per-instance buffers into swarmGpu (the sim ↔ render bridge),
-// and otherwise does NOTHING per frame: the sim uploads (in updateSwarm's tail).
-// There is deliberately NO useFrame here — that would be a second sim loop.
+// <SwarmRenderer/> — mounts FOUR InstancedMeshes (one per family member), each drawing
+// that character's decimated proxy geometry + real baseColor texture, animated on the
+// GPU via its own Vertex Animation Texture. Wires per-mesh aPhase/aClip buffers into
+// swarmGpu.byChar (the sim ↔ render bridge), and otherwise does NOTHING per frame: the
+// sim uploads (in updateSwarm's tail). There is deliberately NO useFrame here — that
+// would be a second sim loop.
 //
-// Geometry = the decimated proxy (swarmGeometry, with aVertexId guaranteed).
-// Material = makeVatMaterial(assets) (VAT vertex displacement on the GPU).
-// We render exactly one <instancedMesh args={[geom, mat, MAX_NIBBLERS]}
-// frustumCulled={false} castShadow={false}/>. On mount we attach aPhase/aClip/
-// aTint InstancedBufferAttributes and collapse every instance to scale 0 so
-// nothing shows until the sim writes real matrices. On unmount we null swarmGpu.
+// Per character (charIx 0..3 = mike/kelli/cece/drew):
+//   geometry = a CLONE of the shared proxy (so per-instance aPhase/aClip live on a
+//              private geometry; instanced attrs are geometry-bound).
+//   material = makeVatMaterial(charAssets) (VAT vertex displacement + that char's map).
+//   <instancedMesh args={[geom, mat, MAX_NIBBLERS]} frustumCulled={false}
+//    castShadow={false}/>.
+// On mount each instance is collapsed to scale 0 so nothing shows until the sim writes.
 //
-// Gated on assetsReady(): if the VAT json/PNGs haven't loaded we render null and
-// the sim gate (updateNibblers) stays closed too, so the two never desync.
+// Gated on assetsReady(): if the per-character VAT json/textures/proxies haven't loaded
+// we render null and the sim gate (updateNibblers) stays closed too, so they never desync.
 
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { MAX_NIBBLERS } from '../constants.js';
+import { MAX_NIBBLERS, NIBBLER_CHARS, NIBBLER_TINTS } from '../constants.js';
 import { useNibblerAssets } from './nibblerAssets.js';
 import { useSwarmGeometry } from './swarmGeometry.js';
 import { makeVatMaterial } from './vatMaterial.js';
@@ -23,72 +26,98 @@ import { swarmGpu } from './swarmGpu.js';
 
 const MAX = MAX_NIBBLERS;
 
-export default function SwarmRenderer() {
-  const assets = useNibblerAssets();
-  const geometry = useSwarmGeometry();
+// One character's InstancedMesh. Clones the shared proxy geometry (so its aPhase/aClip
+// instanced attrs are private), builds the character's VAT material, publishes the
+// bucket into swarmGpu.byChar[charIx] on mount, and nulls it on unmount.
+function CharMesh({ charIx, geometry, charAssets }) {
   const meshRef = useRef(/** @type {THREE.InstancedMesh|null} */ (null));
 
-  // One material per loaded-asset set; rebuilt only if the assets object changes.
+  // Material per character (rebuilt only if this character's assets change). The faint
+  // per-character tint is layered over the real baseColor texture for variety.
   const material = useMemo(
-    () => (assets ? makeVatMaterial(assets) : null),
-    [assets],
+    () =>
+      charAssets
+        ? makeVatMaterial({ ...charAssets, tint: NIBBLER_TINTS[charIx] })
+        : null,
+    [charAssets, charIx],
   );
 
-  // Pre-allocate the per-instance buffers once (stable across the component life).
-  const buffers = useMemo(() => {
+  // Private geometry clone + per-instance buffers (stable across the mesh's life).
+  // The clone keeps the shared base geometry's attributes (position/normal/uv/aVertexId)
+  // but gives THIS mesh its own aPhase/aClip without clobbering the other characters'.
+  const { geom, buffers } = useMemo(() => {
+    if (!geometry) return { geom: null, buffers: null };
+    const g = geometry.clone();
     const phase = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1);
     const clip = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1);
-    const tint = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3);
     phase.setUsage(THREE.DynamicDrawUsage);
     clip.setUsage(THREE.DynamicDrawUsage);
-    tint.setUsage(THREE.DynamicDrawUsage);
-    return { phase, clip, tint };
-  }, []);
+    return { geom: g, buffers: { phase, clip } };
+  }, [geometry]);
 
   // Register into the sim ↔ render bridge once the mesh + buffers are mounted.
   useEffect(() => {
     const mesh = meshRef.current;
-    if (!mesh || !geometry) return undefined;
+    if (!mesh || !geom || !buffers) return undefined;
 
-    // Attach the per-instance attributes to the geometry the mesh draws.
-    geometry.setAttribute('aPhase', buffers.phase);
-    geometry.setAttribute('aClip', buffers.clip);
-    geometry.setAttribute('aTint', buffers.tint);
+    // Attach the per-instance attributes to THIS mesh's geometry clone.
+    geom.setAttribute('aPhase', buffers.phase);
+    geom.setAttribute('aClip', buffers.clip);
 
-    // Draw all slots every frame; dead slots ride at scale 0 (degenerate → GPU
-    // discards them). The sim writes real matrices over these.
-    mesh.count = MAX;
+    // Start with every slot collapsed; the sim sets mesh.count + real matrices each
+    // frame. (Dead/unused slots beyond the per-char count are simply not drawn.)
+    mesh.count = 0;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-
-    // Collapse every instance to a zero-scale point so NOTHING shows until the sim
-    // writes — avoids a one-frame flash of MAX identity-posed nibblers at origin.
     const zero = new THREE.Matrix4().makeScale(0, 0, 0);
     for (let i = 0; i < MAX; i++) mesh.setMatrixAt(i, zero);
     mesh.instanceMatrix.needsUpdate = true;
     mesh.frustumCulled = false;
 
-    // Publish the bridge for updateSwarm to upload into.
-    swarmGpu.mesh = mesh;
-    swarmGpu.aPhase = buffers.phase;
-    swarmGpu.aClip = buffers.clip;
-    swarmGpu.aTint = buffers.tint;
+    // Publish the bucket for updateSwarm to upload into.
+    swarmGpu.byChar[charIx] = {
+      mesh,
+      aPhase: buffers.phase,
+      aClip: buffers.clip,
+    };
 
     return () => {
-      swarmGpu.mesh = null;
-      swarmGpu.aPhase = null;
-      swarmGpu.aClip = null;
-      swarmGpu.aTint = null;
+      swarmGpu.byChar[charIx] = null;
     };
-  }, [geometry, buffers]);
+  }, [charIx, geom, buffers]);
 
-  if (!assets || !geometry || !material) return null;
+  if (!geom || !material) return null;
 
   return (
     <instancedMesh
       ref={meshRef}
-      args={[geometry, material, MAX]}
+      args={[geom, material, MAX]}
       frustumCulled={false}
       castShadow={false}
     />
+  );
+}
+
+export default function SwarmRenderer() {
+  const assets = useNibblerAssets();
+  const geomByChar = useSwarmGeometry();
+
+  if (!assets || !geomByChar) return null;
+
+  return (
+    <>
+      {NIBBLER_CHARS.map((key, charIx) => {
+        const charAssets = assets.byChar[key];
+        const geometry = geomByChar[key];
+        if (!charAssets || !geometry) return null;
+        return (
+          <CharMesh
+            key={key}
+            charIx={charIx}
+            geometry={geometry}
+            charAssets={charAssets}
+          />
+        );
+      })}
+    </>
   );
 }
