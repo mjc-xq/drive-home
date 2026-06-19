@@ -124,12 +124,16 @@ export default function SceneEnv() {
     }
   }, [gl, scene, camera]);
 
-  // ACES filmic tone mapping; a touch under 1.0 so bright facades don't blow out.
+  // ACES filmic tone mapping. PostFX, when mounted, switches the RENDERER to
+  // NoToneMapping and applies ACES ONCE at the end of its effect chain (so the look
+  // is identical but not double-applied). This stays as the source of truth / the
+  // fallback when PostFX is absent. Exposure 1.05 gives the sunny look a touch more
+  // lift without clipping facades.
   useEffect(() => {
     const prevTone = gl.toneMapping;
     const prevExp = gl.toneMappingExposure;
     gl.toneMapping = THREE.ACESFilmicToneMapping;
-    gl.toneMappingExposure = 1.0;
+    gl.toneMappingExposure = 1.05;
     return () => {
       gl.toneMapping = prevTone;
       gl.toneMappingExposure = prevExp;
@@ -147,32 +151,48 @@ export default function SceneEnv() {
       {/* Distance fog — only the far property edges haze, sky-matched. */}
       <fog attach="fog" args={[FOG_COLOR, 260, 580]} />
 
-      {/* Gentle sky/ground bounce — kept LOW so building sides aren't washed flat. */}
-      <hemisphereLight args={['#dcebff', '#4a4636', 0.34]} />
+      {/* Sky/ground bounce — warm-blue sky over a sun-warmed ground. Lifted from 0.34
+          so shadowed faces and the undersides of characters keep real fill (the AO
+          pass re-darkens crevices, so this can be generous without going flat). */}
+      <hemisphereLight args={['#cfe1ff', '#6b6346', 0.55]} />
 
-      {/* The sun: strong warm key with crisp shadows — gives the model its form. */}
+      {/* The sun: strong warm key with crisp shadows — gives form to the neighborhood
+          and the characters. Brighter (3.2) and a hair warmer for a midday-sun read.
+          three 0.184 dropped PCFSoftShadowMap (it falls back to PCF anyway), and the
+          soft VSM path costs ~20 ms/frame here (the whole static neighborhood blurred
+          every frame → ~35 fps), so the Canvas uses PCFShadowMap: a large 4k map keeps
+          the hard sun shadows fine-edged at ~58 fps. shadow.radius is a no-op on PCF. */}
       <directionalLight
         position={SUN_DIR}
-        intensity={2.7}
-        color="#fff3df"
+        intensity={3.2}
+        color="#fff1d6"
         castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={4096}
+        shadow-mapSize-height={4096}
         shadow-camera-near={1}
         shadow-camera-far={400}
         shadow-camera-left={-150}
         shadow-camera-right={150}
         shadow-camera-top={150}
         shadow-camera-bottom={-150}
-        shadow-bias={-0.0004}
-        shadow-normalBias={0.04}
+        shadow-bias={-0.00025}
+        shadow-normalBias={0.045}
       />
 
-      {/* Cool sky fill from the opposite side so shadowed faces keep a little shape. */}
-      <directionalLight position={[-70, 45, -40]} intensity={0.55} color="#acc4ff" />
+      {/* Cool sky fill from the opposite side so shadowed faces keep shape and a
+          believable cool bounce. Up from 0.55 → 0.8 so back/shadow faces of the
+          characters read instead of going muddy. */}
+      <directionalLight position={[-70, 45, -40]} intensity={0.8} color="#b9ccff" />
 
-      {/* Minimal ambient so deep shadows aren't crushed to pure black. */}
-      <ambientLight intensity={0.12} />
+      {/* Character key-flatter: a gentle, low warm fill aimed roughly down the sunny
+          side, kept soft so it lifts the skinned characters (who otherwise read
+          underlit against the bright env) without blowing them out or casting a
+          second shadow. No shadow, low intensity, generous falloff via distance. */}
+      <directionalLight position={[40, 30, 60]} intensity={0.45} color="#fff4e6" />
+
+      {/* Minimal ambient so deep shadows aren't crushed to pure black. Slightly up
+          (0.12 → 0.16) now that AO restores contact darkness in the composited pass. */}
+      <ambientLight intensity={0.16} />
     </>
   );
 }

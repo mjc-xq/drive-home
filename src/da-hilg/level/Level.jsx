@@ -22,8 +22,13 @@ import { WindGrass } from './WindGrass.jsx';
 
 const LEVEL_SOURCE = LEVEL_URL;
 
+// Texture slots worth anisotropic filtering (grazing-angle sharpness on roads,
+// sidewalks, roofs, facades, terrain). Anisotropy is hardware-cheap; the pipeline
+// leaves every map at the default 1, which smears ground planes seen edge-on.
+const ANISO_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
+
 /** Tune one mesh's material(s) so the neighborhood reads crisp + sunlit, not pale. */
-function tuneMaterial(o) {
+function tuneMaterial(o, maxAniso) {
   const name = o.name || '';
   const isWindow = name.toLowerCase().includes('window');
   const isGlass = name.includes('windows') || isWindow;
@@ -31,6 +36,14 @@ function tuneMaterial(o) {
   for (const m of mats) {
     if (!m) continue;
     if (m.map) m.map.colorSpace = THREE.SRGBColorSpace; // photo/colour maps are sRGB
+    // Full anisotropic filtering so grazing surfaces (lawn, road, sidewalk) stay sharp.
+    for (const slot of ANISO_SLOTS) {
+      const t = m[slot];
+      if (t && t.anisotropy !== maxAniso) {
+        t.anisotropy = maxAniso;
+        t.needsUpdate = true;
+      }
+    }
     if ('roughness' in m) m.roughness = isGlass ? 0.2 : 0.92;
     if ('metalness' in m) m.metalness = isGlass ? 0.45 : 0.0;
     if (m.emissive) m.emissive.setScalar(0); // kill any baked-in glow that washes it out
@@ -39,7 +52,7 @@ function tuneMaterial(o) {
 }
 
 /** Hide the collision/LOD proxies, tune visual materials, set shadow flags. */
-function processScene(scene) {
+function processScene(scene, maxAniso) {
   scene.traverse((o) => {
     if (!o.isMesh) return;
     const name = o.name || '';
@@ -51,7 +64,7 @@ function processScene(scene) {
     o.receiveShadow = true;
     // Buildings + the house cast shadows for form; the heavy terrain/roads don't.
     o.castShadow = name.startsWith('House') || name.startsWith('Buildings');
-    tuneMaterial(o);
+    tuneMaterial(o, maxAniso);
   });
 }
 
@@ -240,8 +253,8 @@ export function Level({ onReady }) {
     return () => clearInterval(id);
   }, [ready]);
 
-  // Hide proxies/LOD + tune materials once.
-  useMemo(() => processScene(scene), [scene]);
+  // Hide proxies/LOD + tune materials once (full anisotropy from the live GPU caps).
+  useMemo(() => processScene(scene, gl.capabilities.getMaxAnisotropy()), [scene, gl]);
 
   const offset = levelMeta.offset || [0, 0, 0];
   const recenter = [-offset[0], -offset[1], -offset[2]];

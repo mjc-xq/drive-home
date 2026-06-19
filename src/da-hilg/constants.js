@@ -41,15 +41,31 @@ export const CAPSULE_CENTER_Y = 0.85;    // capsule center above feet (feet at b
 
 // ── Camera ──────────────────────────────────────────────────────────────────
 export const EYE_HEIGHT = 1.62;
-export const FP_NEAR = 0.18;   // near-plane clips the player's own head (no bone hacks)
+export const FP_NEAR = 0.16;   // near-plane clips the player's own head (no bone hacks)
 export const TP_NEAR = 0.1;
 export const CAM_FAR = 600;
-export const CAM_FOV = 75;
-export const TP_PIVOT_HEIGHT = 1.45;
-export const TP_DISTANCE = 4.5;
-export const TP_MIN_DISTANCE = 0.6;
-export const TP_COLLISION_SKIN = 0.25;
+export const CAM_FOV = 68;     // base vertical FOV (matches DaHilgApp init); runtime adds speed-FOV
+export const TP_PIVOT_HEIGHT = 1.5;  // look pivot ≈ shoulder/neck of a 1.7 m character
+export const TP_DISTANCE = 3.8;      // boom length behind the shoulder pivot
+export const TP_MIN_DISTANCE = 0.7;  // never let collision pull the boom inside the head
+export const TP_COLLISION_SKIN = 0.3; // keep the cam this far off a wall it backs into
 export const FP_FORWARD_NUDGE = 0.06;
+
+// Over-the-shoulder framing: push the character off-center so the path ahead
+// reads. The pivot (boom anchor + look target) slides right in camera-right space
+// and the look target rises slightly so we sight just over the shoulder.
+export const TP_SHOULDER_X = 0.55;   // lateral offset (m, +right) — character sits left of center
+export const TP_SHOULDER_Y = 0.06;   // look a touch above the pivot for headroom
+
+// Speed-FOV: a gentle widening as realized speed ramps walk → run, for a sense
+// of motion. Kept small so it never disorients.
+export const SPEED_FOV_GAIN = 5;     // max extra degrees at full run
+export const SPEED_FOV_SMOOTH = 4;   // how fast FOV chases the speed target
+
+// Landing dip: a brief vertical settle when slamming back to ground from a fall.
+export const LANDING_DIP_VEL = 6;    // |downward velY| (m/s) at touchdown for a full dip
+export const LANDING_DIP_MAX = 0.18; // peak camera drop (m)
+export const LANDING_DIP_RECOVER = 9; // how fast the dip springs back out
 
 // ── Movement ────────────────────────────────────────────────────────────────
 export const WALK_SPEED = 4.6;
@@ -86,8 +102,10 @@ export const INVERT_Y = false;
 // ── Frame ───────────────────────────────────────────────────────────────────
 export const DT_CLAMP = 1 / 30;          // never integrate a hitch larger than this
 export const SMOOTH_ACCEL = 14;          // exponential smoothing rates: 1 - exp(-rate*dt)
-export const SMOOTH_CAM = 14;
-export const SMOOTH_BOOM = 12;
+export const SMOOTH_CAM = 12;            // boom/position follow — a touch of cinematic lag
+export const SMOOTH_LOOK = 22;           // look target chases fast so aim stays crisp
+export const SMOOTH_BOOM_IN = 60;        // collision shrink: snap in to never clip a wall
+export const SMOOTH_BOOM = 7;            // collision ease-out: glide back to full length
 
 // ── Animation ───────────────────────────────────────────────────────────────
 export const IDLE_SPEED_EPS = 0.15;      // below this horizontal speed → idle

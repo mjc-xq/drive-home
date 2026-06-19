@@ -12,9 +12,9 @@
 // Run:  node scripts/build_dahilg_assets.mjs   (or: npm run build:dahilg-assets)
 // Idempotent — safe to re-run; outputs are regenerated from the sources each time.
 import { NodeIO, Logger } from '@gltf-transform/core';
-import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { ALL_EXTENSIONS, EXTMeshGPUInstancing } from '@gltf-transform/extensions';
 import {
-  dedup, prune, weld, textureCompress, reorder, quantize, meshopt, getBounds, instance,
+  dedup, prune, weld, textureCompress, reorder, quantize, meshopt, getBounds,
 } from '@gltf-transform/functions';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 import draco3d from 'draco3dgltf';
@@ -151,6 +151,106 @@ async function writeAndVerify(doc, file, { label } = {}) {
     `[meshopt=${meshopt ? 'yes' : 'NO'}, ext=${used.join(',') || 'none'}]`);
 }
 
+// ---- GPU-instance repeated static nodes (trees/fences) ------------------------------
+// WHY a custom pass instead of gltf-transform's instance(): instance() refuses to run
+// on ANY document that contains an animation ("Instancing is not currently supported for
+// animated models") — and the level carries the GrassWind node animation. But the trees
+// and fences are NOT animation targets (only GrassClump_* nodes are), and the tree-lib /
+// fence GLBs are reused 100s of times sharing the SAME mesh after dedup(). So we emit
+// EXT_mesh_gpu_instancing ourselves for the reused, non-animated, leaf mesh-nodes:
+// one node per shared mesh carrying per-instance TRANSLATION/ROTATION/SCALE. three.js'
+// GLTFLoader turns each such node into an InstancedMesh (one draw call per primitive),
+// collapsing ~900 tree/fence draw calls into a handful. Frustum culling stays on.
+//
+// Safe because every ancestor wrapper empty from organize_layers.py has an IDENTITY
+// transform (verified), so each leaf node's LOCAL TRS already equals its WORLD TRS — no
+// matrix baking needed. We only instance nodes that (a) reference a mesh, (b) have no
+// children, (c) are NOT targeted by any animation channel, and (d) share their mesh with
+// at least `min` other such nodes.
+function instanceStaticRepeats(doc, { min = 4 } = {}) {
+  const root = doc.getRoot();
+  const instExt = doc.createExtension(EXTMeshGPUInstancing);
+
+  // Nodes touched by ANY animation channel must keep their own node (don't fold them).
+  const animated = new Set();
+  for (const anim of root.listAnimations()) {
+    for (const ch of anim.listChannels()) {
+      const t = ch.getTargetNode();
+      if (t) animated.add(t);
+    }
+  }
+
+  // We bake each node's LOCAL TRS as the instance transform, which only equals the WORLD
+  // TRS when every ancestor is identity. Guard that assumption: skip any node whose chain
+  // of parents carries a non-identity transform (rather than silently misplacing a tree).
+  const ID_T = [0, 0, 0], ID_R = [0, 0, 0, 1], ID_S = [1, 1, 1];
+  const approx = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-5);
+  const ancestorsIdentity = (node) => {
+    for (let p = node.getParentNode(); p; p = p.getParentNode()) {
+      if (!approx(p.getTranslation(), ID_T) || !approx(p.getRotation(), ID_R) || !approx(p.getScale(), ID_S)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Group eligible leaf mesh-nodes by the mesh they reference.
+  const byMesh = new Map();
+  for (const node of root.listNodes()) {
+    if (animated.has(node)) continue;
+    if (node.listChildren().length > 0) continue;
+    if (!ancestorsIdentity(node)) continue;   // would need world-matrix baking — leave as-is
+    const mesh = node.getMesh();
+    if (!mesh) continue;
+    if (!byMesh.has(mesh)) byMesh.set(mesh, []);
+    byMesh.get(mesh).push(node);
+  }
+
+  let instancedMeshes = 0;
+  let foldedNodes = 0;
+  let totalInstances = 0;
+  const scene = root.listScenes()[0];
+
+  for (const [mesh, nodes] of byMesh) {
+    if (nodes.length < min) continue;
+
+    // Per-instance TRS, read straight from each node's local transform (== world here).
+    const n = nodes.length;
+    const T = new Float32Array(n * 3);
+    const R = new Float32Array(n * 4);
+    const S = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const t = nodes[i].getTranslation(), r = nodes[i].getRotation(), s = nodes[i].getScale();
+      T.set(t, i * 3); R.set(r, i * 4); S.set(s, i * 3);
+    }
+    const aT = doc.createAccessor().setType('VEC3').setArray(T);
+    const aR = doc.createAccessor().setType('VEC4').setArray(R);
+    const aS = doc.createAccessor().setType('VEC3').setArray(S);
+
+    const instancing = instExt.createInstancedMesh()
+      .setAttribute('TRANSLATION', aT)
+      .setAttribute('ROTATION', aR)
+      .setAttribute('SCALE', aS);
+
+    // One holder node (at the origin) carrying the shared mesh + the instance attributes.
+    const holder = doc.createNode(`${mesh.getName() || 'Mesh'}_instances`)
+      .setMesh(mesh)
+      .setExtension('EXT_mesh_gpu_instancing', instancing);
+    scene.addChild(holder);
+
+    // Drop the now-folded per-item nodes (their geometry lives in the instanced holder).
+    for (const node of nodes) node.dispose();
+
+    instancedMeshes++;
+    foldedNodes += n;
+    totalInstances += n;
+  }
+
+  console.log(`  GPU-instanced ${foldedNodes} static nodes -> ${instancedMeshes} ` +
+    `EXT_mesh_gpu_instancing node(s) (${totalInstances} instances; ${animated.size} animated nodes left alone)`);
+  return { instancedMeshes, foldedNodes };
+}
+
 // =====================================================================================
 console.log('\n=== Da Hilg asset build ===');
 
@@ -205,10 +305,13 @@ const levelDoc = await io.read(LEVEL_SRC);
   console.log(`  stripped material from ${strippedPrims} collision primitive(s)`);
 
   // GPU-instance the repeated trees/fences: the tree-lib is reused across hundreds of
-  // nodes, so dedup() collapses them to shared meshes and instance() emits ONE
-  // EXT_mesh_gpu_instancing node per reused mesh → three renders them as InstancedMeshes
-  // (a handful of draw calls instead of ~870). Frustum culling stays on at runtime.
-  await levelDoc.transform(dedup(), instance({ min: 4 }));
+  // nodes. dedup() first collapses identical placed meshes to ONE shared mesh each, then
+  // our instanceStaticRepeats() emits EXT_mesh_gpu_instancing per reused mesh → three
+  // renders each as an InstancedMesh (a handful of draw calls instead of ~900). We can't
+  // use gltf-transform's instance() here because it aborts on the GrassWind animation;
+  // our pass folds only the non-animated tree/fence nodes and leaves the grass alone.
+  await levelDoc.transform(dedup());
+  instanceStaticRepeats(levelDoc, { min: 4 });
 
   // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
   // their mesh is disposed) collision helpers survive even if their mesh were dropped —
