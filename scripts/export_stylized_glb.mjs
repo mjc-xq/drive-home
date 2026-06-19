@@ -95,6 +95,10 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   g.computeVertexNormals();
   const opacity = opts.opacity ?? 1;
   const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat', transparent: opacity < 1, opacity });
+  if (opts.emissive) {
+    const e = color instanceof THREE.Color ? color.clone() : new THREE.Color(color);
+    m.emissive = e.multiplyScalar(opts.emissive);
+  }
   if (opts.colors) m.vertexColors = true;
   if (opts.flat) m.flatShading = true;
   if (opacity < 1) m.depthWrite = false;
@@ -466,8 +470,8 @@ const WALL_PALETTE = [
   [0.68, 0.72, 0.73], [0.80, 0.76, 0.68], [0.69, 0.66, 0.60],
 ];
 const ROOF_PALETTE = [
-  [0.46, 0.43, 0.39], [0.48, 0.35, 0.29], [0.38, 0.40, 0.42],
-  [0.55, 0.50, 0.43], [0.34, 0.35, 0.36],
+  [0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55],
+  [0.60, 0.50, 0.42], [0.62, 0.59, 0.52],
 ];
 const clamp01 = v => Math.max(0, Math.min(1, v));
 const mix3 = (a, b, t) => a.map((v, i) => v * (1 - t) + b[i] * t);
@@ -487,7 +491,7 @@ const wallColor = ib => {
 };
 function roofColor(ib) {
   const src = RCOL[ib] || seededColor(ROOF_PALETTE, ib);
-  return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.32), 0.34, seededColor(ROOF_PALETTE, ib));
+  return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.42), 0.48, seededColor(ROOF_PALETTE, ib));
 }
 const TILE = 3.0;
 function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
@@ -519,8 +523,8 @@ function emitFacadeShellDetails(ring, base, wallH, D) {
       }
     }
     if (D.siding) {
-      for (let y = base + 0.72; y < base + wallH - 0.58; y += 0.52) {
-        pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.18, L - 0.18, y - 0.012, y + 0.012, 0.124);
+      for (let y = base + 0.82; y < base + wallH - 0.65; y += 0.92) {
+        pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.22, L - 0.22, y - 0.006, y + 0.006, 0.124);
       }
     }
   }
@@ -577,13 +581,22 @@ function pushUpTri(Rf, col, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
 }
+function pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, cen) {
+  const A = [xi, yb, zi], B = [xj, yb, zj], Cc = [xj, yt, zj], Dd = [xi, yt, zi];
+  const L = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
+  const nx = -(zj - zi) / L, nz = (xj - xi) / L;
+  const out = (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz) >= 0;
+  const verts = out ? [A, B, Cc, A, Cc, Dd] : [A, Cc, B, A, Dd, Cc];
+  for (const v of verts) W.pos.push(v[0], v[1], v[2]);
+  for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+}
 function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, detail, detailOpts = {}) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   for (let i = 0; i < ring.length; i++) {
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
-    W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
-    for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+    pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, cen);
   }
   const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));
   for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, []))
@@ -620,9 +633,9 @@ if (houseIdx >= 0) {
   buildingPolys.push(houseRing);
   buildingCollision.push({ ring: houseRing, base, h: houseWallH });
   // base colour = building's own SV colour, so it renders in every viewer (not just COLOR_0)
-  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9 }));
-  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85 }));
-  if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0x6f6a60, 'House_siding_lines', { rough: 0.86 }));
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9, emissive: 0.42 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85, emissive: 0.36 }));
+  if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0xbcb4a4, 'House_siding_lines', { rough: 0.86, emissive: 0.18 }));
   if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim', { rough: 0.8 }));
   if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows', { rough: 0.55 }));
 }
@@ -652,7 +665,9 @@ function groupedMesh(buf, groups, name, rough) {
   g.computeVertexNormals();
   const mats = groups.map(([start, count, col], i) => {
     g.addGroup(start, count, i);
-    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: rough, metalness: 0, name: `${name}_${i}` });
+    const base = new THREE.Color(col[0], col[1], col[2]);
+    const m = new THREE.MeshStandardMaterial({ color: base, roughness: rough, metalness: 0, name: `${name}_${i}` });
+    m.emissive = base.clone().multiplyScalar(/walls/i.test(name) ? 0.42 : 0.36);
     m.side = THREE.DoubleSide; return m;
   });
   const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
@@ -660,7 +675,7 @@ function groupedMesh(buf, groups, name, rough) {
 if (bW.pos.length) {
   scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', 0.9));
   scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', 0.85));
-  if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0x6d675d, 'Buildings_siding_lines', { rough: 0.86 }));
+  if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0xb6ad9f, 'Buildings_siding_lines', { rough: 0.86, emissive: 0.18 }));
   if (bD.trim.length) scene.add(mkMesh(bD.trim, null, 0xd2c9b8, 'Buildings_window_trim', { rough: 0.8 }));
   if (bD.glass.length) scene.add(mkMesh(bD.glass, null, 0x203342, 'Buildings_windows', { rough: 0.55 }));
 }

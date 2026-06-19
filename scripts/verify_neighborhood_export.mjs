@@ -135,7 +135,7 @@ if (existsSync(path.join(ROOT, 'exports/map_surfaces_osm.json'))) {
 
 for (const node of nodes) {
   const name = node.getName() || '';
-  if (!/^Collision_/.test(name)) continue;
+  if (!/^Collision_/.test(name) && name !== 'LOD_Buildings_Low') continue;
   const mesh = node.getMesh();
   if (!mesh) continue;
   for (const prim of mesh.listPrimitives()) {
