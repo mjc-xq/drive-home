@@ -32,7 +32,7 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
   };
 }
 
-import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, fanDisc, ringAnnulus, trimEndInward } from './road_prep.mjs';
+import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, isCulDeSacRoad, snapCreekToChannel, buildSidewalkConnectors, buildSidewalkEndCaps, fanDisc, ringAnnulus, trimEndInward } from './road_prep.mjs';
 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
@@ -67,9 +67,15 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   if (opts.colors) g.setAttribute('color', new THREE.Float32BufferAttribute(opts.colors, 3));
   if (indices) g.setIndex(indices);
   g.computeVertexNormals();
-  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.95, metalness: 0, name: name + '_mat' });
+  const opacity = opts.opacity ?? 1;
+  const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat', transparent: opacity < 1, opacity });
+  if (opts.emissive) {
+    const e = color instanceof THREE.Color ? color.clone() : new THREE.Color(color);
+    m.emissive = e.multiplyScalar(opts.emissive);
+  }
   if (opts.colors) m.vertexColors = true;
   if (opts.flat) m.flatShading = true;
+  if (opacity < 1) m.depthWrite = false;
   m.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
 }
@@ -145,12 +151,111 @@ const COL = existsSync(path.join(ROOT, 'exports/buildings_color.json'))
 const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
-const ROOFP = [[0.34, 0.32, 0.30], [0.40, 0.36, 0.31], [0.30, 0.30, 0.31], [0.37, 0.33, 0.29], [0.26, 0.26, 0.27]];
-const lighten = c => c.map(v => Math.min(1, v * 0.55 + 0.40));   // plausible wall from a roof colour
-// walls: Street View colour if known, else a light tint of the roof, else stucco
-const wallColor = ib => COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
-// roofs: real sampled colour, else the old palette
-const roofColor = ib => RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+const ROOFP = [[0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55], [0.60, 0.50, 0.42], [0.62, 0.59, 0.52]];
+const WALL_PALETTE = [
+  [0.78, 0.73, 0.64], [0.72, 0.75, 0.68], [0.73, 0.70, 0.65],
+  [0.68, 0.72, 0.73], [0.80, 0.76, 0.68], [0.69, 0.66, 0.60],
+];
+const ROOF_PALETTE = [
+  [0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55],
+  [0.60, 0.50, 0.42], [0.62, 0.59, 0.52],
+];
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const mix3 = (a, b, t) => a.map((v, i) => v * (1 - t) + b[i] * t);
+const luma = c => c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+const liftLuma = (c, minL, target = STUCCO) => {
+  const L = luma(c);
+  if (L >= minL) return c.map(clamp01);
+  const denom = Math.max(0.001, luma(target) - L);
+  return mix3(c, target, Math.min(1, (minL - L) / denom)).map(clamp01);
+};
+const seededColor = (palette, ib) => palette[(Math.imul((ib | 0) + 17, 1103515245) >>> 0) % palette.length];
+const lighten = c => liftLuma(mix3(c, STUCCO, 0.52), 0.62);   // plausible wall from a roof colour
+// walls: source samples often include shadow/tree occlusion; normalize to paint,
+// not black placeholder boxes.
+const wallColor = ib => {
+  const src = COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
+  let c = liftLuma(src, 0.58, seededColor(WALL_PALETTE, ib));
+  c = mix3(c, seededColor(WALL_PALETTE, ib), 0.34);
+  return liftLuma(c, 0.62, STUCCO);
+};
+// roofs: real sampled colour, but lift deep satellite shadows so they read as roof
+// material instead of black voids in review renders.
+const roofColor = ib => {
+  const src = RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+  return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.40), 0.48, seededColor(ROOF_PALETTE, ib));
+};
+
+function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
+  const A = [ax + ex * s0 + nx * off, y0, az + ez * s0 + nz * off];
+  const B = [ax + ex * s1 + nx * off, y0, az + ez * s1 + nz * off];
+  const Cc = [ax + ex * s1 + nx * off, y1, az + ez * s1 + nz * off];
+  const Dd = [ax + ex * s0 + nx * off, y1, az + ez * s0 + nz * off];
+  for (const v of [A, B, Cc, A, Cc, Dd]) pos.push(v[0], v[1], v[2]);
+}
+function emitFacadeShellDetails(ring, base, wallH, D) {
+  if (!D) return;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  const yBase = base + 0.12, yTop = base + wallH - 0.16;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 1.4 || wallH < 2.1) continue;
+    let ex = (bx - ax) / L, ez = (bz - az) / L;
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    if (D.trim) {
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.02, Math.min(0.14, L), yBase, yTop, 0.116);
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, Math.max(0, L - 0.14), L - 0.02, yBase, yTop, 0.116);
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.08, L - 0.08, base + wallH - 0.24, base + wallH - 0.08, 0.118);
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.08, L - 0.08, base + 0.16, base + 0.30, 0.118);
+      for (let y = base + 2.65; y < base + wallH - 0.55; y += 2.55) {
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.18, L - 0.18, y - 0.035, y + 0.035, 0.121);
+      }
+    }
+    if (D.siding) {
+      for (let y = base + 0.82; y < base + wallH - 0.65; y += 0.92) {
+        pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.22, L - 0.22, y - 0.006, y + 0.006, 0.124);
+      }
+    }
+  }
+}
+function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
+  if (!D) return;
+  emitFacadeShellDetails(ring, base, wallH, D);
+  if (opts.autoWindows === false) return;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  const yt = base + wallH;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 2.4 || wallH < 2.7) continue;
+    let ex = (bx - ax) / L, ez = (bz - az) / L;
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    const bay = opts.house ? 3.0 : 3.35 + (((i * 97 + Math.round(L * 10)) % 5) - 2) * 0.10;
+    const count = Math.max(1, Math.min(12, Math.floor((L - 1.0) / bay)));
+    const floors = Math.max(1, Math.min(3, Math.floor((wallH - 1.15) / 2.55)));
+    for (let f = 0; f < floors; f++) {
+      const y0 = base + 1.10 + f * 2.45;
+      const y1 = Math.min(y0 + 1.02, yt - 0.42);
+      if (y1 - y0 < 0.45) continue;
+      for (let w = 0; w < count; w++) {
+        if (!opts.house && count > 3 && ((w + i + f) % 7) === 5) continue;
+        const jitter = (((i + 3) * 37 + (w + 11) * 19 + f * 13) % 17 - 8) / 100;
+        const s = (w + 1 + jitter) * L / (count + 1);
+        if (s < 0.85 || L - s < 0.85) continue;
+        const hw = Math.min(0.64, Math.max(0.34, L / (count + 1) * (0.18 + ((w + i) % 3) * 0.025)));
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - hw - 0.12, s + hw + 0.12, y0 - 0.10, y1 + 0.10, 0.082);
+        pushWallRect(D.glass, ax, az, ex, ez, nx, nz, s - hw, s + hw, y0, y1, 0.105);
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - 0.025, s + 0.025, y0 + 0.05, y1 - 0.05, 0.118);
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - hw - 0.18, s + hw + 0.18, y0 - 0.20, y0 - 0.12, 0.115);
+      }
+    }
+  }
+}
 
 // push a roof triangle with upward-facing winding, solid roof colour (no texture)
 function pushUpTri(Rf, col, a, b, c) {
@@ -158,30 +263,59 @@ function pushUpTri(Rf, col, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
 }
-// W = {pos,uv,col} facade walls (window texture x wallC);  Rf = {pos,col} solid roof
-function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf) {
+// push a roof-PHOTO triangle (upward winding) with nadir aerial UV -> real satellite
+// roof imagery. Used only on flat roofs (nadir on pitched roofs smears), as a separate
+// toggleable 'Roofs_photo' layer lifted just above the solid cap.
+function pushPhotoTri(RfP, a, b, c) {
+  const ux = b[0] - a[0], uz = b[2] - a[2], vx = c[0] - a[0], vz = c[2] - a[2];
+  const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
+  for (const v of tri) { RfP.pos.push(v[0], v[1], v[2]); const w = aerialUV(v[0], v[2]); RfP.uv.push(w[0], w[1]); }
+}
+function pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, u0, u1, vt, cen) {
+  const A = [xi, yb, zi], B = [xj, yb, zj], Cc = [xj, yt, zj], Dd = [xi, yt, zi];
+  const L = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
+  const nx = -(zj - zi) / L, nz = (xj - xi) / L;
+  const out = (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz) >= 0;
+  const verts = out ? [A, B, Cc, A, Cc, Dd] : [A, Cc, B, A, Dd, Cc];
+  const uvs = out
+    ? [u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt]
+    : [u0, 0, u1, vt, u1, 0, u0, 0, u0, vt, u1, vt];
+  for (const v of verts) W.pos.push(v[0], v[1], v[2]);
+  W.uv.push(...uvs);
+  for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+}
+// W = {pos,uv,col} facade walls (window texture x wallC);  Rf = {pos,col} solid roof.
+// RfP = {pos,uv} optional satellite-photo cap (flat roofs only) for the toggle layer.
+function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, RfP, detail, detailOpts = {}) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   let dist = 0;
   for (let i = 0; i < ring.length; i++) {           // walls
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
     const seg = Math.hypot(xj - xi, zj - zi), u0 = dist / TILE, u1 = (dist + seg) / TILE; dist += seg;
-    W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
-    W.uv.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
-    for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+    pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, u0, u1, vt, cen);
   }
   const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));   // flat eave cap
-  for (const [a, c, d] of THREE.ShapeUtils.triangulateShape(v2, []))
+  const capTris = THREE.ShapeUtils.triangulateShape(v2, []);
+  for (const [a, c, d] of capTris)
     pushUpTri(Rf, roofC, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
+  // satellite roof-photo cap: ONLY flat roofs (no gable), lifted just above the solid cap
+  if (RfP && !(roofRects && roofRects.length)) {
+    const yp = yt + 0.06;
+    for (const [a, c, d] of capTris)
+      pushPhotoTri(RfP, [ring[a][0], yp, ring[a][1]], [ring[c][0], yp, ring[c][1]], [ring[d][0], yp, ring[d][1]]);
+  }
   if (roofRects) for (const r of roofRects) {        // gables
     const g = gableTris(r, base, wallH);
     for (let k = 0; k < g.length; k += 9)
       pushUpTri(Rf, roofC, [g[k], g[k + 1], g[k + 2]], [g[k + 3], g[k + 4], g[k + 5]], [g[k + 6], g[k + 7], g[k + 8]]);
   }
+  emitFacadeDetails(ring, base, wallH, detail, detailOpts);
   return ring;
 }
-const emitBuilding = (b, ib, base, wallH, W, Rf) =>
-  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf);
+const emitBuilding = (b, ib, base, wallH, W, Rf, RfP, detail, detailOpts) =>
+  emitRing(b.p.map(([e, n]) => w2(e, n)), base, wallH, b.r, wallColor(ib), roofColor(ib), W, Rf, RfP, detail, detailOpts);
 
 // ---- assemble ------------------------------------------------------------
 const scene = new THREE.Scene(); scene.name = '1840_Dahill_Property';
@@ -191,17 +325,29 @@ scene.add(terrainMesh);
 const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
 const houseIdx = S.buildings.findIndex(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
+const buildingCollision = [];
+const svFacadeTextures = new Map();
 const hW = { pos: [], uv: [], col: [] }, hRf = { pos: [], col: [] };
+const hD = { glass: [], trim: [], siding: [] };
+let houseRing = null, houseWallH = 0;
+const RfP = { pos: [], uv: [] };   // satellite roof-photo caps (flat roofs) -> toggle layer
 if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
-  buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB, houseIdx), hW, hRf));
+  houseWallH = wallHeight(houseB, houseIdx);
+  houseRing = emitBuilding(houseB, houseIdx, base, houseWallH, hW, hRf, RfP, hD, { house: true, autoWindows: false });
+  buildingPolys.push(houseRing);
+  buildingCollision.push({ ring: houseRing, base, h: houseWallH });
   // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
   // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
-  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv }));
-  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', {}));
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv, emissive: 0.42 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36 }));
+  if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0xbcb4a4, 'House_siding_lines', { emissive: 0.18 }));
+  if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim'));
+  if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows'));
 }
 const bW = { pos: [], uv: [], col: [] }, bRf = { pos: [], col: [] };
+const bD = { glass: [], trim: [], siding: [] };
 const wallGroups = [], roofGroups = [];   // per-building [start, count, colour] -> material array
 // Keep the OWNER'S two lots clear of any generated building except the house —
 // the back lot stays empty for a manually-placed shed. Parcel rings from parcels.json.
@@ -215,8 +361,11 @@ S.buildings.forEach((b, ib) => {
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }     // never put others' buildings on the owner's lots
   const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const h = wallHeight(b, ib);
   const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
-  buildingPolys.push(emitBuilding(b, ib, base, wallHeight(b, ib), bW, bRf));
+  const ring = emitBuilding(b, ib, base, h, bW, bRf, RfP, bD, {});
+  buildingPolys.push(ring);
+  buildingCollision.push({ ring, base, h });
   wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
   roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
   nBld++;
@@ -234,7 +383,9 @@ function groupedMesh(buf, groups, name, withUV) {
   g.computeVertexNormals();
   const mats = groups.map(([start, count, col], i) => {
     g.addGroup(start, count, i);
-    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    const base = new THREE.Color(col[0], col[1], col[2]);
+    const m = new THREE.MeshStandardMaterial({ color: base, roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    m.emissive = base.clone().multiplyScalar(/walls/i.test(name) ? 0.42 : 0.36);
     m.side = THREE.DoubleSide; return m;
   });
   const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
@@ -242,11 +393,59 @@ function groupedMesh(buf, groups, name, withUV) {
 if (bW.pos.length) {
   scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', true));
   scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', false));
+  if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0xb6ad9f, 'Buildings_siding_lines', { emissive: 0.18 }));
+  if (bD.trim.length) scene.add(mkMesh(bD.trim, null, 0xd2c9b8, 'Buildings_window_trim'));
+  if (bD.glass.length) scene.add(mkMesh(bD.glass, null, 0x203342, 'Buildings_windows'));
 }
+// Satellite roof-photo layer (flat roofs): real aerial imagery, lifted just above the
+// solid roof. A separate node so it can be toggled on/off (hide it -> solid colours).
+if (RfP.pos.length) scene.add(mkMesh(RfP.pos, null, 0xffffff, 'Roofs_photo', { uvs: RfP.uv }));
+function addStreetViewFacadeOverlays() {
+  const manifest = path.join(ROOT, 'exports/sv_facades.json');
+  if (!existsSync(manifest)) return 0;
+  const data = JSON.parse(readFileSync(manifest, 'utf8'));
+  let count = 0;
+  for (const wall of data.walls || []) {
+    const img = path.join(ROOT, 'exports', wall.image || '');
+    const b = S.buildings[wall.building];
+    if (!b || !existsSync(img) || !wall.A || !wall.B) continue;
+    const A0 = w2(...wall.A), B0 = w2(...wall.B);
+    const L = Math.hypot(B0[0] - A0[0], B0[1] - A0[1]);
+    if (L < 1.5) continue;
+    let ex = (B0[0] - A0[0]) / L, ez = (B0[1] - A0[1]) / L;
+    let nx = -ez, nz = ex;
+    const ring = b.p.map(([e, n]) => w2(e, n));
+    const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+    const mx = (A0[0] + B0[0]) / 2, mz = (A0[1] + B0[1]) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    const base = terrainAt(mx, mz) - 0.46;
+    const top = base + (wall.wallH || wallHeight(b));
+    const off = 0.16;
+    const A = [A0[0] + nx * off, base, A0[1] + nz * off];
+    const B = [B0[0] + nx * off, base, B0[1] + nz * off];
+    const Cc = [B0[0] + nx * off, top, B0[1] + nz * off];
+    const Dd = [A0[0] + nx * off, top, A0[1] + nz * off];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([...A, ...B, ...Cc, ...A, ...Cc, ...Dd], 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0], 2));
+    g.computeVertexNormals();
+    const matName = `SVFacade_${wall.building}_${wall.edge}`;
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, name: matName, emissive: new THREE.Color(1, 1, 1).multiplyScalar(0.16) });
+    mat.side = THREE.DoubleSide;
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.name = matName;
+    mesh.userData = { source: 'Google Street View Static', date: wall.date || '', building: wall.building, edge: wall.edge };
+    scene.add(mesh);
+    svFacadeTextures.set(matName, img);
+    count++;
+  }
+  return count;
+}
+const nSVFacades = addStreetViewFacadeOverlays();
 
-// roads (context) + collect world polylines for tree spacing
-const roadLines = [];
-const rPos = [], rIdx = [];
+// roads / mapped service ways (context) + collect world polylines for tree spacing
+const roadLines = [], streetLines = [];
+const rPos = [], rIdx = [], drvPos = [], drvIdx = [], drvSrcPos = [], drvSrcIdx = [], parkSrcPos = [], parkSrcIdx = [];
 function ribbon(lineW, width, lift, posArr, idxArr) {
   // densify: terrain height is sampled per vertex, so subdivide long segments
   // (parcel corners / cul-de-sacs are sparse) to make the ribbon hug the ground
@@ -268,6 +467,29 @@ function ribbon(lineW, width, lift, posArr, idxArr) {
     row++;
   }
 }
+function flatWaterRibbon(lineW, width, lift, posArr, idxArr) {
+  const dense = [lineW[0]];
+  for (let k = 1; k < lineW.length; k++) {
+    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(seg / 2.0));
+    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
+  }
+  const ys = dense.map(([x, z]) => terrainAt(x, z) + lift);
+  for (let pass = 0; pass < 2; pass++) {
+    const sm = ys.slice();
+    for (let i = 1; i < ys.length - 1; i++) sm[i] = (ys[i - 1] + ys[i] * 2 + ys[i + 1]) / 4;
+    ys.splice(0, ys.length, ...sm);
+  }
+  const hw = width / 2;
+  for (let k = 0; k < dense.length; k++) {
+    const [x, z] = dense[k], p = dense[Math.max(0, k - 1)], q = dense[Math.min(dense.length - 1, k + 1)];
+    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
+    const off = posArr.length / 3;
+    posArr.push(lx, ys[k], lz, rx, ys[k], rz);      // same Y both banks: flat water top
+    if (k > 0) { const a = off - 2, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
+  }
+}
 // Good-looking roads: dark asphalt + raised light curbs both sides + dashed yellow
 // centre line (matches the reference). Separate named layers so each is editable.
 // Width/lanes per class (roadSpec); roads clipped to ROAD_HALF (> terrain) so they
@@ -279,6 +501,14 @@ function ribbon(lineW, width, lift, posArr, idxArr) {
 // ±200 m terrain) so they run edge-to-edge while every vertex stays on real ground.
 const ROAD_HALF = cropHalf;
 const cuPos = [], cuIdx = [], dPos = [];
+const swPos = [], swIdx = [], swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalkIdx = [];
+// layer stack (m above terrain). Asphalt lifted well clear so the aerial/grass under-
+// layer never bleeds through; each higher layer sits above the last.
+const LIFT_ASPHALT = 0.55, LIFT_DRIVEWAY = 0.60, LIFT_SIDEWALK = 0.62, LIFT_CURB = 0.70, LIFT_DASH = 0.61;
+const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
+const MAPSURFACES = path.join(ROOT, 'exports/map_surfaces_osm.json');
+const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
+const hasMappedDriveways = !!((mapSurfaces.drivewayPolygons || []).length || (mapSurfaces.driveways || []).length || (mapSurfaces.parkingAreas || []).length);
 // offset a polyline along its left normal, with a mitre clamp so curbs don't pinch /
 // self-cross on sharp corners (offset scaled by 1/max(0.35,cos(halfTurn))).
 const offsetLine = (lw, d) => lw.map((p, k) => {
@@ -335,6 +565,29 @@ function curbRibbon(lineW, width, lift, posArr, idxArr, skip) {
     prev = off;
   }
 }
+function surfacePolygon(poly, lift, posArr, idxArr) {
+  const ring = (poly || []).filter(p => Array.isArray(p) && p.length >= 2);
+  if (ring.length < 3) return false;
+  if (!ring.every(([x, z]) => x >= tXmin - 2 && x <= tXmax + 2 && z >= tZmin - 2 && z <= tZmax + 2)) return false;
+  const base = posArr.length / 3;
+  for (const [x, z] of ring) posArr.push(x, terrainAt(x, z) + lift, z);
+  const pts = ring.map(([x, z]) => new THREE.Vector2(x, z));
+  const tris = THREE.ShapeUtils.triangulateShape(pts, []);
+  for (const [a, b, c] of tris) idxArr.push(base + a, base + b, base + c);
+  return true;
+}
+function sourceRibbon(lines, width, lift, posArr, idxArr) {
+  for (const src of lines || []) {
+    const pl = src.p || src;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
+      piece = smoothLine(piece);
+      if (piece.length < 2) continue;
+      curbRibbon(piece, width, lift, posArr, idxArr, null);
+      roadLines.push(piece);
+    }
+  }
+}
 
 // shared junction/dead-end vertex map and rank lookup
 const vertHit = buildVertHit(S.roads || [], w2);
@@ -363,7 +616,7 @@ for (const r of S.roads || []) {
 // real patch bounds with a margin, not the symmetric ROAD_HALF box, so no disc
 // edge spills past the terrain into the void)
 const inHalf = (x, z) => inTerrain(x, z, 14);
-const isCourt = r => r.k === 'residential' || /court|ct\b|cul/i.test(r.n || '');
+const isCourt = isCulDeSacRoad;
 const bulbs = [];                                  // {cx,cz,R} for residential courts
 for (const r of S.roads || []) {
   const pl = r.p || r; if (!Array.isArray(pl)) continue;
@@ -375,7 +628,9 @@ for (const r of S.roads || []) {
     if (!inHalf(tip[0], tip[1])) continue;
     if ((vertHit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;
     let tx = tip[0] - prev[0], tz = tip[1] - prev[1]; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
-    const R = Math.max(6, Math.min(12, spec.width * 1.6));
+    // realistic residential cul-de-sac bulb: ~10-12 m diameter -> radius ~5-6 m,
+    // scaled gently to the road width but clamped so it never balloons over lots.
+    const R = Math.max(5, Math.min(6, spec.width * 0.75));
     bulbs.push({ cx: tip[0] + tx * (R - spec.width / 2), cz: tip[1] + tz * (R - spec.width / 2), R });
   }
 }
@@ -400,20 +655,44 @@ for (const r of S.roads || []) {
     piece = smoothLine(piece);
     if (piece.length < 2) continue;
     roadLines.push(piece);
-    ribbon(piece, spec.width, 0.28, rPos, rIdx);                                        // asphalt
-    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, 0.44, cuPos, cuIdx, skipNearJunction);
-    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, 0.44, cuPos, cuIdx, skipNearJunction);
-    if (spec.lanes >= 2) centreDashes(piece, 0.14, 0.34, skipNearJunction);
+    if (spec.isService) {
+      if (!hasMappedDriveways) ribbon(piece, spec.width, LIFT_DRIVEWAY, drvPos, drvIdx);
+      continue;
+    }
+    streetLines.push(piece);
+    ribbon(piece, spec.width, LIFT_ASPHALT, rPos, rIdx);                                // asphalt
+    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction);
+    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction);
+    if (spec.lanes >= 2) centreDashes(piece, 0.14, LIFT_DASH, skipNearJunction);
+    if (!spec.isService) {
+      const swDist = spec.width / 2 + SW_GAP;
+      curbRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipNearJunction);
+      curbRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipNearJunction);
+    }
   }
 }
+// Road-edge sidewalks: actual pedestrian paths run parallel to the carriageway,
+// then meet through rounded connector arcs around intersection curb returns.
+for (const run of buildSidewalkConnectors(S.roads || [], w2, {
+  sideGap: SW_GAP,
+  inPatch: (x, z) => inTerrain(x, z, 6),
+})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null);
+for (const run of buildSidewalkEndCaps(S.roads || [], w2, {
+  sideGap: SW_GAP,
+  inPatch: (x, z) => inTerrain(x, z, 6),
+  isCourt,
+})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null);
 // cul-de-sac bulbs / service end-caps at true dead-ends inside ROAD_HALF.
 // Court bulbs were precomputed above (reused here so dashes/curbs avoided them);
 // service stubs just get a small rounded end-cap (no fake roundabout).
-const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + 0.28, z); return o; };
-const emitCurb = (x, z) => { const o = cuPos.length / 3; cuPos.push(x, terrainAt(x, z) + 0.44, z); return o; };
+const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + LIFT_ASPHALT, z); return o; };
+const emitDriveway = (x, z) => { const o = drvPos.length / 3; drvPos.push(x, terrainAt(x, z) + LIFT_DRIVEWAY, z); return o; };
+const emitCurb = (x, z) => { const o = cuPos.length / 3; cuPos.push(x, terrainAt(x, z) + LIFT_CURB, z); return o; };
+const emitSidewalk = (x, z) => { const o = swPos.length / 3; swPos.push(x, terrainAt(x, z) + LIFT_SIDEWALK, z); return o; };
 for (const { cx, cz, R } of bulbs) {
   fanDisc(cx, cz, R, 24, emitAsphalt, rIdx);
   ringAnnulus(cx, cz, R, R + 0.3, 24, emitCurb, cuIdx);
+  ringAnnulus(cx, cz, R + 0.95, R + 0.95 + SW_WIDTH, 32, emitSidewalk, swIdx);
 }
 for (const r of S.roads || []) {
   const pl = r.p || r; if (!Array.isArray(pl) || isCourt(r)) continue;
@@ -424,7 +703,9 @@ for (const r of S.roads || []) {
     const tip = w2(...pl[i]);
     if (!inHalf(tip[0], tip[1])) continue;
     if ((vertHit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;   // not a dead-end
-    fanDisc(tip[0], tip[1], spec.width / 2, 12, emitAsphalt, rIdx);  // service: rounded end
+    const emit = spec.isService ? emitDriveway : emitAsphalt;
+    const idx = spec.isService ? drvIdx : rIdx;
+    fanDisc(tip[0], tip[1], spec.width / 2, 12, emit, idx);
   }
 }
 // junction blend pads: a small asphalt fillet (radius = half the widest road, so it
@@ -435,7 +716,31 @@ for (const [px, pz] of junctionPts) {
   const w = junctionWidth.get(vkey(px, pz)) || 7;
   fanDisc(px, pz, w / 2 + 0.4, 20, emitAsphalt, rIdx);
 }
+for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LIFT_DRIVEWAY + 0.02, drvSrcPos, drvSrcIdx);
+for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
+sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
+sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx);
+sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
+const DRIVEWAYSJSON = path.join(ROOT, 'exports/driveways_osm.json');
+if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
+  const mapped = JSON.parse(readFileSync(DRIVEWAYSJSON, 'utf8')).driveways || [];
+  for (const d of mapped) {
+    const width = d.service === 'parking_aisle' ? 5.0 : 3.6;
+    for (let piece of clipPolylineToBox(d.p || [], ROAD_HALF)) {
+      piece = smoothLine(piece);
+      if (piece.length < 2) continue;
+      roadLines.push(piece);
+      ribbon(piece, width, LIFT_DRIVEWAY, drvPos, drvIdx);
+    }
+  }
+}
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
+if (drvIdx.length) scene.add(mkMesh(drvPos, drvIdx, 0x77787a, 'Driveways'));
+if (drvSrcIdx.length) scene.add(mkMesh(drvSrcPos, drvSrcIdx, 0x7d7f80, 'Driveways_Mapped'));
+if (parkSrcIdx.length) scene.add(mkMesh(parkSrcPos, parkSrcIdx, 0x6f7272, 'ParkingAreas_Mapped'));
+if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks'));   // light concrete, road-edge derived
+if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped'));
+if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_Mapped'));
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
 if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
@@ -443,20 +748,11 @@ if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 let creekW = null;
 if (S.creek && S.creek.p) {
   creekW = S.creek.p.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
-  // OSM centerline is crude; pull each vertex toward the channel bottom (lowest bare-earth
-  // DEM within +/-R perpendicular to flow) so the ribbon sits IN the real creek, not beside it.
-  if (creekW.length >= 3) {
-    const R = 12;
-    creekW = creekW.map((p, i) => {
-      const a = creekW[Math.max(0, i - 1)], b = creekW[Math.min(creekW.length - 1, i + 1)];
-      let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-      const nx = -dz, nz = dx; let bx = p[0], bz = p[1], bh = terrainAt(p[0], p[1]);
-      for (let t = -R; t <= R; t += 2) { const x = p[0] + nx * t, z = p[1] + nz * t, h = terrainAt(x, z); if (h < bh) { bh = h; bx = x; bz = z; } }
-      return [p[0] + (bx - p[0]) * 0.6, p[1] + (bz - p[1]) * 0.6];   // gentle 60% nudge
-    });
-  }
+  creekW = snapCreekToChannel(creekW, terrainAt, { radius: 18, step: 1.5, strength: 0.9, smoothPasses: 2 });
   if (creekW.length >= 2) {
-    const cPos = [], cIdx = []; ribbon(creekW, 10, 0.05, cPos, cIdx);
+    const CREEK_WIDTH = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 6.0;
+    const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.22;
+    const cPos = [], cIdx = []; flatWaterRibbon(creekW, CREEK_WIDTH, CREEK_DEPTH, cPos, cIdx);
     const cr = mkMesh(cPos, cIdx, 0x3a78c2, 'Creek_SanLorenzo'); cr.material.name = 'Creek_mat'; scene.add(cr);
   }
 }
@@ -482,10 +778,67 @@ function distToLines(x, z, lines, max) {
   }
   return best;
 }
+function emitOwnerHouseFacadeCues(ring, wallH, out) {
+  if (!ring || ring.length < 3 || !out) return;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  const edges = ring.map(([ax, az], i) => {
+    const [bx, bz] = ring[(i + 1) % ring.length];
+    const L = Math.hypot(bx - ax, bz - az);
+    let ex = (bx - ax) / (L || 1), ez = (bz - az) / (L || 1);
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    return { i, ax, az, bx, bz, L, ex, ez, nx, nz, mx, mz, roadD: distToLines(mx, mz, roadLines, 1e9) };
+  }).filter(e => e.L >= 2.2);
+  if (!edges.length) return;
+  const front = edges.reduce((a, b) => b.roadD < a.roadD ? b : a);
+  const back = edges.reduce((a, b) => {
+    const da = (a.nx * front.nx + a.nz * front.nz);
+    const db = (b.nx * front.nx + b.nz * front.nz);
+    return db < da ? b : a;
+  }, front);
+  const addWindow = (e, t, halfW = 0.48, y0 = 1.08, h = 0.92, wide = false) => {
+    if (!e || e.L < 2.4) return;
+    const s = Math.max(halfW + 0.18, Math.min(e.L - halfW - 0.18, e.L * t));
+    const base = terrainAt(e.mx, e.mz) - 0.10;
+    const yA = base + y0, yB = Math.min(base + y0 + h, base + wallH - 0.45);
+    if (yB - yA < 0.35) return;
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, yA - 0.10, yB + 0.10, 0.086);
+    pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, yA, yB, 0.118);
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - 0.025, s + 0.025, yA + 0.04, yB - 0.04, 0.13);
+    if (wide) pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.18, s + halfW + 0.18, yA - 0.20, yA - 0.12, 0.13);
+  };
+  const addDoorGlass = (e, t, halfW = 0.62) => {
+    const s = Math.max(halfW + 0.22, Math.min(e.L - halfW - 0.22, e.L * t));
+    const base = terrainAt(e.mx, e.mz) - 0.10;
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, base + 0.02, base + 2.16, 0.088);
+    pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, base + 0.12, base + 2.04, 0.122);
+  };
+  const garageT = front.ax > front.bx ? 0.20 : 0.80;
+  const doorT = front.ax > front.bx ? 0.72 : 0.28;
+  addWindow(front, (doorT + garageT) / 2, 0.42, 1.18, 0.82);
+  for (const e of edges) {
+    if (e === front) continue;
+    if (e === back) {
+      addDoorGlass(e, 0.48, 0.82);
+      if (e.L > 6.0) { addWindow(e, 0.23, 0.42); addWindow(e, 0.75, 0.42); }
+    } else if (e.L > 5.5) {
+      addWindow(e, 0.32, 0.46);
+      addWindow(e, 0.68, 0.46);
+    } else {
+      addWindow(e, 0.50, 0.42);
+    }
+  }
+}
 
-// ---- Doors (+ the owner's driveway) --------------------------------------
-const dwPos = [], dwCol = [], DOORCOL = [0.26, 0.18, 0.12];
-let houseDoor = null, houseGarage = null;       // for the driveway, tree clear-zone, front fence
+// ---- Doors ----------------------------------------------------------------
+const houseCue = { glass: [], trim: [] };
+emitOwnerHouseFacadeCues(houseRing, houseWallH, houseCue);
+if (houseCue.trim.length) scene.add(mkMesh(houseCue.trim, null, 0xd8d0bd, 'House_window_trim'));
+if (houseCue.glass.length) scene.add(mkMesh(houseCue.glass, null, 0x223647, 'House_windows'));
+
+const dwPos = [], dwCol = [], garagePos = [], garageTrim = [], DOORCOL = [0.26, 0.18, 0.12];
+let houseDoor = null, houseGarage = null;       // for the tree clear-zone / front fence orientation
 buildingPolys.forEach((ring, bi) => {
   if (ring.length < 2) return;
   const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
@@ -511,24 +864,26 @@ buildingPolys.forEach((ring, bi) => {
   const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
   const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
   for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
-  if (bi === 0) { houseDoor = [dcx, dcz]; houseGarage = (ax > bx) ? [ax, az] : [bx, bz]; }
+  if (bi === 0) {
+    houseDoor = [dcx, dcz]; houseGarage = (ax > bx) ? [ax, az] : [bx, bz];
+    const gt = (ax > bx) ? 0.20 : 0.80;
+    const gs = L * gt, ghw = Math.min(1.65, Math.max(1.25, L * 0.16));
+    const gx = ax + ex * gs, gz = az + ez * gs, gb = terrainAt(gx, gz) - 0.08;
+    pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw - 0.16, gs + ghw + 0.16, gb - 0.03, gb + 2.35, 0.095);
+    pushWallRect(garagePos, ax, az, ex, ez, nx, nz, gs - ghw, gs + ghw, gb + 0.06, gb + 2.18, 0.125);
+    for (let p = 1; p <= 3; p++) {
+      const y = gb + 0.06 + p * (2.12 / 4);
+      pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw + 0.05, gs + ghw - 0.05, y - 0.025, y + 0.025, 0.145);
+    }
+    pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - 0.025, gs + 0.025, gb + 0.12, gb + 2.08, 0.145);
+  }
 });
 if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
+if (garageTrim.length) scene.add(mkMesh(garageTrim, null, 0xd8d0bd, 'GarageDoor_trim'));
+if (garagePos.length) scene.add(mkMesh(garagePos, null, 0x5e6266, 'GarageDoors'));
 
-// Driveway: house garage (road/NE corner) -> nearest road point, light concrete ribbon.
-if (houseGarage) {
-  let bp = null, bd = Infinity;
-  for (const lw of roadLines) for (const [x, z] of lw) { const d = Math.hypot(x - houseGarage[0], z - houseGarage[1]); if (d < bd) { bd = d; bp = [x, z]; } }
-  if (bp && bd < 70) {
-    // end at the road EDGE (pull back ~4 m off the centre-line) so the driveway meets the
-    // road, not overlaps it; wider + darker so it reads as a paved drive, not a thin path.
-    let ddx = bp[0] - houseGarage[0], ddz = bp[1] - houseGarage[1]; const dl = Math.hypot(ddx, ddz) || 1;
-    const edge = [bp[0] - ddx / dl * 4, bp[1] - ddz / dl * 4];
-    const dvPos = [], dvIdx = [];
-    ribbon([houseGarage, [(houseGarage[0] + edge[0]) / 2, (houseGarage[1] + edge[1]) / 2], edge], 4.2, 0.07, dvPos, dvIdx);
-    if (dvIdx.length) scene.add(mkMesh(dvPos, dvIdx, 0x6f6f72, 'Driveway'));
-  }
-}
+// Driveways are sourced from mapped service ways above. Do not synthesize a custom
+// garage-to-road strip here; if the map has no driveway, leave it for hand editing.
 
 // Real LiDAR-canopy trees (exports/trees.json from fetch_trees.py) if present,
 // else heuristic positions along the creek + open yard.
@@ -540,12 +895,21 @@ if (existsSync(TREESJSON)) {
   // LiDAR canopy size/height (raw heights ran to 35 m towers; ~94 points fell beyond the
   // cropped terrain and floated in mid-air). This keeps every tree on the ground and the
   // house readable instead of buried.
-  trees = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees
-    .filter(([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS
-      && !inMine(x, z)                                                         // owner's yard stays clear (too many trees)
-      && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5))   // keep the front door clear
+  const raw = JSON.parse(readFileSync(TREESJSON, 'utf8')).trees;
+  const baseOK = ([x, z]) => inTerrain(x, z) && !onBuilding(x, z) && Math.hypot(x, z) <= TREE_RADIUS
+    && (!houseDoor || Math.hypot(x - houseDoor[0], z - houseDoor[1]) > 5);     // keep the front door clear
+  const context = [], owner = [];
+  for (const t of raw) {
+    if (!baseOK(t)) continue;
+    (inMine(t[0], t[1]) ? owner : context).push(t);
+  }
+  const ownerKeep = owner
+    .filter(([, , cr = 0, th = 0]) => cr >= 1.4 && th >= 5)
+    .sort((a, b) => ((b[2] || 0) * (b[3] || 0)) - ((a[2] || 0) * (a[3] || 0)))
+    .slice(0, 12);
+  trees = context.concat(ownerKeep)
     .map(([x, z, cr, th]) => [x, z, Math.min(cr || 2.5, 5), Math.max(4, Math.min(16, th || 7))]);
-  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m)`;
+  treeSrc = `LiDAR canopy 2021 (real; ${trees.length} within ${TREE_RADIUS} m, ${ownerKeep.length} on owner lots)`;
 } else {
   trees = [];
   treeSrc = 'heuristic (no LiDAR/OSM trees)';
@@ -578,6 +942,142 @@ if (trees.length) {
   writeFileSync(path.join(ROOT, 'exports/trees_placed.json'),
     JSON.stringify({ frame: 'gltf-y-up; x=east, y=up, z=-north; house at origin', count: placed.length, trees: placed }));
 }
+
+function addCreekArtAndShrubs() {
+  if (creekW && creekW.length >= 2) {
+    const creekWidth = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 6.0;
+    const bankPos = [], bankIdx = [], flowPos = [], flowIdx = [], rockPos = [], rockIdx = [], reedPos = [];
+    ribbon(offsetLine(creekW, creekWidth / 2 + 0.75), 1.35, 0.18, bankPos, bankIdx);
+    ribbon(offsetLine(creekW, -(creekWidth / 2 + 0.75)), 1.35, 0.18, bankPos, bankIdx);
+    let phase = 0;
+    for (let k = 1; k < creekW.length; k++) {
+      const a = creekW[k - 1], b = creekW[k];
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg;
+      const nx = -dz, nz = dx;
+      for (let s = (phase % 8); s < seg; s += 9) {
+        const len = Math.min(3.4, seg - s);
+        if (len < 1.2) continue;
+        const x0 = a[0] + dx * s + nx * 0.55, z0 = a[1] + dz * s + nz * 0.55;
+        const x1 = a[0] + dx * (s + len) + nx * 0.55, z1 = a[1] + dz * (s + len) + nz * 0.55;
+        const y0 = terrainAt(x0, z0) + 0.35, y1 = terrainAt(x1, z1) + 0.35, hw = 0.08;
+        const off = flowPos.length / 3;
+        flowPos.push(x0 + nx * hw, y0, z0 + nz * hw, x0 - nx * hw, y0, z0 - nz * hw, x1 + nx * hw, y1, z1 + nz * hw, x1 - nx * hw, y1, z1 - nz * hw);
+        flowIdx.push(off, off + 2, off + 1, off + 1, off + 2, off + 3);
+      }
+      phase += seg;
+    }
+    const emitRock = (x, z) => { const o = rockPos.length / 3; rockPos.push(x, terrainAt(x, z) + 0.26, z); return o; };
+    for (let k = 1; k < creekW.length; k++) {
+      const a = creekW[k - 1], b = creekW[k];
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg;
+      const nx = -dz, nz = dx;
+      for (let s = 0; s < seg; s += 8) for (const side of [1, -1]) if (rand() < 0.38) {
+        const x = a[0] + dx * s + nx * side * (creekWidth / 2 + 0.9 + rand() * 1.5);
+        const z = a[1] + dz * s + nz * side * (creekWidth / 2 + 0.9 + rand() * 1.5);
+        if (inTerrain(x, z, 2)) fanDisc(x, z, 0.18 + rand() * 0.42, 8, emitRock, rockIdx);
+      }
+      for (let s = 0; s < seg; s += 5) for (const side of [1, -1]) if (rand() < 0.55) {
+        const x = a[0] + dx * s + nx * side * (creekWidth / 2 + 1.4);
+        const z = a[1] + dz * s + nz * side * (creekWidth / 2 + 1.4);
+        if (!inTerrain(x, z, 2)) continue;
+        const y = terrainAt(x, z) + 0.18, h = 0.45 + rand() * 0.55, w = 0.035;
+        reedPos.push(x - nx * w, y, z - nz * w, x + nx * w, y, z + nz * w, x + dx * 0.08, y + h, z + dz * 0.08);
+      }
+    }
+    if (bankIdx.length) scene.add(mkMesh(bankPos, bankIdx, 0x756d58, 'Creek_Banks'));
+    if (flowIdx.length) scene.add(mkMesh(flowPos, flowIdx, 0x9fd6f1, 'Creek_FlowLines'));
+    if (rockIdx.length) scene.add(mkMesh(rockPos, rockIdx, 0x77786f, 'Creek_Rocks'));
+    if (reedPos.length) scene.add(mkMesh(reedPos, null, 0x607a3d, 'Creek_Reeds'));
+  }
+
+  const shrubPos = [], shrubIdx = [];
+  const pushShrub = (x, z, r, h) => {
+    const sides = 9, base = shrubPos.length / 3, y = terrainAt(x, z) + 0.08;
+    for (let k = 0; k < sides; k++) {
+      const a = k / sides * Math.PI * 2;
+      shrubPos.push(x + Math.cos(a) * r * (0.75 + rand() * 0.35), y, z + Math.sin(a) * r * (0.75 + rand() * 0.35));
+    }
+    shrubPos.push(x, y + h, z);
+    const top = base + sides;
+    for (let k = 0; k < sides; k++) shrubIdx.push(base + k, base + ((k + 1) % sides), top);
+  };
+  const shrubOK = (x, z) => inTerrain(x, z, 3) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5;
+  for (let i = 0; i < 420 && shrubIdx.length / 3 < 180; i++) {
+    let x, z;
+    if (creekW && rand() < 0.55) {
+      const seg = creekW[Math.floor(rand() * Math.max(1, creekW.length - 1))];
+      x = seg[0] + (rand() - 0.5) * 22; z = seg[1] + (rand() - 0.5) * 22;
+    } else {
+      x = tXmin + rand() * (tXmax - tXmin); z = tZmin + rand() * (tZmax - tZmin);
+    }
+    if (shrubOK(x, z)) pushShrub(x, z, 0.45 + rand() * 0.75, 0.45 + rand() * 0.75);
+  }
+  if (shrubIdx.length) scene.add(mkMesh(shrubPos, shrubIdx, 0x4d7437, 'Shrubs'));
+}
+addCreekArtAndShrubs();
+
+// ---- Game-level collision / LOD proxies ----------------------------------
+function appendIndexed(srcPos, srcIdx, dstPos, dstIdx) {
+  if (!srcPos.length || !srcIdx.length) return;
+  const base = dstPos.length / 3;
+  dstPos.push(...srcPos);
+  for (const i of srcIdx) dstIdx.push(base + i);
+}
+function pushExtrudedRing(pos, idx, ring, base, h) {
+  if (!ring || ring.length < 3) return;
+  const off = pos.length / 3;
+  for (const [x, z] of ring) pos.push(x, base, z);
+  for (const [x, z] of ring) pos.push(x, base + h, z);
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    idx.push(off + i, off + j, off + n + j, off + i, off + n + j, off + n + i);
+  }
+  const tris = THREE.ShapeUtils.triangulateShape(ring.map(([x, z]) => new THREE.Vector2(x, z)), []);
+  for (const [a, b, c] of tris) idx.push(off + n + a, off + n + b, off + n + c);
+}
+function pushTreeCylinder(pos, idx, x, z, radius, height) {
+  const sides = 8, base = pos.length / 3, y0 = terrainAt(x, z), y1 = y0 + height;
+  for (let k = 0; k < sides; k++) {
+    const a = k / sides * Math.PI * 2;
+    const px = x + Math.cos(a) * radius, pz = z + Math.sin(a) * radius;
+    pos.push(px, y0, pz, px, y1, pz);
+  }
+  for (let k = 0; k < sides; k++) {
+    const j = (k + 1) % sides;
+    idx.push(base + k * 2, base + j * 2, base + j * 2 + 1, base + k * 2, base + j * 2 + 1, base + k * 2 + 1);
+  }
+}
+function addGameLevelLayers() {
+  const tPos = [], tIdx = [], step = 8;
+  const xs = [], zs = [];
+  for (let x = tXmin; x <= tXmax + 0.01; x += step) xs.push(Math.min(x, tXmax));
+  for (let z = tZmin; z <= tZmax + 0.01; z += step) zs.push(Math.min(z, tZmax));
+  for (const z of zs) for (const x of xs) tPos.push(x, terrainAt(x, z), z);
+  for (let j = 0; j < zs.length - 1; j++) for (let i = 0; i < xs.length - 1; i++) {
+    const a = j * xs.length + i, b = a + 1, c = a + xs.length, d = c + 1;
+    tIdx.push(a, c, b, b, c, d);
+  }
+  if (tIdx.length) scene.add(mkMesh(tPos, tIdx, 0xff00ff, 'Collision_Terrain', { opacity: 0 }));
+
+  const roadColPos = [], roadColIdx = [];
+  for (const [p, ix] of [[rPos, rIdx], [drvPos, drvIdx], [drvSrcPos, drvSrcIdx], [parkSrcPos, parkSrcIdx], [swPos, swIdx], [swSrcPos, swSrcIdx], [xwalkPos, xwalkIdx]]) appendIndexed(p, ix, roadColPos, roadColIdx);
+  if (roadColIdx.length) scene.add(mkMesh(roadColPos, roadColIdx, 0x00ffff, 'Collision_Roads', { opacity: 0 }));
+
+  const bPos = [], bIdx = [];
+  for (const b of buildingCollision) pushExtrudedRing(bPos, bIdx, b.ring, b.base, b.h);
+  if (bIdx.length) {
+    scene.add(mkMesh(bPos, bIdx, 0xff00ff, 'Collision_Buildings', { opacity: 0 }));
+    scene.add(mkMesh(bPos, bIdx, 0x808080, 'LOD_Buildings_Low', { opacity: 0 }));
+  }
+
+  const trPos = [], trIdx = [];
+  for (const [x, z, cr = 2.5, th = 7] of trees) pushTreeCylinder(trPos, trIdx, x, z, Math.max(0.28, Math.min(0.55, cr * 0.16)), Math.max(2.2, Math.min(4.2, th * 0.38)));
+  if (trIdx.length) scene.add(mkMesh(trPos, trIdx, 0x00ff00, 'Collision_Trees', { opacity: 0 }));
+}
+addGameLevelLayers();
 
 // ---- Parcels / lot lines (real fences run along these) -------------------
 // LotLines = all county parcel boundaries; YourLots = APN 416-120-67 (house) +
@@ -620,7 +1120,7 @@ const REPEAT = 10497, CLAMP = 33071;
 let textured = 0;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
-  if (aerialTex && /terrain/i.test(n)) {
+  if (aerialTex && /terrain|roofs_photo/i.test(n)) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {
@@ -628,6 +1128,10 @@ for (const m of doc.getRoot().listMaterials()) {
     // multiply the window texture over it -> wall = SV colour x windows, in every viewer.
     m.setBaseColorTexture(facadeTex);
     m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
+  } else if (svFacadeTextures.has(n)) {
+    const tex = doc.createTexture(n + '_tex').setImage(new Uint8Array(readFileSync(svFacadeTextures.get(n)))).setMimeType('image/jpeg');
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(tex);
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   }
 }
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
@@ -637,5 +1141,6 @@ scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geomet
 console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
+console.log(`street-view facade overlays: ${nSVFacades}`);
 console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);

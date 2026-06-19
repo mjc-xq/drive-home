@@ -65,17 +65,17 @@ def terrain_at(X, Z):
 # ---- fence runs (WORLD coords x,z) -------------------------------------------
 RUNS = [
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[1.46, 20.34], [-13.53, -0.98], [-28.83, -22.64]]},
+     "polyline": [[1.46, 20.34], [-28.83, -22.64]]},
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[18.28, 5.19], [0.06, -17.97], [-17.11, -39.91]]},
+     "polyline": [[18.28, 5.19], [-17.11, -39.91]]},
     # human<->pig yard divider = the owner's WHITE line (#11): set BACK from the house,
     # NOT on the lot divider; follows the terrain break across the back lot (georef-extracted).
     {"name": "FencePink", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[-28.8, -13.2], [-26.5, -8.0], [-25.0, -2.9], [-24.1, -0.3], [-21.3, 0.9], [-17.7, 2.0]]},
+     "polyline": [[-28.8, -13.2], [-17.7, 2.0]]},
     # back/creek fence — LEAVE ALONE (owner: the very back line is fine). On the east
     # bank, inside the property, off the creek ribbon.
     {"name": "FenceRed", "glb": f"{DL}/Fence.glb",
-     "polyline": [[-28.83, -22.64], [-27.0, -31.0], [-25.5, -39.0], [-17.11, -39.91]]},
+     "polyline": [[-28.83, -22.64], [-17.11, -39.91]]},
     # front-yard picket on the DOOR half (SW); garage is the road/NE end. ONE straight
     # ~5 m run (matches the picket asset's section length so it tiles as a clean,
     # undistorted picket, not a yawed corner blob), offset ~2 m into the front yard;
@@ -159,6 +159,34 @@ def load_template(path):
     obj.matrix_world = mathutils.Matrix.Identity(4)
     obj.hide_set(True)
     return obj, length
+
+
+def make_collision_helpers_transparent():
+    """Keep invisible collision meshes invisible after Blender GLB re-export."""
+    mat = bpy.data.materials.get("Collision_Invisible")
+    if mat is None:
+        mat = bpy.data.materials.new("Collision_Invisible")
+    mat.diffuse_color = (1.0, 0.0, 1.0, 0.0)
+    mat.use_nodes = True
+    mat.blend_method = 'BLEND'
+    if hasattr(mat, "show_transparent_back"):
+        mat.show_transparent_back = True
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = 'BLENDED'
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        if "Base Color" in bsdf.inputs:
+            bsdf.inputs["Base Color"].default_value = (1.0, 0.0, 1.0, 0.0)
+        if "Alpha" in bsdf.inputs:
+            bsdf.inputs["Alpha"].default_value = 0.0
+
+    for obj in bpy.data.objects:
+        if obj.type != 'MESH' or not obj.name.startswith("Collision_"):
+            continue
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        for poly in obj.data.polygons:
+            poly.material_index = 0
 
 
 # ---- build scene -------------------------------------------------------------
@@ -260,6 +288,7 @@ for r in RUNS:
 for base, (obj, _L) in templates.items():          # drop unused template originals
     bpy.data.objects.remove(obj, do_unlink=True)
 
+make_collision_helpers_transparent()
 bpy.ops.export_scene.gltf(filepath=OUT, export_format='GLB', use_visible=False)
 total = sum(counts.values())
 print(f"[fences] placed {total} sections {counts} -> {OUT} "
