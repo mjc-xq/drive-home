@@ -859,6 +859,81 @@ if (trees.length) {
     JSON.stringify({ frame: 'gltf-y-up; x=east, y=up, z=-north; house at origin', count: placed.length, trees: placed }));
 }
 
+function addCreekArtAndShrubs() {
+  if (creekW && creekW.length >= 2) {
+    const creekWidth = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 6.0;
+    const bankPos = [], bankIdx = [], flowPos = [], flowIdx = [], rockPos = [], rockIdx = [], reedPos = [];
+    ribbon(offsetLine(creekW, creekWidth / 2 + 0.75), 1.35, 0.18, bankPos, bankIdx);
+    ribbon(offsetLine(creekW, -(creekWidth / 2 + 0.75)), 1.35, 0.18, bankPos, bankIdx);
+    let phase = 0;
+    for (let k = 1; k < creekW.length; k++) {
+      const a = creekW[k - 1], b = creekW[k];
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg;
+      const nx = -dz, nz = dx;
+      for (let s = (phase % 8); s < seg; s += 9) {
+        const len = Math.min(3.4, seg - s);
+        if (len < 1.2) continue;
+        const x0 = a[0] + dx * s + nx * 0.55, z0 = a[1] + dz * s + nz * 0.55;
+        const x1 = a[0] + dx * (s + len) + nx * 0.55, z1 = a[1] + dz * (s + len) + nz * 0.55;
+        const y0 = terrainAt(x0, z0) + 0.35, y1 = terrainAt(x1, z1) + 0.35, hw = 0.08;
+        const off = flowPos.length / 3;
+        flowPos.push(x0 + nx * hw, y0, z0 + nz * hw, x0 - nx * hw, y0, z0 - nz * hw, x1 + nx * hw, y1, z1 + nz * hw, x1 - nx * hw, y1, z1 - nz * hw);
+        flowIdx.push(off, off + 2, off + 1, off + 1, off + 2, off + 3);
+      }
+      phase += seg;
+    }
+    const emitRock = (x, z) => { const o = rockPos.length / 3; rockPos.push(x, terrainAt(x, z) + 0.26, z); return o; };
+    for (let k = 1; k < creekW.length; k++) {
+      const a = creekW[k - 1], b = creekW[k];
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg;
+      const nx = -dz, nz = dx;
+      for (let s = 0; s < seg; s += 8) for (const side of [1, -1]) if (rand() < 0.38) {
+        const x = a[0] + dx * s + nx * side * (creekWidth / 2 + 0.9 + rand() * 1.5);
+        const z = a[1] + dz * s + nz * side * (creekWidth / 2 + 0.9 + rand() * 1.5);
+        if (inTerrain(x, z, 2)) fanDisc(x, z, 0.18 + rand() * 0.42, 8, emitRock, rockIdx);
+      }
+      for (let s = 0; s < seg; s += 5) for (const side of [1, -1]) if (rand() < 0.55) {
+        const x = a[0] + dx * s + nx * side * (creekWidth / 2 + 1.4);
+        const z = a[1] + dz * s + nz * side * (creekWidth / 2 + 1.4);
+        if (!inTerrain(x, z, 2)) continue;
+        const y = terrainAt(x, z) + 0.18, h = 0.45 + rand() * 0.55, w = 0.035;
+        reedPos.push(x - nx * w, y, z - nz * w, x + nx * w, y, z + nz * w, x + dx * 0.08, y + h, z + dz * 0.08);
+      }
+    }
+    if (bankIdx.length) scene.add(mkMesh(bankPos, bankIdx, 0x756d58, 'Creek_Banks'));
+    if (flowIdx.length) scene.add(mkMesh(flowPos, flowIdx, 0x9fd6f1, 'Creek_FlowLines'));
+    if (rockIdx.length) scene.add(mkMesh(rockPos, rockIdx, 0x77786f, 'Creek_Rocks'));
+    if (reedPos.length) scene.add(mkMesh(reedPos, null, 0x607a3d, 'Creek_Reeds'));
+  }
+
+  const shrubPos = [], shrubIdx = [];
+  const pushShrub = (x, z, r, h) => {
+    const sides = 9, base = shrubPos.length / 3, y = terrainAt(x, z) + 0.08;
+    for (let k = 0; k < sides; k++) {
+      const a = k / sides * Math.PI * 2;
+      shrubPos.push(x + Math.cos(a) * r * (0.75 + rand() * 0.35), y, z + Math.sin(a) * r * (0.75 + rand() * 0.35));
+    }
+    shrubPos.push(x, y + h, z);
+    const top = base + sides;
+    for (let k = 0; k < sides; k++) shrubIdx.push(base + k, base + ((k + 1) % sides), top);
+  };
+  const shrubOK = (x, z) => inTerrain(x, z, 3) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5;
+  for (let i = 0; i < 420 && shrubIdx.length / 3 < 180; i++) {
+    let x, z;
+    if (creekW && rand() < 0.55) {
+      const seg = creekW[Math.floor(rand() * Math.max(1, creekW.length - 1))];
+      x = seg[0] + (rand() - 0.5) * 22; z = seg[1] + (rand() - 0.5) * 22;
+    } else {
+      x = tXmin + rand() * (tXmax - tXmin); z = tZmin + rand() * (tZmax - tZmin);
+    }
+    if (shrubOK(x, z)) pushShrub(x, z, 0.45 + rand() * 0.75, 0.45 + rand() * 0.75);
+  }
+  if (shrubIdx.length) scene.add(mkMesh(shrubPos, shrubIdx, 0x4d7437, 'Shrubs'));
+}
+addCreekArtAndShrubs();
+
 // ---- Game-level collision / LOD proxies ----------------------------------
 function appendIndexed(srcPos, srcIdx, dstPos, dstIdx) {
   if (!srcPos.length || !srcIdx.length) return;
