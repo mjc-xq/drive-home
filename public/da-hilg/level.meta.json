@@ -1,0 +1,76 @@
+{
+  "source": "1840-dahill-property.glb",
+  "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
+  "offset": [
+    -0.095,
+    37.545,
+    -0.695
+  ],
+  "groundY": 37.545,
+  "houseCenter": [
+    -0.095,
+    49.543,
+    -0.695
+  ],
+  "houseBox": {
+    "min": [
+      -12.155,
+      9.868,
+      -9.315
+    ],
+    "max": [
+      12.155,
+      14.128,
+      9.315
+    ]
+  },
+  "spawns": [
+    [
+      0,
+      0.05,
+      12.315
+    ],
+    [
+      15.155,
+      0.05,
+      0
+    ],
+    [
+      -15.155,
+      0.05,
+      -2
+    ]
+  ],
+  "npcSpawns": [
+    [
+      18.155,
+      0.05,
+      15.315
+    ],
+    [
+      -18.155,
+      0.05,
+      15.315
+    ],
+    [
+      20.155,
+      0.05,
+      -13.315
+    ],
+    [
+      -20.155,
+      0.05,
+      -13.315
+    ],
+    [
+      0,
+      0.05,
+      23.315
+    ],
+    [
+      18,
+      0.05,
+      18
+    ]
+  ]
+}

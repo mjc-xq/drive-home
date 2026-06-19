@@ -1,0 +1,40 @@
+/* Da Hilg display font — self-hosted AGC, 4 weights.
+ *
+ * CSS in src/ can't reliably reference src/assets/ at runtime (Vite would have to
+ * resolve+hash each url, which it only does for imported assets). The 4 woff2 are
+ * therefore COPIED into public/da-hilg/fonts/ (a build-time `cp`, see the cluster
+ * notes) so these stable absolute URLs resolve straight from the served root.
+ *
+ * Chakra Petch is already loaded via index.html (Google Fonts); the @import below
+ * is a harmless fallback for when the game page is opened without that <link>. */
+
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&display=swap');
+
+@font-face {
+  font-family: 'AGC';
+  src: url('/da-hilg/fonts/agc-black.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'AGC';
+  src: url('/da-hilg/fonts/agc-heavy.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'AGC';
+  src: url('/da-hilg/fonts/agc-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'AGC';
+  src: url('/da-hilg/fonts/agc-medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}

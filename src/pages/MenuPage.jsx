@@ -30,6 +30,13 @@ export default function MenuPage() {
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12a7 7 0 0 1 14 0v5H5z" /><path d="M9 17v3M15 17v3" /></svg>
             <span className="mcTitle">Scoop</span><span className="mcSub">Collect &amp; deliver</span>
           </button>
+          {/* Da Hilg is a fully separate R3F game; navigate hard (not the SPA
+              router) so main.jsx's root-switch mounts it and the old engine
+              tears down. */}
+          <button className="modeCard" onClick={() => window.location.assign('/da-hilg')}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 8 2 16 12 22 22 16 22 8 12 2" /><path d="M12 22V12M2 8l10 4 10-4" /></svg>
+            <span className="mcTitle">Da Hilg</span><span className="mcSub">First-person · explore</span>
+          </button>
         </div>
       </div>
     </div>

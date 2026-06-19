@@ -1,8 +1,22 @@
 import { createRoot } from 'react-dom/client';
-import App from './App.jsx';
 import './register-sw.js';
 import './styles.css';
 
-// No StrictMode: the engine builds the entire WebGL world in its mount effect
-// and must not be constructed twice.
-createRoot(document.getElementById('root')).render(<App />);
+// Root-switch. The /da-hilg game is a fully isolated R3F app: when the URL is in
+// its subtree we mount ONLY <DaHilgApp/> and never construct the old shared 3D
+// engine (EngineProvider/App), so there's exactly one WebGL context alive.
+// Crossing the /da-hilg boundary is a normal full-page navigation (see MenuPage),
+// which unmounts the other root and disposes its engine before this one mounts.
+// Both roots are lazy so neither bundle (old engine vs R3F) ships to the other.
+//
+// No StrictMode: each world builds in its mount effect and must not double-construct.
+const root = createRoot(document.getElementById('root'));
+if (window.location.pathname.startsWith('/da-hilg')) {
+  import('./da-hilg/index.js').then(({ default: DaHilgApp }) => {
+    root.render(<DaHilgApp />);
+  });
+} else {
+  import('./App.jsx').then(({ default: App }) => {
+    root.render(<App />);
+  });
+}
