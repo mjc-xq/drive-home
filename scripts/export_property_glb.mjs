@@ -559,6 +559,12 @@ const swPos = [], swIdx = [], swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalk
 // layer stack (m above terrain). These are still low enough to read as ground-hugging,
 // but high enough that the DEM/aerial terrain cannot poke through paved overlays.
 const LIFT_ASPHALT = 0.22, LIFT_DRIVEWAY = 0.24, LIFT_SIDEWALK = 0.26, LIFT_CURB = 0.34, LIFT_DASH = 0.31;
+// Skirt = vertical edge wall dropped from a raised slab's outer edges down to the lawn so the
+// slab MEETS the ground instead of hovering. Sidewalks/curbs sit 26-34 cm up; without a skirt
+// you see a floating gap at eye level. Drop the wall the full lift (minus a hair so its foot
+// tucks just into the grass, no z-fight). The asphalt road keeps no skirt (it's the lowest
+// layer and the curb already walls its edge).
+const SKIRT_SIDEWALK = LIFT_SIDEWALK - 0.02, SKIRT_CURB = LIFT_CURB - 0.02;
 const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
 const MAPSURFACES = path.join(ROOT, 'exports/map_surfaces_osm.json');
 const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
@@ -598,8 +604,10 @@ function centreDashes(lw, halfW, lift, skip) {      // 3 m dash / 3.5 m gap, 0.2
 // curb ribbon that skips samples within R_TRIM of a junction (no curb across an
 // intersection). Densify + offset already done by the caller; here we just drop
 // quads whose midpoint is near a junction.
-function curbRibbon(lineW, width, lift, posArr, idxArr, skip) {
-  emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, { skip });
+function curbRibbon(lineW, width, lift, posArr, idxArr, skip, skirt) {
+  // skirt = slab thickness to drop a vertical edge wall to grade (no floating gap);
+  // pass the layer's lift so the slab visibly meets the lawn instead of hovering.
+  emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, { skip, skirt: skirt || 0 });
 }
 function surfacePolygon(poly, lift, posArr, idxArr) {
   const ring = (poly || []).filter(p => Array.isArray(p) && p.length >= 2);
@@ -612,14 +620,14 @@ function surfacePolygon(poly, lift, posArr, idxArr) {
   for (const [a, b, c] of tris) idxArr.push(base + a, base + b, base + c);
   return true;
 }
-function sourceRibbon(lines, width, lift, posArr, idxArr, skip = null) {
+function sourceRibbon(lines, width, lift, posArr, idxArr, skip = null, skirt = 0) {
   for (const src of lines || []) {
     const pl = src.p || src;
     if (!Array.isArray(pl) || pl.length < 2) continue;
     for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
       piece = smoothLine(piece);
       if (piece.length < 2) continue;
-      curbRibbon(piece, width, lift, posArr, idxArr, skip);
+      curbRibbon(piece, width, lift, posArr, idxArr, skip, skirt);
       roadLines.push(piece);
     }
   }
@@ -700,13 +708,13 @@ for (const r of S.roads || []) {
     }
     streetLines.push(piece);
     ribbon(piece, spec.width, LIFT_ASPHALT, rPos, rIdx);                                // asphalt
-    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction);
-    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction);
+    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction, SKIRT_CURB);
+    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction, SKIRT_CURB);
     if (spec.lanes >= 2) centreDashes(piece, 0.14, LIFT_DASH, skipNearJunction);
     if (!spec.isService) {
       const swDist = spec.width / 2 + SW_GAP;
-      curbRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk);
-      curbRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk);
+      curbRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk, SKIRT_SIDEWALK);
+      curbRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk, SKIRT_SIDEWALK);
     }
   }
 }
@@ -718,13 +726,13 @@ for (const run of buildSidewalkConnectors(S.roads || [], w2, {
   avoid: nearMappedWalk,
   junctions: roadJunctions,
   roadSegments: streetSegs,
-})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null);
+})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK);
 for (const run of buildSidewalkEndCaps(S.roads || [], w2, {
   sideGap: SW_GAP,
   inPatch: (x, z) => inTerrain(x, z, 6),
   avoid: nearMappedWalk,
   isCourt,
-})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null);
+})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK);
 // cul-de-sac bulbs / service end-caps at true dead-ends inside ROAD_HALF.
 // Court bulbs were precomputed above (reused here so dashes/curbs avoided them);
 // service stubs just get a small rounded end-cap (no fake roundabout).
@@ -762,7 +770,7 @@ for (const [px, pz] of junctionPts) {
 for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LIFT_DRIVEWAY + 0.02, drvSrcPos, drvSrcIdx);
 for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
 sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
-sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx, skipMappedSidewalk);
+sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx, skipMappedSidewalk, SKIRT_SIDEWALK);
 sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
 const DRIVEWAYSJSON = path.join(ROOT, 'exports/driveways_osm.json');
 if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {

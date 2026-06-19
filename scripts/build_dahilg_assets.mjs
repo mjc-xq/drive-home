@@ -383,7 +383,7 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   for (const a of root.listAnimations()) if (a !== target) a.dispose();
   target.setName(key);
 
-  // -------- SKIN-SAFE RETARGET: drop non-root bone TRANSLATION channels --------
+  // -------- SKIN-SAFE RETARGET: drop unsafe translation + scale channels --------
   // The clips are shared across all 4 characters by bone NAME (no remap). A Mixamo clip
   // bakes a `translation` channel for EVERY bone holding the SOURCE character's skeleton
   // rest offsets. Bone offsets (limb/torso lengths) are a property of each character's
@@ -392,13 +392,18 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   // forces dad/mike's torso-root bone (Spine02) ~0.20 m off its hip attachment → the
   // "floating torso / waist gap" bug. Bone ROTATIONS carry the actual motion and are
   // bind-agnostic, so we keep those (+ the Hips translation, which is true root motion /
-  // the vertical bob). We strip translation on every bone EXCEPT Hips. This must run
-  // BEFORE stripRootXZ (which then operates on the surviving Hips translation track).
+  // the vertical bob). Scale channels are likewise source-rig baggage for this project:
+  // our character bind poses already carry the intended limb proportions, and animated
+  // bone scale is a waist/limb distortion footgun. We strip scale everywhere and strip
+  // translation on every bone EXCEPT Hips. This must run BEFORE stripRootXZ (which then
+  // operates on the surviving Hips translation track).
   let droppedT = 0;
+  let droppedS = 0;
   for (const ch of target.listChannels()) {
     const node = ch.getTargetNode();
-    if (ch.getTargetPath() !== 'translation') continue;
-    if (node && node.getName() === 'Hips') continue;   // keep root motion
+    const targetPath = ch.getTargetPath();
+    if (targetPath !== 'translation' && targetPath !== 'scale') continue;
+    if (targetPath === 'translation' && node && node.getName() === 'Hips') continue;   // keep root motion
     const sampler = ch.getSampler();
     ch.dispose();
     // Dispose the channel's now-orphaned sampler input/output accessors via prune later;
@@ -406,9 +411,10 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
     if (sampler && sampler.listParents().filter((p) => p.propertyType !== 'Root').length === 0) {
       sampler.dispose();
     }
-    droppedT++;
+    if (targetPath === 'translation') droppedT++;
+    else droppedS++;
   }
-  console.log(`    ${key}: dropped ${droppedT} non-Hips translation channel(s) (skin-safe retarget)`);
+  console.log(`    ${key}: dropped ${droppedT} non-Hips translation + ${droppedS} scale channel(s) (skin-safe retarget)`);
 
   // stripRootXZ: zero X+Z (keep Y) on the Hips translation track so the capsule drives
   // world position (in-place locomotion). Build-time only.
@@ -458,18 +464,25 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
       `targeting nodes outside dad's rig — shared-rig retarget would break.`);
   }
 
-  // Assertion (C): NO bone but Hips may keep a translation channel — a foreign bone's
-  // translation tears the shared-rig retarget at the waist (the floating-torso bug).
+  // Assertion (C): NO bone but Hips may keep a translation channel, and NO scale channel
+  // may ship. Foreign bone translations and animated scale tear the shared-rig retarget
+  // at the waist (the floating-torso bug).
   const strayT = channels.filter((ch) => {
     const node = ch.getTargetNode();
     return ch.getTargetPath() === 'translation' && !(node && node.getName() === 'Hips');
   });
+  const strayS = channels.filter((ch) => ch.getTargetPath() === 'scale');
   if (strayT.length !== 0) {
     const names = strayT.map((ch) => ch.getTargetNode()?.getName()).join(', ');
     throw new Error(`ASSERTION (C) FAILED: anim "${key}" still has non-Hips translation ` +
       `channel(s) on [${names}] — these would tear the mesh on other characters.`);
   }
-  console.log(`    ${key}: ${channels.length} channels, 0 unmatched, only Hips translates (skin-safe)`);
+  if (strayS.length !== 0) {
+    const names = strayS.map((ch) => ch.getTargetNode()?.getName()).join(', ');
+    throw new Error(`ASSERTION (C) FAILED: anim "${key}" still has scale ` +
+      `channel(s) on [${names}] — these would distort character proportions.`);
+  }
+  console.log(`    ${key}: ${channels.length} channels, 0 unmatched, only Hips translates, no scale (skin-safe)`);
 
   await writeAndVerify(doc, path.join(ANIM_DIR, `${key}.glb`), { label: `anim:${key}` });
 }
