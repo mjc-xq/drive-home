@@ -835,14 +835,13 @@ export function createEngine({ canvas, ui, emit }) {
   function photorealOpts() {
     return {
       // errorTarget = screen-space pixel error the LOD traversal aims for; LOWER =
-      // crisper (and a zoom/view change now actually pulls a higher LOD, since the
-      // bar is tight enough to be unmet by coarse tiles). Google photoreal reads
-      // sharp around 5–6 px. Phones stay coarser — leaf-tile geometry/texture is
-      // the dominant iOS memory cost. lruMaxMB grows the resident budget on
-      // desktop so the extra high-LOD tiles actually stay put instead of thrashing.
+      // crisper but FAR more tile geometry at every distance. errorTarget 6 was a
+      // regression — it refined distant tiles to full detail too, tanking the
+      // framerate (and overwhelming the per-frame see-through cutaway). Back to the
+      // known-good values; a perf-safe sharpen (e.g. near-car only) can come later.
       lat: ctx.tileAnchor.lat, lon: ctx.tileAnchor.lon, azimuth: Math.PI,
-      errorTarget: ctx.MOBILE ? 12 : 6, mobile: ctx.MOBILE,
-      lruMinMB: ctx.MOBILE ? 120 : 280, lruMaxMB: ctx.MOBILE ? 200 : 460
+      errorTarget: ctx.MOBILE ? 16 : 10, mobile: ctx.MOBILE,
+      lruMinMB: ctx.MOBILE ? 120 : 120, lruMaxMB: ctx.MOBILE ? 200 : 200
     };
   }
   function mountPhotorealTiles(createPhotorealTiles) {
