@@ -300,12 +300,40 @@ runs divide each segment into a whole number of equal panels so they terminate
 exactly at corners. `Fence.glb` runs along native Y, so it's rotated −90° about Z
 (baked into mesh data) to share the common +X length convention.
 
-### 4.8 Grass (stylized variant)
-- Flat-shaded green DTM, plus a `Grass_Wind` parent of hundreds of **instanced
-  grass-blade clumps**, each its own node.
+### 4.8 Grass in the wind (both variants)
+- A `Grass_Wind` parent of hundreds of **instanced grass-blade clumps**, each its
+  own `GrassClump_####` node, built by the shared **`scripts/grass_wind.mjs`** so
+  the photo and stylized exporters stay in sync.
 - A looping **glTF node animation `GrassWind`** sways every clump, phase-offset by
   world position (travelling-gust effect). It plays **natively in any viewer that
   auto-plays animations** — no engine shader required.
+- The stylized variant also has a flat-shaded green DTM under the clumps; the photo
+  variant grows the same tufts over the aerial-textured terrain.
+
+### 4.9 Layer organization (`organize_layers.py`)
+The final post-step over each model is **`scripts/organize_layers.py`**, which sorts
+the ~1000 flat nodes into a clean, toggle-able **collection hierarchy** so the model
+is easy to read and enable/disable — layer by layer — for a human or an AI in Blender.
+It writes an editable **`<model>.blend`** *and* re-exports the GLB with the same
+grouping baked into the glTF node tree (`export_hierarchy_full_collections`), so the
+structure survives in three.js / Quick Look / re-import too. Geometry never moves —
+wrapper empties are flattened with each object's **world transform preserved**.
+
+```
+Neighborhood
+├─ Terrain & Ground      Ground · Satellite Ground (off)
+├─ Buildings             Owner House · Neighborhood Houses · Street View Facades · Roof Photo (off)
+├─ Roads & Paths         Streets · Walkways
+├─ Creek                 water · banks · flow lines · rocks · reeds
+├─ Vegetation            Trees (sub-grouped by area: NE/NW/SE/SW) · Grass in the Wind · Shrubs
+├─ Fences                Side Boundary · Interlot Divider · Creek Fence · Front Picket
+├─ Property Lines        (off by default)
+├─ Helpers               Collision · LOD   (off by default, kept invisible α=0)
+└─ Unsorted              tripwire — must stay empty
+```
+Helper/optional collections open **disabled** (eye off) but still export, so the
+invisible collision/LOD proxies remain in the GLB. Per-instance names (`Tree_0007`,
+`FenceGreen_0003`, …) are preserved as the leaf node names.
 
 ---
 
@@ -321,14 +349,16 @@ scripts/.venv/bin/python scripts/fetch_building_colors.py# Street View wall colo
 scripts/.venv/bin/python scripts/fetch_sv_facades.py     # Street View facade crops
 python3 scripts/fetch_driveways.py                       # mapped OSM service driveways/aisles
 
-# PHOTO variant (fences must land in the FINAL file)
-node scripts/export_property_glb.mjs                            # -> 1840-dahill-property.glb
+# PHOTO variant (fences must land in the FINAL file; organize is the LAST step)
+node scripts/export_property_glb.mjs                            # -> 1840-dahill-property.glb (+ grass)
 blender --background --python scripts/place_trees.py            # -> 1840-dahill-property-trees.glb
 blender --background --python scripts/place_fences.py           # rewrites that file
+blender --background --python scripts/organize_layers.py -- exports/1840-dahill-property-trees.glb  # collections + .blend
 
 # STYLIZED variant
-node scripts/export_stylized_glb.mjs                                          # -> 1840-dahill-stylized.glb
+node scripts/export_stylized_glb.mjs                                          # -> 1840-dahill-stylized.glb (+ grass)
 blender --background --python scripts/place_fences.py -- exports/1840-dahill-stylized.glb
+blender --background --python scripts/organize_layers.py -- exports/1840-dahill-stylized.glb        # collections + .blend
 
 # REGION backdrop
 scripts/.venv/bin/python scripts/fetch_region.py         # wide DEM + satellite (±5 mi)

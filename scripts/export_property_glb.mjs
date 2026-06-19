@@ -1101,10 +1101,23 @@ if (existsSync(PARCELSJSON)) {
   if (SHOW_LOTLINES && yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
 }
 
+// ---- ANIMATED grass-blade clumps (looping glTF node animation) -----------
+// Shared with export_stylized_glb.mjs via scripts/grass_wind.mjs: a `Grass_Wind`
+// group of `GrassClump_####` nodes with a looping "GrassWind" sway clip. Added
+// LAST so it only appends to the RNG stream and leaves every placement above
+// byte-identical; the green vertex-coloured tufts sit over the aerial terrain.
+const { buildGrassWind } = await import('./grass_wind.mjs');
+const grass = buildGrassWind({
+  THREE, scene, rand, terrainAt, cropHalf,
+  openGround: (x, z) => inPatch(x, z) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5,
+});
+const animations = grass.clip ? [grass.clip] : [];
+console.log(`grass clumps (animated nodes): ${grass.count}   wind clip: ${animations.length ? 'GrassWind (3s loop)' : 'none'}`);
+
 // ---- export GLB, then embed photo textures via gltf-transform -------------
 // (GLTFExporter can't encode images in Node — gltf-transform attaches the JPEG/
 //  PNG bytes directly.) aerial -> Terrain + all roofs; facade -> all walls.
-const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
+const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false, animations });
 mkdirSync(path.join(ROOT, 'exports'), { recursive: true });
 const out = path.join(ROOT, 'exports', '1840-dahill-property.glb');
 

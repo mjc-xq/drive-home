@@ -1,0 +1,32 @@
+// Reactive Jotai atoms for Nibblers — discrete UI state only, written change-gated
+// (and bucketed) in nibblers/systems/commitNibblers.js, never per frame. The 400+
+// fast-changing swarm values live in the typed-array SoA (swarm/swarmState.js), a
+// plain module — NOT here. markedAtom + healthAtom are reused from the framework's
+// state/atoms.js (they were reserved for exactly this).
+
+import { atom } from 'jotai';
+
+// markedAtom + healthAtom live in the framework's state/atoms.js (reserved there
+// for exactly this). Re-export them so nibblers code has one import source.
+export { markedAtom, healthAtom } from '../../state/atoms.js';
+
+// Which game loop is active. Nibblers is the default mode.
+export const gameModeAtom = atom('nibblers'); // 'nibblers' | 'greet'
+
+// Safe zones the player has discovered (permanent, append-only) — drives the minimap.
+export const discoveredSafeZonesAtom = atom([]); // string[] of zone ids
+
+// Marked elapsed seconds (1 Hz) + the attraction tier 0..4 (for HUD ramp).
+export const markedTimerAtom = atom(0);
+export const attractionTierAtom = atom(0);
+
+// Swarm counts (bucketed so churn doesn't thrash the store).
+export const activeNibblersAtom = atom(0);
+export const attachedCountAtom = atom(0);
+
+// Visibility 0..1 (1 = clear). Drives the HUD vignette; mirrored from the
+// nibblerPenalty ref in 0.05 steps.
+export const visibilityFactorAtom = atom(1);
+
+// The current safe zone the player is standing in (label), or null.
+export const currentSafeZoneAtom = atom(null);
