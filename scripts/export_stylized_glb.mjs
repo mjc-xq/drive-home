@@ -266,18 +266,46 @@ function skipRibbon(lineW, width, lift, posArr, idxArr, skip) {
 
 const rPos = [], rIdx = [];                 // asphalt streets
 const drvPos = [], drvIdx = [];             // mapped service/driveway pavement
+const drvSrcPos = [], drvSrcIdx = [], parkSrcPos = [], parkSrcIdx = [];
 const swPos = [], swIdx = [];               // concrete sidewalks
+const swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalkIdx = [];
 const cbPos = [], cbIdx = [];               // raised light curbs
 const dPos = [];                            // dashed yellow centre line
 // layer stack (metres above terrain). Asphalt lifted well clear so the satellite/
 // grass under-layer never bleeds through; each higher layer sits above the last.
 const LIFT_ASPHALT = 0.55, LIFT_DRIVEWAY = 0.60, LIFT_SIDEWALK = 0.62, LIFT_CURB = 0.70, LIFT_DASH = 0.61;
 const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
+const MAPSURFACES = ex('map_surfaces_osm.json');
+const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
+const hasMappedDriveways = !!((mapSurfaces.drivewayPolygons || []).length || (mapSurfaces.driveways || []).length || (mapSurfaces.parkingAreas || []).length);
 // Roads must reach the patch edge but NOT hang past it into the void: the terrain
 // mesh only covers the DEM patch, and terrainAt clamps beyond it, so any ribbon
 // vertex past the patch floats. Clip roads to the patch (cropHalf, ~4 m inside the
 // ±200 m terrain) so they run edge-to-edge while every vertex stays on real ground.
 const ROAD_HALF = cropHalf;
+function surfacePolygon(poly, lift, posArr, idxArr) {
+  const ring = (poly || []).filter(p => Array.isArray(p) && p.length >= 2);
+  if (ring.length < 3) return false;
+  if (!ring.every(([x, z]) => x >= tXmin - 2 && x <= tXmax + 2 && z >= tZmin - 2 && z <= tZmax + 2)) return false;
+  const base = posArr.length / 3;
+  for (const [x, z] of ring) posArr.push(x, terrainAt(x, z) + lift, z);
+  const pts = ring.map(([x, z]) => new THREE.Vector2(x, z));
+  const tris = THREE.ShapeUtils.triangulateShape(pts, []);
+  for (const [a, b, c] of tris) idxArr.push(base + a, base + b, base + c);
+  return true;
+}
+function sourceRibbon(lines, width, lift, posArr, idxArr) {
+  for (const src of lines || []) {
+    const pl = src.p || src;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
+      piece = smoothLine(piece);
+      if (piece.length < 2) continue;
+      skipRibbon(piece, width, lift, posArr, idxArr, null);
+      roadLines.push(piece);
+    }
+  }
+}
 
 // shared junction / dead-end vertex map (same logic + data as the photo model)
 const vertHit = buildVertHit(S.roads || [], w2);
@@ -339,7 +367,7 @@ for (const r of S.roads || []) {
     if (piece.length < 2) continue;
     roadLines.push(piece);
     if (spec.isService) {
-      ribbonPart(piece, spec.width, LIFT_DRIVEWAY, drvPos, drvIdx);
+      if (!hasMappedDriveways) ribbonPart(piece, spec.width, LIFT_DRIVEWAY, drvPos, drvIdx);
       continue;
     }
     ribbonPart(piece, spec.width, LIFT_ASPHALT, rPos, rIdx);                              // asphalt
@@ -396,8 +424,13 @@ for (const [px, pz] of junctionPts) {
   const w = junctionWidth.get(vkey(px, pz)) || 7;
   fanDisc(px, pz, w / 2 + 0.4, 20, emitAsphalt, rIdx);
 }
+for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LIFT_DRIVEWAY + 0.02, drvSrcPos, drvSrcIdx);
+for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
+sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
+sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx);
+sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
 const DRIVEWAYSJSON = ex('driveways_osm.json');
-if (existsSync(DRIVEWAYSJSON)) {
+if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
   const mapped = JSON.parse(readFileSync(DRIVEWAYSJSON, 'utf8')).driveways || [];
   for (const d of mapped) {
     const width = d.service === 'parking_aisle' ? 5.0 : 3.6;
@@ -411,7 +444,11 @@ if (existsSync(DRIVEWAYSJSON)) {
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads', { rough: 0.98 }));       // dark asphalt
 if (drvIdx.length) scene.add(mkMesh(drvPos, drvIdx, 0x77787a, 'Driveways', { rough: 0.95 }));
+if (drvSrcIdx.length) scene.add(mkMesh(drvSrcPos, drvSrcIdx, 0x7d7f80, 'Driveways_Mapped', { rough: 0.95 }));
+if (parkSrcIdx.length) scene.add(mkMesh(parkSrcPos, parkSrcIdx, 0x6f7272, 'ParkingAreas_Mapped', { rough: 0.95 }));
 if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { rough: 0.95 })); // light concrete
+if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped', { rough: 0.95 }));
+if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_Mapped', { rough: 0.95 }));
 if (cbIdx.length) scene.add(mkMesh(cbPos, cbIdx, 0xcacaca, 'Curbs', { rough: 0.9 }));      // raised light curbs
 if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines', { rough: 0.6 }));      // dashed yellow centre line
 

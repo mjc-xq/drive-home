@@ -312,7 +312,7 @@ if (RfP.pos.length) scene.add(mkMesh(RfP.pos, null, 0xffffff, 'Roofs_photo', { u
 
 // roads / mapped service ways (context) + collect world polylines for tree spacing
 const roadLines = [], streetLines = [];
-const rPos = [], rIdx = [], drvPos = [], drvIdx = [];
+const rPos = [], rIdx = [], drvPos = [], drvIdx = [], drvSrcPos = [], drvSrcIdx = [], parkSrcPos = [], parkSrcIdx = [];
 function ribbon(lineW, width, lift, posArr, idxArr) {
   // densify: terrain height is sampled per vertex, so subdivide long segments
   // (parcel corners / cul-de-sacs are sparse) to make the ribbon hug the ground
@@ -368,11 +368,14 @@ function flatWaterRibbon(lineW, width, lift, posArr, idxArr) {
 // ±200 m terrain) so they run edge-to-edge while every vertex stays on real ground.
 const ROAD_HALF = cropHalf;
 const cuPos = [], cuIdx = [], dPos = [];
-const swPos = [], swIdx = [];               // concrete sidewalks (road-edge derived)
+const swPos = [], swIdx = [], swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalkIdx = [];
 // layer stack (m above terrain). Asphalt lifted well clear so the aerial/grass under-
 // layer never bleeds through; each higher layer sits above the last.
 const LIFT_ASPHALT = 0.55, LIFT_DRIVEWAY = 0.60, LIFT_SIDEWALK = 0.62, LIFT_CURB = 0.70, LIFT_DASH = 0.61;
 const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
+const MAPSURFACES = path.join(ROOT, 'exports/map_surfaces_osm.json');
+const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
+const hasMappedDriveways = !!((mapSurfaces.drivewayPolygons || []).length || (mapSurfaces.driveways || []).length || (mapSurfaces.parkingAreas || []).length);
 // offset a polyline along its left normal, with a mitre clamp so curbs don't pinch /
 // self-cross on sharp corners (offset scaled by 1/max(0.35,cos(halfTurn))).
 const offsetLine = (lw, d) => lw.map((p, k) => {
@@ -427,6 +430,29 @@ function curbRibbon(lineW, width, lift, posArr, idxArr, skip) {
     posArr.push(lx, terrainAt(lx, lz) + lift, lz, rx, terrainAt(rx, rz) + lift, rz);
     if (prev !== null) { const a = prev, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
     prev = off;
+  }
+}
+function surfacePolygon(poly, lift, posArr, idxArr) {
+  const ring = (poly || []).filter(p => Array.isArray(p) && p.length >= 2);
+  if (ring.length < 3) return false;
+  if (!ring.every(([x, z]) => x >= tXmin - 2 && x <= tXmax + 2 && z >= tZmin - 2 && z <= tZmax + 2)) return false;
+  const base = posArr.length / 3;
+  for (const [x, z] of ring) posArr.push(x, terrainAt(x, z) + lift, z);
+  const pts = ring.map(([x, z]) => new THREE.Vector2(x, z));
+  const tris = THREE.ShapeUtils.triangulateShape(pts, []);
+  for (const [a, b, c] of tris) idxArr.push(base + a, base + b, base + c);
+  return true;
+}
+function sourceRibbon(lines, width, lift, posArr, idxArr) {
+  for (const src of lines || []) {
+    const pl = src.p || src;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
+      piece = smoothLine(piece);
+      if (piece.length < 2) continue;
+      curbRibbon(piece, width, lift, posArr, idxArr, null);
+      roadLines.push(piece);
+    }
   }
 }
 
@@ -497,7 +523,7 @@ for (const r of S.roads || []) {
     if (piece.length < 2) continue;
     roadLines.push(piece);
     if (spec.isService) {
-      ribbon(piece, spec.width, LIFT_DRIVEWAY, drvPos, drvIdx);
+      if (!hasMappedDriveways) ribbon(piece, spec.width, LIFT_DRIVEWAY, drvPos, drvIdx);
       continue;
     }
     streetLines.push(piece);
@@ -557,8 +583,13 @@ for (const [px, pz] of junctionPts) {
   const w = junctionWidth.get(vkey(px, pz)) || 7;
   fanDisc(px, pz, w / 2 + 0.4, 20, emitAsphalt, rIdx);
 }
+for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LIFT_DRIVEWAY + 0.02, drvSrcPos, drvSrcIdx);
+for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
+sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
+sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx);
+sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
 const DRIVEWAYSJSON = path.join(ROOT, 'exports/driveways_osm.json');
-if (existsSync(DRIVEWAYSJSON)) {
+if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
   const mapped = JSON.parse(readFileSync(DRIVEWAYSJSON, 'utf8')).driveways || [];
   for (const d of mapped) {
     const width = d.service === 'parking_aisle' ? 5.0 : 3.6;
@@ -572,7 +603,11 @@ if (existsSync(DRIVEWAYSJSON)) {
 }
 if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
 if (drvIdx.length) scene.add(mkMesh(drvPos, drvIdx, 0x77787a, 'Driveways'));
+if (drvSrcIdx.length) scene.add(mkMesh(drvSrcPos, drvSrcIdx, 0x7d7f80, 'Driveways_Mapped'));
+if (parkSrcIdx.length) scene.add(mkMesh(parkSrcPos, parkSrcIdx, 0x6f7272, 'ParkingAreas_Mapped'));
 if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks'));   // light concrete, road-edge derived
+if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped'));
+if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_Mapped'));
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
 if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
