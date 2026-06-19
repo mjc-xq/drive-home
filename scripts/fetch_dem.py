@@ -18,12 +18,14 @@ import numpy as np
 import requests
 from PIL import Image
 
-# Geocode origin (matches scripts/build_scene.py and src/engine/coords.js)
-LAT0, LON0 = 37.6835313, -122.0686199
-COSLAT = math.cos(math.radians(LAT0))
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENE = json.load(open(os.path.join(ROOT, "src", "assets", "scene.json")))
+ORIGIN = SCENE.get("origin") or {}
+# Geocode origin (matches scripts/build_scene.py and src/engine/coords.js unless
+# a custom place scene supplies its own local origin).
+LAT0 = float(ORIGIN.get("lat", 37.6835313))
+LON0 = float(ORIGIN.get("lon", -122.0686199))
+COSLAT = math.cos(math.radians(LAT0))
 CX, CY = SCENE["center"]                       # house centroid in ENU metres
 
 PATCH = float(sys.argv[1]) if len(sys.argv) > 1 else 256.0  # square side, metres

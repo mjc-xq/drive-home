@@ -27,6 +27,10 @@ EXPORTS = os.path.join(ROOT, "exports")
 R = float(sys.argv[1]) if len(sys.argv) > 1 else 196.0
 SCENE = json.load(open(os.path.join(ROOT, "src", "assets", "scene.json")))
 C = SCENE["center"]
+ORIGIN = SCENE.get("origin") or {}
+LAT0 = float(ORIGIN.get("lat", geo.LAT0))
+LON0 = float(ORIGIN.get("lon", geo.LON0))
+COSLAT = math.cos(math.radians(LAT0))
 
 
 def load_key():
@@ -71,7 +75,7 @@ def main():
         cx = sum(p[0] for p in b["p"]) / len(b["p"]); cy = sum(p[1] for p in b["p"]) / len(b["p"])
         if math.hypot(cx - C[0], cy - C[1]) > R:
             continue
-        blat = geo.LAT0 + cy / 110540.0; blon = geo.LON0 + cx / (geo.COSLAT * 111320.0)
+        blat = LAT0 + cy / 110540.0; blon = LON0 + cx / (COSLAT * 111320.0)
         loc = f"{blat:.7f},{blon:.7f}"
         meta = sess.get(f"{SV}/metadata", params={"location": loc, "source": "outdoor", "key": KEY}, timeout=20).json()
         if meta.get("status") != "OK":

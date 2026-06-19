@@ -15,6 +15,7 @@
 //   roadSpec(r)               - { width, lanes, isService } from r.k / r.w.
 //   isCulDeSacRoad(r)         - true only for named courts/cul-de-sacs needing bulbs.
 //   snapCreekToChannel(...)   - pull a creek centreline toward the DEM channel bottom.
+//   buildRoadJunctions(...) - shared + geometric centreline junction detection.
 //   buildSidewalkConnectors(...) - rounded sidewalk returns around intersections.
 //   buildSidewalkEndCaps(...) - U-shaped sidewalk returns at residential dead ends.
 //   fanDisc / ringAnnulus     - triangle-fan disc + curb annulus (callbacks emit
@@ -120,6 +121,15 @@ export function buildVertHit(roads, w2) {
   return m;
 }
 
+export function distPointSeg(px, pz, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  const l2 = dx * dx + dz * dz || 1;
+  let t = ((px - ax) * dx + (pz - az) * dz) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const x = ax + t * dx, z = az + t * dz;
+  return { d: Math.hypot(px - x, pz - z), t, x, z };
+}
+
 // ---- width / lanes from class ---------------------------------------------
 // Realistic carriageway widths. OSM r.w (when present) is often a thin centreline
 // hint; clamp named streets to a class FLOOR so roads never render too narrow.
@@ -151,6 +161,118 @@ export function roadRank(r) {
 export function isCulDeSacRoad(r) {
   const name = String(r?.n || '').toLowerCase();
   return /\b(court|ct|cul[- ]?de[- ]?sac|circle|cir)\b/.test(name);
+}
+
+export function roadSegmentsWorld(roads, w2, opts = {}) {
+  const includeService = opts.includeService ?? true;
+  const segs = [];
+  for (const r of roads || []) {
+    const spec = roadSpec(r);
+    if (!includeService && spec.isService) continue;
+    const pl = r.p || r;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    for (let i = 1; i < pl.length; i++) {
+      const a = w2(...pl[i - 1]), b = w2(...pl[i]);
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (L < 0.5) continue;
+      segs.push({ a, b, road: r, spec, rank: roadRank(r), i, L });
+    }
+  }
+  return segs;
+}
+
+function segIntersection(a, b, c, d) {
+  const rx = b[0] - a[0], rz = b[1] - a[1];
+  const sx = d[0] - c[0], sz = d[1] - c[1];
+  const den = rx * sz - rz * sx;
+  if (Math.abs(den) < 1e-8) return null;
+  const qx = c[0] - a[0], qz = c[1] - a[1];
+  const t = (qx * sz - qz * sx) / den;
+  const u = (qx * rz - qz * rx) / den;
+  if (t < -1e-5 || t > 1 + 1e-5 || u < -1e-5 || u > 1 + 1e-5) return null;
+  return {
+    x: a[0] + rx * Math.max(0, Math.min(1, t)),
+    z: a[1] + rz * Math.max(0, Math.min(1, t)),
+    t: Math.max(0, Math.min(1, t)),
+    u: Math.max(0, Math.min(1, u)),
+  };
+}
+
+export function buildRoadJunctions(roads, w2, opts = {}) {
+  const mergeDist = opts.mergeDist ?? 0.8;
+  const segs = roadSegmentsWorld(roads, w2, { includeService: opts.includeService ?? true });
+  const junctions = [];
+  const byVertex = new Map();
+
+  const getJunction = (x, z) => {
+    for (const j of junctions) {
+      if (Math.hypot(j.x - x, j.z - z) <= mergeDist) return j;
+    }
+    const j = { x, z, width: 0, maxRank: 0, arms: [], sources: new Set() };
+    junctions.push(j);
+    return j;
+  };
+  const addArm = (j, seg, dx, dz, source) => {
+    const L = Math.hypot(dx, dz);
+    if (L < 0.25) return;
+    dx /= L; dz /= L;
+    j.width = Math.max(j.width, seg.spec.width);
+    j.maxRank = Math.max(j.maxRank, seg.rank);
+    j.sources.add(source);
+    if (j.arms.some(a => a.road === seg.road && a.spec.isService === seg.spec.isService && a.dx * dx + a.dz * dz > 0.985)) return;
+    j.arms.push({ road: seg.road, spec: seg.spec, rank: seg.rank, dx, dz, source });
+  };
+  const addSegTouch = (j, seg, t, source) => {
+    if (t <= 0.04) addArm(j, seg, seg.b[0] - seg.a[0], seg.b[1] - seg.a[1], source);
+    else if (t >= 0.96) addArm(j, seg, seg.a[0] - seg.b[0], seg.a[1] - seg.b[1], source);
+    else {
+      addArm(j, seg, seg.a[0] - j.x, seg.a[1] - j.z, source);
+      addArm(j, seg, seg.b[0] - j.x, seg.b[1] - j.z, source);
+    }
+  };
+
+  for (const r of roads || []) {
+    const pl = r.p || r;
+    if (!Array.isArray(pl)) continue;
+    for (let i = 0; i < pl.length; i++) {
+      const [x, z] = w2(...pl[i]);
+      const key = vkey(x, z);
+      let bucket = byVertex.get(key);
+      if (!bucket) byVertex.set(key, bucket = []);
+      bucket.push({ r, pl, i, x, z });
+    }
+  }
+  for (const hits of byVertex.values()) {
+    if (hits.length < 2) continue;
+    const x = hits.reduce((s, h) => s + h.x, 0) / hits.length;
+    const z = hits.reduce((s, h) => s + h.z, 0) / hits.length;
+    const j = getJunction(x, z);
+    for (const h of hits) {
+      const spec = roadSpec(h.r), rank = roadRank(h.r);
+      if (h.i > 0) {
+        const a = w2(...h.pl[h.i - 1]);
+        addArm(j, { a, b: [h.x, h.z], road: h.r, spec, rank }, a[0] - h.x, a[1] - h.z, 'shared-vertex');
+      }
+      if (h.i < h.pl.length - 1) {
+        const b = w2(...h.pl[h.i + 1]);
+        addArm(j, { a: [h.x, h.z], b, road: h.r, spec, rank }, b[0] - h.x, b[1] - h.z, 'shared-vertex');
+      }
+    }
+  }
+
+  for (let i = 0; i < segs.length; i++) {
+    for (let k = i + 1; k < segs.length; k++) {
+      const a = segs[i], b = segs[k];
+      if (a.road === b.road) continue;
+      const hit = segIntersection(a.a, a.b, b.a, b.b);
+      if (!hit) continue;
+      const j = getJunction(hit.x, hit.z);
+      addSegTouch(j, a, hit.t, 'geometric-crossing');
+      addSegTouch(j, b, hit.u, 'geometric-crossing');
+    }
+  }
+
+  return junctions.filter(j => j.arms.length >= 2);
 }
 
 // Pull each creek vertex toward the lowest DEM point along a perpendicular probe.
@@ -196,52 +318,59 @@ export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
 // ribbons run parallel to road centrelines and are intentionally gapped near
 // intersections; these arcs sew those ends together around the curb return instead
 // of leaving squared-off, non-meeting strips.
+export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, opts = {}) {
+  const skip = opts.skip || null;
+  const alongStep = opts.alongStep ?? 1.5;
+  const crossStep = opts.crossStep ?? 0.75;
+  const dense = [lineW[0]];
+  for (let k = 1; k < lineW.length; k++) {
+    const a = lineW[k - 1], b = lineW[k];
+    const seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(seg / alongStep));
+    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
+  }
+
+  let cols = Math.max(1, Math.ceil(width / crossStep));
+  if (cols % 2 === 1) cols++; // include a centre sample, where DEM ridges often poke through.
+  const hw = width / 2;
+  let prevBase = null;
+
+  for (let k = 0; k < dense.length; k++) {
+    const [x, z] = dense[k];
+    if (skip && skip(x, z)) { prevBase = null; continue; }
+    const p = dense[Math.max(0, k - 1)], q = dense[Math.min(dense.length - 1, k + 1)];
+    let dx = q[0] - p[0], dz = q[1] - p[1];
+    const L = Math.hypot(dx, dz) || 1;
+    dx /= L; dz /= L;
+    const nx = -dz, nz = dx;
+    const base = posArr.length / 3;
+    for (let c = 0; c <= cols; c++) {
+      const off = -hw + width * c / cols;
+      const px = x + nx * off, pz = z + nz * off;
+      posArr.push(px, terrainAt(px, pz) + lift, pz);
+    }
+    if (prevBase !== null) {
+      for (let c = 0; c < cols; c++) {
+        const a = prevBase + c, b = a + 1, d = base + c, e = d + 1;
+        idxArr.push(a, d, b, b, d, e);
+      }
+    }
+    prevBase = base;
+  }
+}
+
 export function buildSidewalkConnectors(roads, w2, opts = {}) {
   const sideGap = opts.sideGap ?? 2.2;         // centre of walk = road edge + gap
   const leadExtra = opts.leadExtra ?? 1.2;     // how far along each arm before curving
-  const maxGap = opts.maxGapRad ?? (145 * Math.PI / 180);
-  const minGap = opts.minGapRad ?? (18 * Math.PI / 180);
+  const maxGap = opts.maxGapRad ?? (118 * Math.PI / 180);
+  const minGap = opts.minGapRad ?? (4 * Math.PI / 180);
   const step = opts.step ?? 2.2;
+  const maxRunLen = opts.maxRunLen ?? 22;
+  const roadMargin = opts.roadMargin ?? 0.95;
   const inPatch = opts.inPatch || (() => true);
-  const hit = buildVertHit(roads, w2);
-  const byJunction = new Map();
-
-  const addArm = (key, j, r, vi, ni) => {
-    if (roadSpec(r).isService) return;         // driveways/service roads do not get sidewalks
-    const p = w2(...j), q = w2(...r.p[ni]);
-    let dx = q[0] - p[0], dz = q[1] - p[1];
-    const L = Math.hypot(dx, dz);
-    if (L < 0.5) return;
-    dx /= L; dz /= L;
-    const spec = roadSpec(r);
-    const sideDist = spec.width / 2 + sideGap;
-    const lead = Math.max(3.0, Math.min(8.0, spec.width / 2 + leadExtra));
-    let bucket = byJunction.get(key);
-    if (!bucket) {
-      bucket = { c: p, pts: [] };
-      byJunction.set(key, bucket);
-    }
-    const armKey = `${key}/${vi}/${ni}/${r.n || r.k || ''}`;
-    for (const side of [1, -1]) {
-      const nx = -dz * side, nz = dx * side;
-      const x = p[0] + dx * lead + nx * sideDist;
-      const z = p[1] + dz * lead + nz * sideDist;
-      if (!inPatch(x, z)) continue;
-      bucket.pts.push({ x, z, a: Math.atan2(z - p[1], x - p[0]), armKey, side, dx, dz });
-    }
-  };
-
-  for (const r of roads || []) {
-    const pl = r.p || r;
-    if (!Array.isArray(pl)) continue;
-    for (let i = 0; i < pl.length; i++) {
-      const p = w2(...pl[i]);
-      const key = vkey(p[0], p[1]);
-      if ((hit.get(key) || 0) < 2) continue;
-      if (i > 0) addArm(key, pl[i], r, i, i - 1);
-      if (i < pl.length - 1) addArm(key, pl[i], r, i, i + 1);
-    }
-  }
+  const avoid = opts.avoid || (() => false);
+  const roadSegs = opts.roadSegments || roadSegmentsWorld(roads, w2, { includeService: false });
+  const junctions = opts.junctions || buildRoadJunctions(roads, w2, { includeService: true });
 
   const arcs = [];
   const normGap = (a0, a1) => {
@@ -249,7 +378,52 @@ export function buildSidewalkConnectors(roads, w2, opts = {}) {
     while (g <= 0) g += Math.PI * 2;
     return g;
   };
-  for (const { c, pts } of byJunction.values()) {
+  const runLen = run => {
+    let L = 0;
+    for (let i = 1; i < run.length; i++) L += Math.hypot(run[i][0] - run[i - 1][0], run[i][1] - run[i - 1][1]);
+    return L;
+  };
+  const clearRun = run => {
+    if (run.length < 2 || runLen(run) > maxRunLen) return false;
+    for (let i = 1; i < run.length; i++) {
+      const a = run[i - 1], b = run[i];
+      const segLen = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const n = Math.max(1, Math.ceil(segLen / 1.2));
+      for (let s = 0; s <= n; s++) {
+        const t = s / n;
+        const x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t;
+        if (!inPatch(x, z) || avoid(x, z)) return false;
+        for (const rs of roadSegs) {
+          const d = distPointSeg(x, z, rs.a[0], rs.a[1], rs.b[0], rs.b[1]).d;
+          if (d < rs.spec.width / 2 + roadMargin) return false;
+        }
+      }
+    }
+    return true;
+  };
+  for (const j of junctions) {
+    const c = [j.x, j.z];
+    const pts = [];
+    for (let ai = 0; ai < j.arms.length; ai++) {
+      const arm = j.arms[ai];
+      if (arm.spec.isService) continue;         // driveways/service roads do not get sidewalks
+      const sideDist = arm.spec.width / 2 + sideGap;
+      const lead = Math.max(3.0, Math.min(8.0, arm.spec.width / 2 + leadExtra));
+      for (const side of [1, -1]) {
+        const nx = -arm.dz * side, nz = arm.dx * side;
+        const x = j.x + arm.dx * lead + nx * sideDist;
+        const z = j.z + arm.dz * lead + nz * sideDist;
+        if (!inPatch(x, z) || avoid(x, z)) continue;
+        pts.push({
+          x, z,
+          a: Math.atan2(z - j.z, x - j.x),
+          armKey: `${ai}/${arm.source}`,
+          side,
+          dx: arm.dx,
+          dz: arm.dz,
+        });
+      }
+    }
     // Merge duplicate endpoints from split OSM ways that share the same arm.
     const unique = [];
     for (const p of pts.sort((a, b) => a.a - b.a)) {
@@ -266,7 +440,8 @@ export function buildSidewalkConnectors(roads, w2, opts = {}) {
         if (dot > -0.92) continue;                  // only near-collinear arms
         if (p0.side !== -p1.side) continue;          // same physical side of the road
         if (Math.hypot(p0.x - p1.x, p0.z - p1.z) > 18) continue;
-        arcs.push([[p0.x, p0.z], [p1.x, p1.z]]);
+        const run = [[p0.x, p0.z], [p1.x, p1.z]];
+        if (clearRun(run)) arcs.push(run);
       }
     }
 
@@ -289,7 +464,7 @@ export function buildSidewalkConnectors(roads, w2, opts = {}) {
         if (!inPatch(x, z)) continue;
         arc.push([x, z]);
       }
-      if (arc.length >= 2) arcs.push(arc);
+      if (arc.length >= 2 && clearRun(arc)) arcs.push(arc);
     }
   }
   return arcs;
@@ -302,6 +477,7 @@ export function buildSidewalkEndCaps(roads, w2, opts = {}) {
   const sideGap = opts.sideGap ?? 2.2;
   const step = opts.step ?? 2.0;
   const inPatch = opts.inPatch || (() => true);
+  const avoid = opts.avoid || (() => false);
   const isCourt = opts.isCourt || isCulDeSacRoad;
   const hit = buildVertHit(roads, w2);
   const arcs = [];
@@ -328,14 +504,15 @@ export function buildSidewalkEndCaps(roads, w2, opts = {}) {
       const theta = Math.atan2(tz, tx);
       const steps = Math.max(6, Math.ceil(Math.PI * radius / step));
       const arc = [];
+      let ok = true;
       for (let s = 0; s <= steps; s++) {
         const a = theta + Math.PI / 2 - Math.PI * s / steps;
         const x = tip[0] + Math.cos(a) * radius;
         const z = tip[1] + Math.sin(a) * radius;
-        if (!inPatch(x, z)) continue;
+        if (!inPatch(x, z) || avoid(x, z)) { ok = false; break; }
         arc.push([x, z]);
       }
-      if (arc.length >= 2) arcs.push(arc);
+      if (ok && arc.length >= 2) arcs.push(arc);
     }
   }
   return arcs;

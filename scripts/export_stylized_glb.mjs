@@ -41,7 +41,7 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
   };
 }
 
-import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, isCulDeSacRoad, snapCreekToChannel, buildSidewalkConnectors, buildSidewalkEndCaps, fanDisc, ringAnnulus, trimEndInward } from './road_prep.mjs';
+import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, isCulDeSacRoad, snapCreekToChannel, buildRoadJunctions, buildSidewalkConnectors, buildSidewalkEndCaps, emitGroundRibbon, fanDisc, ringAnnulus, trimEndInward, roadSegmentsWorld, distPointSeg } from './road_prep.mjs';
 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
@@ -52,7 +52,10 @@ const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf
 const C = S.center;                                       // house centroid (flat ENU)
 
 // ---- flat-ENU frame (exactly as specified) -------------------------------
-const LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * Math.PI / 180);
+const ORIGIN = S.origin || {};
+const LAT0 = Number.isFinite(+ORIGIN.lat) ? +ORIGIN.lat : 37.6835313;
+const LON0 = Number.isFinite(+ORIGIN.lon) ? +ORIGIN.lon : -122.0686199;
+const COSLAT = Math.cos(LAT0 * Math.PI / 180);
 const w2 = (e, n) => [e - C[0], -(n - C[1])];                          // scene.json e/n -> world X,Z
 // world X,Z -> lat/lon (inverse of the flat frame) for sampling the DEM grid
 const worldToLL = (X, Z) => {
@@ -172,22 +175,7 @@ function distToLines(x, z, lines, max) {
 // ---- roads + sidewalks + curbs (real ribbon geometry) --------------------
 const roadLines = [];        // world centrelines (for tree/grass avoidance)
 function ribbonPart(lineW, width, lift, posArr, idxArr) {
-  const dense = [lineW[0]];
-  for (let k = 1; k < lineW.length; k++) {
-    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const steps = Math.max(1, Math.ceil(seg / 2.5));
-    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
-  }
-  lineW = dense;
-  const hw = width / 2;
-  for (let k = 0; k < lineW.length; k++) {
-    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
-    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-    const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
-    const off = posArr.length / 3;
-    posArr.push(lx, terrainAt(lx, lz) + lift, lz, rx, terrainAt(rx, rz) + lift, rz);
-    if (k > 0) { const a = off - 2, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
-  }
+  emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr);
 }
 function flatWaterRibbon(lineW, width, lift, posArr, idxArr) {
   const dense = [lineW[0]];
@@ -250,24 +238,7 @@ function centreDashes(lw, halfW, lift, dPos, skip) {
 // Curb/sidewalk ribbon that skips quads whose centreline sample is within R_TRIM of
 // a junction (no curb/sidewalk across an intersection). Takes an ALREADY-offset line.
 function skipRibbon(lineW, width, lift, posArr, idxArr, skip) {
-  const dense = [lineW[0]];
-  for (let k = 1; k < lineW.length; k++) {
-    const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const steps = Math.max(1, Math.ceil(seg / 2.5));
-    for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
-  }
-  lineW = dense;
-  const hw = width / 2; let prev = null;
-  for (let k = 0; k < lineW.length; k++) {
-    const [x, z] = lineW[k], p = lineW[Math.max(0, k - 1)], q = lineW[Math.min(lineW.length - 1, k + 1)];
-    let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-    const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
-    if (skip && skip(x, z)) { prev = null; continue; }
-    const off = posArr.length / 3;
-    posArr.push(lx, terrainAt(lx, lz) + lift, lz, rx, terrainAt(rx, rz) + lift, rz);
-    if (prev !== null) { const a = prev, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }
-    prev = off;
-  }
+  emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, { skip });
 }
 
 const rPos = [], rIdx = [];                 // asphalt streets
@@ -277,9 +248,9 @@ const swPos = [], swIdx = [];               // concrete sidewalks
 const swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalkIdx = [];
 const cbPos = [], cbIdx = [];               // raised light curbs
 const dPos = [];                            // dashed yellow centre line
-// layer stack (metres above terrain). Asphalt lifted well clear so the satellite/
-// grass under-layer never bleeds through; each higher layer sits above the last.
-const LIFT_ASPHALT = 0.55, LIFT_DRIVEWAY = 0.60, LIFT_SIDEWALK = 0.62, LIFT_CURB = 0.70, LIFT_DASH = 0.61;
+// layer stack (m above terrain). These stay low, but have enough clearance that
+// the grass/satellite ground cannot poke through paved overlays.
+const LIFT_ASPHALT = 0.22, LIFT_DRIVEWAY = 0.24, LIFT_SIDEWALK = 0.26, LIFT_CURB = 0.34, LIFT_DASH = 0.31;
 const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
 const MAPSURFACES = ex('map_surfaces_osm.json');
 const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
@@ -300,14 +271,14 @@ function surfacePolygon(poly, lift, posArr, idxArr) {
   for (const [a, b, c] of tris) idxArr.push(base + a, base + b, base + c);
   return true;
 }
-function sourceRibbon(lines, width, lift, posArr, idxArr) {
+function sourceRibbon(lines, width, lift, posArr, idxArr, skip = null) {
   for (const src of lines || []) {
     const pl = src.p || src;
     if (!Array.isArray(pl) || pl.length < 2) continue;
     for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
       piece = smoothLine(piece);
       if (piece.length < 2) continue;
-      skipRibbon(piece, width, lift, posArr, idxArr, null);
+      skipRibbon(piece, width, lift, posArr, idxArr, skip);
       roadLines.push(piece);
     }
   }
@@ -321,19 +292,26 @@ const vertHit = buildVertHit(S.roads || [], w2);
 const inHalf = (x, z) => inTerrain(x, z, 14);
 const isCourt = isCulDeSacRoad;
 const R_TRIM_FOR = w => w / 2 + 0.5;
-const junctionPts = [], junctionWidth = new Map(), junctionMaxRank = new Map();
-for (const r of S.roads || []) {
-  const pl = r.p || r; if (!Array.isArray(pl)) continue;
-  const sp = roadSpec(r), rk = roadRank(r);
-  for (const [e, n] of pl) {
-    const [x, z] = w2(e, n), k = vkey(x, z);
-    if ((vertHit.get(k) || 0) >= 2) {
-      if (!junctionPts.some(p => p[0] === x && p[1] === z)) junctionPts.push([x, z]);
-      junctionWidth.set(k, Math.max(junctionWidth.get(k) || 0, sp.width));
-      junctionMaxRank.set(k, Math.max(junctionMaxRank.get(k) || 0, rk));
-    }
+const roadJunctions = buildRoadJunctions(S.roads || [], w2, { includeService: true });
+const junctionPts = roadJunctions.map(j => [j.x, j.z]);       // shared + geometric road junctions
+const junctionWidth = new Map(roadJunctions.map(j => [vkey(j.x, j.z), j.width || 7]));
+const junctionMaxRank = new Map(roadJunctions.map(j => [vkey(j.x, j.z), j.maxRank || 0]));
+const streetSegs = roadSegmentsWorld(S.roads || [], w2, { includeService: false });
+const mappedLineSegs = (lines, width) => {
+  const segs = [];
+  for (const src of lines || []) {
+    const pl = src.p || src;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    for (let i = 1; i < pl.length; i++) segs.push({ a: pl[i - 1], b: pl[i], width });
   }
-}
+  return segs;
+};
+const mappedWalkSegs = mappedLineSegs(mapSurfaces.sidewalks || [], SW_WIDTH);
+const mappedCrossingSegs = mappedLineSegs(mapSurfaces.crossings || [], 2.4);
+const nearSegs = (x, z, segs, margin) => segs.some(s => distPointSeg(x, z, s.a[0], s.a[1], s.b[0], s.b[1]).d < s.width / 2 + margin);
+const nearMappedWalk = (x, z) => nearSegs(x, z, mappedWalkSegs, 1.15) || nearSegs(x, z, mappedCrossingSegs, 0.9);
+const insideStreetSurface = (x, z) => streetSegs.some(s => distPointSeg(x, z, s.a[0], s.a[1], s.b[0], s.b[1]).d < s.spec.width / 2 + 0.6);
+const skipMappedSidewalk = (x, z) => insideStreetSurface(x, z);
 // cul-de-sac bulb centres (computed first so dashes/curbs can avoid them)
 const bulbs = [];
 for (const r of S.roads || []) {
@@ -356,6 +334,7 @@ const skipNearJunction = (x, z) => junctionPts.some(([px, pz]) => {
   const w = junctionWidth.get(vkey(px, pz)) || 7; const r = R_TRIM_FOR(w);
   const dx = x - px, dz = z - pz; return dx * dx + dz * dz < r * r;
 }) || bulbs.some(({ cx, cz, R }) => { const dx = x - cx, dz = z - cz; return dx * dx + dz * dz < R * R; });
+const skipGeneratedSidewalk = (x, z) => skipNearJunction(x, z) || nearMappedWalk(x, z);
 
 for (const r of S.roads || []) {
   const pl = r.p || r; if (!Array.isArray(pl)) continue;
@@ -382,8 +361,8 @@ for (const r of S.roads || []) {
     if (spec.lanes >= 2) centreDashes(piece, 0.14, LIFT_DASH, dPos, skipNearJunction);
     if (!spec.isService) {
       const swDist = spec.width / 2 + SW_GAP;
-      skipRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipNearJunction);
-      skipRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipNearJunction);
+      skipRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk);
+      skipRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk);
     }
   }
 }
@@ -392,10 +371,14 @@ for (const r of S.roads || []) {
 for (const run of buildSidewalkConnectors(S.roads || [], w2, {
   sideGap: SW_GAP,
   inPatch: (x, z) => inTerrain(x, z, 6),
+  avoid: nearMappedWalk,
+  junctions: roadJunctions,
+  roadSegments: streetSegs,
 })) skipRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null);
 for (const run of buildSidewalkEndCaps(S.roads || [], w2, {
   sideGap: SW_GAP,
   inPatch: (x, z) => inTerrain(x, z, 6),
+  avoid: nearMappedWalk,
   isCourt,
 })) skipRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null);
 // cul-de-sac bulbs (court) + service end-caps + junction blend pads
@@ -433,7 +416,7 @@ for (const [px, pz] of junctionPts) {
 for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LIFT_DRIVEWAY + 0.02, drvSrcPos, drvSrcIdx);
 for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
 sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
-sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx);
+sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx, skipMappedSidewalk);
 sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
 const DRIVEWAYSJSON = ex('driveways_osm.json');
 if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
@@ -616,7 +599,7 @@ const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Ma
 // owner's parcels: skip foreign buildings on them; keep the back lot empty
 const pip = (x, z, r) => inPoly(x, z, r);
 const PARCELS = existsSync(ex('parcels.json')) ? (JSON.parse(readFileSync(ex('parcels.json'), 'utf8')).parcels || []) : [];
-const MINE = PARCELS.filter(p => p.mine).map(p => p.ring);
+const MINE = PARCELS.filter(p => p.mine && p.skipBuildings !== false).map(p => p.ring);
 const inMine = (x, z) => MINE.some(r => pip(x, z, r));
 
 const buildingPolys = [];
@@ -817,7 +800,7 @@ if (PARCELS.length) {
     else ribbonPart(closed, 0.5, 0.12, lPos, lIdx);
   }
   // property lines HIDDEN by default (set SHOW_LOTLINES=true to bring them back)
-  const SHOW_LOTLINES = false;
+  const SHOW_LOTLINES = process.env.SHOW_LOTLINES === 'true';
   if (SHOW_LOTLINES && lIdx.length) scene.add(mkMesh(lPos, lIdx, 0xe8e2d0, 'LotLines'));
   if (SHOW_LOTLINES && yIdx.length) scene.add(mkMesh(yPos, yIdx, 0xffcf33, 'YourLots'));
 }
@@ -885,7 +868,7 @@ function addCreekArtAndShrubs() {
   const shrubOK = (x, z) => inTerrain(x, z, 3) && !onBuilding(x, z) && distToLines(x, z, roadLines, 5.5) >= 5.5;
   for (let i = 0; i < 420 && shrubIdx.length / 3 < 180; i++) {
     let x, z;
-    if (creekW && rand() < 0.55) {
+    if (creekW && creekW.length >= 2 && rand() < 0.55) {
       const seg = creekW[Math.floor(rand() * Math.max(1, creekW.length - 1))];
       x = seg[0] + (rand() - 0.5) * 22; z = seg[1] + (rand() - 0.5) * 22;
     } else {
@@ -901,7 +884,7 @@ addCreekArtAndShrubs();
 function appendIndexed(srcPos, srcIdx, dstPos, dstIdx) {
   if (!srcPos.length || !srcIdx.length) return;
   const base = dstPos.length / 3;
-  dstPos.push(...srcPos);
+  for (let i = 0; i < srcPos.length; i++) dstPos.push(srcPos[i]);
   for (const i of srcIdx) dstIdx.push(base + i);
 }
 function pushExtrudedRing(pos, idx, ring, base, h) {

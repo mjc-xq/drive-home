@@ -13,10 +13,6 @@ import sys
 
 import requests
 
-LAT0 = 37.6835313
-LON0 = -122.0686199
-COSLAT = math.cos(math.radians(LAT0))
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "scripts", "_cache")
 OUT = os.path.join(ROOT, "exports", "driveways_osm.json")
@@ -35,10 +31,12 @@ def ll_to_en(lat, lon):
     return (lon - LON0) * COSLAT * 111320.0, (lat - LAT0) * 110540.0
 
 
-def bbox_around_origin(radius_m):
+def bbox_around(center, radius_m):
+    lat = LAT0 + center[1] / 110540.0
+    lon = LON0 + center[0] / (COSLAT * 111320.0)
     dlat = radius_m / 110540.0
     dlon = radius_m / (COSLAT * 111320.0)
-    return LAT0 - dlat, LON0 - dlon, LAT0 + dlat, LON0 + dlon
+    return lat - dlat, lon - dlon, lat + dlat, lon + dlon
 
 
 def overpass(query):
@@ -64,8 +62,14 @@ def overpass(query):
 
 
 def main():
-    center = json.load(open(os.path.join(ROOT, "src/assets/scene.json")))["center"]
-    s, w, n, e = bbox_around_origin(420)
+    scene = json.load(open(os.path.join(ROOT, "src/assets/scene.json")))
+    origin = scene.get("origin") or {}
+    global LAT0, LON0, COSLAT
+    LAT0 = float(origin.get("lat", 37.6835313))
+    LON0 = float(origin.get("lon", -122.0686199))
+    COSLAT = math.cos(math.radians(LAT0))
+    center = scene["center"]
+    s, w, n, e = bbox_around(center, 420)
     query = (
         "[out:json][timeout:90];"
         "("
