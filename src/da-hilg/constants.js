@@ -114,6 +114,12 @@ export const FADE_LOCO = 0.18;
 export const FADE_IDLE = 0.2;
 export const FADE_JUMP = 0.1;
 export const FADE_EMOTE = 0.15;
+// Distant non-controlled actors throttle their AnimationMixer — advancing the mixer +
+// re-deriving skinning matrices for a far background body is wasted work, and mike/kelli
+// are heavy meshes. Beyond ANIM_FAR_DIST m a non-player actor re-skins at ~ANIM_FAR_DT
+// cadence instead of every frame (invisible at distance).
+export const ANIM_FAR_DIST = 32;
+export const ANIM_FAR_DT = 1 / 20;
 
 // ── NPC AI ──────────────────────────────────────────────────────────────────
 export const NOTICE_RADIUS = 20;

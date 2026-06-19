@@ -13,8 +13,11 @@ import {
   FADE_IDLE,
   FADE_JUMP,
   FADE_EMOTE,
+  ANIM_FAR_DIST,
+  ANIM_FAR_DT,
 } from '../constants.js';
 import { CLIP_LOOP, EMOTE_HELD } from '../animation/clips.js';
+import { activePlayer } from '../state/refs.js';
 
 /**
  * Choose the target animState for an actor from its motion + active emote.
@@ -100,6 +103,26 @@ export function updateAnimation(actor, dt) {
       if (current && actions[current]) actions[current].fadeOut(d);
       actor.ref.current = target;
       m.animState = target;
+    }
+  }
+
+  // Throttle skinning for distant, non-controlled actors (background NPC bodies — incl.
+  // the heavy mike/kelli — are wasted work off-screen). The active player + nearby
+  // actors stay full-rate; far ones re-skin at ~ANIM_FAR_DT, advancing by accumulated
+  // dt so playback speed is preserved.
+  const p = activePlayer();
+  if (p && actor !== p) {
+    const dx = m.pos.x - p.motion.pos.x;
+    const dz = m.pos.z - p.motion.pos.z;
+    if (dx * dx + dz * dz > ANIM_FAR_DIST * ANIM_FAR_DIST) {
+      const acc = (actor.ref._animAcc || 0) + dt;
+      if (acc < ANIM_FAR_DT) {
+        actor.ref._animAcc = acc;
+        return;
+      }
+      actor.ref._animAcc = 0;
+      mixer.update(acc);
+      return;
     }
   }
 
