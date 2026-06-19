@@ -11,6 +11,7 @@ import {
   EMOTE_RATE,
 } from '../constants.js';
 import { CAPSULE_RADIUS, CAPSULE_CENTER_Y, CAPSULE_HALF_HEIGHT } from '../../constants.js';
+import { emit } from '../../hud/hudEvents.js';
 import {
   px,
   py,
@@ -27,6 +28,10 @@ import {
 } from './swarmState.js';
 
 const TWO_PI = Math.PI * 2;
+
+// Attached count last frame — emit a single HUD 'nibblerAttach' pulse when the
+// pile grows (drives the SwarmCount pop), bounded to one emit per frame.
+let _lastAttached = 0;
 
 // Vertical span the pile covers around the capsule (feet .. ~head).
 const SHELL_BOTTOM = 0.05;
@@ -105,4 +110,8 @@ export function updateAttachment(ctx) {
     stateT[i] += dt;
   }
   swarm.attachedCount = attached;
+
+  // One pulse per frame when the pile grows (the SwarmCount widget's pop).
+  if (attached > _lastAttached) emit('nibblerAttach', { count: attached });
+  _lastAttached = attached;
 }

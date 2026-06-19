@@ -20,14 +20,14 @@
 //       (only a safe zone clears it).
 
 import { byId } from '../../zones/zoneRegistry.js';
-import { pushToast } from '../../hud/hudEvents.js';
+import { pushToast, emit } from '../../hud/hudEvents.js';
 import {
   markedAtom,
   discoveredSafeZonesAtom,
   currentSafeZoneAtom,
 } from '../state/nibblerAtoms.js';
 import { swarm } from '../swarm/swarmState.js';
-import { armMarked, clearAndScatter } from './markedSystem.js';
+import { armMarked, clearAndScatter, setScatterCenter } from './markedSystem.js';
 
 /** Last currentSafeZone label we wrote, so we only set the atom on change. */
 let lastSafeLabel = null;
@@ -61,11 +61,16 @@ export function updateNibblerZones(ctx) {
 
   // ── SAFE WINS ────────────────────────────────────────────────────────────
   if (inSafe) {
-    // Marked → safe: clear the mark and scatter the whole horde.
+    // Marked → safe: clear the mark and scatter the whole horde OFF the player
+    // (seed the scatter center to the player's feet — otherwise it radiates from
+    // world origin). flushZones already toasts 'Safe — <label>', so we fire the
+    // distinct relief beat instead of duplicating it.
     if (swarm.marked) {
+      setScatterCenter(player.motion.pos);
       clearAndScatter(ctx.now);
       ctx.store.set(markedAtom, false);
-      pushToast('Safe — ' + (safeLabel || ''), 'safe');
+      emit('safeReached', { label: safeLabel || null });
+      pushToast('Nibblers scattered!', 'zone');
     }
 
     // First-time discovery of this safe zone → append to the permanent set.

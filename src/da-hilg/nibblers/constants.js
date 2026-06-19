@@ -74,6 +74,7 @@ export const VIS_MIN = 0.18;
 // ── Health drain ────────────────────────────────────────────────────────────
 export const HEALTH_DRAIN_PER_ATTACH = 0.04; // HP/s per attached, capped
 export const HEALTH_DRAIN_CAP = 2.5;         // HP/s max
+export const HEALTH_REGEN = 5;               // HP/s recovered when nothing is attached
 export const HEALTH_COMMIT_HZ = 1.5;
 
 // ── Stomp ───────────────────────────────────────────────────────────────────

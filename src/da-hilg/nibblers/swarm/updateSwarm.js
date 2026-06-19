@@ -120,9 +120,7 @@ export function updateSwarm(ctx) {
         // Brief "spotted you" beat: face the player, hold position, then RUN. The
         // dwell staggers the swarm so they don't all snap to RUN on one frame.
         if (dist2 > 1e-4) heading[i] = Math.atan2(dx, dz);
-        // Bleed off momentum.
-        vx[i] *= Math.max(0, 1 - 8 * dt);
-        // (vz handled in fallthrough integrate)
+        // Bleed off momentum — seekTo at speed 0 damps both vx AND vz toward zero.
         seekTo(i, px[i], pz[i], 0, dt);
         integrate(i, dt, groundY, false);
         active++;
@@ -197,9 +195,12 @@ export function updateSwarm(ctx) {
     phase[i] += EMOTE_RATE * dt;
     phase[i] -= Math.floor(phase[i]);
 
-    if (st === S_RUN || st === S_NOTICE) clip[i] = CLIP_RUN;
-    else if (st === S_JUMP || st === S_FALL) clip[i] = CLIP_JUMP;
-    else if (st === S_WANDER || st === S_SPAWN) clip[i] = CLIP_EMOTE;
+    // Pick from the LIVE (post-transition) state, not the frame-start `st`, so a
+    // RUN→JUMP this frame shows the jump clip immediately (no 1-frame stale pose).
+    const cur = state[i];
+    if (cur === S_RUN || cur === S_NOTICE) clip[i] = CLIP_RUN;
+    else if (cur === S_JUMP || cur === S_FALL) clip[i] = CLIP_JUMP;
+    else if (cur === S_WANDER || cur === S_SPAWN) clip[i] = CLIP_EMOTE;
     else clip[i] = CLIP_IDLE;
   }
 
