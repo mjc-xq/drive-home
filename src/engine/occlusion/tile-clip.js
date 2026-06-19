@@ -111,13 +111,11 @@ export function createTileClip(ctx) {
     cutaway.flatMinOpacity.value = close ? 0.94 : topdown ? 0.76 : aerial ? 0.88 : 0.86;
     cutaway.flatFadeHeight.value = close ? 2.7 : topdown ? 2.9 : aerial ? 3.8 : 2.8;
     cutaway.depthPad.value = topdown || aerial ? 0.12 : 0.28;
-    // groundPad pushes the eye→car sightline floor DOWN: bigger = the cut reaches
-    // lower, clearing the WHOLE corridor between camera and car (not just the
-    // building tops poking over the sightline). 50 m drops the floor below any
-    // street geometry for the close/cruise chase, so nothing between you and the
-    // car blocks it. The flat-surface guard (flatMinOpacity) still keeps the road
-    // and low ground; only the vertical blockers + high roofs in the corridor cut.
-    cutaway.groundPad.value = close ? 50 : topdown || aerial ? 0.12 : 0.2;
+    // groundPad keeps fragments below the eye→car sightline (the road + low ground).
+    // NOTE: raising this to "clear the whole corridor" dissolves the bumpy
+    // photogrammetry GROUND too (its normals aren't flat enough for the flat-surface
+    // guard), leaving the surface untextured — so it stays at the tuned 1.15.
+    cutaway.groundPad.value = close ? 1.15 : topdown || aerial ? 0.12 : 0.2;
     cutaway.minHeight.value = topdown ? 1.05 : aerial ? 1.25 : close ? 0.85 : 0.75;
     // Overhead views get an extra world-space column so the cut only follows blockers
     // almost directly over the car, instead of clearing a broad screen-shaped patch.
