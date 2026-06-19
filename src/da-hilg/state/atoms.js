@@ -13,7 +13,8 @@ export const gamePhaseAtom = atom('loading'); // 'loading' | 'playing' | 'won'
 export const loadProgressAtom = atom(0);      // 0..100 (bridged from DefaultLoadingManager)
 
 // Who the player controls. (Maps the spec's "selectedCharacter" / activePlayerId.)
-export const activePlayerIdAtom = atom(CHARACTERS[0]);
+// Default to Cece; the other three (Mike, Kelli, Drew) start as NPCs.
+export const activePlayerIdAtom = atom('cece');
 export const rolesAtom = atom(charMap('npc'));        // id -> 'player' | 'npc'
 export const npcStatesAtom = atom(charMap('idle'));   // id -> fsm/anim glyph
 
