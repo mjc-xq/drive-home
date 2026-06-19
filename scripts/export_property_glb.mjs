@@ -161,6 +161,7 @@ function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
 }
 function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
   if (!D) return;
+  if (opts.autoWindows === false) return;
   const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   const yt = base + wallH;
   for (let i = 0; i < ring.length; i++) {
@@ -247,13 +248,17 @@ scene.add(terrainMesh);
 const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
 const houseIdx = S.buildings.findIndex(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
+const svFacadeTextures = new Map();
 const hW = { pos: [], uv: [], col: [] }, hRf = { pos: [], col: [] };
 const hD = { glass: [], trim: [] };
+let houseRing = null, houseWallH = 0;
 const RfP = { pos: [], uv: [] };   // satellite roof-photo caps (flat roofs) -> toggle layer
 if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
-  buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB, houseIdx), hW, hRf, RfP, hD, { house: true }));
+  houseWallH = wallHeight(houseB, houseIdx);
+  houseRing = emitBuilding(houseB, houseIdx, base, houseWallH, hW, hRf, RfP, hD, { house: true, autoWindows: false });
+  buildingPolys.push(houseRing);
   // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
   // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
   scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv }));
@@ -309,6 +314,48 @@ if (bW.pos.length) {
 // Satellite roof-photo layer (flat roofs): real aerial imagery, lifted just above the
 // solid roof. A separate node so it can be toggled on/off (hide it -> solid colours).
 if (RfP.pos.length) scene.add(mkMesh(RfP.pos, null, 0xffffff, 'Roofs_photo', { uvs: RfP.uv }));
+function addStreetViewFacadeOverlays() {
+  const manifest = path.join(ROOT, 'exports/sv_facades.json');
+  if (!existsSync(manifest)) return 0;
+  const data = JSON.parse(readFileSync(manifest, 'utf8'));
+  let count = 0;
+  for (const wall of data.walls || []) {
+    const img = path.join(ROOT, 'exports', wall.image || '');
+    const b = S.buildings[wall.building];
+    if (!b || !existsSync(img) || !wall.A || !wall.B) continue;
+    const A0 = w2(...wall.A), B0 = w2(...wall.B);
+    const L = Math.hypot(B0[0] - A0[0], B0[1] - A0[1]);
+    if (L < 1.5) continue;
+    let ex = (B0[0] - A0[0]) / L, ez = (B0[1] - A0[1]) / L;
+    let nx = -ez, nz = ex;
+    const ring = b.p.map(([e, n]) => w2(e, n));
+    const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+    const mx = (A0[0] + B0[0]) / 2, mz = (A0[1] + B0[1]) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    const base = terrainAt(mx, mz) - 0.46;
+    const top = base + (wall.wallH || wallHeight(b));
+    const off = 0.16;
+    const A = [A0[0] + nx * off, base, A0[1] + nz * off];
+    const B = [B0[0] + nx * off, base, B0[1] + nz * off];
+    const Cc = [B0[0] + nx * off, top, B0[1] + nz * off];
+    const Dd = [A0[0] + nx * off, top, A0[1] + nz * off];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([...A, ...B, ...Cc, ...A, ...Cc, ...Dd], 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0], 2));
+    g.computeVertexNormals();
+    const matName = `SVFacade_${wall.building}_${wall.edge}`;
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, name: matName });
+    mat.side = THREE.DoubleSide;
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.name = matName;
+    mesh.userData = { source: 'Google Street View Static', date: wall.date || '', building: wall.building, edge: wall.edge };
+    scene.add(mesh);
+    svFacadeTextures.set(matName, img);
+    count++;
+  }
+  return count;
+}
+const nSVFacades = addStreetViewFacadeOverlays();
 
 // roads / mapped service ways (context) + collect world polylines for tree spacing
 const roadLines = [], streetLines = [];
@@ -645,8 +692,65 @@ function distToLines(x, z, lines, max) {
   }
   return best;
 }
+function emitOwnerHouseFacadeCues(ring, wallH, out) {
+  if (!ring || ring.length < 3 || !out) return;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  const edges = ring.map(([ax, az], i) => {
+    const [bx, bz] = ring[(i + 1) % ring.length];
+    const L = Math.hypot(bx - ax, bz - az);
+    let ex = (bx - ax) / (L || 1), ez = (bz - az) / (L || 1);
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    return { i, ax, az, bx, bz, L, ex, ez, nx, nz, mx, mz, roadD: distToLines(mx, mz, roadLines, 1e9) };
+  }).filter(e => e.L >= 2.2);
+  if (!edges.length) return;
+  const front = edges.reduce((a, b) => b.roadD < a.roadD ? b : a);
+  const back = edges.reduce((a, b) => {
+    const da = (a.nx * front.nx + a.nz * front.nz);
+    const db = (b.nx * front.nx + b.nz * front.nz);
+    return db < da ? b : a;
+  }, front);
+  const addWindow = (e, t, halfW = 0.48, y0 = 1.08, h = 0.92, wide = false) => {
+    if (!e || e.L < 2.4) return;
+    const s = Math.max(halfW + 0.18, Math.min(e.L - halfW - 0.18, e.L * t));
+    const base = terrainAt(e.mx, e.mz) - 0.10;
+    const yA = base + y0, yB = Math.min(base + y0 + h, base + wallH - 0.45);
+    if (yB - yA < 0.35) return;
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, yA - 0.10, yB + 0.10, 0.086);
+    pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, yA, yB, 0.118);
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - 0.025, s + 0.025, yA + 0.04, yB - 0.04, 0.13);
+    if (wide) pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.18, s + halfW + 0.18, yA - 0.20, yA - 0.12, 0.13);
+  };
+  const addDoorGlass = (e, t, halfW = 0.62) => {
+    const s = Math.max(halfW + 0.22, Math.min(e.L - halfW - 0.22, e.L * t));
+    const base = terrainAt(e.mx, e.mz) - 0.10;
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, base + 0.02, base + 2.16, 0.088);
+    pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, base + 0.12, base + 2.04, 0.122);
+  };
+  const garageT = front.ax > front.bx ? 0.20 : 0.80;
+  const doorT = front.ax > front.bx ? 0.72 : 0.28;
+  addWindow(front, (doorT + garageT) / 2, 0.42, 1.18, 0.82);
+  for (const e of edges) {
+    if (e === front) continue;
+    if (e === back) {
+      addDoorGlass(e, 0.48, 0.82);
+      if (e.L > 6.0) { addWindow(e, 0.23, 0.42); addWindow(e, 0.75, 0.42); }
+    } else if (e.L > 5.5) {
+      addWindow(e, 0.32, 0.46);
+      addWindow(e, 0.68, 0.46);
+    } else {
+      addWindow(e, 0.50, 0.42);
+    }
+  }
+}
 
 // ---- Doors ----------------------------------------------------------------
+const houseCue = { glass: [], trim: [] };
+emitOwnerHouseFacadeCues(houseRing, houseWallH, houseCue);
+if (houseCue.trim.length) scene.add(mkMesh(houseCue.trim, null, 0xd8d0bd, 'House_window_trim'));
+if (houseCue.glass.length) scene.add(mkMesh(houseCue.glass, null, 0x223647, 'House_windows'));
+
 const dwPos = [], dwCol = [], garagePos = [], garageTrim = [], DOORCOL = [0.26, 0.18, 0.12];
 let houseDoor = null, houseGarage = null;       // for the tree clear-zone / front fence orientation
 buildingPolys.forEach((ring, bi) => {
@@ -797,6 +901,10 @@ for (const m of doc.getRoot().listMaterials()) {
     // multiply the window texture over it -> wall = SV colour x windows, in every viewer.
     m.setBaseColorTexture(facadeTex);
     m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
+  } else if (svFacadeTextures.has(n)) {
+    const tex = doc.createTexture(n + '_tex').setImage(new Uint8Array(readFileSync(svFacadeTextures.get(n)))).setMimeType('image/jpeg');
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(tex);
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   }
 }
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
@@ -806,5 +914,6 @@ scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geomet
 console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
+console.log(`street-view facade overlays: ${nSVFacades}`);
 console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);
