@@ -81,6 +81,8 @@ function bakeCollider(scene) {
   const indices = [];
   let base = 0;
   const v = new THREE.Vector3();
+  // Track the walkable XZ extent (recentered world) → the map boundary.
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
 
   scene.traverse((o) => {
     const name = o.name || '';
@@ -90,6 +92,10 @@ function bakeCollider(scene) {
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
       positions.push(v.x, v.y, v.z);
+      if (v.x < minX) minX = v.x;
+      if (v.x > maxX) maxX = v.x;
+      if (v.z < minZ) minZ = v.z;
+      if (v.z > maxZ) maxZ = v.z;
     }
     const idx = o.geometry.index;
     if (idx) {
@@ -100,7 +106,9 @@ function bakeCollider(scene) {
     base += pos.count;
   });
 
-  return { vertices: new Float32Array(positions), indices: new Uint32Array(indices) };
+  const bounds =
+    minX < maxX && minZ < maxZ ? { minX, maxX, minZ, maxZ } : null;
+  return { vertices: new Float32Array(positions), indices: new Uint32Array(indices), bounds };
 }
 
 /**
@@ -271,7 +279,9 @@ export function Level({ onReady }) {
     const raf = requestAnimationFrame(() => {
       if (didBuildLevelRef.current) return;
       didBuildLevelRef.current = true;
-      setCollider(bakeCollider(scene));
+      const baked = bakeCollider(scene);
+      setCollider(baked);
+      if (baked.bounds) levelMeta.bounds = baked.bounds; // map boundary (walkable XZ extent)
       const b = computeCreekBounds(scene);
       setCreekBounds(b);
       if (b) hideCreekClutter(scene, b);
