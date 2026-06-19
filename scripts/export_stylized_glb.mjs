@@ -461,17 +461,33 @@ const COL = existsSync(ex('buildings_color.json')) ? JSON.parse(readFileSync(ex(
 // colour when present — still NO photo texture, just a measured solid colour.
 const RCOL = existsSync(ex('buildings_roof_color.json')) ? JSON.parse(readFileSync(ex('buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
-const wallColor = ib => COL[ib] || STUCCO;
-// WHOLE building takes its Street View colour (per the brief): the roof is the same
-// SV colour, just darkened ~0.8 for a little depth. (Was the aerial roof colour.)
+const WALL_PALETTE = [
+  [0.78, 0.73, 0.64], [0.72, 0.75, 0.68], [0.73, 0.70, 0.65],
+  [0.68, 0.72, 0.73], [0.80, 0.76, 0.68], [0.69, 0.66, 0.60],
+];
+const ROOF_PALETTE = [
+  [0.46, 0.43, 0.39], [0.48, 0.35, 0.29], [0.38, 0.40, 0.42],
+  [0.55, 0.50, 0.43], [0.34, 0.35, 0.36],
+];
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const mix3 = (a, b, t) => a.map((v, i) => v * (1 - t) + b[i] * t);
+const luma = c => c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+const seededColor = (palette, ib) => palette[(Math.imul((ib | 0) + 17, 1103515245) >>> 0) % palette.length];
+const liftLuma = (c, minL, target = STUCCO) => {
+  const L = luma(c);
+  if (L >= minL) return c.map(clamp01);
+  const denom = Math.max(0.001, luma(target) - L);
+  return mix3(c, target, Math.min(1, (minL - L) / denom)).map(clamp01);
+};
+const wallColor = ib => {
+  const src = COL[ib] || STUCCO;
+  let c = liftLuma(src, 0.58, seededColor(WALL_PALETTE, ib));
+  c = mix3(c, seededColor(WALL_PALETTE, ib), 0.34);
+  return liftLuma(c, 0.62, STUCCO);
+};
 function roofColor(ib) {
-  return wallColor(ib).map(c => Math.max(0, c * 0.8));
-}
-function _unusedRoofColor(ib) {
-  if (RCOL[ib]) return RCOL[ib];
-  const w = wallColor(ib);
-  const m = (w[0] + w[1] + w[2]) / 3;
-  return [Math.max(0.12, w[0] * 0.45 + m * 0.05), Math.max(0.12, w[1] * 0.45 + m * 0.05), Math.max(0.14, w[2] * 0.45 + m * 0.08)];
+  const src = RCOL[ib] || seededColor(ROOF_PALETTE, ib);
+  return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.32), 0.34, seededColor(ROOF_PALETTE, ib));
 }
 const TILE = 3.0;
 function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
@@ -481,8 +497,37 @@ function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
   const Dd = [ax + ex * s0 + nx * off, y1, az + ez * s0 + nz * off];
   for (const v of [A, B, Cc, A, Cc, Dd]) pos.push(v[0], v[1], v[2]);
 }
+function emitFacadeShellDetails(ring, base, wallH, D) {
+  if (!D) return;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  const yBase = base + 0.12, yTop = base + wallH - 0.16;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 1.4 || wallH < 2.1) continue;
+    let ex = (bx - ax) / L, ez = (bz - az) / L;
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    if (D.trim) {
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.02, Math.min(0.14, L), yBase, yTop, 0.116);
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, Math.max(0, L - 0.14), L - 0.02, yBase, yTop, 0.116);
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.08, L - 0.08, base + wallH - 0.24, base + wallH - 0.08, 0.118);
+      pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.08, L - 0.08, base + 0.16, base + 0.30, 0.118);
+      for (let y = base + 2.65; y < base + wallH - 0.55; y += 2.55) {
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.18, L - 0.18, y - 0.035, y + 0.035, 0.121);
+      }
+    }
+    if (D.siding) {
+      for (let y = base + 0.72; y < base + wallH - 0.58; y += 0.52) {
+        pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.18, L - 0.18, y - 0.012, y + 0.012, 0.124);
+      }
+    }
+  }
+}
 function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
   if (!D) return;
+  emitFacadeShellDetails(ring, base, wallH, D);
   if (opts.autoWindows === false) return;
   const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   const yt = base + wallH;
@@ -494,7 +539,7 @@ function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
     let nx = -ez, nz = ex;
     const mx = (ax + bx) / 2, mz = (az + bz) / 2;
     if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
-    const bay = opts.house ? 3.0 : 3.35;
+    const bay = opts.house ? 3.0 : 3.35 + (((i * 97 + Math.round(L * 10)) % 5) - 2) * 0.10;
     const count = Math.max(1, Math.min(12, Math.floor((L - 1.0) / bay)));
     const floors = Math.max(1, Math.min(3, Math.floor((wallH - 1.15) / 2.55)));
     for (let f = 0; f < floors; f++) {
@@ -502,9 +547,11 @@ function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
       const y1 = Math.min(y0 + 1.02, yt - 0.42);
       if (y1 - y0 < 0.45) continue;
       for (let w = 0; w < count; w++) {
-        const s = (w + 1) * L / (count + 1);
+        if (!opts.house && count > 3 && ((w + i + f) % 7) === 5) continue;
+        const jitter = (((i + 3) * 37 + (w + 11) * 19 + f * 13) % 17 - 8) / 100;
+        const s = (w + 1 + jitter) * L / (count + 1);
         if (s < 0.85 || L - s < 0.85) continue;
-        const hw = Math.min(0.58, Math.max(0.36, L / (count + 1) * 0.20));
+        const hw = Math.min(0.64, Math.max(0.34, L / (count + 1) * (0.18 + ((w + i) % 3) * 0.025)));
         pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - hw - 0.12, s + hw + 0.12, y0 - 0.10, y1 + 0.10, 0.082);
         pushWallRect(D.glass, ax, az, ex, ez, nx, nz, s - hw, s + hw, y0, y1, 0.105);
         pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - 0.025, s + 0.025, y0 + 0.05, y1 - 0.05, 0.118);
@@ -563,7 +610,7 @@ const buildingPolys = [];
 const buildingCollision = [];
 const houseIdx = S.buildings.findIndex(b => b.house);
 const hW = { pos: [], col: [] }, hRf = { pos: [], col: [] };
-const hD = { glass: [], trim: [] };
+const hD = { glass: [], trim: [], siding: [] };
 let houseRing = null, houseWallH = 0;
 if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
@@ -575,11 +622,12 @@ if (houseIdx >= 0) {
   // base colour = building's own SV colour, so it renders in every viewer (not just COLOR_0)
   scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9 }));
   scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85 }));
+  if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0x6f6a60, 'House_siding_lines', { rough: 0.86 }));
   if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim', { rough: 0.8 }));
   if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows', { rough: 0.55 }));
 }
 const bW = { pos: [], col: [] }, bRf = { pos: [], col: [] };
-const bD = { glass: [], trim: [] };
+const bD = { glass: [], trim: [], siding: [] };
 const wallGroups = [], roofGroups = [];   // per-building [start, count, colour] -> material array
 let nBld = 0, nSkip = 0;
 S.buildings.forEach((b, ib) => {
@@ -612,6 +660,7 @@ function groupedMesh(buf, groups, name, rough) {
 if (bW.pos.length) {
   scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', 0.9));
   scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', 0.85));
+  if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0x6d675d, 'Buildings_siding_lines', { rough: 0.86 }));
   if (bD.trim.length) scene.add(mkMesh(bD.trim, null, 0xd2c9b8, 'Buildings_window_trim', { rough: 0.8 }));
   if (bD.glass.length) scene.add(mkMesh(bD.glass, null, 0x203342, 'Buildings_windows', { rough: 0.55 }));
 }
@@ -701,6 +750,11 @@ buildingPolys.forEach((ring, bi) => {
     const gx = ax + ex * gs, gz = az + ez * gs, gb = terrainAt(gx, gz) - 0.08;
     pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw - 0.16, gs + ghw + 0.16, gb - 0.03, gb + 2.35, 0.095);
     pushWallRect(garagePos, ax, az, ex, ez, nx, nz, gs - ghw, gs + ghw, gb + 0.06, gb + 2.18, 0.125);
+    for (let p = 1; p <= 3; p++) {
+      const y = gb + 0.06 + p * (2.12 / 4);
+      pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw + 0.05, gs + ghw - 0.05, y - 0.025, y + 0.025, 0.145);
+    }
+    pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - 0.025, gs + 0.025, gb + 0.12, gb + 2.08, 0.145);
   }
 });
 if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
