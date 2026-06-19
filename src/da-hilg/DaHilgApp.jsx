@@ -26,6 +26,7 @@ import { initNibblers } from './nibblers/index.js';
 
 import SceneEnv from './scene/SceneEnv.jsx';
 import Scene from './scene/Scene.jsx';
+import PostFX from './scene/PostFX.jsx';
 import DaHilgHud from './hud/DaHilgHud.jsx';
 
 // Stable list of the KTX2-bearing GLBs to warm once the renderer is live.
@@ -74,6 +75,9 @@ export default function DaHilgApp() {
           <Suspense fallback={null}>
             <Scene />
           </Suspense>
+          {/* Post-processing composer. Mounts after the scene; publishes a composer
+              that RenderLoop drives as the SOLE priority-100 render (composited). */}
+          <PostFX />
         </Canvas>
       </KeyboardControls>
     </Provider>

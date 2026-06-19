@@ -34,6 +34,9 @@ function pickAnimState(actor) {
   if (m.action) return m.action;
   // Locomotion by realized horizontal speed.
   if (m.speed < IDLE_SPEED_EPS) return 'idle';
+  // Drew's authored walk is the flirty strut. Keep it for every grounded movement
+  // speed so both player-controlled and full-size NPC Drew move with that style.
+  if (actor.character === 'drew') return 'walk';
   if (m.speed >= RUN_ANIM_THRESH) return 'run';
   return 'walk';
 }

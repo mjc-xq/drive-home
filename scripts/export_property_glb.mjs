@@ -66,6 +66,14 @@ let terrainAt, terrainMesh, cropHalf, terrSrc, tXmin, tXmax, tZmin, tZmax;
 function mkMesh(positions, indices, color, name, opts = {}) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  // planarUV: <metresPerTile> -> derive a WORLD-PLANAR uv from each vertex's X/Z so a
+  // tiled texture repeats at a real-world scale (these are flat XZ ground/roof ribbons).
+  // Only used when no explicit uvs are supplied. uv = [worldX/tile, worldZ/tile].
+  if (!opts.uvs && opts.planarUV) {
+    const t = opts.planarUV, uv = [];
+    for (let i = 0; i < positions.length; i += 3) uv.push(positions[i] / t, positions[i + 2] / t);
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  }
   if (opts.uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(opts.uvs, 2));
   if (opts.colors) g.setAttribute('color', new THREE.Float32BufferAttribute(opts.colors, 3));
   if (indices) g.setIndex(indices);
@@ -344,7 +352,7 @@ if (houseIdx >= 0) {
   // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
   // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
   scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv, emissive: 0.42 }));
-  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36, planarUV: 1.6, rough: 0.85 }));
   if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0xbcb4a4, 'House_siding_lines', { emissive: 0.18 }));
   if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim'));
   if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows'));
@@ -379,15 +387,25 @@ S.buildings.forEach((b, ib) => {
 const nFill = 0;
 // Per-building MATERIALS (base colour = the building's SV/satellite colour) via geometry
 // groups, one Buildings mesh each — colour renders in every viewer (no reliance on COLOR_0).
-function groupedMesh(buf, groups, name, withUV) {
+function groupedMesh(buf, groups, name, withUV, planarUV) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
   if (withUV) g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uv, 2));
+  // grouped roofs carry no facade UVs: derive a world-planar XZ uv so the shingle
+  // texture tiles (pitched roofs read fine under a nadir projection at distance).
+  else if (planarUV) {
+    const t = planarUV, uv = [];
+    for (let i = 0; i < buf.pos.length; i += 3) uv.push(buf.pos[i] / t, buf.pos[i + 2] / t);
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  }
   g.computeVertexNormals();
+  const isRoof = /roofs/i.test(name);
   const mats = groups.map(([start, count, col], i) => {
     g.addGroup(start, count, i);
     const base = new THREE.Color(col[0], col[1], col[2]);
-    const m = new THREE.MeshStandardMaterial({ color: base, roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    // roofs get a slightly lower roughness (0.85) so the shingle texture reads;
+    // walls keep 0.95. metalness stays 0.
+    const m = new THREE.MeshStandardMaterial({ color: base, roughness: isRoof ? 0.85 : 0.95, metalness: 0, name: `${name}_${i}` });
     m.emissive = base.clone().multiplyScalar(/walls/i.test(name) ? 0.42 : 0.36);
     m.side = THREE.DoubleSide; return m;
   });
@@ -395,7 +413,8 @@ function groupedMesh(buf, groups, name, withUV) {
 }
 if (bW.pos.length) {
   scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', true));
-  scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', false));
+  // roofs: world-planar XZ uv at ~1.6 m/tile so the shingle-course texture tiles
+  scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', false, 1.6));
   if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0xb6ad9f, 'Buildings_siding_lines', { emissive: 0.18 }));
   if (bD.trim.length) scene.add(mkMesh(bD.trim, null, 0xd2c9b8, 'Buildings_window_trim'));
   if (bD.glass.length) scene.add(mkMesh(bD.glass, null, 0x203342, 'Buildings_windows'));
@@ -758,14 +777,17 @@ if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
     }
   }
 }
-if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads'));
-if (drvIdx.length) scene.add(mkMesh(drvPos, drvIdx, 0x77787a, 'Driveways'));
-if (drvSrcIdx.length) scene.add(mkMesh(drvSrcPos, drvSrcIdx, 0x7d7f80, 'Driveways_Mapped'));
-if (parkSrcIdx.length) scene.add(mkMesh(parkSrcPos, parkSrcIdx, 0x6f7272, 'ParkingAreas_Mapped'));
-if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks'));   // light concrete, road-edge derived
-if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped'));
-if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_Mapped'));
-if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs'));
+// Flat paved ground gets WORLD-PLANAR UVs (planarUV = metres/tile) so the procedural
+// asphalt/concrete textures attached downstream tile at a real-world scale: asphalt ~5 m,
+// concrete (sidewalk/curb) ~2.5 m. Roughness: asphalt 0.95, concrete 0.9.
+if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads', { planarUV: 5.0, rough: 0.95 }));
+if (drvIdx.length) scene.add(mkMesh(drvPos, drvIdx, 0x77787a, 'Driveways', { planarUV: 4.5, rough: 0.95 }));
+if (drvSrcIdx.length) scene.add(mkMesh(drvSrcPos, drvSrcIdx, 0x7d7f80, 'Driveways_Mapped', { planarUV: 4.5, rough: 0.95 }));
+if (parkSrcIdx.length) scene.add(mkMesh(parkSrcPos, parkSrcIdx, 0x6f7272, 'ParkingAreas_Mapped', { planarUV: 5.0, rough: 0.95 }));
+if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { planarUV: 2.5, rough: 0.9 }));   // light concrete, road-edge derived
+if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped', { planarUV: 2.5, rough: 0.9 }));
+if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_Mapped', { planarUV: 3.0, rough: 0.95 }));
+if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs', { planarUV: 2.5, rough: 0.9 }));
 if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
 // creek ribbon
@@ -1138,6 +1160,68 @@ const grass = buildGrassWind({
 const animations = grass.clip ? [grass.clip] : [];
 console.log(`grass clumps (animated nodes): ${grass.count}   wind clip: ${animations.length ? 'GrassWind (3s loop)' : 'none'}`);
 
+// ---- procedural paved/roof detail textures -------------------------------
+// Tiny (256^2), TILEABLE, very SUBTLE procedural textures so roads/sidewalks/curbs/
+// driveways/roofs read as real material instead of flat plastic from eye height. Built
+// with sharp from raw RGB so they're a few KB and compress well downstream (KTX2).
+// Wrap-safety: low-frequency mottle uses integer-frequency sines (perfectly periodic
+// over the tile) and grain uses a periodic hash, so opposite edges always match.
+const { default: sharp } = await import('sharp');
+const TEX_N = 256;
+const hash2 = (x, y) => {                                   // periodic value hash in [0,1)
+  let h = Math.sin((x * 127.1 + y * 311.7)) * 43758.5453;
+  return h - Math.floor(h);
+};
+// build one tileable texture. `shade(u,v)->[r,g,b]` returns 0..255 per channel for the
+// normalised tile coords u,v in [0,1). All randomness must be periodic in u,v.
+async function makeTileTex(name, shade) {
+  const buf = Buffer.alloc(TEX_N * TEX_N * 3);
+  for (let j = 0; j < TEX_N; j++) for (let i = 0; i < TEX_N; i++) {
+    const [r, g, b] = shade(i / TEX_N, j / TEX_N);
+    const k = (j * TEX_N + i) * 3;
+    buf[k] = Math.max(0, Math.min(255, r | 0));
+    buf[k + 1] = Math.max(0, Math.min(255, g | 0));
+    buf[k + 2] = Math.max(0, Math.min(255, b | 0));
+  }
+  const png = await sharp(buf, { raw: { width: TEX_N, height: TEX_N, channels: 3 } }).png({ compressionLevel: 9 }).toBuffer();
+  return { name, png };
+}
+const TAU = Math.PI * 2;
+// periodic fine grain: hash the wrapped integer cell so left/right + top/bottom match.
+const grain = (u, v, scale) => {
+  const x = Math.floor(u * scale) % scale, y = Math.floor(v * scale) % scale;
+  return hash2(x, y) - 0.5;                                 // [-0.5,0.5)
+};
+// periodic low-frequency mottle from a couple of integer-frequency sines (wrap-safe).
+const mottle = (u, v) =>
+  0.5 * Math.sin(TAU * (u * 2 + v)) + 0.35 * Math.sin(TAU * (u - v * 3)) + 0.25 * Math.sin(TAU * (u * 5 + v * 2));
+// asphalt: near-white-grey carrier so it MODULATES the dark base colour (kept on the
+// material); subtle speckle + faint mottle. Centred ~200 so it darkens/lightens gently.
+const asphaltTex = await makeTileTex('asphalt', (u, v) => {
+  const n = 200 + grain(u, v, 128) * 34 + mottle(u, v) * 6;
+  return [n, n, n + 1];
+});
+// concrete: light warm-grey carrier, soft mottling + faint aggregate speckle + a very
+// faint scoreline grid (sidewalk control joints) every ~half tile. Modulates the base.
+const concreteTex = await makeTileTex('concrete', (u, v) => {
+  let n = 210 + mottle(u, v) * 9 + grain(u, v, 96) * 16;
+  const joint = (Math.abs(((u + 0.5) % 0.5) - 0.25) < 0.012 || Math.abs(((v + 0.5) % 0.5) - 0.25) < 0.012);
+  if (joint) n -= 16;                                       // faint darker control joint
+  return [n + 4, n + 2, n - 2];                             // warm tint
+});
+// shingle/roof: neutral grey carrier with soft horizontal COURSES (rows) + slight
+// per-row value variation + fine grain. Stays grey so the per-building roofColor (kept
+// on the material) tints it -> each roof keeps its sampled colour, just textured.
+const shingleTex = await makeTileTex('shingle', (u, v) => {
+  const rows = 8;                                           // 8 shingle courses per tile
+  const row = Math.floor(v * rows) % rows;
+  const within = (v * rows) % 1;                            // 0..1 down a course
+  const courseShade = within < 0.10 ? -22 : (within > 0.92 ? 10 : 0);  // shadow line + lit lip
+  const rowVar = (hash2(row, 0) - 0.5) * 26;                // per-row value variation
+  const n = 200 + courseShade + rowVar + grain(u, v, 110) * 18 + mottle(u, v * 0.5) * 4;
+  return [n, n, n];
+});
+
 // ---- export GLB, then embed photo textures via gltf-transform -------------
 // (GLTFExporter can't encode images in Node — gltf-transform attaches the JPEG/
 //  PNG bytes directly.) aerial -> Terrain + all roofs; facade -> all walls.
@@ -1153,10 +1237,17 @@ const aerialP = existsSync(gAerialJpg) ? gAerialJpg : path.join(ROOT, 'src/asset
 const facadeP = path.join(ROOT, 'exports/facade.png');
 const aerialTex = existsSync(aerialP) ? doc.createTexture('aerial').setImage(new Uint8Array(readFileSync(aerialP))).setMimeType('image/jpeg') : null;
 const facadeTex = existsSync(facadeP) ? doc.createTexture('facade').setImage(new Uint8Array(readFileSync(facadeP))).setMimeType('image/png') : null;
+// procedural detail textures (generated above) -> tiled REPEAT over the planar UVs
+const asphaltGTex = doc.createTexture('asphalt_detail').setImage(new Uint8Array(asphaltTex.png)).setMimeType('image/png');
+const concreteGTex = doc.createTexture('concrete_detail').setImage(new Uint8Array(concreteTex.png)).setMimeType('image/png');
+const shingleGTex = doc.createTexture('shingle_detail').setImage(new Uint8Array(shingleTex.png)).setMimeType('image/png');
 const REPEAT = 10497, CLAMP = 33071;
 let textured = 0;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
+  // never texture the invisible collision/LOD proxies (opacity 0) — e.g. Collision_Roads
+  // matches /roads/i. Skip them so they stay untouched.
+  const isProxy = /^(Collision_|LOD_)/i.test(n);
   if (aerialTex && /terrain|roofs_photo/i.test(n)) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
@@ -1169,6 +1260,21 @@ for (const m of doc.getRoot().listMaterials()) {
     const tex = doc.createTexture(n + '_tex').setImage(new Uint8Array(readFileSync(svFacadeTextures.get(n)))).setMimeType('image/jpeg');
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(tex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
+  } else if (!isProxy && /roads|driveway|parking|crosswalk/i.test(n)) {
+    // asphalt detail tiles over the world-planar UVs. The texture is a near-white grey
+    // carrier so it MODULATES the dark base colour kept on the material (subtle grain).
+    m.setBaseColorTexture(asphaltGTex);
+    m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
+  } else if (!isProxy && /sidewalk|curb/i.test(n)) {
+    // concrete detail (mottle + faint scorelines) modulating the light-grey base colour.
+    m.setBaseColorTexture(concreteGTex);
+    m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
+  } else if (!isProxy && /roof/i.test(n)) {
+    // solid roofs only (roofs_photo already took the aerial above). KEEP the per-building
+    // sampled roofColor as the base factor and let the neutral-grey shingle texture
+    // modulate it -> each roof stays its own colour, just with shingle courses + grain.
+    m.setBaseColorTexture(shingleGTex);
+    m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT); textured++;
   }
 }
 writeFileSync(out, Buffer.from(await io.writeBinary(doc)));
@@ -1179,5 +1285,5 @@ console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
 console.log('layers:\n' + objs.join('\n'));
 console.log(`street-view facade overlays: ${nSVFacades}`);
-console.log(`textured materials: ${textured} (aerial->terrain/roofs, facade->walls)`);
+console.log(`textured materials: ${textured} (aerial->terrain/roofs_photo, facade->walls, asphalt->roads/driveways/parking/crosswalks, concrete->sidewalks/curbs, shingle->solid roofs)`);
 console.log(`wrote ${out} (${(statSync(out).size / 1024).toFixed(0)} KB)`);
