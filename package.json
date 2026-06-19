@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "build:dahilg-assets": "node scripts/build_dahilg_assets.mjs"
+    "build:dahilg-assets": "node scripts/build_dahilg_assets.mjs",
+    "build:nibbler-vat": "node scripts/build_nibbler_vat.mjs",
+    "build:minimap": "node scripts/build_minimap.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.14.0",

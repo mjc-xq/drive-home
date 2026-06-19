@@ -1,0 +1,54 @@
+{
+  "vertCount": 519,
+  "rows": 96,
+  "frameCount": 24,
+  "clips": {
+    "idle": {
+      "row": 0,
+      "frames": 24
+    },
+    "run": {
+      "row": 24,
+      "frames": 24
+    },
+    "jump": {
+      "row": 48,
+      "frames": 24
+    },
+    "emote": {
+      "row": 72,
+      "frames": 24
+    }
+  },
+  "posMin": [
+    -1.255118,
+    -0.047426,
+    -0.950716
+  ],
+  "posMax": [
+    1.743788,
+    1.888735,
+    3.205502
+  ],
+  "nrmMin": [
+    -0.999966,
+    -0.999971,
+    -0.999998
+  ],
+  "nrmMax": [
+    0.999998,
+    1,
+    0.99997
+  ],
+  "layout": "pos+nrm in separate pngs",
+  "posTexture": "nibbler.vat.pos.png",
+  "nrmTexture": "nibbler.vat.nrm.png",
+  "aVertexId": "attribute",
+  "attributeName": "_VERTEXID",
+  "aVertexIdNote": "Read float attribute _VERTEXID per vertex and round() it -> exact 0..vertCount-1 (meshopt reorders vertices, so values are a permutation, but each is an exact integer id). Use as the VAT texture column (x).",
+  "textureWidth": 519,
+  "textureHeight": 96,
+  "filter": "nearest",
+  "encoding": "RGB = (val - min) / (max - min) in 0..255; A unused. Decode: val = min + (rgb/255)*(max-min).",
+  "note": "Sample texel (x=vertexId, y=clip.row+frame). World-meters, feet at y~=0, rig faces +Z."
+}

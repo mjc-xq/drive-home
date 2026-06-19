@@ -15,6 +15,7 @@ import '../fonts.css';
 import { lazy, Suspense, Component } from 'react';
 import { useAtomValue } from 'jotai';
 import { gamePhaseAtom, pausedAtom } from '../state/atoms.js';
+import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
 
 import LoadingVeil from './LoadingVeil.jsx';
 import ProgressBridge from './ProgressBridge.jsx';
@@ -24,6 +25,7 @@ import ObjectiveStrip from './ObjectiveStrip.jsx';
 import CharacterBar from './CharacterBar.jsx';
 import InteractPrompt from './InteractPrompt.jsx';
 import LockOverlay from './LockOverlay.jsx';
+import NibblersHud from '../nibblers/hud/NibblersHud.jsx';
 
 /** A lazy component that resolves to render-nothing if the module is missing. */
 function optional(importer) {
@@ -81,8 +83,10 @@ function Optional({ children }) {
 export default function DaHilgHud() {
   const phase = useAtomValue(gamePhaseAtom);
   const paused = useAtomValue(pausedAtom);
+  const mode = useAtomValue(gameModeAtom);
 
   const playing = phase === 'playing' || phase === 'won';
+  const greet = mode !== 'nibblers'; // greet-the-family widgets only in greet mode
 
   return (
     <div className="dahilg-hud">
@@ -98,9 +102,13 @@ export default function DaHilgHud() {
         <>
           {!paused && <Crosshair />}
           <StateStrip />
-          <ObjectiveStrip />
+          {greet && <ObjectiveStrip />}
           <CharacterBar />
-          {!paused && <InteractPrompt />}
+          {greet && !paused && <InteractPrompt />}
+
+          {/* Nibblers HUD (self-gates to nibblers mode): marked / swarm / health /
+              minimap / vignette. */}
+          <NibblersHud />
 
           {/* Optional cluster6 widgets. */}
           <Optional>
@@ -112,9 +120,11 @@ export default function DaHilgHud() {
           <Optional>
             <HudMenu />
           </Optional>
-          <Optional>
-            <CelebrationBanner />
-          </Optional>
+          {greet && (
+            <Optional>
+              <CelebrationBanner />
+            </Optional>
+          )}
 
           {/* Mobile cluster — only on touch devices. */}
           {isTouch && (
