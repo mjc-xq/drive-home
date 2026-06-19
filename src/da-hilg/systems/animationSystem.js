@@ -8,6 +8,7 @@
 import {
   IDLE_SPEED_EPS,
   RUN_ANIM_THRESH,
+  COYOTE_TIME,
   FADE_LOCO,
   FADE_IDLE,
   FADE_JUMP,
@@ -22,8 +23,13 @@ import { CLIP_LOOP, EMOTE_HELD } from '../animation/clips.js';
  */
 function pickAnimState(actor) {
   const m = actor.motion;
-  // Airborne always wins — you got bumped or jumped.
-  if (!m.grounded) return 'jump';
+  // Only play 'jump' when genuinely airborne — rising, or ungrounded past the
+  // coyote window. This matches stepMotion's coyote grace and stops the jump clip
+  // from latching on the single-frame grounded=false flickers the KCC reports
+  // while walking the hill's slopes/steps.
+  const airborne =
+    !m.grounded && (m.velY > 0.1 || performance.now() - m.lastGroundedT > COYOTE_TIME * 1000);
+  if (airborne) return 'jump';
   // An active emote overrides locomotion while it's held / playing.
   if (m.action) return m.action;
   // Locomotion by realized horizontal speed.

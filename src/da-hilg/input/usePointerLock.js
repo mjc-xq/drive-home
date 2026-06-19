@@ -29,20 +29,23 @@ export function usePointerLock() {
       document.querySelector('canvas')
     );
 
-    const requestLock = () => {
+    const requestLock = (e) => {
       const canvas = getCanvas();
-      // Don't grab the pointer while the game is paused (menu open).
-      if (canvas && !daHilgStore.get(pausedAtom)) canvas.requestPointerLock?.();
+      // Only grab the pointer when the click actually landed on the canvas (HUD
+      // buttons pass through the pointer-events:none wrapper to the canvas, but
+      // real HUD widgets must stay clickable), and not while paused (menu open).
+      if (canvas && e.target === canvas && !daHilgStore.get(pausedAtom)) {
+        canvas.requestPointerLock?.();
+      }
     };
 
     const onLockChange = () => {
       const canvas = getCanvas();
       const locked = !!canvas && document.pointerLockElement === canvas;
       daHilgStore.set(pointerLockedAtom, locked);
-      // Esc (or any programmatic unlock) → surface the pause menu.
-      if (!locked && !daHilgStore.get(pausedAtom)) {
-        daHilgStore.set(pausedAtom, true);
-      }
+      // NOTE: we do NOT auto-pause on unlock — the HudMenu is the single owner of
+      // pause (it pauses while open). Losing the lock (Esc/alt-tab) just shows the
+      // click-to-play LockOverlay again.
     };
 
     const onMouseMove = (e) => {

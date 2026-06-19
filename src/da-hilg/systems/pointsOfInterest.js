@@ -29,42 +29,45 @@ export function buildPOIs(levelMeta) {
   const gy = typeof meta.groundY === 'number' ? meta.groundY : 0;
   const feet = gy + 0.05; // stand on the ground, not buried in it
 
-  // Landmarks fanned out around the house. Offsets are in meters; the lookAt of
-  // most points back toward the house so wanderers turn to take it in.
+  // Landmarks ringed around the house in the OPEN YARD — every point sits well
+  // OUTSIDE the house footprint (~±12 x ±9 m) and biased to the front/side yard
+  // (the +Z half, where the player spawns and the terrain is flat), so wanderers
+  // stroll open ground instead of pressing into the building walls or off the
+  // hill's back/creek edge. lookAt points back at the house so they face inward.
   const house = new THREE.Vector3(cx, feet + 1.4, cz);
   /** @type {Array<{id:string,pos:THREE.Vector3,lookAt?:THREE.Vector3,emote?:string}>} */
   const list = [
     {
-      // Front porch — right by the door, look back at the house.
-      id: 'porch',
-      pos: new THREE.Vector3(cx + 2, feet, cz + 5),
+      id: 'front_lawn',
+      pos: new THREE.Vector3(cx + 0, feet, cz + 16),
       lookAt: house.clone(),
     },
     {
-      // Driveway — out front, look up the street.
       id: 'driveway',
-      pos: new THREE.Vector3(cx + 9, feet, cz + 7),
-      lookAt: new THREE.Vector3(cx + 20, feet + 1.4, cz + 7),
-      emote: 'wave',
-    },
-    {
-      // Mailbox — curb's edge, a little wave-worthy errand.
-      id: 'mailbox',
-      pos: new THREE.Vector3(cx + 11, feet, cz + 2),
+      pos: new THREE.Vector3(cx + 15, feet, cz + 11),
       lookAt: house.clone(),
       emote: 'wave',
     },
     {
-      // Creek edge — off to the side, a place to pause and take it in.
-      id: 'creek',
-      pos: new THREE.Vector3(cx - 18, feet, cz - 14),
-      lookAt: new THREE.Vector3(cx - 30, feet + 1.4, cz - 22),
+      id: 'mailbox',
+      pos: new THREE.Vector3(cx + 11, feet, cz + 18),
+      lookAt: house.clone(),
+      emote: 'wave',
+    },
+    {
+      id: 'east_yard',
+      pos: new THREE.Vector3(cx + 16, feet, cz - 1),
+      lookAt: house.clone(),
+    },
+    {
+      id: 'west_yard',
+      pos: new THREE.Vector3(cx - 15, feet, cz + 9),
+      lookAt: house.clone(),
       emote: 'cheer',
     },
     {
-      // A tree in the yard — shade, a spot to loiter under.
-      id: 'tree',
-      pos: new THREE.Vector3(cx - 6, feet, cz + 9),
+      id: 'corner_oak',
+      pos: new THREE.Vector3(cx - 14, feet, cz + 17),
       lookAt: house.clone(),
     },
   ];

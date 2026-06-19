@@ -32,9 +32,16 @@ const FALLBACK = {
  * @param {Object} src
  */
 function applyMeta(src) {
-  levelMeta.offset = Array.isArray(src.offset) ? src.offset : FALLBACK.offset;
-  levelMeta.groundY = typeof src.groundY === 'number' ? src.groundY : FALLBACK.groundY;
-  levelMeta.houseCenter = Array.isArray(src.houseCenter) ? src.houseCenter : FALLBACK.houseCenter;
+  const off = Array.isArray(src.offset) ? src.offset : FALLBACK.offset;
+  levelMeta.offset = off;
+  // groundY + houseCenter ship in RAW source coords; recenter them (subtract the
+  // offset) so every consumer reads the SAME recentered space as spawns/houseBox
+  // (which the build already emits recentered). Without this, POI/AI Y lands ~37 m off.
+  const rawGround = typeof src.groundY === 'number' ? src.groundY : FALLBACK.groundY;
+  levelMeta.groundY = rawGround - off[1];
+  const hc = Array.isArray(src.houseCenter) ? src.houseCenter : FALLBACK.houseCenter;
+  levelMeta.houseCenter = [hc[0] - off[0], hc[1] - off[1], hc[2] - off[2]];
+  // houseBox already ships RECENTERED — use as-is (do NOT subtract offset again).
   levelMeta.houseBox = src.houseBox && src.houseBox.min && src.houseBox.max ? src.houseBox : FALLBACK.houseBox;
   levelMeta.spawns = Array.isArray(src.spawns) && src.spawns.length ? src.spawns : FALLBACK.spawns;
   levelMeta.npcSpawns = Array.isArray(src.npcSpawns) ? src.npcSpawns : FALLBACK.npcSpawns;
