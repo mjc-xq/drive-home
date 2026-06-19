@@ -481,6 +481,7 @@ function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
 }
 function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
   if (!D) return;
+  if (opts.autoWindows === false) return;
   const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   const yt = base + wallH;
   for (let i = 0; i < ring.length; i++) {
@@ -560,10 +561,13 @@ const buildingPolys = [];
 const houseIdx = S.buildings.findIndex(b => b.house);
 const hW = { pos: [], col: [] }, hRf = { pos: [], col: [] };
 const hD = { glass: [], trim: [] };
+let houseRing = null, houseWallH = 0;
 if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
   const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
-  buildingPolys.push(emitBuilding(houseB, houseIdx, base, wallHeight(houseB), hW, hRf, hD, { house: true }));
+  houseWallH = wallHeight(houseB);
+  houseRing = emitBuilding(houseB, houseIdx, base, houseWallH, hW, hRf, hD, { house: true, autoWindows: false });
+  buildingPolys.push(houseRing);
   // base colour = building's own SV colour, so it renders in every viewer (not just COLOR_0)
   scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { rough: 0.9 }));
   scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { rough: 0.85 }));
@@ -607,6 +611,59 @@ if (bW.pos.length) {
 const onBuilding = (x, z) => buildingPolys.some(r => inPoly(x, z, r));
 
 // ---- Doors ----------------------------------------------------------------
+function emitOwnerHouseFacadeCues(ring, wallH, out) {
+  if (!ring || ring.length < 3 || !out) return;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+  const edges = ring.map(([ax, az], i) => {
+    const [bx, bz] = ring[(i + 1) % ring.length];
+    const L = Math.hypot(bx - ax, bz - az);
+    let ex = (bx - ax) / (L || 1), ez = (bz - az) / (L || 1);
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    return { i, ax, az, bx, bz, L, ex, ez, nx, nz, mx, mz, roadD: distToLines(mx, mz, roadLines, 1e9) };
+  }).filter(e => e.L >= 2.2);
+  if (!edges.length) return;
+  const front = edges.reduce((a, b) => b.roadD < a.roadD ? b : a);
+  const back = edges.reduce((a, b) => (b.nx * front.nx + b.nz * front.nz) < (a.nx * front.nx + a.nz * front.nz) ? b : a, front);
+  const addWindow = (e, t, halfW = 0.48, y0 = 1.08, h = 0.92, wide = false) => {
+    if (!e || e.L < 2.4) return;
+    const s = Math.max(halfW + 0.18, Math.min(e.L - halfW - 0.18, e.L * t));
+    const base = terrainAt(e.mx, e.mz) - 0.10;
+    const yA = base + y0, yB = Math.min(base + y0 + h, base + wallH - 0.45);
+    if (yB - yA < 0.35) return;
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, yA - 0.10, yB + 0.10, 0.086);
+    pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, yA, yB, 0.118);
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - 0.025, s + 0.025, yA + 0.04, yB - 0.04, 0.13);
+    if (wide) pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.18, s + halfW + 0.18, yA - 0.20, yA - 0.12, 0.13);
+  };
+  const addDoorGlass = (e, t, halfW = 0.62) => {
+    const s = Math.max(halfW + 0.22, Math.min(e.L - halfW - 0.22, e.L * t));
+    const base = terrainAt(e.mx, e.mz) - 0.10;
+    pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, base + 0.02, base + 2.16, 0.088);
+    pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, base + 0.12, base + 2.04, 0.122);
+  };
+  const garageT = front.ax > front.bx ? 0.20 : 0.80;
+  const doorT = front.ax > front.bx ? 0.72 : 0.28;
+  addWindow(front, (doorT + garageT) / 2, 0.42, 1.18, 0.82);
+  for (const e of edges) {
+    if (e === front) continue;
+    if (e === back) {
+      addDoorGlass(e, 0.48, 0.82);
+      if (e.L > 6.0) { addWindow(e, 0.23, 0.42); addWindow(e, 0.75, 0.42); }
+    } else if (e.L > 5.5) {
+      addWindow(e, 0.32, 0.46);
+      addWindow(e, 0.68, 0.46);
+    } else {
+      addWindow(e, 0.50, 0.42);
+    }
+  }
+}
+const houseCue = { glass: [], trim: [] };
+emitOwnerHouseFacadeCues(houseRing, houseWallH, houseCue);
+if (houseCue.trim.length) scene.add(mkMesh(houseCue.trim, null, 0xd8d0bd, 'House_window_trim', { rough: 0.8 }));
+if (houseCue.glass.length) scene.add(mkMesh(houseCue.glass, null, 0x223647, 'House_windows', { rough: 0.55 }));
+
 const dwPos = [], dwCol = [], garagePos = [], garageTrim = [], DOORCOL = [0.24, 0.16, 0.10];
 let houseDoor = null, houseGarage = null;
 buildingPolys.forEach((ring, bi) => {
