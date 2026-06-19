@@ -520,9 +520,13 @@ if (houseGarage) {
   let bp = null, bd = Infinity;
   for (const lw of roadLines) for (const [x, z] of lw) { const d = Math.hypot(x - houseGarage[0], z - houseGarage[1]); if (d < bd) { bd = d; bp = [x, z]; } }
   if (bp && bd < 70) {
+    // end at the road EDGE (pull back ~4 m off the centre-line) so the driveway meets the
+    // road, not overlaps it; wider + darker so it reads as a paved drive, not a thin path.
+    let ddx = bp[0] - houseGarage[0], ddz = bp[1] - houseGarage[1]; const dl = Math.hypot(ddx, ddz) || 1;
+    const edge = [bp[0] - ddx / dl * 4, bp[1] - ddz / dl * 4];
     const dvPos = [], dvIdx = [];
-    ribbon([houseGarage, [(houseGarage[0] + bp[0]) / 2, (houseGarage[1] + bp[1]) / 2], bp], 3.6, 0.05, dvPos, dvIdx);
-    if (dvIdx.length) scene.add(mkMesh(dvPos, dvIdx, 0x8f8c86, 'Driveway'));
+    ribbon([houseGarage, [(houseGarage[0] + edge[0]) / 2, (houseGarage[1] + edge[1]) / 2], edge], 4.2, 0.07, dvPos, dvIdx);
+    if (dvIdx.length) scene.add(mkMesh(dvPos, dvIdx, 0x6f6f72, 'Driveway'));
   }
 }
 

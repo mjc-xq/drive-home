@@ -68,19 +68,20 @@ RUNS = [
      "polyline": [[1.46, 20.34], [-13.53, -0.98], [-28.83, -22.64]]},
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
      "polyline": [[18.28, 5.19], [0.06, -17.97], [-17.11, -39.91]]},
+    # human<->pig yard divider = the owner's WHITE line (#11): set BACK from the house,
+    # NOT on the lot divider; follows the terrain break across the back lot (georef-extracted).
     {"name": "FencePink", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[-13.53, -0.98], [-7.65, -5.04], [-3.47, -10.33], [0.06, -17.97]]},
-    # creek-side fence pulled ONTO LAND (east bank), inside the property — the parcel
-    # line itself dips into the ~10 m creek ribbon (centreline ~x-32.5), so following it
-    # literally put the fence in the water. Judgement: run it ~5 m inside the bank.
+     "polyline": [[-28.8, -13.2], [-26.5, -8.0], [-25.0, -2.9], [-24.1, -0.3], [-21.3, 0.9], [-17.7, 2.0]]},
+    # back/creek fence — LEAVE ALONE (owner: the very back line is fine). On the east
+    # bank, inside the property, off the creek ribbon.
     {"name": "FenceRed", "glb": f"{DL}/Fence.glb",
      "polyline": [[-28.83, -22.64], [-27.0, -31.0], [-25.5, -39.0], [-17.11, -39.91]]},
-    # front-yard picket on the DOOR half (SW), garage is the road/NE end so the fence
-    # is on the other half. Starts at the house SW front corner, runs out ~2 m into the
-    # (shallow) front yard and along toward the door; the open NE end is the GATE on the
-    # door->driveway path. Kept inside the parcel's road-side line.
+    # front-yard picket on the DOOR half (SW); garage is the road/NE end. ONE straight
+    # ~5 m run (matches the picket asset's section length so it tiles as a clean,
+    # undistorted picket, not a yawed corner blob), offset ~2 m into the front yard;
+    # the open NE end is the GATE on the door->driveway path.
     {"name": "FenceBlack", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[3.16, -10.01], [4.63, -11.05], [7.77, -6.64]]},
+     "polyline": [[4.5, -11.3], [7.6, -7.2]]},
 ]
 
 # per-asset unit scale (-> meters), whether the native run axis is Y not X, and a
