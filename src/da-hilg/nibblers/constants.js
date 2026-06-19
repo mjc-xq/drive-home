@@ -138,11 +138,8 @@ export const PANIC_POP = 3.5;
 export const SCATTER_TIME = 1.2;
 
 // ── Assets ──────────────────────────────────────────────────────────────────
-// Per-character VAT: the build bakes one textured proxy + pos/nrm/color textures per
-// family member (mike/kelli/cece/drew) into public/da-hilg/nibblers/. The combined
-// manifest (nibbler.vat.json) maps each character key to its assets; the runtime reads
-// proxy/texture URLs from there. NIBBLER_CHARS is the canonical order (charIx 0..3).
-export const NIBBLER_ASSET_BASE = '/da-hilg/nibblers/';
+// NIBBLER_CHARS is the canonical family order (charIx 0..3); the real-NPC pool clones
+// the live character GLBs (CHARACTER_URL) directly — no separate baked nibbler assets.
 export const NIBBLER_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 
 // The real-NPC pool uses ONLY the two light Meshy bodies — cece (~5.6k verts) and
@@ -151,8 +148,6 @@ export const NIBBLER_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 //   2 = cece, 3 = drew. Order is the spawn rotation.
 export const NIBBLER_NPC_CHARS = ['cece', 'drew'];
 export const NIBBLER_NPC_CHAR_IX = [2, 3]; // their indices in NIBBLER_CHARS
-export const NIBBLER_PROXY_URL = (key) => `${NIBBLER_ASSET_BASE}nibbler.${key}.proxy.glb`;
-export const NIBBLER_VAT_JSON_URL = '/da-hilg/nibblers/nibbler.vat.json';
 export const MINIMAP_URL = '/da-hilg/minimap.json';
 
 // Per-character tints — now a FAINT variety nudge layered on top of the REAL baseColor
