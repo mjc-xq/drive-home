@@ -41,7 +41,7 @@ OUT_DIR = os.path.join(ROOT, "exports", "sv_facades")
 MANIFEST = os.path.join(ROOT, "exports", "sv_facades.json")
 
 # --- tuning ---------------------------------------------------------------
-N_NEAREST = int(sys.argv[1]) if len(sys.argv) > 1 else 18  # nearest buildings + house
+N_NEAREST = int(sys.argv[1]) if len(sys.argv) > 1 else 60  # nearest buildings + house (was 18; raised to cover the playable patch, ~150-170 m out from the house)
 MAX_ROAD_DIST = 35.0      # wall faces a road only if nearest road point <= this
 PANO_SNAP = 25.0          # snap P to pano if metadata pano is within this
 MIN_WALL = 2.5            # skip slivers shorter than this (m)

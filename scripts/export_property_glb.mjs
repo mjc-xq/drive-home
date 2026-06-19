@@ -163,9 +163,13 @@ const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
 const ROOFP = [[0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55], [0.60, 0.50, 0.42], [0.62, 0.59, 0.52]];
+// Deterministic VARIED fallback for the buildings Street View has no colour for —
+// real house paints (warm white, tan, sage, slate-blue, grey, buff) so the colourless
+// buildings still read as a mixed block instead of all-tan.
 const WALL_PALETTE = [
-  [0.78, 0.73, 0.64], [0.72, 0.75, 0.68], [0.73, 0.70, 0.65],
-  [0.68, 0.72, 0.73], [0.80, 0.76, 0.68], [0.69, 0.66, 0.60],
+  [0.86, 0.82, 0.74], [0.80, 0.72, 0.60], [0.74, 0.78, 0.80], [0.82, 0.79, 0.72],
+  [0.70, 0.74, 0.66], [0.86, 0.80, 0.70], [0.66, 0.70, 0.74], [0.82, 0.74, 0.64],
+  [0.78, 0.70, 0.62], [0.72, 0.76, 0.74], [0.62, 0.66, 0.70], [0.84, 0.78, 0.66],
 ];
 const ROOF_PALETTE = [
   [0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55],
@@ -182,13 +186,35 @@ const liftLuma = (c, minL, target = STUCCO) => {
 };
 const seededColor = (palette, ib) => palette[(Math.imul((ib | 0) + 17, 1103515245) >>> 0) % palette.length];
 const lighten = c => liftLuma(mix3(c, STUCCO, 0.52), 0.62);   // plausible wall from a roof colour
-// walls: source samples often include shadow/tree occlusion; normalize to paint,
-// not black placeholder boxes.
+// Hue-preserving luma remap: lift only the DARK (shadow/occluded) samples and softly
+// compress the very bright ones, but LEAVE THE MIDS ALONE so each house keeps its real
+// Street-View lightness. The old wallColor() instead lifted+mixed every sample toward one
+// stucco tan (luma collapsed to ~0.63, stddev ~0.03) so the whole block read flat tan with
+// facades off. This keeps the SV variation (luma spread ~0.09, range ~0.38-0.80).
+const remapLuma = L => {
+  if (L < 0.46) return 0.46 - (0.46 - L) * 0.42;   // gently lift shadows (keeps some spread)
+  if (L > 0.84) return 0.84 + (L - 0.84) * 0.60;   // soft ceiling on blown-out samples
+  return L;                                         // mids untouched -> real per-house lightness
+};
+// Street-View facade crops bleed green from foreground foliage; pull an extreme green
+// cast back toward neutral so a house doesn't render olive, without touching real hues.
+const deGreen = c => {
+  const [r, g, b] = c;
+  if (g > r + 0.05 && g > b + 0.05) { const avg = (r + b) / 2; return [r, (g + avg) / 2, b]; }
+  return c;
+};
+// WALL BASE COLOUR baked per building (set as the material's baseColorFactor -> shows in
+// EVERY viewer with the photo facades OFF). Source = the building's real Street-View facade
+// colour (exports/buildings_color.json); buildings SV missed fall back to a derived roof
+// tint or a deterministic VARIED paint so the block is never uniform tan.
 const wallColor = ib => {
-  const src = COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : STUCCO);
-  let c = liftLuma(src, 0.58, seededColor(WALL_PALETTE, ib));
-  c = mix3(c, seededColor(WALL_PALETTE, ib), 0.34);
-  return liftLuma(c, 0.62, STUCCO);
+  const src = COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : seededColor(WALL_PALETTE, ib));
+  const L = Math.max(0.02, luma(src));
+  let c = src.map(v => v * (remapLuma(L) / L));    // hue-preserving lightness remap
+  c = deGreen(c);
+  const m = luma(c);
+  c = c.map(v => m + (v - m) * 1.14);              // gentle chroma boost so it reads as paint
+  return c.map(clamp01);
 };
 // roofs: real sampled colour, but lift deep satellite shadows so they read as roof
 // material instead of black voids in review renders.
@@ -466,12 +492,23 @@ function addStreetViewFacadeOverlays() {
       const yPhotoBot = yAtV(cv[1]);   // ground (or, if crop_v clamped, slightly above ground)
       const span = yPhotoTop - yPhotoBot;
       if (span > 0.5) {
-        bottomY = base + Math.max(0, yPhotoBot);                 // photo bottom: at/just above ground
-        topY = base + Math.min(wallH, yPhotoTop);                // clip top to the wall eave
-        vBottom = (yPhotoTop - Math.max(0, yPhotoBot)) / span;   // image V at the quad bottom
-        vTop = (yPhotoTop - Math.min(wallH, yPhotoTop)) / span;  // image V at the wall eave (crops roof pad)
+        // The quad must FILL the wall base..eave exactly (no plinth gap, no roof pad):
+        //  - bottom always at the wall base (any small positive yPhotoBot left a strip of
+        //    bare stucco under the photo and made the panel look like a floating decal);
+        //  - top clipped to the wall eave so the eave+0.6 m roof pad is dropped.
+        // Then map the UV-V so the photo's real ground row sits at the base and its eave row
+        // at the top — i.e. solve V at world-Y = base (0) and Y = wallH from the linear
+        // pinhole band, clamped to the captured [cv0..cv1] range so we never sample sky.
+        const vAtY = y => (yPhotoTop - y) / span;                // inverse of yAtV, in [0..1] over the band
+        bottomY = base;
+        topY = base + Math.min(wallH, yPhotoTop);
+        vBottom = Math.min(1, vAtY(0));                          // photo row at the wall base (ground)
+        vTop = Math.max(0, vAtY(Math.min(wallH, yPhotoTop)));    // photo row at the wall eave (crops roof pad)
       }
     }
+    // Inset: the panel must sit JUST proud of the wall and all its surface details
+    // (window trim/glass/garage push out to ~0.145 m), so 0.16 m keeps the photo in front
+    // of them without a visible floating gap. Kept consistent across every facade.
     const off = 0.16;
     const A = [A0[0] + nx * off, bottomY, A0[1] + nz * off];
     const B = [B0[0] + nx * off, bottomY, B0[1] + nz * off];
@@ -482,7 +519,10 @@ function addStreetViewFacadeOverlays() {
     g.setAttribute('uv', new THREE.Float32BufferAttribute([0, vBottom, 1, vBottom, 1, vTop, 0, vBottom, 1, vTop, 0, vTop], 2));
     g.computeVertexNormals();
     const matName = `SVFacade_${wall.building}_${wall.edge}`;
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, name: matName, emissive: new THREE.Color(1, 1, 1).multiplyScalar(0.16) });
+    // Low emissive: the SV JPEG is already a fully-lit photo, so a high emissive (was 0.16)
+    // washed it out into a pale floating decal that let the stucco wall read through it.
+    // A small lift keeps it from going muddy in shade while it still reads as the real face.
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0, name: matName, emissive: new THREE.Color(1, 1, 1).multiplyScalar(0.05) });
     mat.side = THREE.DoubleSide;
     const mesh = new THREE.Mesh(g, mat);
     mesh.name = matName;
