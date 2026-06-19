@@ -294,8 +294,10 @@ export function WindGrass({
     const baseCol = new THREE.Color();
 
     for (let i = 0; i < count; i++) {
-      // Uniform-area scatter on the annulus [innerRadius, radius], with the inner ring
-      // weighted denser (pow<1) so the lawn looks lushest right around the player.
+      // Scatter on the annulus [innerRadius, radius] biased OUTWARD (pow<1 pushes t
+      // toward 1 → the rim). Keeping the center SPARSE is deliberate: opaque double-
+      // sided blades stacked near the camera spike fragment overdraw (a dense center
+      // drops this from ~58 to ~18 fps), so density lives out where it's edge-on.
       const t = Math.pow(rnd(), 0.85);
       const r = Math.sqrt(
         innerRadius * innerRadius + t * (radius * radius - innerRadius * innerRadius),

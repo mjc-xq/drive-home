@@ -25,7 +25,6 @@ import ObjectiveStrip from './ObjectiveStrip.jsx';
 import CharacterBar from './CharacterBar.jsx';
 import InteractPrompt from './InteractPrompt.jsx';
 import LockOverlay from './LockOverlay.jsx';
-import SettingsPanel from './SettingsPanel.jsx';
 import NibblersHud from '../nibblers/hud/NibblersHud.jsx';
 
 /** A lazy component that resolves to render-nothing if the module is missing. */
@@ -105,7 +104,6 @@ export default function DaHilgHud() {
           <StateStrip />
           {greet && <ObjectiveStrip />}
           <CharacterBar />
-          <SettingsPanel />
           {greet && !paused && <InteractPrompt />}
 
           {/* Nibblers HUD (self-gates to nibblers mode): marked / swarm / health /
