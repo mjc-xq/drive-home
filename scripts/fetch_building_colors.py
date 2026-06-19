@@ -24,7 +24,7 @@ import geo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXPORTS = os.path.join(ROOT, "exports")
-R = float(sys.argv[1]) if len(sys.argv) > 1 else 196.0
+R = float(sys.argv[1]) if len(sys.argv) > 1 else 280.0  # was 196; widened to cover the whole DEM patch (~±200 m -> ~280 m to the corners) so every rendered building gets a real SV wall colour
 SCENE = json.load(open(os.path.join(ROOT, "src", "assets", "scene.json")))
 C = SCENE["center"]
 ORIGIN = SCENE.get("origin") or {}
