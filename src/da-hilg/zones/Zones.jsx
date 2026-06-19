@@ -7,16 +7,25 @@
 // stable after load.
 
 import { useMemo } from 'react';
+import { useAtomValue } from 'jotai';
 import { Zone } from './Zone.jsx';
 import { buildZoneConfig } from './zoneConfig.js';
 import { levelMeta } from '../state/refs.js';
+import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
+import { buildNibblersZones } from '../nibblers/zones/zoneConfig.nibblers.js';
 
 export function Zones() {
-  // Build once levelMeta is ready. levelMeta.loaded is the gate; we read the
-  // singleton directly (it's plain-mutable, not React state).
+  // Pick the mode's zone layout (nibblers = danger + safe; greet = safe/notice/
+  // trigger). Built once levelMeta is ready; levelMeta is a plain-mutable ref.
+  const mode = useAtomValue(gameModeAtom);
   const defs = useMemo(
-    () => (levelMeta.loaded ? buildZoneConfig(levelMeta) : []),
-    [levelMeta.loaded],
+    () =>
+      !levelMeta.loaded
+        ? []
+        : mode === 'nibblers'
+          ? buildNibblersZones(levelMeta)
+          : buildZoneConfig(levelMeta),
+    [levelMeta.loaded, mode],
   );
 
   if (!levelMeta.loaded) return null;

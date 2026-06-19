@@ -22,16 +22,17 @@ import { registry } from '../state/refs.js';
  * @param {number[]} props.size      FULL extents [w,h,d] (halved for Rapier args)
  * @param {string}  [props.npcGroup] notice zones: which NPC group it activates
  * @param {string}  [props.event]    trigger zones: event name to emit on enter
- * @param {string}  [props.label]    trigger zones: HUD toast text
+ * @param {string}  [props.label]    trigger/safe zones: HUD toast text
+ * @param {boolean} [props.discover] safe zones: revealed on the minimap on first entry
  * @param {boolean} [props.active]   gate behavior without unmounting (default true)
  */
-export function Zone({ id, type, position, size, npcGroup, event, label, active = true }) {
+export function Zone({ id, type, position, size, npcGroup, event, label, discover, active = true }) {
   // Register/unregister the def for O(1) hot-path lookup. Re-runs if identity
   // fields change; unregister scrubs the id from every actor's membership set.
   useEffect(() => {
-    registerZone({ id, type, npcGroup, event, label, active });
+    registerZone({ id, type, npcGroup, event, label, discover, active });
     return () => unregisterZone(id);
-  }, [id, type, npcGroup, event, label, active]);
+  }, [id, type, npcGroup, event, label, discover, active]);
 
   // Only enqueue events for things that are actually registered actors, keyed by
   // the RigidBody's name (we set name === actor.id on each ActorView).

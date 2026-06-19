@@ -13,6 +13,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { Physics } from '@react-three/rapier';
+import { useAtomValue } from 'jotai';
 
 import { levelMeta } from '../state/refs.js';
 import Level from '../level/Level.jsx';
@@ -21,10 +22,13 @@ import Actors from '../actors/Actors.jsx';
 import GameSystems from './GameSystems.jsx';
 import CameraRig from '../camera/CameraRig.jsx';
 import RenderLoop from './RenderLoop.jsx';
+import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
+import { SwarmRenderer } from '../nibblers/index.js';
 
 export default function Scene() {
   // Start paused; release one tick after the level (and thus its collider) is up.
   const [physicsPaused, setPhysicsPaused] = useState(true);
+  const mode = useAtomValue(gameModeAtom);
 
   useEffect(() => {
     let raf = 0;
@@ -49,6 +53,9 @@ export default function Scene() {
       </Suspense>
       <Zones />
       <Actors />
+      {/* The nibbler swarm — ONE InstancedMesh sampling a VAT; renders only in
+          nibblers mode and only once its assets load (self-gated). */}
+      {mode === 'nibblers' && <SwarmRenderer />}
       <GameSystems />
       {/* Camera lives inside <Physics> because its third-person collision ray
           uses useRapier(); priority 10 still runs it after the sim each frame. */}

@@ -27,6 +27,7 @@ import { updateAnimation } from '../systems/animationSystem.js';
 import { flushZones } from '../systems/zoneSystem.js';
 import { updateGreet } from '../systems/greetSystem.js';
 import { commitReactive } from '../systems/commitReactive.js';
+import { isNibblersMode, updateNibblers } from '../nibblers/index.js';
 
 /** The single simulation driver. Renders null. */
 export default function GameSystems() {
@@ -84,8 +85,9 @@ export default function GameSystems() {
     // ── 5. Zones: drain queued sensor events → zonesActive + toasts ──
     flushZones(ctx);
 
-    // ── 6. Greet proximity scan (~5 Hz; the system rate-limits internally) ──
-    updateGreet(ctx);
+    // ── 6. Mode loop: Nibblers swarm sim OR the greet-the-family scan ──
+    if (isNibblersMode()) updateNibblers(ctx);
+    else updateGreet(ctx);
 
     // ── 7. Change-gated atom writes (the only React-facing writes) ──
     commitReactive(ctx);

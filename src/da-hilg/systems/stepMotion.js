@@ -28,6 +28,9 @@ import {
   JUMP_BUFFER,
   CAPSULE_CENTER_Y,
 } from '../constants.js';
+// Nibblers swarm penalty: {1,1,1} in greet mode (no-op), scaled by attached count
+// in nibblers mode. Framework-level coupling kept to this one read site each.
+import { nibblerPenalty } from '../nibblers/mode.js';
 
 // Reused scratch so the per-frame loop never allocates.
 const _desired = { x: 0, y: 0, z: 0 };
@@ -67,7 +70,7 @@ export function stepMotion(actor, intent, ctx) {
     mx /= mag;
     mz /= mag;
   }
-  const speed = intent.run ? RUN_SPEED : WALK_SPEED;
+  const speed = (intent.run ? RUN_SPEED : WALK_SPEED) * nibblerPenalty.speedMul;
   const targetVX = mx * speed;
   const targetVZ = mz * speed;
 
@@ -88,7 +91,7 @@ export function stepMotion(actor, intent, ctx) {
   if (intent.jump) m.jumpBufferedT = now;
 
   if (bufferedJump && (wasGrounded || canCoyote)) {
-    m.velY = JUMP_VELOCITY;
+    m.velY = JUMP_VELOCITY * nibblerPenalty.jumpMul;
     m.lastGroundedT = -1; // consume coyote
     m.jumpBufferedT = -1; // consume buffer
   } else if (m.jumpBufferedT >= 0 && now - m.jumpBufferedT > JUMP_BUFFER * 1000) {

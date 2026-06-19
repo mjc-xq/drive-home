@@ -21,7 +21,7 @@ const SAFE_MIN_HEIGHT = 6;
  * @param {import('../state/refs.js').levelMeta} levelMeta
  * @returns {{id:string,type:string,position:number[],size:number[]}}
  */
-function buildHomeSafe(levelMeta) {
+export function buildHomeSafe(levelMeta) {
   const box = levelMeta.houseBox;
   const hasBox =
     box &&
