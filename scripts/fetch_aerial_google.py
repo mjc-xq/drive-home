@@ -20,10 +20,13 @@ EXPORTS = os.path.join(ROOT, "exports")
 os.makedirs(CACHE, exist_ok=True); os.makedirs(EXPORTS, exist_ok=True)
 from PIL import Image
 
-LAT0, LON0 = 37.6835313, -122.0686199
+SCENE = json.load(open(os.path.join(ROOT, "src/assets/scene.json")))
+ORIGIN = SCENE.get("origin") or {}
+LAT0 = float(ORIGIN.get("lat", 37.6835313))
+LON0 = float(ORIGIN.get("lon", -122.0686199))
 COSLAT = math.cos(math.radians(LAT0))
-HLAT = LAT0 + json.load(open(os.path.join(ROOT, "src/assets/scene.json")))["center"][1] / 110540.0
-HLON = LON0 + json.load(open(os.path.join(ROOT, "src/assets/scene.json")))["center"][0] / (COSLAT * 111320.0)
+HLAT = LAT0 + SCENE["center"][1] / 110540.0
+HLON = LON0 + SCENE["center"][0] / (COSLAT * 111320.0)
 R = float(sys.argv[1]) if len(sys.argv) > 1 else 230.0
 Z = int(sys.argv[2]) if len(sys.argv) > 2 else 19
 

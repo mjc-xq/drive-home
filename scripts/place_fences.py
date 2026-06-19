@@ -33,6 +33,13 @@ argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUT = os.path.abspath(argv[0]) if argv else os.path.join(
     ROOT, "exports/1840-dahill-property-trees.glb")
 
+SCENE_PATH = os.path.join(ROOT, "src", "assets", "scene.json")
+SCENE = json.load(open(SCENE_PATH)) if os.path.exists(SCENE_PATH) else {}
+SCENE_SLUG = str(SCENE.get("slug") or "").lower()
+if SCENE_SLUG and "dahill" not in SCENE_SLUG:
+    print(f"[fences] skipping Dahill owner-lot fence runs for scene slug {SCENE_SLUG!r}", flush=True)
+    sys.exit(0)
+
 DL = "/Users/mcohen/Downloads"
 
 # ---- frame constants (must match the exporters) ------------------------------
