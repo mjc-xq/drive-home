@@ -90,7 +90,10 @@ export function makeVatMaterial(assets) {
     const vidDecl = glVid
       ? 'float vatVid = float(gl_VertexID);'
       : 'attribute float aVertexId;';
-    const vidExpr = glVid ? 'vatVid' : 'aVertexId';
+    // meshopt reorders vertices, so the baked _VERTEXID is a PERMUTATION of 0..N-1.
+    // round() it (floor(x+0.5)) so each vertex samples ITS OWN VAT row exactly —
+    // a future quantized re-bake would otherwise drift the float across a texel.
+    const vidExpr = glVid ? 'vatVid' : 'floor(aVertexId + 0.5)';
 
     // ── Vertex header: instanced attrs + VAT uniforms + a tint varying ──────
     shader.vertexShader = shader.vertexShader.replace(

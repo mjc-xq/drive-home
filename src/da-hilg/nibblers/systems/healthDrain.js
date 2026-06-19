@@ -14,6 +14,7 @@ import { swarm } from '../swarm/swarmState.js';
 import {
   HEALTH_DRAIN_PER_ATTACH,
   HEALTH_DRAIN_CAP,
+  HEALTH_REGEN,
   HEALTH_COMMIT_HZ,
 } from '../constants.js';
 
@@ -23,6 +24,8 @@ const healthFloat = new Map();
 const lastCommittedHp = new Map();
 /** Wall-clock (ms) of the last atom commit, for the HEALTH_COMMIT_HZ throttle. */
 let lastCommitT = 0;
+/** The id we last committed for — a Tab switch forces an immediate commit. */
+let lastCommitId = null;
 
 /** Min ms between health atom commits, from HEALTH_COMMIT_HZ. */
 const COMMIT_INTERVAL_MS = 1000 / HEALTH_COMMIT_HZ;
@@ -49,16 +52,27 @@ export function updateHealthDrain(ctx) {
     healthFloat.set(id, hf);
   }
 
-  // drainRate = min(a * perAttach, cap)  — HP/sec.
+  // drainRate = min(a * perAttach, cap) HP/s while attached; otherwise the player
+  // recovers slowly (so escaping to safety actually heals the HP debt over time).
   const a = swarm.attachedCount;
   const drainRate = Math.min(a * HEALTH_DRAIN_PER_ATTACH, HEALTH_DRAIN_CAP);
   if (drainRate > 0) {
     hf = clamp(hf - drainRate * ctx.dt, 0, 100);
     healthFloat.set(id, hf);
+  } else if (hf < 100) {
+    hf = clamp(hf + HEALTH_REGEN * ctx.dt, 0, 100);
+    healthFloat.set(id, hf);
   }
 
   // Mirror the continuous value onto the actor (plain-ref write, per-frame truth).
   actor.health = hf;
+
+  // A Tab switch must surface the new player's HP immediately, not after the next
+  // throttle window — force a commit when the active id changes.
+  if (id !== lastCommitId) {
+    lastCommitId = id;
+    lastCommitT = 0;
+  }
 
   // Commit the integer HP into the per-id atom map at the throttled rate, only when
   // the rounded value changed (avoids store churn while idling at full health).

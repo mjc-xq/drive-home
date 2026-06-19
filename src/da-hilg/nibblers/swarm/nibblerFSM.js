@@ -52,23 +52,32 @@ export function seekTo(i, tx, tz, speed, dt) {
  * @param {number} i
  * @param {number} dt
  */
+// One persistent callback + module accumulators, reused for every separate() call,
+// so the 512×/frame neighbor walk allocates ZERO closures (the previous inline
+// arrow was a real GC hazard at 60 fps).
+let _sepI = 0;
+let _sepX = 0;
+let _sepZ = 0;
+function _sepNeighbor(j) {
+  if (j === _sepI) return;
+  const ddx = px[_sepI] - px[j];
+  const ddz = pz[_sepI] - pz[j];
+  const dd = ddx * ddx + ddz * ddz;
+  if (dd < SEP_R2 && dd > 1e-6) {
+    const w = 1 - dd / SEP_R2; // soft falloff 0..1
+    const inv = w / Math.sqrt(dd);
+    _sepX += ddx * inv;
+    _sepZ += ddz * inv;
+  }
+}
+
 export function separate(i, dt) {
-  let sepX = 0;
-  let sepZ = 0;
-  forNeighbors(i, (j) => {
-    if (j === i) return;
-    const ddx = px[i] - px[j];
-    const ddz = pz[i] - pz[j];
-    const dd = ddx * ddx + ddz * ddz;
-    if (dd < SEP_R2 && dd > 1e-6) {
-      const w = 1 - dd / SEP_R2; // soft falloff 0..1
-      const inv = w / Math.sqrt(dd);
-      sepX += ddx * inv;
-      sepZ += ddz * inv;
-    }
-  });
-  vx[i] += sepX * SEP_STRENGTH * dt * NIBBLER_ACCEL;
-  vz[i] += sepZ * SEP_STRENGTH * dt * NIBBLER_ACCEL;
+  _sepI = i;
+  _sepX = 0;
+  _sepZ = 0;
+  forNeighbors(i, _sepNeighbor);
+  vx[i] += _sepX * SEP_STRENGTH * dt * NIBBLER_ACCEL;
+  vz[i] += _sepZ * SEP_STRENGTH * dt * NIBBLER_ACCEL;
 }
 
 /**
