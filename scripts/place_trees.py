@@ -56,6 +56,34 @@ def load_template(entry):
     return m
 
 
+def make_collision_helpers_transparent():
+    """Keep invisible collision meshes invisible after Blender GLB re-export."""
+    mat = bpy.data.materials.get("Collision_Invisible")
+    if mat is None:
+        mat = bpy.data.materials.new("Collision_Invisible")
+    mat.diffuse_color = (1.0, 0.0, 1.0, 0.0)
+    mat.use_nodes = True
+    mat.blend_method = 'BLEND'
+    if hasattr(mat, "show_transparent_back"):
+        mat.show_transparent_back = True
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = 'BLENDED'
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        if "Base Color" in bsdf.inputs:
+            bsdf.inputs["Base Color"].default_value = (1.0, 0.0, 1.0, 0.0)
+        if "Alpha" in bsdf.inputs:
+            bsdf.inputs["Alpha"].default_value = 0.0
+
+    for obj in bpy.data.objects:
+        if obj.type != 'MESH' or not obj.name.startswith("Collision_"):
+            continue
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        for poly in obj.data.polygons:
+            poly.material_index = 0
+
+
 bpy.ops.wm.read_factory_settings(use_empty=True)
 import_glb(PROP)                                   # property scene (no trees)
 templates = [load_template(e) for e in MANIFEST["trees"]]
@@ -109,6 +137,7 @@ for t in PLACED:
 for t in templates:                                # remove unused template originals
     bpy.data.objects.remove(t, do_unlink=True)
 
+make_collision_helpers_transparent()
 bpy.ops.export_scene.gltf(filepath=OUT, export_format='GLB', use_visible=False)
 print(f"[place] instanced {made} trees from {len(templates)}-tree library -> {OUT} "
       f"({os.path.getsize(OUT) // 1024} KB)")
