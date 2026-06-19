@@ -125,12 +125,13 @@ Actor = {
   enabledRotations={[false,false,false]}>` + `<CapsuleCollider args={[CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS]}/>` +
   `<CharacterModel/>`. On mount wires `actor.ref.{rigid,collider,group}` and creates KCC (paired cleanup); set name ONLY on RigidBody.
 - `CharacterModel.jsx` — `<CharacterModel actor/>`: `useGLTF(CHARACTER_URL[actor.character])`,
-  `SkeletonUtils.clone(scene)` (own instance), `useCharacterClips` to bind the 7 anim actions onto its skeleton,
+  `SkeletonUtils.clone(scene)` (own instance), `useCharacterClips` to retarget/bind the 8 anim actions onto its skeleton,
   store `actor.ref.{group,mixer,actions}`. No FP head-bone manipulation (camera near-plane handles it).
 
 ### animation/
-- `useCharacterClips.js` — `export function useCharacterClips(clonedScene)` → `{ mixer, actions }` binding the
-  7 anim GLBs (ANIM_URL) onto `clonedScene`'s skeleton via one AnimationMixer; loop modes per CLIP_LOOP.
+- `useCharacterClips.js` — `export function useCharacterClips(clonedScene, character)` → `{ mixer, actions }`
+  retargeting the 8 anim GLBs (ANIM_URL) through source/target rest poses, then binding onto
+  `clonedScene`'s skeleton via one AnimationMixer; loop modes per CLIP_LOOP.
 
 ### zones/
 - `zoneRegistry.js` — plain registry: `actorZones:Map<id,Set>`, `byId:Map<id,def>`, queue array.

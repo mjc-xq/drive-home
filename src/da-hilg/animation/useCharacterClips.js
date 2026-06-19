@@ -1,14 +1,14 @@
-// Binds the canonical animation clips onto a single character's cloned
-// skeleton. All four rigs are byte-identical 24-bone Mixamo skeletons with bare
-// bone names, so each clip-only GLB (ANIM_URL) binds by bone name with zero
-// remapping. We build ONE AnimationMixer for the given clone and one
-// AnimationAction per clip, with loop modes from CLIP_LOOP.
+// Binds the canonical animation clips onto a single character's cloned skeleton.
+// Clip GLBs bind by shared bone names, then retarget through the source/target
+// rest poses so Meshy rigs with different hip/spine locals don't twist waists.
+// We build ONE AnimationMixer for the given clone and one AnimationAction per
+// clip, with loop modes from CLIP_LOOP.
 
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { ANIM_URL, IDLE_TIMESCALE } from '../constants.js';
-import { CLIP_KEYS, CLIP_LOOP, skinSafeClip } from './clips.js';
+import { CLIP_KEYS, CLIP_LOOP, retargetSkinSafeClip } from './clips.js';
 
 // The clip GLB URLs in canonical key order — drei caches each by URL.
 const CLIP_URLS = CLIP_KEYS.map((key) => ANIM_URL[key]);
@@ -17,9 +17,10 @@ const CLIP_URLS = CLIP_KEYS.map((key) => ANIM_URL[key]);
  * Load the shared clip GLBs and bind them as AnimationActions onto `clonedScene`.
  * Returns one mixer + an actions map keyed by clip key (idle/walk/run/...).
  * @param {THREE.Object3D} clonedScene this actor's own SkeletonUtils clone
+ * @param {string} character stable character key used for retarget cache reuse
  * @returns {{ mixer: THREE.AnimationMixer, actions: Record<string, THREE.AnimationAction> }}
  */
-export function useCharacterClips(clonedScene) {
+export function useCharacterClips(clonedScene, character) {
   // useGLTF must be called the same number of times each render, so load the
   // fixed CLIP_URLS array (drei accepts an array and returns one result each).
   const gltfs = useGLTF(CLIP_URLS);
@@ -34,7 +35,7 @@ export function useCharacterClips(clonedScene) {
       const sourceClip = gltfs[i]?.animations?.[0];
       if (!sourceClip) return;
 
-      const clip = skinSafeClip(sourceClip);
+      const clip = retargetSkinSafeClip(sourceClip, gltfs[i]?.scene, clonedScene, character);
       const action = mixer.clipAction(clip);
       if (CLIP_LOOP[key] === 'once') {
         action.setLoop(THREE.LoopOnce, 1);

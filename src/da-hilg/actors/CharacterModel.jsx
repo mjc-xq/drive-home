@@ -32,7 +32,7 @@ export default function CharacterModel({ actor }) {
     return c;
   }, [scene]);
 
-  const { mixer, actions } = useCharacterClips(clone);
+  const { mixer, actions } = useCharacterClips(clone, actor.character);
 
   // The group whose world transform the camera/motion can read.
   const groupRef = useRef(null);

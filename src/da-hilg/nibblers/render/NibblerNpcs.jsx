@@ -60,8 +60,9 @@ function PooledNpc({ slot, charScene, clipByKey }) {
   // One mixer + actions for this clone.
   const { mixer, actions } = useMemo(() => {
     const m = new THREE.AnimationMixer(clone);
-    return { mixer: m, actions: bindNpcActions(m, clipByKey) };
-  }, [clone, clipByKey]);
+    const character = NIBBLER_CHARS[slotCharIx(slot)];
+    return { mixer: m, actions: bindNpcActions(m, clipByKey, clone, character) };
+  }, [clone, clipByKey, slot]);
 
   // Register into the bridge once the group exists; unregister + stop on unmount.
   useEffect(() => {
@@ -116,10 +117,13 @@ export default function NibblerNpcs() {
   // Load the shared clips once (drei caches by URL; array form returns one per entry).
   const clipGltfs = useGLTF(NPC_CLIP_URLS);
   const clipByKey = useMemo(() => {
-    /** @type {Record<string, THREE.AnimationClip|undefined>} */
+    /** @type {Record<string, {clip?: THREE.AnimationClip, sourceRoot?: THREE.Object3D}>} */
     const map = {};
     NPC_CLIP_KEYS.forEach((key, i) => {
-      map[key] = clipGltfs[i]?.animations?.[0];
+      map[key] = {
+        clip: clipGltfs[i]?.animations?.[0],
+        sourceRoot: clipGltfs[i]?.scene,
+      };
     });
     return map;
   }, [clipGltfs]);

@@ -405,10 +405,10 @@ const levelOut = await io.read(OUT('level.glb'));
 console.log('\n[2/4] anims (7 clip-only GLBs)');
 
 // Canonical clip table: key -> { src, clip, stripRootXZ }
-// Most clips now come from the shared family-anims.glb (a Mixamo biped whose 24-bone rig
-// is byte-name-IDENTICAL to dad/mom/cece/drew — verified), so they bind to all four
-// characters with zero remapping. idle + jump have no good family equivalent and stay on
-// their original sources.
+// Most clips now come from the shared family-anims.glb. The four character rigs share
+// these 24 Mixamo-style bone NAMES, but their Meshy/local rest transforms are not all
+// identical; runtime binding retargets rotations by rest-pose delta before creating
+// AnimationActions. Build-time still strips unsafe foreign translations/scale.
 const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';
 const ANIMS = [
   { key: 'idle',  src: 'src/assets/anim/drew-idle.glb', clip: 'Armature|Boxing_Warmup|baselayer' },
@@ -455,8 +455,9 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   // wherever the source and target bind poses differ. Concretely, the drew-sourced `idle`
   // forces dad/mike's torso-root bone (Spine02) ~0.20 m off its hip attachment → the
   // "floating torso / waist gap" bug. Bone ROTATIONS carry the actual motion and are
-  // bind-agnostic, so we keep those (+ the Hips translation, which is true root motion /
-  // the vertical bob). Scale channels are likewise source-rig baggage for this project:
+  // retargetable after runtime rest-pose correction, so we keep those (+ the Hips
+  // translation, which is true root motion / the vertical bob). Scale channels are
+  // likewise source-rig baggage for this project:
   // our character bind poses already carry the intended limb proportions, and animated
   // bone scale is a waist/limb distortion footgun. We strip scale everywhere and strip
   // translation on every bone EXCEPT Hips. This must run BEFORE stripRootXZ (which then
@@ -525,11 +526,11 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   }
   if (unmatched !== 0) {
     throw new Error(`ASSERTION (B) FAILED: anim "${key}" has ${unmatched} channel(s) ` +
-      `targeting nodes outside dad's rig — shared-rig retarget would break.`);
+      `targeting nodes outside dad's rig — named-bone retarget would break.`);
   }
 
   // Assertion (C): NO bone but Hips may keep a translation channel, and NO scale channel
-  // may ship. Foreign bone translations and animated scale tear the shared-rig retarget
+  // may ship. Foreign bone translations and animated scale tear the named-bone retarget
   // at the waist (the floating-torso bug).
   const strayT = channels.filter((ch) => {
     const node = ch.getTargetNode();
@@ -561,7 +562,7 @@ console.log('\n[3/4] characters (mike, kelli, cece, drew)');
 const CHARS = [
   { out: 'mike.glb',  src: 'src/assets/dad.glb' },
   { out: 'kelli.glb', src: 'src/assets/mom.glb' },
-  // Cece now uses the NEW low-poly Meshy body (~5.6k verts vs the old ~128k), same 24-bone rig.
+  // Cece now uses the NEW low-poly Meshy body (~5.6k verts vs the old ~128k), same 24 bone names.
   { out: 'cece.glb',  src: 'src/assets/cece-meshy.glb' },
   { out: 'drew.glb',  src: 'src/assets/drew-meshy.glb' },
 ];
