@@ -110,12 +110,25 @@ const parseGLB = (buf) => new Promise((res, rej) =>
 // runs — required now that we bake from the raw family-anims.glb (not the pre-stripped
 // public/da-hilg/anims/*.glb). It also drops `.scale` tracks (a constant unit scale that
 // only adds rows; the rig scale lives on matrixWorld).
+function isHipsPositionTrack(trackName) {
+  if (!trackName.endsWith('.position')) return false;
+  const target = trackName.slice(0, -'.position'.length);
+  return target === 'Hips' || target.endsWith('/Hips');
+}
+
 function skinSafeClip(clip) {
   clip.tracks = clip.tracks.filter((t) => {
     if (t.name.endsWith('.scale')) return false;
-    if (t.name.endsWith('.position') && !t.name.startsWith('Hips.')) return false;
+    if (t.name.endsWith('.position') && !isHipsPositionTrack(t.name)) return false;
     return true;
   });
+
+  const strayPosition = clip.tracks.find((t) => t.name.endsWith('.position') && !isHipsPositionTrack(t.name));
+  const strayScale = clip.tracks.find((t) => t.name.endsWith('.scale'));
+  if (strayPosition || strayScale) {
+    throw new Error(`bake: skin-safe clip strip failed (${strayPosition?.name || strayScale?.name})`);
+  }
+
   return clip;
 }
 

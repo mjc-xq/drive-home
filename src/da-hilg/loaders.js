@@ -12,7 +12,7 @@
 // and fail to transcode, so we preload from <DaHilgPreloader/> (mounted in the Canvas)
 // instead of at import time.
 
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { KTX2Loader } from 'three-stdlib';
@@ -42,7 +42,8 @@ const extendFor = (gl) => (loader) => loader.setKTX2Loader(ktx2For(gl));
  */
 export function useDaHilgGLTF(url) {
   const gl = useThree((s) => s.gl);
-  return useGLTF(url, false, true, extendFor(gl));
+  const extend = useMemo(() => extendFor(gl), [gl]);
+  return useGLTF(url, false, true, extend);
 }
 
 /**
@@ -51,9 +52,9 @@ export function useDaHilgGLTF(url) {
  */
 export function DaHilgPreloader({ urls }) {
   const gl = useThree((s) => s.gl);
+  const extend = useMemo(() => extendFor(gl), [gl]);
   useEffect(() => {
-    const extend = extendFor(gl);
     for (const u of urls) useGLTF.preload(u, false, true, extend);
-  }, [gl, urls]);
+  }, [extend, urls]);
   return null;
 }

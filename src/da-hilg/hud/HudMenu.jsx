@@ -5,7 +5,7 @@
 // eagerly so the sliders feel live.
 
 import { useState, useRef, useEffect } from 'react';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import {
   cameraModeAtom,
   settingsAtom,
@@ -17,6 +17,8 @@ import {
 import { CHARACTERS } from '../constants.js';
 import { setVolumes } from '../audio/sfx.js';
 import { pushToast } from './hudEvents.js';
+import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
+import { initNibblers } from '../nibblers/init.js';
 
 const charMap = (v) => Object.fromEntries(CHARACTERS.map((id) => [id, v]));
 
@@ -27,6 +29,7 @@ export default function HudMenu() {
   const [open, setOpen] = useAtom(pausedAtom);
   const [cameraMode, setCameraMode] = useAtom(cameraModeAtom);
   const [settings, setSettings] = useAtom(settingsAtom);
+  const mode = useAtomValue(gameModeAtom);
   const [, setScore] = useAtom(scoreAtom);
   const [, setWon] = useAtom(wonAtom);
   const [, setGreeted] = useAtom(greetedAtom);
@@ -56,14 +59,19 @@ export default function HudMenu() {
     }
   }
 
-  // Restart: clear greeted/score/won; the proximity scan + greet flow re-arm
-  // naturally on the next frames. Toast confirms the reset ("re-greet").
+  // Restart the active mode. The proximity scan + Nibblers systems re-arm naturally
+  // on subsequent frames.
   function restart() {
-    setGreeted(charMap(false));
-    setScore(0);
-    setWon(false);
+    if (mode === 'nibblers') {
+      initNibblers();
+      pushToast('Nibblers reset', 'system');
+    } else {
+      setGreeted(charMap(false));
+      setScore(0);
+      setWon(false);
+      pushToast('Family scattered — greet them again!', 'system');
+    }
     setOpen(false);
-    pushToast('Family scattered — greet them again!', 'system');
   }
 
   function exit() {
@@ -153,8 +161,9 @@ export default function HudMenu() {
             HOW TO PLAY
           </div>
           <div style={blurbStyle}>
-            WASD move · Space jump · Shift run · Mouse look · <b>E</b> greet · <b>Tab</b> switch ·{' '}
-            <b>Q</b> emote · <b>V</b> camera. Greet all four family members to reunite them.
+            {mode === 'nibblers'
+              ? 'Scout the block. Safe Zones scatter attached swarms; red danger zones call them in.'
+              : 'Find the family, greet everyone, and reunite at home.'}
           </div>
 
           {/* ACTIONS */}

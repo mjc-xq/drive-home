@@ -13,6 +13,7 @@ import { Suspense, useEffect } from 'react';
 import { Provider } from 'jotai';
 import { Canvas } from '@react-three/fiber';
 import { KeyboardControls } from '@react-three/drei';
+import * as THREE from 'three';
 
 import { daHilgStore } from './state/store.js';
 import { CAM_FOV, FP_NEAR, CAM_FAR, LEVEL_URL, CHARACTER_URL } from './constants.js';
@@ -63,7 +64,7 @@ export default function DaHilgApp() {
       {/* Held movement keys are read transiently inside the sim via getKeys(). */}
       <KeyboardControls map={keyMap}>
         <Canvas
-          shadows
+          shadows={{ type: THREE.PCFShadowMap }}
           dpr={[1, 2]}
           camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
         >

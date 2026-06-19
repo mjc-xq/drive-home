@@ -1,58 +1,90 @@
-// Drives loadProgressAtom from drei's useProgress (which reads three's global
-// DefaultLoadingManager — it works OUTSIDE the Canvas, anywhere under React). When
-// loading completes it flips gamePhase 'loading' → 'playing' so the veil fades and
-// the lock overlay takes over.
+// Drives loadProgressAtom from three's global DefaultLoadingManager. When loading
+// completes it flips gamePhase 'loading' -> 'playing' so the veil fades and the
+// lock overlay takes over.
 //
-// Robustness: drei reports `active` + `progress`; once active goes false with
-// progress at 100 we consider the level ready. A safety timeout also advances the
-// phase if the manager never reports (e.g. everything was cached before mount), so
-// the player is never stuck behind the veil.
+// Robustness: the manager's onLoad event advances the phase, and a safety timeout
+// also advances if everything was cached before mount, so the player is never stuck
+// behind the veil.
 
-import { useEffect, useRef } from 'react';
-import { useProgress } from '@react-three/drei';
+import { useCallback, useEffect, useRef } from 'react';
+import * as THREE from 'three';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { gamePhaseAtom, loadProgressAtom } from '../state/atoms.js';
 
 const SAFETY_MS = 12000; // never leave the player stuck on the veil
 
 export default function ProgressBridge() {
-  const { active, progress, loaded, total } = useProgress();
   const setProgress = useSetAtom(loadProgressAtom);
   const setPhase = useSetAtom(gamePhaseAtom);
   const phase = useAtomValue(gamePhaseAtom);
-
-  // mirror raw progress into the atom (clamped, integer-ish for the veil readout)
-  useEffect(() => {
-    setProgress(Math.max(0, Math.min(100, progress)));
-  }, [progress, setProgress]);
-
-  // advance to 'playing' when the manager settles at full, or after the safety net
+  const lastProgress = useRef(null);
   const advanced = useRef(false);
-  useEffect(() => {
+
+  const writeProgress = useCallback((value) => {
+    const next = Math.round(Math.max(0, Math.min(100, value)));
+    if (Object.is(lastProgress.current, next)) return;
+    lastProgress.current = next;
+    setProgress(next);
+  }, [setProgress]);
+
+  const advance = useCallback(() => {
     if (advanced.current) return;
-    if (phase !== 'loading') {
-      advanced.current = true;
-      return;
-    }
-    // settled = not actively loading AND we've reported 100% (or had ≥1 item finish)
-    const settled = !active && progress >= 100 && (total === 0 || loaded >= total);
-    if (settled) {
-      advanced.current = true;
-      setProgress(100);
-      setPhase('playing');
-    }
-  }, [active, progress, loaded, total, phase, setPhase, setProgress]);
+    advanced.current = true;
+    lastProgress.current = 100;
+    setProgress(100);
+    setPhase((p) => (p === 'loading' ? 'playing' : p));
+  }, [setPhase, setProgress]);
+
+  // If another flow already moved the game past loading, retire the bridge.
+  useEffect(() => {
+    if (phase !== 'loading') advanced.current = true;
+  }, [phase]);
+
+  // Mirror three's DefaultLoadingManager directly. This avoids a React subscription
+  // loop from drei/useProgress while keeping the same loading veil semantics.
+  useEffect(() => {
+    const manager = THREE.DefaultLoadingManager;
+    const prevStart = manager.onStart;
+    const prevProgress = manager.onProgress;
+    const prevLoad = manager.onLoad;
+    const prevError = manager.onError;
+
+    const onStart = (url, loaded, total) => {
+      writeProgress(total > 0 ? (loaded / total) * 100 : 0);
+      prevStart?.(url, loaded, total);
+    };
+    const onProgress = (url, loaded, total) => {
+      writeProgress(total > 0 ? (loaded / total) * 100 : 100);
+      prevProgress?.(url, loaded, total);
+    };
+    const onLoad = () => {
+      advance();
+      prevLoad?.();
+    };
+    const onError = (url) => {
+      prevError?.(url);
+    };
+
+    manager.onStart = onStart;
+    manager.onProgress = onProgress;
+    manager.onLoad = onLoad;
+    manager.onError = onError;
+
+    return () => {
+      if (manager.onStart === onStart) manager.onStart = prevStart;
+      if (manager.onProgress === onProgress) manager.onProgress = prevProgress;
+      if (manager.onLoad === onLoad) manager.onLoad = prevLoad;
+      if (manager.onError === onError) manager.onError = prevError;
+    };
+  }, [advance, writeProgress]);
 
   // safety: flip to playing even if the loading manager never reports completion
   useEffect(() => {
     const t = setTimeout(() => {
-      if (advanced.current) return;
-      advanced.current = true;
-      setProgress(100);
-      setPhase((p) => (p === 'loading' ? 'playing' : p));
+      advance();
     }, SAFETY_MS);
     return () => clearTimeout(t);
-  }, [setPhase, setProgress]);
+  }, [advance]);
 
   return null;
 }

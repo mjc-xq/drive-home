@@ -81,15 +81,18 @@ export default function SafeZoneBeacons() {
       {safeZones.map((z) => {
         const [cx, , cz] = z.position;
         const r = Math.min(z.size[0], z.size[2]) * 0.5;
+        const isHome = z.id === 'safe_home';
         // Beam base near the ground (~zone floor), rising tall enough to spot from afar.
         const floorY = z.position[1] - z.size[1] / 2;
         const beamH = 60;
         return (
           <group key={z.id} position={[cx, 0, cz]}>
             {/* Vertical beam */}
-            <mesh material={beamMat} position={[0, floorY + beamH / 2, 0]} renderOrder={5} frustumCulled={false}>
-              <cylinderGeometry args={[r * 0.18, r * 0.34, beamH, 12, 1, true]} />
-            </mesh>
+            {!isHome && (
+              <mesh material={beamMat} position={[0, floorY + beamH / 2, 0]} renderOrder={5} frustumCulled={false}>
+                <cylinderGeometry args={[r * 0.18, r * 0.34, beamH, 12, 1, true]} />
+              </mesh>
+            )}
             {/* Ground ring on the footprint */}
             <mesh material={ringMat} position={[0, floorY + 0.15, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={5} frustumCulled={false}>
               <ringGeometry args={[r * 0.82, r, 40]} />

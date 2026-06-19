@@ -114,7 +114,7 @@ export function createEngine({ canvas, ui, emit }) {
   // still softens edges), 2 on desktop. LITE stays at 1x.
   ctx.renderer.setPixelRatio(ctx.renderPixelRatio());   // 1.25² vs 2² ≈ 30% fewer fragments on the full-screen photoreal tiles
   ctx.renderer.shadowMap.enabled = !ctx.LITE;
-  ctx.renderer.shadowMap.type = ctx.MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+  ctx.renderer.shadowMap.type = THREE.PCFShadowMap;
   ctx.renderer.shadowMap.autoUpdate = false;
   ctx.renderer.localClippingEnabled = true;   // Drive-mode tile cutaway: only the photoreal tile materials carry clip planes, so the car/HUD/guide stay unclipped (see updateTileClip + tiles3d.clipPlanes)
   ctx.MAX_ANISO = ctx.renderer.capabilities.getMaxAnisotropy();   // sharp ground/roads at grazing angles

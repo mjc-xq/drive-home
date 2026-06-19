@@ -10,7 +10,7 @@ const charMap = (v) => Object.fromEntries(CHARACTERS.map((id) => [id, v]));
 
 // Lifecycle / phase. (Maps the spec's "gameMode".)
 export const gamePhaseAtom = atom('loading'); // 'loading' | 'playing' | 'won'
-export const loadProgressAtom = atom(0);      // 0..100 (bridged from drei useProgress)
+export const loadProgressAtom = atom(0);      // 0..100 (bridged from DefaultLoadingManager)
 
 // Who the player controls. (Maps the spec's "selectedCharacter" / activePlayerId.)
 export const activePlayerIdAtom = atom(CHARACTERS[0]);
