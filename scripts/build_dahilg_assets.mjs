@@ -15,8 +15,9 @@ import { NodeIO, Logger } from '@gltf-transform/core';
 import { ALL_EXTENSIONS, EXTMeshGPUInstancing } from '@gltf-transform/extensions';
 import {
   dedup, prune, weld, textureCompress, reorder, quantize, meshopt, getBounds,
+  simplify, sortPrimitiveWeights,
 } from '@gltf-transform/functions';
-import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
+import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer';
 import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
 import { ktx2CompressDoc } from './lib/ktx2_pass.mjs';
@@ -45,6 +46,7 @@ const io = new NodeIO()
   });
 await MeshoptEncoder.ready;
 await MeshoptDecoder.ready;
+await MeshoptSimplifier.ready;
 
 mkdirSync(OUT_DIR, { recursive: true });
 mkdirSync(ANIM_DIR, { recursive: true });
@@ -100,17 +102,79 @@ function stripDanglingExtensions(doc) {
   }
 }
 
+// ---- count triangles across all primitives in a document --------------------------
+function countTris(doc) {
+  let tris = 0, verts = 0;
+  for (const mesh of doc.getRoot().listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+      const idx = prim.getIndices();
+      const pos = prim.getAttribute('POSITION');
+      tris += idx ? idx.getCount() / 3 : (pos ? pos.getCount() / 3 : 0);
+      if (pos) verts += pos.getCount();
+    }
+  }
+  return { tris: Math.round(tris), verts };
+}
+
+// ---- SKINNED-MESH SIMPLIFY (triangle-budget decimation) -----------------------------
+// The two adult bodies (mike ~220k tris, kelli ~285k tris) ship un-decimated; meshopt
+// shrinks BYTES but not TRIANGLES, so every frame they're skinned + shadow-rasterized at
+// full detail — ~85% of the character triangle load for a 1.7 m rig that never needs it.
+//
+// gltf-transform's simplify() wraps meshoptimizer's MeshoptSimplifier: it welds (overwrite
+// off) then edge-collapses INDICES, carrying every per-vertex attribute — POSITION, NORMAL,
+// JOINTS_0, WEIGHTS_0 — along by index, so skinning survives the collapse. We then re-sort +
+// re-normalize the surviving skin weights (collapse can leave weights summing slightly off)
+// so each vertex keeps a clean <=4-influence, sum=1 weight set.
+//
+// `ratio` is the target fraction of triangles to KEEP. Rather than a fixed ratio (mike and
+// kelli differ ~30% in tri count), we compute the ratio from a TARGET TRIANGLE BUDGET so both
+// land near the same ~28-32k budget. `error` is the max deviation as a fraction of mesh radius
+// — we give it generous headroom (0.02) so the collapse can actually REACH the budget instead
+// of quitting early at the tight 0.01% default, but not so loose it caves the face in.
+async function simplifyToTarget(doc, label, { targetTris, error = 0.02, minRatio = 0.06 }) {
+  const before = countTris(doc);
+  // ratio of TRIANGLES to keep to hit the budget; clamp so we never request an absurdly low
+  // ratio that would dissolve fine features (face/hands). 1.0 => skip (already under budget).
+  const ratio = Math.min(1, Math.max(minRatio, targetTris / before.tris));
+  if (ratio >= 1) {
+    console.log(`    simplify: ${label} already ${before.tris} tris <= target ${targetTris} — skipped`);
+    return;
+  }
+  await doc.transform(simplify({
+    simplifier: MeshoptSimplifier,
+    ratio,
+    error,
+    lockBorder: false,
+  }));
+  // Re-sort high->low and re-normalize skin weights to a clean 4-influence, sum=1 set; edge
+  // collapse can perturb the surviving weights. Keeps the skin-safe runtime happy.
+  for (const mesh of doc.getRoot().listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+      if (prim.getAttribute('WEIGHTS_0')) sortPrimitiveWeights(prim, 4);
+    }
+  }
+  const after = countTris(doc);
+  console.log(`    simplify: ${label} ratio=${ratio.toFixed(3)} error<=${error} -> ` +
+    `${before.verts}/${before.tris} verts/tris -> ${after.verts}/${after.tris} ` +
+    `(${(100 * (1 - after.tris / before.tris)).toFixed(1)}% fewer tris)`);
+}
+
 // ---- meshopt geometry pipeline (shared by level + the 4 characters) ----
-// Order per spec: dedup -> prune(keepLeaves) -> weld -> [KTX2|webp textures] -> reorder
-//   -> quantize(flags) -> meshopt(setRequired) -> write.
+// Order per spec: dedup -> prune(keepLeaves) -> weld -> [simplify] -> [KTX2|webp textures]
+//   -> reorder -> quantize(flags) -> meshopt(setRequired) -> write.
 // quantizeFlags differ: characters use skinned-safe values so the 1.7 m rig keeps
 // tight feet (no over-quantized sliding); the level uses gltf-transform defaults.
 // texCap is the per-class texture size cap (1024 landscape / 512 characters).
+// simplifyOpts (optional, characters only): { targetTris, error, minRatio } — runs the
+// skinned-mesh decimation AFTER weld (welded topology = better collapses) and BEFORE
+// quantize/meshopt (decimate the float mesh, then compress the smaller result).
 // Textures become GPU-compressed KTX2 when an encoder is on PATH, else webp.
-async function meshoptPipeline(doc, label, quantizeFlags, texCap = 1024) {
+async function meshoptPipeline(doc, label, quantizeFlags, texCap = 1024, simplifyOpts = null) {
   await doc.transform(dedup());
   await doc.transform(prune({ keepLeaves: true }));
   await doc.transform(weld());
+  if (simplifyOpts) await simplifyToTarget(doc, label, simplifyOpts);
   stripDraco(doc);          // geometry is already decoded on read; drop the dangling ext decl
   const ktx = await ktx2CompressDoc(doc, { maxSize: texCap, label });
   if (ktx.encoder) {
@@ -510,6 +574,18 @@ const CHAR_QUANT = {
   quantizeWeight: 8,
   quantizeGeneric: 12,
 };
+// TRIANGLE-BUDGET DECIMATION (skinned-mesh simplify):
+//   - mike (~128k v / 220k t) and kelli (~166k v / 285k t) ship un-decimated; meshopt
+//     compresses bytes, NOT triangles, so they skin + cast shadows at full detail every
+//     frame (~85% of the character triangle load). A 1.7 m rig at gameplay distance does
+//     not need that — target a ~30k-triangle budget for the heavy bodies.
+//   - cece (~5.6k v) and drew (~13k v) are already light; we GATE simplify behind a vertex
+//     threshold (SIMPLIFY_VERT_THRESHOLD) so they pass through essentially untouched.
+//   - error=0.02 gives the collapse headroom to reach the budget; minRatio=0.10 floors the
+//     ratio so the FACE/HANDS can't be dissolved if the budget math ever asks for too few
+//     tris. The skin-safe + clip-bind assertions still run against the decimated result.
+const SIMPLIFY_VERT_THRESHOLD = 40000;     // only decimate bodies heavier than this
+const CHAR_SIMPLIFY = { targetTris: 30000, error: 0.02, minRatio: 0.10 };
 const charSrcBytes = {};
 for (const { out, src } of CHARS) {
   console.log(`  ${out} <- ${src}`);
@@ -517,8 +593,13 @@ for (const { out, src } of CHARS) {
   const doc = await io.read(SRC(src));
   // Remove ALL animation clips — shipped separately.
   for (const a of doc.getRoot().listAnimations()) a.dispose();
+  // Gate decimation by source vertex count: only the heavy adult bodies cross the threshold;
+  // cece/drew stay untouched. Simplify runs INSIDE meshoptPipeline (after weld, before quantize).
+  const { verts: srcVerts } = countTris(doc);
+  const simplifyOpts = srcVerts > SIMPLIFY_VERT_THRESHOLD ? CHAR_SIMPLIFY : null;
+  if (!simplifyOpts) console.log(`    simplify: ${out} ${srcVerts} verts <= ${SIMPLIFY_VERT_THRESHOLD} threshold — left untouched`);
   // Characters cap textures at 512 — a 1.7 m rig never needs more (per-class cap).
-  await meshoptPipeline(doc, out, CHAR_QUANT, 512);
+  await meshoptPipeline(doc, out, CHAR_QUANT, 512, simplifyOpts);
   await writeAndVerify(doc, OUT(out), { label: out });
 }
 
