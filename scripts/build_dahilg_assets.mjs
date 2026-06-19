@@ -19,6 +19,7 @@ import {
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
+import { ktx2CompressDoc } from './lib/ktx2_pass.mjs';
 import { mkdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,16 +53,18 @@ const mb = (bytes) => (bytes / 1e6).toFixed(2) + ' MB';
 const written = [];          // { path, bytes } for the final summary
 const DRACO_EXT = 'KHR_draco_mesh_compression';
 
-// ---- texture compression step (webp, max 1024, q80) with a graceful fallback ----
+// ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----
 // textureCompress can throw if sharp can't decode an image; per the spec we WARN and
 // continue (skip texture compression) rather than failing the whole build.
+// `maxSize` is the per-asset-class cap: 1024 for the landscape, 512 for characters
+// (a 1.7 m rig never needs more) — see ASSET_PIPELINE.md.
 const warnings = [];
-async function compressTextures(doc, label) {
+async function compressTextures(doc, label, maxSize = 1024) {
   try {
     await doc.transform(textureCompress({
       encoder: sharp,
       targetFormat: 'webp',
-      resize: [1024, 1024],
+      resize: [maxSize, maxSize],
       quality: 80,
     }));
   } catch (err) {
@@ -98,16 +101,25 @@ function stripDanglingExtensions(doc) {
 }
 
 // ---- meshopt geometry pipeline (shared by level + the 4 characters) ----
-// Order per spec: dedup -> prune(keepLeaves) -> weld -> textureCompress -> reorder
+// Order per spec: dedup -> prune(keepLeaves) -> weld -> [KTX2|webp textures] -> reorder
 //   -> quantize(flags) -> meshopt(setRequired) -> write.
 // quantizeFlags differ: characters use skinned-safe values so the 1.7 m rig keeps
 // tight feet (no over-quantized sliding); the level uses gltf-transform defaults.
-async function meshoptPipeline(doc, label, quantizeFlags) {
+// texCap is the per-class texture size cap (1024 landscape / 512 characters).
+// Textures become GPU-compressed KTX2 when an encoder is on PATH, else webp.
+async function meshoptPipeline(doc, label, quantizeFlags, texCap = 1024) {
   await doc.transform(dedup());
   await doc.transform(prune({ keepLeaves: true }));
   await doc.transform(weld());
   stripDraco(doc);          // geometry is already decoded on read; drop the dangling ext decl
-  await compressTextures(doc, label);
+  const ktx = await ktx2CompressDoc(doc, { maxSize: texCap, label });
+  if (ktx.encoder) {
+    console.log(`    textures: KTX2/${ktx.encoder} x${ktx.count} @cap ${texCap}` +
+      (ktx.skipped ? ` (${ktx.skipped} skipped)` : ''));
+  } else {
+    await compressTextures(doc, label, texCap);
+    console.log(`    textures: webp @cap ${texCap}  (install basis_universal/toktx for KTX2)`);
+  }
   await doc.transform(reorder({ encoder: MeshoptEncoder }));
   await doc.transform(quantize(quantizeFlags));
   await doc.transform(meshopt({ encoder: MeshoptEncoder, level: 'high' }));
@@ -176,10 +188,24 @@ const levelDoc = await io.read(LEVEL_SRC);
   }
   console.log('  preserved collision nodes: ' + KEEP.join(', '));
 
+  // Visual/collision separation: the Collision_* meshes are physics-only (the runtime
+  // bakes a trimesh collider from them and hides them). Strip their materials so the
+  // shipped GLB carries no texture/material payload for geometry the player never sees.
+  let strippedPrims = 0;
+  for (const node of root.listNodes()) {
+    if (!node.getName().startsWith('Collision_')) continue;
+    const mesh = node.getMesh();
+    if (!mesh) continue;
+    for (const prim of mesh.listPrimitives()) {
+      if (prim.getMaterial()) { prim.setMaterial(null); strippedPrims++; }
+    }
+  }
+  console.log(`  stripped material from ${strippedPrims} collision primitive(s)`);
+
   // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
   // their mesh is disposed) collision helpers survive even if their mesh were dropped —
   // but here the collision meshes are real geometry and stay intact.
-  await meshoptPipeline(levelDoc, 'level.glb', { quantizationVolume: 'scene' });
+  await meshoptPipeline(levelDoc, 'level.glb', { quantizationVolume: 'scene' }, 1024);
 }
 await writeAndVerify(levelDoc, OUT('level.glb'), { label: 'level' });
 
@@ -204,14 +230,21 @@ const levelOut = await io.read(OUT('level.glb'));
 console.log('\n[2/4] anims (7 clip-only GLBs)');
 
 // Canonical clip table: key -> { src, clip, stripRootXZ }
+// Most clips now come from the shared family-anims.glb (a Mixamo biped whose 24-bone rig
+// is byte-name-IDENTICAL to dad/mom/cece/drew — verified), so they bind to all four
+// characters with zero remapping. idle + jump have no good family equivalent and stay on
+// their original sources.
+const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';
 const ANIMS = [
   { key: 'idle',  src: 'src/assets/anim/drew-idle.glb', clip: 'Armature|Boxing_Warmup|baselayer' },
-  { key: 'walk',  src: 'src/assets/dad.glb',            clip: 'Walking',             stripRootXZ: true },
-  { key: 'run',   src: 'src/assets/dad.glb',            clip: 'Running',             stripRootXZ: true },
+  // Flirty_Strut_inplace is authored IN-PLACE (Hips XZ travel ~0.085 m / ~0.025 m over the
+  // whole clip — negligible) so we do NOT stripRootXZ; the small residual bob stays put.
+  { key: 'walk',  src: FAMILY_ANIMS,                    clip: 'Flirty_Strut_inplace' },
+  { key: 'run',   src: FAMILY_ANIMS,                    clip: 'Running',                  stripRootXZ: true },
   { key: 'jump',  src: 'src/assets/dad.glb',            clip: '360_Power_Spin_Jump' },
-  { key: 'dance', src: 'src/assets/dad.glb',            clip: 'All_Night_Dance' },
-  { key: 'wave',  src: 'src/assets/cece.glb',           clip: 'Big_Heart_Gesture' },
-  { key: 'cheer', src: 'src/assets/cece.glb',           clip: 'Cheer_with_Both_Hands_1' },
+  { key: 'dance', src: FAMILY_ANIMS,                    clip: 'Love_You_Pop_Dance' },
+  { key: 'wave',  src: FAMILY_ANIMS,                    clip: 'Agree_Gesture' },
+  { key: 'cheer', src: FAMILY_ANIMS,                    clip: 'Cheer_with_Both_Hands_Up' },
 ];
 
 // Load dad's skeleton bone names once — assertion (B) checks every clip channel binds
@@ -236,6 +269,33 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   // Drop the other clips.
   for (const a of root.listAnimations()) if (a !== target) a.dispose();
   target.setName(key);
+
+  // -------- SKIN-SAFE RETARGET: drop non-root bone TRANSLATION channels --------
+  // The clips are shared across all 4 characters by bone NAME (no remap). A Mixamo clip
+  // bakes a `translation` channel for EVERY bone holding the SOURCE character's skeleton
+  // rest offsets. Bone offsets (limb/torso lengths) are a property of each character's
+  // OWN bind, not the animation — so applying a foreign bone's translation TEARS the mesh
+  // wherever the source and target bind poses differ. Concretely, the drew-sourced `idle`
+  // forces dad/mike's torso-root bone (Spine02) ~0.20 m off its hip attachment → the
+  // "floating torso / waist gap" bug. Bone ROTATIONS carry the actual motion and are
+  // bind-agnostic, so we keep those (+ the Hips translation, which is true root motion /
+  // the vertical bob). We strip translation on every bone EXCEPT Hips. This must run
+  // BEFORE stripRootXZ (which then operates on the surviving Hips translation track).
+  let droppedT = 0;
+  for (const ch of target.listChannels()) {
+    const node = ch.getTargetNode();
+    if (ch.getTargetPath() !== 'translation') continue;
+    if (node && node.getName() === 'Hips') continue;   // keep root motion
+    const sampler = ch.getSampler();
+    ch.dispose();
+    // Dispose the channel's now-orphaned sampler input/output accessors via prune later;
+    // disposing the channel detaches it from the animation so the bone keeps its bind pos.
+    if (sampler && sampler.listParents().filter((p) => p.propertyType !== 'Root').length === 0) {
+      sampler.dispose();
+    }
+    droppedT++;
+  }
+  console.log(`    ${key}: dropped ${droppedT} non-Hips translation channel(s) (skin-safe retarget)`);
 
   // stripRootXZ: zero X+Z (keep Y) on the Hips translation track so the capsule drives
   // world position (in-place locomotion). Build-time only.
@@ -284,7 +344,19 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
     throw new Error(`ASSERTION (B) FAILED: anim "${key}" has ${unmatched} channel(s) ` +
       `targeting nodes outside dad's rig — shared-rig retarget would break.`);
   }
-  console.log(`    ${key}: ${channels.length} channels, 0 unmatched (binds to shared rig)`);
+
+  // Assertion (C): NO bone but Hips may keep a translation channel — a foreign bone's
+  // translation tears the shared-rig retarget at the waist (the floating-torso bug).
+  const strayT = channels.filter((ch) => {
+    const node = ch.getTargetNode();
+    return ch.getTargetPath() === 'translation' && !(node && node.getName() === 'Hips');
+  });
+  if (strayT.length !== 0) {
+    const names = strayT.map((ch) => ch.getTargetNode()?.getName()).join(', ');
+    throw new Error(`ASSERTION (C) FAILED: anim "${key}" still has non-Hips translation ` +
+      `channel(s) on [${names}] — these would tear the mesh on other characters.`);
+  }
+  console.log(`    ${key}: ${channels.length} channels, 0 unmatched, only Hips translates (skin-safe)`);
 
   await writeAndVerify(doc, path.join(ANIM_DIR, `${key}.glb`), { label: `anim:${key}` });
 }
@@ -299,8 +371,9 @@ console.log('\n[3/4] characters (mike, kelli, cece, drew)');
 const CHARS = [
   { out: 'mike.glb',  src: 'src/assets/dad.glb' },
   { out: 'kelli.glb', src: 'src/assets/mom.glb' },
-  { out: 'cece.glb',  src: 'src/assets/cece.glb' },
-  { out: 'drew.glb',  src: 'src/assets/drew.glb' },
+  // Cece now uses the NEW low-poly Meshy body (~5.6k verts vs the old ~128k), same 24-bone rig.
+  { out: 'cece.glb',  src: 'src/assets/cece-meshy.glb' },
+  { out: 'drew.glb',  src: 'src/assets/drew-meshy.glb' },
 ];
 // Skinned-safe quantization: do NOT over-quantize the 1.7 m rig (feet slide otherwise).
 const CHAR_QUANT = {
@@ -318,7 +391,8 @@ for (const { out, src } of CHARS) {
   const doc = await io.read(SRC(src));
   // Remove ALL animation clips — shipped separately.
   for (const a of doc.getRoot().listAnimations()) a.dispose();
-  await meshoptPipeline(doc, out, CHAR_QUANT);
+  // Characters cap textures at 512 — a 1.7 m rig never needs more (per-class cap).
+  await meshoptPipeline(doc, out, CHAR_QUANT, 512);
   await writeAndVerify(doc, OUT(out), { label: out });
 }
 

@@ -14,7 +14,7 @@ import { useEffect } from 'react';
 import * as THREE from 'three';
 import { daHilgStore } from '../state/store.js';
 import { cameraRig } from '../state/refs.js';
-import { pointerLockedAtom, pausedAtom, settingsAtom } from '../state/atoms.js';
+import { pointerLockedAtom, pausedAtom, settingsAtom, gamePhaseAtom } from '../state/atoms.js';
 import { LOOK_SENSITIVITY, PITCH_MAX, INVERT_Y } from '../constants.js';
 
 /**
@@ -43,9 +43,16 @@ export function usePointerLock() {
       const canvas = getCanvas();
       const locked = !!canvas && document.pointerLockElement === canvas;
       daHilgStore.set(pointerLockedAtom, locked);
-      // NOTE: we do NOT auto-pause on unlock — the HudMenu is the single owner of
-      // pause (it pauses while open). Losing the lock (Esc/alt-tab) just shows the
-      // click-to-play LockOverlay again.
+      // Losing the lock while playing opens the pause menu so the freed cursor has
+      // something to click. The browser usually SWALLOWS the Esc keydown that exits
+      // pointer lock, so this lock-change is the only reliable "open the menu" path.
+      if (
+        !locked &&
+        daHilgStore.get(gamePhaseAtom) === 'playing' &&
+        !daHilgStore.get(pausedAtom)
+      ) {
+        daHilgStore.set(pausedAtom, true);
+      }
     };
 
     const onMouseMove = (e) => {

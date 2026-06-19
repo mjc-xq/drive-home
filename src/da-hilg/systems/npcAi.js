@@ -27,6 +27,7 @@ import { playerIsSafe, playerNoticeGroups } from '../zones/zoneRegistry.js';
 import { pickWander } from './pointsOfInterest.js';
 import { onNpcTouch } from './greetSystem.js';
 import { requestEmote } from './animationSystem.js';
+import { isNibblersMode } from '../nibblers/mode.js';
 
 // Reused scratch so the hot loop never allocates.
 const _intent = { move: { x: 0, z: 0 }, run: false, jump: false, action: null };
@@ -45,6 +46,9 @@ const WANDER_TIMEOUT_MS = 7000; // abandon an unreachable stroll target after th
  * @param {number} dist  planar distance NPC→active player (passed in to avoid recompute)
  */
 function targetable(actor, ctx, dist) {
+  // In Nibblers mode the family never chases/tags you — the nibblers are the
+  // threat; the family just strolls calmly in the background.
+  if (isNibblersMode()) return false;
   if (playerIsSafe()) return false;
   const group = actor.ai && actor.ai.group;
   // A zone-bound NPC needs BOTH: the player inside its notice group AND within
@@ -211,7 +215,9 @@ export function npcStep(actor, ctx, dt) {
         // Rarely react at the landmark (wave at the mailbox, cheer at the creek).
         // Route through requestEmote — the canonical path that owns motion.action;
         // intent.action is never consumed for NPCs.
-        if (ai._wanderEmote && Math.random() < 0.25) {
+        // Rare landmark emote — but never in Nibblers mode (no dancing while you're
+        // being swarmed) and only occasionally otherwise.
+        if (ai._wanderEmote && !isNibblersMode() && Math.random() < 0.25) {
           requestEmote(actor, ai._wanderEmote, { faceTarget: ai._wanderLookAt || null });
         }
         break;

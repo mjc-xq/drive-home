@@ -5,7 +5,8 @@
 // webgl_gpgpu_birds_gltf recipe adapted to an InstancedMesh on three 0.184.
 //
 // Per-instance attributes (InstancedBufferAttributes the renderer adds):
-//   aPhase (float) 0..1 clip cursor, aClip (float) which band, aTint (vec3) color.
+//   aPhase (float) 0..1 clip cursor, aClip (float) which band. The character color is
+//   the REAL baseColor texture (map), nudged by a faint per-character uTint uniform.
 // The vertex id comes from a baked float attribute `aVertexId` when
 // meta.aVertexId==='attribute', else gl_VertexID (WebGL2 / GLSL3 — always available
 // under R3F). The proxy here bakes _VERTEXID, so swarmGeometry aliases it to
@@ -31,18 +32,24 @@ function useGlVertexId(/* meta */) {
 }
 
 /**
- * Build the patched MeshStandardMaterial for the swarm.
- * @param {{posTex:THREE.Texture, nrmTex:THREE.Texture, meta:Object}} assets
+ * Build the patched MeshStandardMaterial for ONE character's swarm mesh.
+ * @param {{posTex:THREE.Texture, nrmTex:THREE.Texture, colorTex:THREE.Texture, meta:Object, tint?:number[]}} assets
  * @returns {THREE.MeshStandardMaterial}
  */
 export function makeVatMaterial(assets) {
-  const { posTex, nrmTex, meta } = assets;
+  const { posTex, nrmTex, colorTex, meta } = assets;
+  // Faint per-CHARACTER tint (one value per material, not per instance) layered over
+  // the real baseColor texture for variety. Defaults to white = pure texture.
+  const tint = assets.tint || [1, 1, 1];
 
   const material = new THREE.MeshStandardMaterial({
+    // The REAL character baseColor texture is the dominant look. The proxy keeps its
+    // UVs, so the standard `map` chunk samples it normally; the VAT only displaces
+    // vertices, it does not touch UVs. A faint per-character uTint adds variety.
+    map: colorTex || null,
     roughness: 1,
     metalness: 0,
   });
-  // The proxy has no useful UVs/atlas for v1 — characters differ by aTint only.
 
   const vertCount = meta.vertCount;
   const rows = meta.rows;
@@ -85,6 +92,7 @@ export function makeVatMaterial(assets) {
     shader.uniforms.uNrmMax = { value: new THREE.Vector3().fromArray(nrmMax) };
     shader.uniforms.uClipRow = { value: clipRow };
     shader.uniforms.uClipFrames = { value: clipFrames };
+    shader.uniforms.uTint = { value: new THREE.Vector3().fromArray(tint) };
 
     // The vertex id source: a baked attribute or gl_VertexID.
     const vidDecl = glVid
@@ -95,13 +103,12 @@ export function makeVatMaterial(assets) {
     // a future quantized re-bake would otherwise drift the float across a texel.
     const vidExpr = glVid ? 'vatVid' : 'floor(aVertexId + 0.5)';
 
-    // ── Vertex header: instanced attrs + VAT uniforms + a tint varying ──────
+    // ── Vertex header: instanced attrs + VAT uniforms + clip-band helpers ───
     shader.vertexShader = shader.vertexShader.replace(
       '#define STANDARD',
       /* glsl */ `#define STANDARD
         attribute float aPhase;
         attribute float aClip;
-        attribute vec3  aTint;
         ${glVid ? '' : vidDecl}
         uniform sampler2D uVatPos;
         uniform sampler2D uVatNrm;
@@ -113,7 +120,6 @@ export function makeVatMaterial(assets) {
         uniform vec3  uNrmMax;
         uniform vec4  uClipRow;
         uniform vec4  uClipFrames;
-        varying vec3  vTint;
 
         // Pick the clip band's starting row + frame count by aClip (0..3).
         float nibClipRow(float c) {
@@ -144,8 +150,7 @@ export function makeVatMaterial(assets) {
         float nibFrame = nibCr + floor(aPhase * nibCf);
         float nibV = (nibFrame + 0.5) / uRows;
         vec3 nibPosSample = texture2D(uVatPos, vec2(nibU, nibV)).xyz;
-        transformed = mix(uPosMin, uPosMax, nibPosSample);
-        vTint = aTint;`,
+        transformed = mix(uPosMin, uPosMax, nibPosSample);`,
     );
 
     // ── beginnormal_vertex: sample VAT normal → object-space objectNormal ────
@@ -164,18 +169,22 @@ export function makeVatMaterial(assets) {
         objectNormal = normalize(mix(uNrmMin, uNrmMax, nibNrmSample));`,
     );
 
-    // ── fragment: tint the diffuse by the per-instance color ────────────────
+    // ── fragment: the REAL baseColor texture (three's <map_fragment>) is the
+    //    dominant diffuse; multiply by the FAINT per-CHARACTER uTint for variety. We
+    //    inject after <map_fragment> so the tint nudges the textured color rather than
+    //    replacing it (the constants keep uTint near-white so each member reads true).
     shader.fragmentShader = shader.fragmentShader.replace(
       '#define STANDARD',
-      '#define STANDARD\nvarying vec3 vTint;',
+      '#define STANDARD\nuniform vec3 uTint;',
     );
     shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <color_fragment>',
-      '#include <color_fragment>\n\tdiffuseColor.rgb *= vTint;',
+      '#include <map_fragment>',
+      '#include <map_fragment>\n\tdiffuseColor.rgb *= uTint;',
     );
   };
 
-  // One program for the whole horde regardless of per-instance data.
+  // One program for the whole horde regardless of per-character data (same chunks +
+  // same defines; map presence is uniform across all four materials).
   material.customProgramCacheKey = () => 'nibblerVAT';
 
   return material;

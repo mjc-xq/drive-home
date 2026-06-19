@@ -8,7 +8,7 @@
 //   3. per nibbler: dispatch on state → seek/drift/separate/integrate/transition
 //   4. advance emote phase + pick the clip band
 //   5. recompute swarm.activeCount
-//   6. upload instanceMatrix + aPhase/aClip/aTint to swarmGpu (if mounted)
+//   6. upload instanceMatrix + aPhase/aClip into each character's mesh (if mounted)
 
 import {
   MAX_NIBBLERS,
@@ -17,7 +17,6 @@ import {
   NIBBLER_WANDER_SPEED,
   EMOTE_RATE,
   SCATTER_TIME,
-  NIBBLER_TINTS,
   S_DESPAWN,
   S_SPAWN,
   S_WANDER,
@@ -29,8 +28,8 @@ import {
   S_SCATTER,
   CLIP_IDLE,
   CLIP_RUN,
-  CLIP_JUMP,
-  CLIP_EMOTE,
+  CLIP_ATTACK,
+  CLIP_DANCE,
 } from '../constants.js';
 import {
   px,
@@ -196,11 +195,15 @@ export function updateSwarm(ctx) {
     phase[i] -= Math.floor(phase[i]);
 
     // Pick from the LIVE (post-transition) state, not the frame-start `st`, so a
-    // RUN→JUMP this frame shows the jump clip immediately (no 1-frame stale pose).
+    // WANDER→RUN this frame shows the run clip immediately (no 1-frame stale pose).
+    // Band order is [idle, run, attack, dance]:
+    //   converging (notice/run/jump) → RUN, wander/spawn → IDLE,
+    //   ATTACHED → ATTACK with ~1/3 varied to DANCE by seed (the partying minority),
+    //   fall/scatter → IDLE (there is no jump band anymore).
     const cur = state[i];
-    if (cur === S_RUN || cur === S_NOTICE) clip[i] = CLIP_RUN;
-    else if (cur === S_JUMP || cur === S_FALL) clip[i] = CLIP_JUMP;
-    else if (cur === S_WANDER || cur === S_SPAWN) clip[i] = CLIP_EMOTE;
+    if (cur === S_RUN || cur === S_NOTICE || cur === S_JUMP) clip[i] = CLIP_RUN;
+    else if (cur === S_ATTACHED) clip[i] = seed[i] < 0.34 ? CLIP_DANCE : CLIP_ATTACK;
+    else if (cur === S_WANDER || cur === S_SPAWN) clip[i] = CLIP_IDLE;
     else clip[i] = CLIP_IDLE;
   }
 
@@ -210,53 +213,62 @@ export function updateSwarm(ctx) {
   uploadToGpu();
 }
 
+// Per-character running write index, reset at the top of each upload. Plain primitives
+// in a module-scope scratch (no per-frame allocation). Index 0..3 = mike/kelli/cece/drew.
+const charCount = [0, 0, 0, 0];
+
 /**
- * Write every slot's instance matrix (translate + yaw + uniform scale, 16 floats
- * direct) and the per-instance aPhase/aClip/aTint attributes from the SoA. Dead slots
- * carry scale 0 (degenerate → GPU discards them). Flags needsUpdate on each buffer.
+ * Write each LIVE nibbler's instance matrix + aPhase/aClip into ITS CHARACTER'S mesh
+ * (swarmGpu.byChar[charIx]) at that mesh's running write index, then set each mesh's
+ * count to its counter and flip needsUpdate. Dead slots (scale<=0) contribute to no
+ * bucket. The instance matrix (translate + yaw + uniform scale, 16 floats direct) is
+ * computed EXACTLY as before — only the destination mesh + the write index differ, so
+ * grounding (the Y/position/scale math) is identical to the single-mesh upload.
  */
 function uploadToGpu() {
-  const mesh = swarmGpu.mesh;
-  if (!mesh) return;
-  const m = mesh.instanceMatrix.array;
-  const aPhase = swarmGpu.aPhase;
-  const aClip = swarmGpu.aClip;
-  const aTint = swarmGpu.aTint;
+  const byChar = swarmGpu.byChar;
+  if (!byChar) return;
+  // Skip entirely until at least one character mesh has mounted.
+  let anyMesh = false;
+  for (let k = 0; k < 4; k++) if (byChar[k]) anyMesh = true;
+  if (!anyMesh) return;
+
+  charCount[0] = 0; charCount[1] = 0; charCount[2] = 0; charCount[3] = 0;
 
   for (let i = 0; i < MAX_NIBBLERS; i++) {
-    const o = i * 16;
     const s = scale[i];
-    if (s <= 0) {
-      // Degenerate: zero the linear block (collapses to a point), keep translation 0.
-      m[o + 0] = 0; m[o + 1] = 0; m[o + 2] = 0; m[o + 3] = 0;
-      m[o + 4] = 0; m[o + 5] = 0; m[o + 6] = 0; m[o + 7] = 0;
-      m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = 0; m[o + 11] = 0;
-      m[o + 12] = 0; m[o + 13] = 0; m[o + 14] = 0; m[o + 15] = 1;
-    } else {
-      const yaw = heading[i];
-      const c = Math.cos(yaw) * s;
-      const sn = Math.sin(yaw) * s;
-      // Column-major; rotation about Y, uniform scale s.
-      m[o + 0] = c;   m[o + 1] = 0; m[o + 2] = -sn; m[o + 3] = 0;
-      m[o + 4] = 0;   m[o + 5] = s; m[o + 6] = 0;   m[o + 7] = 0;
-      m[o + 8] = sn;  m[o + 9] = 0; m[o + 10] = c;  m[o + 11] = 0;
-      m[o + 12] = px[i]; m[o + 13] = py[i]; m[o + 14] = pz[i]; m[o + 15] = 1;
-    }
+    if (s <= 0) continue; // dead slot → no bucket
 
-    if (aPhase) aPhase.array[i] = phase[i];
-    if (aClip) aClip.array[i] = clip[i];
-    if (aTint) {
-      const t = NIBBLER_TINTS[charIx[i]] || NIBBLER_TINTS[0];
-      const j = i * 3;
-      aTint.array[j] = t[0];
-      aTint.array[j + 1] = t[1];
-      aTint.array[j + 2] = t[2];
-    }
+    const ci = charIx[i];
+    const bucket = byChar[ci];
+    if (!bucket) continue; // this character's mesh hasn't mounted; skip its instances
+
+    const idx = charCount[ci]++;
+    const o = idx * 16;
+    const m = bucket.mesh.instanceMatrix.array;
+
+    // ── IDENTICAL matrix math to the single-mesh upload — DO NOT CHANGE ──────
+    const yaw = heading[i];
+    const c = Math.cos(yaw) * s;
+    const sn = Math.sin(yaw) * s;
+    // Column-major; rotation about Y, uniform scale s.
+    m[o + 0] = c;   m[o + 1] = 0; m[o + 2] = -sn; m[o + 3] = 0;
+    m[o + 4] = 0;   m[o + 5] = s; m[o + 6] = 0;   m[o + 7] = 0;
+    m[o + 8] = sn;  m[o + 9] = 0; m[o + 10] = c;  m[o + 11] = 0;
+    m[o + 12] = px[i]; m[o + 13] = py[i]; m[o + 14] = pz[i]; m[o + 15] = 1;
+    // ────────────────────────────────────────────────────────────────────────
+
+    bucket.aPhase.array[idx] = phase[i];
+    bucket.aClip.array[idx] = clip[i];
   }
 
-  mesh.instanceMatrix.needsUpdate = true;
-  if (aPhase) aPhase.needsUpdate = true;
-  if (aClip) aClip.needsUpdate = true;
-  if (aTint) aTint.needsUpdate = true;
-  mesh.count = MAX_NIBBLERS;
+  // Each mesh draws exactly its live count; flag the buffers it actually wrote.
+  for (let k = 0; k < 4; k++) {
+    const bucket = byChar[k];
+    if (!bucket) continue;
+    bucket.mesh.count = charCount[k];
+    bucket.mesh.instanceMatrix.needsUpdate = true;
+    bucket.aPhase.needsUpdate = true;
+    bucket.aClip.needsUpdate = true;
+  }
 }
