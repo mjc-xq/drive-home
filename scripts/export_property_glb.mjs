@@ -69,6 +69,10 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   g.computeVertexNormals();
   const opacity = opts.opacity ?? 1;
   const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat', transparent: opacity < 1, opacity });
+  if (opts.emissive) {
+    const e = color instanceof THREE.Color ? color.clone() : new THREE.Color(color);
+    m.emissive = e.multiplyScalar(opts.emissive);
+  }
   if (opts.colors) m.vertexColors = true;
   if (opts.flat) m.flatShading = true;
   if (opacity < 1) m.depthWrite = false;
@@ -147,14 +151,14 @@ const COL = existsSync(path.join(ROOT, 'exports/buildings_color.json'))
 const RCOL = existsSync(path.join(ROOT, 'exports/buildings_roof_color.json'))
   ? JSON.parse(readFileSync(path.join(ROOT, 'exports/buildings_roof_color.json'), 'utf8')) : {};
 const STUCCO = [0.82, 0.78, 0.70];
-const ROOFP = [[0.42, 0.39, 0.35], [0.48, 0.43, 0.37], [0.38, 0.39, 0.40], [0.47, 0.39, 0.32], [0.52, 0.49, 0.44]];
+const ROOFP = [[0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55], [0.60, 0.50, 0.42], [0.62, 0.59, 0.52]];
 const WALL_PALETTE = [
   [0.78, 0.73, 0.64], [0.72, 0.75, 0.68], [0.73, 0.70, 0.65],
   [0.68, 0.72, 0.73], [0.80, 0.76, 0.68], [0.69, 0.66, 0.60],
 ];
 const ROOF_PALETTE = [
-  [0.46, 0.43, 0.39], [0.48, 0.35, 0.29], [0.38, 0.40, 0.42],
-  [0.55, 0.50, 0.43], [0.34, 0.35, 0.36],
+  [0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55],
+  [0.60, 0.50, 0.42], [0.62, 0.59, 0.52],
 ];
 const clamp01 = v => Math.max(0, Math.min(1, v));
 const mix3 = (a, b, t) => a.map((v, i) => v * (1 - t) + b[i] * t);
@@ -179,7 +183,7 @@ const wallColor = ib => {
 // material instead of black voids in review renders.
 const roofColor = ib => {
   const src = RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
-  return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.28), 0.34, seededColor(ROOF_PALETTE, ib));
+  return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.40), 0.48, seededColor(ROOF_PALETTE, ib));
 };
 
 function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
@@ -211,8 +215,8 @@ function emitFacadeShellDetails(ring, base, wallH, D) {
       }
     }
     if (D.siding) {
-      for (let y = base + 0.72; y < base + wallH - 0.58; y += 0.52) {
-        pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.18, L - 0.18, y - 0.012, y + 0.012, 0.124);
+      for (let y = base + 0.82; y < base + wallH - 0.65; y += 0.92) {
+        pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.22, L - 0.22, y - 0.006, y + 0.006, 0.124);
       }
     }
   }
@@ -267,18 +271,30 @@ function pushPhotoTri(RfP, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { RfP.pos.push(v[0], v[1], v[2]); const w = aerialUV(v[0], v[2]); RfP.uv.push(w[0], w[1]); }
 }
+function pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, u0, u1, vt, cen) {
+  const A = [xi, yb, zi], B = [xj, yb, zj], Cc = [xj, yt, zj], Dd = [xi, yt, zi];
+  const L = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
+  const nx = -(zj - zi) / L, nz = (xj - xi) / L;
+  const out = (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz) >= 0;
+  const verts = out ? [A, B, Cc, A, Cc, Dd] : [A, Cc, B, A, Dd, Cc];
+  const uvs = out
+    ? [u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt]
+    : [u0, 0, u1, vt, u1, 0, u0, 0, u0, vt, u1, vt];
+  for (const v of verts) W.pos.push(v[0], v[1], v[2]);
+  W.uv.push(...uvs);
+  for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+}
 // W = {pos,uv,col} facade walls (window texture x wallC);  Rf = {pos,col} solid roof.
 // RfP = {pos,uv} optional satellite-photo cap (flat roofs only) for the toggle layer.
 function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, RfP, detail, detailOpts = {}) {
   if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
   const yb = base, yt = base + wallH, vt = wallH / TILE;
+  const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
   let dist = 0;
   for (let i = 0; i < ring.length; i++) {           // walls
     const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
     const seg = Math.hypot(xj - xi, zj - zi), u0 = dist / TILE, u1 = (dist + seg) / TILE; dist += seg;
-    W.pos.push(xi, yb, zi, xj, yb, zj, xj, yt, zj, xi, yb, zi, xj, yt, zj, xi, yt, zi);
-    W.uv.push(u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt);
-    for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
+    pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, u0, u1, vt, cen);
   }
   const v2 = ring.map(([x, z]) => new THREE.Vector2(x, z));   // flat eave cap
   const capTris = THREE.ShapeUtils.triangulateShape(v2, []);
@@ -324,9 +340,9 @@ if (houseIdx >= 0) {
   buildingCollision.push({ ring: houseRing, base, h: houseWallH });
   // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
   // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
-  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv }));
-  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', {}));
-  if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0x6f6a60, 'House_siding_lines'));
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv, emissive: 0.42 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36 }));
+  if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0xbcb4a4, 'House_siding_lines', { emissive: 0.18 }));
   if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim'));
   if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows'));
 }
@@ -367,7 +383,9 @@ function groupedMesh(buf, groups, name, withUV) {
   g.computeVertexNormals();
   const mats = groups.map(([start, count, col], i) => {
     g.addGroup(start, count, i);
-    const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(col[0], col[1], col[2]), roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    const base = new THREE.Color(col[0], col[1], col[2]);
+    const m = new THREE.MeshStandardMaterial({ color: base, roughness: 0.95, metalness: 0, name: `${name}_${i}` });
+    m.emissive = base.clone().multiplyScalar(/walls/i.test(name) ? 0.42 : 0.36);
     m.side = THREE.DoubleSide; return m;
   });
   const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
@@ -375,7 +393,7 @@ function groupedMesh(buf, groups, name, withUV) {
 if (bW.pos.length) {
   scene.add(groupedMesh(bW, wallGroups, 'Buildings_walls', true));
   scene.add(groupedMesh(bRf, roofGroups, 'Buildings_roofs', false));
-  if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0x6d675d, 'Buildings_siding_lines'));
+  if (bD.siding.length) scene.add(mkMesh(bD.siding, null, 0xb6ad9f, 'Buildings_siding_lines', { emissive: 0.18 }));
   if (bD.trim.length) scene.add(mkMesh(bD.trim, null, 0xd2c9b8, 'Buildings_window_trim'));
   if (bD.glass.length) scene.add(mkMesh(bD.glass, null, 0x203342, 'Buildings_windows'));
 }
@@ -412,7 +430,7 @@ function addStreetViewFacadeOverlays() {
     g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0], 2));
     g.computeVertexNormals();
     const matName = `SVFacade_${wall.building}_${wall.edge}`;
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, name: matName });
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, name: matName, emissive: new THREE.Color(1, 1, 1).multiplyScalar(0.16) });
     mat.side = THREE.DoubleSide;
     const mesh = new THREE.Mesh(g, mat);
     mesh.name = matName;
