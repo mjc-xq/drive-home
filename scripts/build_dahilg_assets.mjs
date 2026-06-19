@@ -14,7 +14,7 @@
 import { NodeIO, Logger } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import {
-  dedup, prune, weld, textureCompress, reorder, quantize, meshopt, getBounds,
+  dedup, prune, weld, textureCompress, reorder, quantize, meshopt, getBounds, instance,
 } from '@gltf-transform/functions';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 import draco3d from 'draco3dgltf';
@@ -203,6 +203,12 @@ const levelDoc = await io.read(LEVEL_SRC);
     }
   }
   console.log(`  stripped material from ${strippedPrims} collision primitive(s)`);
+
+  // GPU-instance the repeated trees/fences: the tree-lib is reused across hundreds of
+  // nodes, so dedup() collapses them to shared meshes and instance() emits ONE
+  // EXT_mesh_gpu_instancing node per reused mesh → three renders them as InstancedMeshes
+  // (a handful of draw calls instead of ~870). Frustum culling stays on at runtime.
+  await levelDoc.transform(dedup(), instance({ min: 4 }));
 
   // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
   // their mesh is disposed) collision helpers survive even if their mesh were dropped —

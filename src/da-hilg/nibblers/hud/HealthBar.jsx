@@ -24,8 +24,9 @@ export default function HealthBar() {
   const fillClass =
     pct < 30 ? 'is-low' : pct < 60 ? 'is-mid' : '';
 
-  // Shimmer fades in only while actively draining (riders attached), capped.
-  const drain = attached > 0 ? Math.min(0.6, attached / 120) : 0;
+  // Shimmer fades in only while actively draining (riders attached). Scale for the
+  // current 32-NPC pool so a handful of clingers is visible.
+  const drain = attached > 0 ? Math.min(0.65, attached / 16) : 0;
 
   return (
     <div className="nb-health" aria-label={`Health ${Math.round(value)} of ${HEALTH_MAX}`}>

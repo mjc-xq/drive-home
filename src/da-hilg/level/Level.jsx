@@ -8,8 +8,9 @@
 // via fromBufferAttribute) and mounted at identity. Everything gates on
 // levelMeta.loaded so the recenter offset is real first.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RigidBody, TrimeshCollider } from '@react-three/rapier';
 import { useDaHilgGLTF } from '../loaders.js';
@@ -89,11 +90,138 @@ function bakeCollider(scene) {
 }
 
 /**
+ * True for the "paved/built" meshes the player walks ON but grass must NOT grow on:
+ * roads, road-lines, curbs, sidewalks, walkways, driveways, the owner house, the
+ * neighborhood buildings, their doors/garage doors, and the photo roofs. Terrain,
+ * ground, creek, trees, shrubs, fences, grass clumps, and the flat SVFacade photo
+ * planes are NOT here — grass is fine on/around those.
+ */
+function isPavedOrBuilt(name) {
+  if (!name) return false;
+  return (
+    name.startsWith('Buildings') || // Buildings group + Buildings_* parts
+    name.startsWith('House_') ||    // owner-house walls/roof/trim/windows
+    name === 'Doors' ||
+    name.startsWith('GarageDoor') ||
+    name.startsWith('Roofs_photo') ||
+    name.startsWith('Roof Photo') ||
+    name.startsWith('Driveways') ||
+    name === 'RoadCurbs' ||
+    name === 'RoadLines' ||
+    name === 'Roads' ||
+    name === 'Sidewalks' ||
+    name === 'Walkways'
+  );
+}
+
+/**
+ * Render a ONE-TIME top-down paved/building MASK for the grass shader to sample.
+ *
+ * We gather every paved/built mesh (see isPavedOrBuilt), draw each as flat WHITE on a
+ * BLACK clear from an orthographic camera looking straight down over the level's XZ
+ * footprint, into an offscreen render target. White texels = NO grass. The grass
+ * vertex shader maps each blade's recentered-world XZ into this texture and collapses
+ * any blade that lands on white. Built once (no per-frame cost).
+ *
+ * Runs in the SAME recentered world space the grass lives in: the level renders inside
+ * a <group position={recenter}>, so each mesh's matrixWorld is already recentered —
+ * we render with those world matrices and a camera in that space, no offset math.
+ *
+ * @param {THREE.Object3D} scene the loaded (mounted, recentered) level scene
+ * @param {THREE.WebGLRenderer} gl the live renderer
+ * @returns {{ texture: THREE.Texture, min: [number,number], size: [number,number] } | null}
+ */
+function buildPaveMask(scene, gl) {
+  scene.updateWorldMatrix(true, true);
+
+  // Collect paved/built meshes + accumulate their recentered-world XZ bounds.
+  const meshes = [];
+  const box = new THREE.Box3();
+  const worldBox = new THREE.Box3();
+  scene.traverse((o) => {
+    if (!o.isMesh || !o.geometry) return;
+    if (!isPavedOrBuilt(o.name)) return;
+    meshes.push(o);
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    worldBox.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+    box.union(worldBox);
+  });
+  if (!meshes.length || !isFinite(box.min.x)) return null;
+
+  // Pad the bounds so blades right at a road edge still sample cleanly, then SQUARE
+  // it (equal world-units per texel on both axes keeps the mask undistorted).
+  const pad = 4;
+  let minX = box.min.x - pad;
+  let minZ = box.min.z - pad;
+  let maxX = box.max.x + pad;
+  let maxZ = box.max.z + pad;
+  const span = Math.max(maxX - minX, maxZ - minZ);
+  const cx = (minX + maxX) / 2;
+  const cz = (minZ + maxZ) / 2;
+  minX = cx - span / 2;
+  maxX = cx + span / 2;
+  minZ = cz - span / 2;
+  maxZ = cz + span / 2;
+
+  // Mask scene: a white copy of each paved/built mesh, baked at its world matrix.
+  const maskScene = new THREE.Scene();
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+  for (const o of meshes) {
+    const m = new THREE.Mesh(o.geometry, white);
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(o.matrixWorld);
+    maskScene.add(m);
+  }
+
+  // Top-down orthographic camera: looks straight DOWN the −Y axis over the (squared)
+  // footprint. up = −Z makes the camera basis camera-right = world +X and camera-up =
+  // world −Z, so the rendered image is an un-mirrored top-down with V running along
+  // world −Z (the shader flips V to map world Z → V). The frustum is symmetric about
+  // the camera (centered at cx,cz), so half-span on each side.
+  const SIZE = 2048; // ~0.25 m / texel over a ~470 m span — fine for road edges
+  const half = span / 2;
+  const cam = new THREE.OrthographicCamera(
+    -half, half, half, -half, // left, right, top, bottom in camera-local axes
+    0.1, box.max.y - box.min.y + 200,
+  );
+  cam.position.set(cx, box.max.y + 50, cz);
+  cam.up.set(0, 0, -1);
+  cam.lookAt(cx, box.min.y, cz);
+  cam.updateMatrixWorld(true);
+
+  const rt = new THREE.WebGLRenderTarget(SIZE, SIZE, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+    generateMipmaps: false,
+  });
+
+  // Render once on a black clear, then restore renderer state.
+  const prevTarget = gl.getRenderTarget();
+  const prevClear = gl.getClearColor(new THREE.Color()).getHex();
+  const prevAlpha = gl.getClearAlpha();
+  gl.setRenderTarget(rt);
+  gl.setClearColor(0x000000, 1);
+  gl.clear(true, true, true);
+  gl.render(maskScene, cam);
+  gl.setRenderTarget(prevTarget);
+  gl.setClearColor(prevClear, prevAlpha);
+
+  white.dispose();
+  return { texture: rt.texture, min: [minX, minZ], size: [maxX - minX, maxZ - minZ] };
+}
+
+/**
  * @param {Object} props
  * @param {() => void} [props.onReady] called once the collider is built
  */
 export function Level({ onReady }) {
   const { scene } = useDaHilgGLTF(LEVEL_SOURCE);
+  const gl = useThree((s) => s.gl);
+  const onReadyRef = useRef(onReady);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   // In-game graphics toggles (pause-menu settings).
   const showFacades = useAtomValue(showFacadesAtom);
@@ -122,17 +250,23 @@ export function Level({ onReady }) {
   // the creek footprint, and hide the road-line clutter overlapping the creek.
   const [collider, setCollider] = useState(null);
   const [creekBounds, setCreekBounds] = useState(null);
+  const [paveMask, setPaveMask] = useState(null);
+  const didBuildLevelRef = useRef(false);
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || didBuildLevelRef.current) return;
     const raf = requestAnimationFrame(() => {
+      if (didBuildLevelRef.current) return;
+      didBuildLevelRef.current = true;
       setCollider(bakeCollider(scene));
       const b = computeCreekBounds(scene);
       setCreekBounds(b);
       if (b) hideCreekClutter(scene, b);
-      onReady?.();
+      // Top-down paved/building mask so grass skips roads/walks/driveways/buildings.
+      setPaveMask(buildPaveMask(scene, gl));
+      onReadyRef.current?.();
     });
     return () => cancelAnimationFrame(raf);
-  }, [ready, scene]);
+  }, [ready, scene, gl]);
 
   // Facade toggle: show/hide the Street View photo facades as a group. Names survive
   // the meshopt build, so we gate by SVFacade*. No-op until the export carries them.
@@ -153,9 +287,19 @@ export function Level({ onReady }) {
         {showWater && <CreekWater scene={scene} bounds={creekBounds} />}
       </group>
       {/* Wind-swept grass — WORLD space, follows the player's feet (toggleable).
-          innerRadius small so blades reach right up to the player; lush + tall. */}
-      {showGrass && (
-        <WindGrass radius={22} innerRadius={0.5} count={42000} bladeHeight={0.7} />
+          Dense disc of tapered curved blades; innerRadius tiny so it reaches the player.
+          Gated on paveMask so blades never flash on roads before the mask is ready; the
+          shader culls any blade that lands on a road/walk/driveway/building. */}
+      {showGrass && paveMask && (
+        <WindGrass
+          radius={38}
+          innerRadius={0.4}
+          count={85000}
+          bladeHeight={0.4}
+          paveMask={paveMask.texture}
+          maskMin={paveMask.min}
+          maskSize={paveMask.size}
+        />
       )}
       {collider && (
         <RigidBody type="fixed" colliders={false}>

@@ -23,10 +23,9 @@ import { setNpcClip, advanceNpc } from './npcAnim.js';
 
 // Reused scratch for the on-body cling orientation (no per-frame allocation).
 const _up = new THREE.Vector3();      // model up = radial-out from the player's rig axis
-const _fwd = new THREE.Vector3();     // model forward = up the body (toward the head)
+const _fwd = new THREE.Vector3();     // local +Z basis; visible front is local -Z
 const _right = new THREE.Vector3();
 const _basis = new THREE.Matrix4();
-const _worldUp = new THREE.Vector3(0, 1, 0);
 
 /**
  * @typedef {Object} NpcEntry
@@ -101,7 +100,9 @@ export function publishToNpcPool(dt) {
       // i.e. world-up projected into the tangent plane (== world-up since up is horizontal).
       const h = heading[i];
       _up.set(-Math.sin(h), 0, -Math.cos(h)).normalize();
-      _fwd.copy(_worldUp);                       // climb up the body
+      // The mesh's authored front is -Z, so to make the nibbler FACE UP the body (head
+      // toward the player's head, climbing up) we target +Z at world-DOWN.
+      _fwd.set(0, -1, 0);
       _right.crossVectors(_fwd, _up).normalize(); // x = forward × up
       _fwd.crossVectors(_up, _right).normalize(); // re-orthogonalize forward
       // Build a rotation whose columns are (right, up, forward): three's lookAt-style

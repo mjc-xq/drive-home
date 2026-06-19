@@ -45,15 +45,25 @@ function CharMesh({ charIx, geometry, charAssets }) {
   // Private geometry clone + per-instance buffers (stable across the mesh's life).
   // The clone keeps the shared base geometry's attributes (position/normal/uv/aVertexId)
   // but gives THIS mesh its own aPhase/aClip without clobbering the other characters'.
+  const expectedVertCount = charAssets?.meta?.vertCount;
+  const charKey = charAssets?.key || `char-${charIx}`;
+
   const { geom, buffers } = useMemo(() => {
     if (!geometry) return { geom: null, buffers: null };
+    const actualVertCount = geometry.getAttribute('position')?.count;
+    if (expectedVertCount && actualVertCount !== expectedVertCount) {
+      console.warn(
+        `[nibblers] ${charKey} proxy vertex count ${actualVertCount} does not match VAT ${expectedVertCount}`,
+      );
+      return { geom: null, buffers: null };
+    }
     const g = geometry.clone();
     const phase = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1);
     const clip = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1);
     phase.setUsage(THREE.DynamicDrawUsage);
     clip.setUsage(THREE.DynamicDrawUsage);
     return { geom: g, buffers: { phase, clip } };
-  }, [geometry]);
+  }, [geometry, expectedVertCount, charKey]);
 
   // Register into the sim ↔ render bridge once the mesh + buffers are mounted.
   useEffect(() => {

@@ -23,22 +23,38 @@ function extractGeometry(scene) {
   return geom;
 }
 
-// Guarantee a float `aVertexId` attribute (0..count-1) is present.
+function cleanVertexIds(attr, count) {
+  if (!attr || attr.count !== count || attr.itemSize !== 1) return false;
+  const seen = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    const raw = attr.getX(i);
+    const id = Math.round(raw);
+    if (Math.abs(raw - id) > 1e-3 || id < 0 || id >= count || seen[id]) return false;
+    seen[id] = 1;
+  }
+  return true;
+}
+
+// Guarantee a float `aVertexId` attribute is present and integer-clean.
 function ensureVertexId(geometry) {
-  if (geometry.getAttribute('aVertexId')) return;
+  const count = geometry.getAttribute('position').count;
+  const existing = geometry.getAttribute('aVertexId');
+  if (cleanVertexIds(existing, count)) return;
 
   // Reuse a baked id attribute if the proxy carries one under another name.
   const baked =
     geometry.getAttribute('_VERTEXID') ||
     geometry.getAttribute('_vertexid') ||
     geometry.getAttribute('VERTEXID');
-  if (baked) {
+  if (cleanVertexIds(baked, count)) {
     // Alias to the name the shader expects (same buffer, no copy).
     geometry.setAttribute('aVertexId', baked);
     return;
   }
+  if (existing || baked) {
+    console.warn('[nibblers] proxy vertex-id attribute is invalid; synthesizing sequential ids');
+  }
 
-  const count = geometry.getAttribute('position').count;
   const ids = new Float32Array(count);
   for (let i = 0; i < count; i++) ids[i] = i;
   geometry.setAttribute('aVertexId', new THREE.Float32BufferAttribute(ids, 1));

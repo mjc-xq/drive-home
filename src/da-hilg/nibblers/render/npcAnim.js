@@ -6,10 +6,10 @@
 //
 //   CLIP_RUN    → 'run'    (seeking the player — a full run)
 //   CLIP_IDLE   → 'idle'   (spawn settle / wander / scatter ground beat)
-//   CLIP_ATTACK → 'cheer'  (clinging + slamming the body — a punchy, looped emote)
+//   CLIP_ATTACK → 'attack' (clinging + slamming the body — a punchy, looped emote)
 //   CLIP_DANCE  → 'dance'  (the partying minority riding the body)
 //
-// The pool FORCE-LOOPS every clip (even the one-shot cheer) because a clinging NPC
+// The pool FORCE-LOOPS every clip because a clinging NPC
 // emotes continuously; the player's one-shot semantics don't apply to the horde.
 // Cross-fade durations reuse the framework FADE_* constants so the feel matches.
 
@@ -26,6 +26,7 @@ import {
   CLIP_ATTACK,
   CLIP_DANCE,
 } from '../constants.js';
+import { skinSafeClip } from '../../animation/clips.js';
 
 // SoA clip band → animation clip key.
 const BAND_TO_CLIP = {
@@ -53,10 +54,11 @@ export function bindNpcActions(mixer, clipByKey) {
   /** @type {Record<string, THREE.AnimationAction>} */
   const actions = {};
   for (const key of ['idle', 'run', 'attack', 'dance']) {
-    const clip = clipByKey[key];
-    if (!clip) continue;
+    const sourceClip = clipByKey[key];
+    if (!sourceClip) continue;
+    const clip = skinSafeClip(sourceClip);
     const action = mixer.clipAction(clip);
-    action.setLoop(THREE.LoopRepeat, Infinity); // force-loop, even cheer
+    action.setLoop(THREE.LoopRepeat, Infinity); // force-loop all horde moods
     action.clampWhenFinished = false;
     if (key === 'idle') action.timeScale = IDLE_TIMESCALE;
     actions[key] = action;

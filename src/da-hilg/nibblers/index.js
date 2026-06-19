@@ -15,7 +15,7 @@ import { isNibblersMode, nibblerPenalty } from './mode.js';
 import { daHilgStore } from '../state/store.js';
 import { cameraModeAtom } from '../state/atoms.js';
 import { cameraRig } from '../state/refs.js';
-import { discoveredSafeZonesAtom } from './state/nibblerAtoms.js';
+import { discoveredSafeZonesAtom, revealedDangerZonesAtom } from './state/nibblerAtoms.js';
 
 /**
  * Reset the swarm to a clean empty state and, in Nibblers mode, default the camera
@@ -36,6 +36,10 @@ export function initNibblers() {
   const discovered = daHilgStore.get(discoveredSafeZonesAtom);
   if (!discovered.includes('safe_home')) {
     daHilgStore.set(discoveredSafeZonesAtom, ['safe_home', ...discovered]);
+  }
+  const revealedDanger = daHilgStore.get(revealedDangerZonesAtom);
+  if (!revealedDanger.includes('danger_drive')) {
+    daHilgStore.set(revealedDangerZonesAtom, ['danger_drive', ...revealedDanger]);
   }
   if (isNibblersMode()) {
     daHilgStore.set(cameraModeAtom, 'third');

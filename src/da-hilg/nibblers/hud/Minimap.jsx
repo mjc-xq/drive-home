@@ -1,8 +1,6 @@
-// Minimap — Canvas2D widget, bottom-right. North-up, player-locked. Shows ONLY
-// the three things the spec allows: the road network, the player (dot + facing
-// arrow), and DISCOVERED safe zones (--go pips). It NEVER draws danger zones,
-// nibblers, or undiscovered safe zones — enforced by data availability (the widget
-// has no source for them), not a filter that could regress.
+// Minimap — Canvas2D widget, bottom-right. North-up, player-locked. Shows roads,
+// the player, discovered safe zones, current safe/marked state, and revealed
+// danger zones. Unrevealed danger zones are still not plotted.
 //
 // Data sources:
 //   - minimap.json  → fetched once; road segments drawn to an offscreen canvas
@@ -10,20 +8,27 @@
 //   - player pos+facing → read from refs on a throttled ~10 Hz rAF (NOT an atom;
 //                     continuous, would thrash the store) via
 //                     registry.get(daHilgStore.get(activePlayerIdAtom)).motion.
-//   - discoveredSafeZonesAtom → which pips to light.
-//   - buildNibblersZones(levelMeta) → the XZ position of each safe-zone id (guarded
+//   - discoveredSafeZonesAtom/revealedDangerZonesAtom/currentSafeZoneAtom/markedAtom
+//                     → map state.
+//   - dangerZoneEntered hudEvent → which danger marker is currently hot.
+//   - buildNibblersZones(levelMeta) → the XZ position of each zone id (guarded
 //                     dynamic-ish import; if unavailable, pips are simply skipped).
 //
 // The roads are baked to an offscreen layer once; each rAF tick clears, blits the
 // roads translated by the player offset, then draws pips + player. Direct canvas
 // draw, no React re-render in the loop.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import { daHilgStore } from '../../state/store.js';
 import { registry, levelMeta } from '../../state/refs.js';
-import { activePlayerIdAtom } from '../../state/atoms.js';
-import { discoveredSafeZonesAtom } from '../state/nibblerAtoms.js';
+import { activePlayerIdAtom, markedAtom } from '../../state/atoms.js';
+import {
+  currentSafeZoneAtom,
+  discoveredSafeZonesAtom,
+  revealedDangerZonesAtom,
+} from '../state/nibblerAtoms.js';
+import { on } from '../../hud/hudEvents.js';
 import { MINIMAP_URL, MINIMAP_SIZE_PX, MINIMAP_VIEW_RADIUS } from '../constants.js';
 import { makeMinimapProjector } from '../minimap/minimapTransform.js';
 import { buildNibblersZones } from '../zones/zoneConfig.nibblers.js';
@@ -41,21 +46,31 @@ const LAYER_ORDER = ['walk', 'curb', 'drive', 'road', 'line'];
 
 const RAF_INTERVAL_MS = 100; // ~10 Hz redraw
 
-/** Resolve a safe-zone id → [x, z] (recentered) from the nibblers zone config. */
+/** Resolve zone ids -> XZ positions from the nibblers zone config. */
 function buildZonePositions() {
-  /** @type {Map<string, [number, number]>} */
-  const map = new Map();
+  /** @type {Map<string, {x:number,z:number,label:string}>} */
+  const safe = new Map();
+  /** @type {Map<string, {x:number,z:number,label:string}>} */
+  const danger = new Map();
   try {
     const defs = buildNibblersZones(levelMeta) || [];
     for (const d of defs) {
-      if (d && d.type === 'safe' && Array.isArray(d.position)) {
-        map.set(d.id, [d.position[0], d.position[2]]);
+      if (!d || !Array.isArray(d.position)) continue;
+      const entry = {
+        x: d.position[0],
+        z: d.position[2],
+        label: d.label || d.id,
+      };
+      if (d.type === 'safe') {
+        safe.set(d.id, entry);
+      } else if (d.type === 'danger') {
+        danger.set(d.id, entry);
       }
     }
   } catch {
     /* level meta not loaded / malformed — leave empty, pips just won't draw */
   }
-  return map;
+  return { safe, danger };
 }
 
 /** Build the offscreen road layer from minimap.json. Returns {canvas, proj} or null. */
@@ -112,11 +127,22 @@ function buildRoadLayer(json) {
 
 export default function Minimap() {
   const discovered = useAtomValue(discoveredSafeZonesAtom);
+  const revealedDanger = useAtomValue(revealedDangerZonesAtom);
+  const marked = useAtomValue(markedAtom);
+  const currentSafe = useAtomValue(currentSafeZoneAtom);
+  const [dangerStatus, setDangerStatus] = useState(null);
   const canvasRef = useRef(null);
   const roadRef = useRef(null); // { canvas, cx, cz, pxPerMeter, proj } | null
-  const zonePosRef = useRef(null); // Map<id,[x,z]>
+  const zonePosRef = useRef(null); // { safe:Map, danger:Map }
   const discoveredRef = useRef(discovered);
+  const revealedDangerRef = useRef(revealedDanger);
+  const markedRef = useRef(marked);
+  const safeRef = useRef(currentSafe);
+  const lastDangerRef = useRef(null); // { id, label, active }
   discoveredRef.current = discovered;
+  revealedDangerRef.current = revealedDanger;
+  markedRef.current = marked;
+  safeRef.current = currentSafe;
 
   // Resolve safe-zone positions; recompute whenever discoveries change so a pip
   // discovered after level load (e.g. safe_home, derived from levelMeta) resolves.
@@ -125,7 +151,32 @@ export default function Minimap() {
   }
   useEffect(() => {
     zonePosRef.current = buildZonePositions();
-  }, [discovered]);
+  }, [discovered, revealedDanger]);
+
+  useEffect(() => {
+    const rememberDanger = (payload) => {
+      const next = {
+        id: payload?.id || null,
+        label: payload?.label || 'Danger Zone',
+        active: true,
+      };
+      lastDangerRef.current = next;
+      setDangerStatus(next);
+    };
+    const softenDanger = (payload) => {
+      const prev = lastDangerRef.current;
+      if (!prev || (payload?.id && payload.id !== prev.id)) return;
+      const next = { ...prev, active: false };
+      lastDangerRef.current = next;
+      setDangerStatus(next);
+    };
+    const offEnter = on('dangerZoneEntered', rememberDanger);
+    const offExit = on('dangerZoneExited', softenDanger);
+    return () => {
+      offEnter();
+      offExit();
+    };
+  }, []);
 
   // Fetch + bake roads once.
   useEffect(() => {
@@ -198,15 +249,17 @@ export default function Minimap() {
 
       // discovered safe-zone pips (--go), player-locked north-up
       const zonePos = zonePosRef.current;
+      const safePos = zonePos?.safe;
+      const dangerPos = zonePos?.danger;
       const ids = discoveredRef.current || [];
-      if (zonePos && ids.length) {
+      if (safePos && ids.length) {
         ctx.fillStyle = '#2BE84F';
         ctx.shadowColor = 'rgba(43,232,79,0.8)';
         ctx.shadowBlur = 6;
         for (const zid of ids) {
-          const p = zonePos.get(zid);
+          const p = safePos.get(zid);
           if (!p) continue;
-          let [mx, my] = liveProj.worldToMap(p[0], p[1], px, pz);
+          let [mx, my] = liveProj.worldToMap(p.x, p.z, px, pz);
           // clamp off-screen pips to the rim so distant discoveries still read
           mx = Math.max(7, Math.min(size - 7, mx));
           my = Math.max(7, Math.min(size - 7, my));
@@ -220,6 +273,60 @@ export default function Minimap() {
           ctx.fill();
         }
         ctx.shadowBlur = 0;
+      }
+
+      // Revealed danger-zone pips: bright for the current/marked danger, dim after
+      // discovery so the player can remember hazards without getting a full map reveal.
+      const danger = lastDangerRef.current;
+      const dangerIds = revealedDangerRef.current || [];
+      if (dangerPos && dangerIds.length) {
+        for (const zid of dangerIds) {
+          const p = dangerPos.get(zid);
+          if (!p) continue;
+          let [mx, my] = liveProj.worldToMap(p.x, p.z, px, pz);
+          mx = Math.max(9, Math.min(size - 9, mx));
+          my = Math.max(9, Math.min(size - 9, my));
+          const hot = danger?.id === zid && (markedRef.current || danger.active);
+          ctx.save();
+          ctx.strokeStyle = hot ? '#FF5247' : 'rgba(255,82,71,0.48)';
+          ctx.fillStyle = hot ? 'rgba(255,82,71,0.18)' : 'rgba(255,82,71,0.08)';
+          ctx.lineWidth = hot ? 2 : 1.4;
+          ctx.shadowColor = hot ? 'rgba(255,82,71,0.8)' : 'rgba(255,82,71,0.25)';
+          ctx.shadowBlur = hot ? 8 : 3;
+          ctx.beginPath();
+          ctx.moveTo(mx, my - 6);
+          ctx.lineTo(mx + 6, my + 5);
+          ctx.lineTo(mx - 6, my + 5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // State halos around the player make "safe now" and "danger now" readable even
+      // when the current zone pip is hidden under the centered player arrow.
+      if (safeRef.current) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(43,232,79,0.95)';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(43,232,79,0.65)';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(half, half, 11, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      } else if (markedRef.current) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,82,71,0.95)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.shadowColor = 'rgba(255,82,71,0.7)';
+        ctx.shadowBlur = 9;
+        ctx.beginPath();
+        ctx.arc(half, half, 13, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
 
       // player: --jump dot + facing arrow at center. On a north-up map the arrow
@@ -251,12 +358,20 @@ export default function Minimap() {
   }, []);
 
   const count = Array.isArray(discovered) ? discovered.length : 0;
+  const dangerCount = Array.isArray(revealedDanger) ? revealedDanger.length : 0;
+  const dangerLabel = marked
+    ? 'danger active'
+    : dangerStatus
+      ? 'danger remembered'
+      : dangerCount === 1
+        ? '1 danger zone revealed'
+        : `${dangerCount} danger zones revealed`;
 
   return (
     <div
       className="nb-minimap nb-panel"
       style={{ width: MINIMAP_SIZE_PX + 10, height: MINIMAP_SIZE_PX + 10 }}
-      aria-label={`Minimap — ${count} safe zones discovered`}
+      aria-label={`Minimap - ${count} safe zones discovered, ${dangerLabel}`}
     >
       <canvas
         ref={canvasRef}
@@ -270,6 +385,12 @@ export default function Minimap() {
           {count}
         </span>
       )}
+      <span className="nb-minimap-legend" aria-hidden="true">
+        <span className="nb-minimap-key is-safe">Safe</span>
+        <span className={`nb-minimap-key is-danger${marked ? ' is-live' : ''}`}>
+          Danger
+        </span>
+      </span>
     </div>
   );
 }

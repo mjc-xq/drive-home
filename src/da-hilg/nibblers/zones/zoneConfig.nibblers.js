@@ -3,11 +3,10 @@
 // space (house at origin, the same space <Level> renders in) on the ±200 m block.
 //
 // Layout logic: the house is the anchor safe zone; four more discoverable safe
-// zones sit at the cardinals along the road network; six HIDDEN danger zones are
-// seeded on the approaches BETWEEN them, so traveling is the risk. Danger zones are
-// invisible for free — <Zone> renders only a sensor collider — and they never reach
-// the minimap (the minimap has no data source for them; it reads only the discovered
-// safe-zone set).
+// zones sit at the cardinals along the road network; six danger zones are seeded on
+// the approaches BETWEEN them, so traveling is the risk. Most danger zones reveal
+// after discovery. The near-home driveway danger is known from the start so the
+// minimap immediately communicates both sides of the loop: green safe, red danger.
 //
 // Safe boxes are tall (~12 m) so the player triggers them regardless of the exact
 // hill height at that XZ; danger boxes are likewise tall + invisible. Each safe def
@@ -54,6 +53,7 @@ function buildHomeSafeGrounded(levelMeta) {
     size: [sizeX, sizeY, sizeZ],
     label: 'Home',
     discover: true,
+    marker: true,
   };
 }
 
@@ -72,18 +72,18 @@ export function buildNibblersZones(levelMeta) {
   return [
     // ── SAFE ZONES (type 'safe') — home anchor + 4 discoverable along the roads.
     home,
-    { id: 'safe_creek', type: 'safe', position: [-60, 6, -120], size: [26, 12, 26], label: 'Creek Landing', discover: true },
-    { id: 'safe_overlook', type: 'safe', position: [130, 8, 40], size: [24, 12, 24], label: 'East Overlook', discover: true },
-    { id: 'safe_park', type: 'safe', position: [-110, 6, 90], size: [28, 12, 28], label: 'West Green', discover: true },
-    { id: 'safe_corner', type: 'safe', position: [70, 6, 150], size: [24, 12, 24], label: 'North Corner', discover: true },
+    { id: 'safe_creek', type: 'safe', position: [-60, 6, -120], size: [26, 12, 26], label: 'Creek Landing', discover: true, marker: true },
+    { id: 'safe_overlook', type: 'safe', position: [130, 8, 40], size: [24, 12, 24], label: 'East Overlook', discover: true, marker: true },
+    { id: 'safe_park', type: 'safe', position: [-110, 6, 90], size: [28, 12, 28], label: 'West Green', discover: true, marker: true },
+    { id: 'safe_corner', type: 'safe', position: [70, 6, 150], size: [24, 12, 24], label: 'North Corner', discover: true, marker: true },
 
-    // ── DANGER ZONES (type 'danger') — HIDDEN, seeded between the safe zones on the
-    // approaches. npcGroup tags them for future data-only spawn-rate tuning.
-    { id: 'danger_drive', type: 'danger', position: [26, 5, 24], size: [30, 10, 30], npcGroup: 'nibblers' },
-    { id: 'danger_south', type: 'danger', position: [-20, 5, -70], size: [44, 12, 44], npcGroup: 'nibblers' },
-    { id: 'danger_eastrd', type: 'danger', position: [80, 6, 0], size: [50, 12, 40], npcGroup: 'nibblers' },
-    { id: 'danger_westrd', type: 'danger', position: [-80, 6, 40], size: [50, 12, 44], npcGroup: 'nibblers' },
-    { id: 'danger_northrd', type: 'danger', position: [30, 6, 100], size: [48, 12, 48], npcGroup: 'nibblers' },
-    { id: 'danger_far', type: 'danger', position: [150, 8, 150], size: [60, 14, 60], npcGroup: 'nibblers' },
+    // ── DANGER ZONES (type 'danger') — seeded between safe zones on the approaches.
+    // Labels feed toasts, the action pulse, and the minimap marker after a trigger.
+    { id: 'danger_drive', type: 'danger', position: [26, 5, 24], size: [30, 10, 30], label: 'Driveway Swarm', npcGroup: 'nibblers', reveal: true, marker: true },
+    { id: 'danger_south', type: 'danger', position: [-20, 5, -70], size: [44, 12, 44], label: 'South Ambush', npcGroup: 'nibblers', reveal: true },
+    { id: 'danger_eastrd', type: 'danger', position: [80, 6, 0], size: [50, 12, 40], label: 'East Road Swarm', npcGroup: 'nibblers', reveal: true },
+    { id: 'danger_westrd', type: 'danger', position: [-80, 6, 40], size: [50, 12, 44], label: 'West Road Swarm', npcGroup: 'nibblers', reveal: true },
+    { id: 'danger_northrd', type: 'danger', position: [30, 6, 100], size: [48, 12, 48], label: 'North Road Swarm', npcGroup: 'nibblers', reveal: true },
+    { id: 'danger_far', type: 'danger', position: [150, 8, 150], size: [60, 14, 60], label: 'Far Corner Swarm', npcGroup: 'nibblers', reveal: true },
   ];
 }

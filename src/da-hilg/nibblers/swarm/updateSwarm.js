@@ -197,11 +197,11 @@ export function updateSwarm(ctx) {
     // WANDER→RUN this frame shows the run clip immediately (no 1-frame stale pose).
     // Band order is [idle, run, attack, dance]:
     //   converging (notice/run/jump) → RUN, wander/spawn → IDLE,
-    //   ATTACHED → ATTACK with ~1/3 varied to DANCE by seed (the partying minority),
+    //   ATTACHED → ATTACK with a small varied DANCE minority by seed,
     //   fall/scatter → IDLE (there is no jump band anymore).
     const cur = state[i];
     if (cur === S_RUN || cur === S_NOTICE || cur === S_JUMP) clip[i] = CLIP_RUN;
-    else if (cur === S_ATTACHED) clip[i] = seed[i] < 0.34 ? CLIP_DANCE : CLIP_ATTACK;
+    else if (cur === S_ATTACHED) clip[i] = seed[i] < 0.22 ? CLIP_DANCE : CLIP_ATTACK;
     else if (cur === S_WANDER || cur === S_SPAWN) clip[i] = CLIP_IDLE;
     else clip[i] = CLIP_IDLE;
   }

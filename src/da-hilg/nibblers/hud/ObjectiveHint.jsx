@@ -13,7 +13,7 @@ import { markedAtom } from '../../state/atoms.js';
 import { attachedCountAtom } from '../state/nibblerAtoms.js';
 
 // Once this many riders cling, urgency overrides the calmer "reach a safe zone".
-const CRITICAL_ATTACHED = 50;
+const CRITICAL_ATTACHED = 8;
 
 export default function ObjectiveHint() {
   const marked = useAtomValue(markedAtom);
@@ -22,12 +22,12 @@ export default function ObjectiveHint() {
   let text;
   let tone = '';
   if (!marked) {
-    text = 'Explore — find Safe Zones';
+    text = 'Explore - find Safe Zones';
   } else if (attached >= CRITICAL_ATTACHED) {
     text = 'Get to safety!';
     tone = ' is-crit';
   } else {
-    text = 'MARKED — reach a Safe Zone!';
+    text = 'MARKED - reach a Safe Zone!';
     tone = ' is-marked';
   }
 

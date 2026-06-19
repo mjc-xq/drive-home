@@ -6,6 +6,6 @@ import { atom } from 'jotai';
 export const showFacadesAtom = atom(true);
 /** Show the flowing creek water (the "fancy water"). */
 export const showWaterAtom = atom(true);
-// Grass defaults OFF — the current blade field looks rough; a proper instanced-grass
-// rework (shell/fin or alpha-card tutorial technique) is pending. Toggle on to preview.
-export const showGrassAtom = atom(false);
+// Grass defaults ON — a proper instanced curved-blade field (tapered multi-segment
+// blades, traveling wind gust, root→tip gradient + base AO) that follows the player.
+export const showGrassAtom = atom(true);

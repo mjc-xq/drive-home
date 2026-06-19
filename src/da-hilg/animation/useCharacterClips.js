@@ -1,4 +1,4 @@
-// Binds the seven canonical animation clips onto a single character's cloned
+// Binds the canonical animation clips onto a single character's cloned
 // skeleton. All four rigs are byte-identical 24-bone Mixamo skeletons with bare
 // bone names, so each clip-only GLB (ANIM_URL) binds by bone name with zero
 // remapping. We build ONE AnimationMixer for the given clone and one
@@ -8,13 +8,13 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { ANIM_URL, IDLE_TIMESCALE } from '../constants.js';
-import { CLIP_KEYS, CLIP_LOOP } from './clips.js';
+import { CLIP_KEYS, CLIP_LOOP, skinSafeClip } from './clips.js';
 
 // The clip GLB URLs in canonical key order — drei caches each by URL.
 const CLIP_URLS = CLIP_KEYS.map((key) => ANIM_URL[key]);
 
 /**
- * Load the 7 clip GLBs and bind them as AnimationActions onto `clonedScene`.
+ * Load the shared clip GLBs and bind them as AnimationActions onto `clonedScene`.
  * Returns one mixer + an actions map keyed by clip key (idle/walk/run/...).
  * @param {THREE.Object3D} clonedScene this actor's own SkeletonUtils clone
  * @returns {{ mixer: THREE.AnimationMixer, actions: Record<string, THREE.AnimationAction> }}
@@ -31,9 +31,10 @@ export function useCharacterClips(clonedScene) {
 
     CLIP_KEYS.forEach((key, i) => {
       // Each clip GLB carries exactly its one clip as animations[0].
-      const clip = gltfs[i]?.animations?.[0];
-      if (!clip) return;
+      const sourceClip = gltfs[i]?.animations?.[0];
+      if (!sourceClip) return;
 
+      const clip = skinSafeClip(sourceClip);
       const action = mixer.clipAction(clip);
       if (CLIP_LOOP[key] === 'once') {
         action.setLoop(THREE.LoopOnce, 1);
