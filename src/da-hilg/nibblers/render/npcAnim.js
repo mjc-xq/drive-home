@@ -26,7 +26,7 @@ import {
   CLIP_ATTACK,
   CLIP_DANCE,
 } from '../constants.js';
-import { skinSafeClip } from '../../animation/clips.js';
+import { retargetSkinSafeClip } from '../../animation/clips.js';
 
 // SoA clip band → animation clip key.
 const BAND_TO_CLIP = {
@@ -47,16 +47,19 @@ function fadeFor(key) {
  * Bind one mixer's clip actions from a loaded clip map. The pool loops EVERY clip
  * (the horde emotes continuously) and slows the bouncy idle the same as the family.
  * @param {THREE.AnimationMixer} mixer
- * @param {Record<string, THREE.AnimationClip|undefined>} clipByKey  key -> AnimationClip
+ * @param {Record<string, {clip?: THREE.AnimationClip, sourceRoot?: THREE.Object3D}|undefined>} clipByKey
+ * @param {THREE.Object3D} targetRoot this NPC clone/root
+ * @param {string} character stable character key for retarget cache reuse
  * @returns {Record<string, THREE.AnimationAction>} actions keyed by clip key
  */
-export function bindNpcActions(mixer, clipByKey) {
+export function bindNpcActions(mixer, clipByKey, targetRoot, character) {
   /** @type {Record<string, THREE.AnimationAction>} */
   const actions = {};
   for (const key of ['idle', 'walk', 'run', 'attack', 'dance']) {
-    const sourceClip = clipByKey[key];
+    const source = clipByKey[key];
+    const sourceClip = source?.clip;
     if (!sourceClip) continue;
-    const clip = skinSafeClip(sourceClip);
+    const clip = retargetSkinSafeClip(sourceClip, source?.sourceRoot, targetRoot, character);
     const action = mixer.clipAction(clip);
     action.setLoop(THREE.LoopRepeat, Infinity); // force-loop all horde moods
     action.clampWhenFinished = false;

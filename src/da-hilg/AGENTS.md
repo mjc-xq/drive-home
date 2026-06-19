@@ -275,12 +275,13 @@ Outputs:
   — physics geometry ships no texture payload); `LOD_Buildings_Low` dropped.
 - `mike.glb`, `kelli.glb`, `cece.glb`, `drew.glb` — the 4 characters (embedded clips
   removed; skinned-safe quantization).
-- `anims/{idle,walk,run,jump,dance,wave,cheer}.glb` — the **7 canonical clips**,
+- `anims/{idle,walk,run,jump,dance,wave,cheer,attack}.glb` — the **8 canonical clips**,
   clip-only, renamed to the canonical key, with `stripRootXZ` applied to walk/run at
   build time. Skin-safe retarget: every clip **drops non-`Hips` translation channels**
-  (keeps rotations + Hips root motion), so a clip authored on one character binds to
-  any of the four without tearing the torso off the hips. (All four share a 24-bone
-  Mixamo rig but **not** identical bind transforms — see the skin-safe note below.)
+  (keeps rotations + Hips root motion). Runtime then applies source->target rest-pose
+  delta to rotations so clips authored on one Meshy rig do not twist another rig's
+  hips/spine. (All four share 24 Mixamo-style bone names but **not** identical bind
+  transforms — see the skin-safe note below.)
 - `level.meta.json` — **computed at build time**, never hand-edited: `offset`,
   `groundY`, `houseCenter`, `houseBox`, `spawns`, `npcSpawns`.
 
@@ -307,9 +308,9 @@ is done inside the Canvas by `<DaHilgPreloader>`, not at module scope.
 > **Skin-safe retarget (the waist bug):** a Mixamo clip bakes a `translation` track for
 > *every* bone holding the **source** character's rest offsets. Bound onto a character
 > with a different bind, those tracks yank the torso-root bone off the hips (a floating
-> torso / waist gap). The build drops every non-`Hips` translation channel — rotations
-> carry the real motion and are bind-agnostic. If you re-author the clip pipeline, keep
-> assertion (c).
+> torso / waist gap). The build drops every non-`Hips` translation channel, and runtime
+> converts rotation tracks through the source and target rest poses before binding. If
+> you re-author the clip pipeline, keep assertion (c) and the runtime rest-pose retarget.
 
 The **Nibblers swarm** has its own pipeline (`npm run build:nibbler-vat`,
 `build:minimap`) — see `nibblers/AGENTS.md`.
