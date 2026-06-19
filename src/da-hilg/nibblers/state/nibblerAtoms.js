@@ -14,7 +14,11 @@ export { markedAtom, healthAtom } from '../../state/atoms.js';
 export const gameModeAtom = atom('nibblers'); // 'nibblers' | 'greet'
 
 // Safe zones the player has discovered (permanent, append-only) — drives the minimap.
-export const discoveredSafeZonesAtom = atom([]); // string[] of zone ids
+// Seeded with 'safe_home' so the player STARTS safe-zone-aware: the home/front-yard
+// anchor (buildNibblersZones → id 'safe_home', which contains the spawn) shows its pip
+// on the minimap from the first frame, so there's always a marked safe zone to head for.
+// initNibblers() re-seeds this on every (re)mount so it survives a mode re-enter.
+export const discoveredSafeZonesAtom = atom(['safe_home']); // string[] of zone ids
 
 // Marked elapsed seconds (1 Hz) + the attraction tier 0..4 (for HUD ramp).
 export const markedTimerAtom = atom(0);

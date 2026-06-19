@@ -1,11 +1,36 @@
 // All Nibblers tunables in one place. Pure data, no imports. Units: meters /
-// seconds / radians. The swarm is a flat typed-array sim (see swarm/swarmState.js),
-// rendered as ONE InstancedMesh sampling a Vertex Animation Texture.
+// seconds / radians. The swarm is a flat typed-array sim (see swarm/swarmState.js).
+//
+// As of the NPC rework the horde is no longer a VAT InstancedMesh. The SoA sim is
+// unchanged (it stays the single source of truth for marked/active/attached counts,
+// penalties, health, scatter, stomp), but it is now CAPPED to a small pool of REAL
+// skinned NPC characters (Cece + Drew, the two light Meshy bodies) driven by real
+// AnimationMixers so they move like people with smoothly cross-faded clips. The
+// active count is CPU-throttled by a rolling frame-time average (see render/throttle.js).
 
 // ── Capacity / scale ────────────────────────────────────────────────────────
-export const MAX_NIBBLERS = 512;          // SoA capacity + InstancedMesh count
-export const NIBBLER_SCALE_MIN = 0.2;     // 20% of a 1.7 m human
-export const NIBBLER_SCALE_MAX = 0.3;     // 30%
+// MAX_NIBBLERS is the SoA capacity AND the hard ceiling on simultaneously-mounted
+// real NPCs — kept small because each one is a skinned clone with its own mixer
+// (NOT a GPU instance). The throttle servos the live count inside [MIN, MAX].
+export const NIBBLER_NPC_MAX = 32;        // hard cap on real NPC characters in the pool
+export const NIBBLER_NPC_MIN = 6;         // throttle never drops the cap below this
+export const MAX_NIBBLERS = NIBBLER_NPC_MAX; // SoA capacity == pool size (one slot ↔ one NPC)
+// The horde reads as mini-clones (the Nibblers look) even though each is a real skinned
+// NPC — kept small so a pile clings believably to the 1.7 m player capsule. Slightly
+// larger than the old VAT clones since these carry full detail.
+export const NIBBLER_SCALE_MIN = 0.28;
+export const NIBBLER_SCALE_MAX = 0.36;
+
+// ── CPU throttle (rolling frame-time → dynamic active cap) ──────────────────
+// Each frame we fold the real frame time into an exponential moving average. If the
+// average climbs past the budget the active cap ramps DOWN (fewer NPCs animate); if
+// frames are smooth it ramps back UP toward NIBBLER_NPC_MAX. This keeps the horde as
+// large as the machine can sustain without dropping frames.
+export const NIBBLER_FRAME_BUDGET_MS = 19; // target avg ms/frame (~52 fps headroom band)
+export const NIBBLER_FRAME_SLACK_MS = 3;   // dead-band: only adjust outside budget ± slack
+export const NIBBLER_FRAME_EMA = 0.1;      // EMA weight for the new frame sample (0..1)
+export const NIBBLER_CAP_RAMP_DOWN = 18;   // cap units shed per second when over budget
+export const NIBBLER_CAP_RAMP_UP = 4;      // cap units added per second when smooth
 
 // ── Per-nibbler FSM states (integers in the Uint8 state array) ──────────────
 export const S_DESPAWN = 0;
@@ -36,7 +61,10 @@ export const ATTRACTION = [
   { t: 120, lo: 50, hi: 80 },
 ];
 export const ATTRACTION_GROWTH = 1.5;     // extra active/sec past 120s
-export const ACTIVE_RESERVE = 64;         // keep slots for fall/scatter/attached
+// Slots kept free for fall/scatter/attached. With a small NPC pool the throttle cap
+// (render/throttle.js) is the real limiter, so this only needs a couple of slots of
+// headroom so a freshly-attached NPC never starves a new spawn.
+export const ACTIVE_RESERVE = 4;          // keep slots for fall/scatter/attached
 
 // ── Spawner ─────────────────────────────────────────────────────────────────
 export const SPAWN_RING_MIN = 8;          // spawn this far from the player…
@@ -69,8 +97,8 @@ export const ATTACH_HEIGHT_BAND = 1.4;    // vertical reach around the capsule
 // body × stacked layers. Each layer pushes the cling a little further out so a big
 // pile covers the body (concentric shells) instead of fighting for one ring.
 export const CLING_ANGULAR_SLOTS = 7;     // angular columns around the body axis
-export const CLING_NIBBLER_HALF = 0.18;   // nibbler half-size → sits proud of the skin
-export const CLING_LAYER_STEP = 0.16;     // each concentric layer this much further out
+export const CLING_NIBBLER_HALF = -0.05;  // feet press slightly INTO the skin (contact, not floating)
+export const CLING_LAYER_STEP = 0.06;     // layers stay near the surface (perpendicular clingers fan out)
 export const CLING_Y_BOTTOM = 0.18;       // lowest anchor band (m above feet)
 export const CLING_Y_TOP = 1.72;          // highest anchor band (m above feet, ~head)
 
@@ -113,6 +141,13 @@ export const SCATTER_TIME = 1.2;
 // proxy/texture URLs from there. NIBBLER_CHARS is the canonical order (charIx 0..3).
 export const NIBBLER_ASSET_BASE = '/da-hilg/nibblers/';
 export const NIBBLER_CHARS = ['mike', 'kelli', 'cece', 'drew'];
+
+// The real-NPC pool uses ONLY the two light Meshy bodies — cece (~5.6k verts) and
+// drew (~13k). mike/kelli are 128k-vert and far too heavy to clone × the pool size.
+// charIx values that the spawner assigns (indices into NIBBLER_CHARS / CHARACTER_URL):
+//   2 = cece, 3 = drew. Order is the spawn rotation.
+export const NIBBLER_NPC_CHARS = ['cece', 'drew'];
+export const NIBBLER_NPC_CHAR_IX = [2, 3]; // their indices in NIBBLER_CHARS
 export const NIBBLER_PROXY_URL = (key) => `${NIBBLER_ASSET_BASE}nibbler.${key}.proxy.glb`;
 export const NIBBLER_VAT_JSON_URL = '/da-hilg/nibblers/nibbler.vat.json';
 export const MINIMAP_URL = '/da-hilg/minimap.json';

@@ -1,5 +1,5 @@
 // The swarm sim core: one pass over every live nibbler running the per-state FSM,
-// then the GPU upload to the InstancedMesh. This is a plain function called from
+// then a publish to the real-NPC pool. This is a plain function called from
 // updateNibblers(ctx) inside the single GameSystems useFrame — NO useFrame of its own.
 //
 // Order each frame:
@@ -8,7 +8,7 @@
 //   3. per nibbler: dispatch on state → seek/drift/separate/integrate/transition
 //   4. advance emote phase + pick the clip band
 //   5. recompute swarm.activeCount
-//   6. upload instanceMatrix + aPhase/aClip into each character's mesh (if mounted)
+//   6. publish each live slot to its pooled NPC (position/face/scale/clip + tick mixer)
 
 import {
   MAX_NIBBLERS,
@@ -44,14 +44,13 @@ import {
   jumpCD,
   seed,
   state,
-  charIx,
   clip,
   swarm,
 } from './swarmState.js';
 import { free } from './swarmState.js';
 import { buildGrid } from './grid.js';
 import { seekTo, separate, integrate, tryJumpAndAttach } from './nibblerFSM.js';
-import { swarmGpu } from '../render/swarmGpu.js';
+import { publishToNpcPool } from '../render/npcPool.js';
 
 const NOTICE_R2 = NOTICE_RADIUS * NOTICE_RADIUS;
 const SPAWN_SETTLE_T = 0.3; // seconds of pop-in before WANDER
@@ -209,66 +208,8 @@ export function updateSwarm(ctx) {
 
   swarm.activeCount = active;
 
-  // 4) Upload to the GPU (skip entirely if the renderer hasn't mounted).
-  uploadToGpu();
-}
-
-// Per-character running write index, reset at the top of each upload. Plain primitives
-// in a module-scope scratch (no per-frame allocation). Index 0..3 = mike/kelli/cece/drew.
-const charCount = [0, 0, 0, 0];
-
-/**
- * Write each LIVE nibbler's instance matrix + aPhase/aClip into ITS CHARACTER'S mesh
- * (swarmGpu.byChar[charIx]) at that mesh's running write index, then set each mesh's
- * count to its counter and flip needsUpdate. Dead slots (scale<=0) contribute to no
- * bucket. The instance matrix (translate + yaw + uniform scale, 16 floats direct) is
- * computed EXACTLY as before — only the destination mesh + the write index differ, so
- * grounding (the Y/position/scale math) is identical to the single-mesh upload.
- */
-function uploadToGpu() {
-  const byChar = swarmGpu.byChar;
-  if (!byChar) return;
-  // Skip entirely until at least one character mesh has mounted.
-  let anyMesh = false;
-  for (let k = 0; k < 4; k++) if (byChar[k]) anyMesh = true;
-  if (!anyMesh) return;
-
-  charCount[0] = 0; charCount[1] = 0; charCount[2] = 0; charCount[3] = 0;
-
-  for (let i = 0; i < MAX_NIBBLERS; i++) {
-    const s = scale[i];
-    if (s <= 0) continue; // dead slot → no bucket
-
-    const ci = charIx[i];
-    const bucket = byChar[ci];
-    if (!bucket) continue; // this character's mesh hasn't mounted; skip its instances
-
-    const idx = charCount[ci]++;
-    const o = idx * 16;
-    const m = bucket.mesh.instanceMatrix.array;
-
-    // ── IDENTICAL matrix math to the single-mesh upload — DO NOT CHANGE ──────
-    const yaw = heading[i];
-    const c = Math.cos(yaw) * s;
-    const sn = Math.sin(yaw) * s;
-    // Column-major; rotation about Y, uniform scale s.
-    m[o + 0] = c;   m[o + 1] = 0; m[o + 2] = -sn; m[o + 3] = 0;
-    m[o + 4] = 0;   m[o + 5] = s; m[o + 6] = 0;   m[o + 7] = 0;
-    m[o + 8] = sn;  m[o + 9] = 0; m[o + 10] = c;  m[o + 11] = 0;
-    m[o + 12] = px[i]; m[o + 13] = py[i]; m[o + 14] = pz[i]; m[o + 15] = 1;
-    // ────────────────────────────────────────────────────────────────────────
-
-    bucket.aPhase.array[idx] = phase[i];
-    bucket.aClip.array[idx] = clip[i];
-  }
-
-  // Each mesh draws exactly its live count; flag the buffers it actually wrote.
-  for (let k = 0; k < 4; k++) {
-    const bucket = byChar[k];
-    if (!bucket) continue;
-    bucket.mesh.count = charCount[k];
-    bucket.mesh.instanceMatrix.needsUpdate = true;
-    bucket.aPhase.needsUpdate = true;
-    bucket.aClip.needsUpdate = true;
-  }
+  // 4) Drive the real-NPC pool: position/face/scale/clip each live slot's NPC and
+  //    advance its AnimationMixer with the SHARED dt (no second sim loop). A no-op
+  //    until NibblerNpcs has mounted at least one NPC.
+  publishToNpcPool(dt);
 }
