@@ -29,7 +29,34 @@ import { initNibblers } from './nibblers/index.js';
 import SceneEnv from './scene/SceneEnv.jsx';
 import Scene from './scene/Scene.jsx';
 import PostFX from './scene/PostFX.jsx';
+import { renderState } from './scene/RenderLoop.jsx';
 import DaHilgHud from './hud/DaHilgHud.jsx';
+
+/**
+ * Wire WebGL context-loss recovery on the live renderer's canvas. iOS reclaims the GPU
+ * on backgrounding / memory pressure / thermal events; without this the canvas goes
+ * permanently black (RenderLoop would render on a dead context and throw). We
+ * preventDefault the loss so the browser can restore, skip rendering while lost, and
+ * clear the flag on restore (three re-initializes its GL state automatically).
+ */
+function onCanvasCreated({ gl }) {
+  const canvas = gl.domElement;
+  canvas.addEventListener(
+    'webglcontextlost',
+    (e) => {
+      e.preventDefault();
+      renderState.contextLost = true;
+    },
+    false,
+  );
+  canvas.addEventListener(
+    'webglcontextrestored',
+    () => {
+      renderState.contextLost = false;
+    },
+    false,
+  );
+}
 
 // Stable list of the KTX2-bearing GLBs to warm once the renderer is live.
 const PRELOAD_URLS = [LEVEL_URL, ...Object.values(CHARACTER_URL)];
@@ -81,6 +108,7 @@ export default function DaHilgApp() {
           shadows={{ type: THREE.PCFShadowMap }}
           dpr={[1, deviceTier.dprMax]}
           gl={{ powerPreference: 'high-performance', stencil: false }}
+          onCreated={onCanvasCreated}
           camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
         >
           <SceneEnv />

@@ -16,8 +16,17 @@
 import { useFrame } from '@react-three/fiber';
 import { postComposer } from './PostFX.jsx';
 
+// Shared render flag. iOS Safari drops the WebGL context on backgrounding / memory
+// pressure / thermal throttling; rendering on a lost context throws and leaves the
+// canvas permanently black. DaHilgApp's onCreated wires webglcontextlost/restored to
+// flip this, and we simply skip the render while lost — three re-initializes its GL
+// state on 'webglcontextrestored' (we preventDefault the loss to allow that), so the
+// screen recovers on its own instead of staying black until a full reload.
+export const renderState = { contextLost: false };
+
 export default function RenderLoop() {
   useFrame(({ gl, scene, camera }, dt) => {
+    if (renderState.contextLost) return;
     const composer = postComposer.current;
     if (composer) composer.render(dt);
     else gl.render(scene, camera);
