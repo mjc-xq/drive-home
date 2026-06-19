@@ -247,6 +247,8 @@ const ANIMS = [
   { key: 'dance', src: FAMILY_ANIMS,                    clip: 'Love_You_Pop_Dance' },
   { key: 'wave',  src: FAMILY_ANIMS,                    clip: 'Agree_Gesture' },
   { key: 'cheer', src: FAMILY_ANIMS,                    clip: 'Cheer_with_Both_Hands_Up' },
+  // Aggressive clip the Nibbler swarm rides while clinging — a downward ground slam.
+  { key: 'attack', src: FAMILY_ANIMS,                   clip: 'Charged_Ground_Slam' },
 ];
 
 // Load dad's skeleton bone names once — assertion (B) checks every clip channel binds

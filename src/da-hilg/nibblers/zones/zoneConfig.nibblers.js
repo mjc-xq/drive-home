@@ -14,7 +14,48 @@
 // carries label (toast + minimap pip) and discover:true (first entry reveals it).
 // Danger defs carry npcGroup:'nibblers' so future per-zone tuning stays data-only.
 
-import { buildHomeSafe } from '../../zones/zoneConfig.js';
+/**
+ * Build the home/front-yard anchor safe zone, GROUND-ANCHORED around the spawn.
+ *
+ * NOTE: we do NOT reuse the framework's buildHomeSafe here. Its box is fit to
+ * levelMeta.houseBox, whose Y range is the house WALL geometry (~10–14 m above the
+ * recentered ground) — so that box floats ~8 m over a ground-standing player and the
+ * spawned player never overlaps it (the Rapier sensor is a real 3D AABB). For Nibblers
+ * the home zone MUST contain the spawn so the player starts safe, so we take the house
+ * XZ footprint (padded) but anchor the box from the ground up through the roofline.
+ * @param {import('../../state/refs.js').levelMeta} levelMeta
+ * @returns {{id:string,type:string,position:number[],size:number[],label:string,discover:boolean}}
+ */
+function buildHomeSafeGrounded(levelMeta) {
+  const box = levelMeta && levelMeta.houseBox;
+  const hasBox =
+    box && Array.isArray(box.min) && Array.isArray(box.max) && (box.max[0] - box.min[0]) > 0;
+
+  // XZ footprint of the house, padded to include the porch/front-yard skirt, else a
+  // generous box around origin (the spawn sits near origin in recentered space).
+  const PAD_XZ = 8;
+  const cx = hasBox ? (box.min[0] + box.max[0]) / 2 : 0;
+  const cz = hasBox ? (box.min[2] + box.max[2]) / 2 : 0;
+  const sizeX = hasBox ? (box.max[0] - box.min[0]) + PAD_XZ * 2 : 30;
+  const sizeZ = hasBox ? (box.max[2] - box.min[2]) + PAD_XZ * 2 : 30;
+
+  // Vertical span: floor a couple meters BELOW the ground (recentered ground ≈ 0) so a
+  // capsule whose feet sit at y≈0.05 is comfortably inside, and reach up over the roof
+  // (box.max[1] ≈ 14 m). Center + full-height so the AABB is [-2 .. roofTop].
+  const roofTop = hasBox ? box.max[1] : 14;
+  const floorY = -2;
+  const sizeY = roofTop - floorY;
+  const cy = (floorY + roofTop) / 2;
+
+  return {
+    id: 'safe_home',
+    type: 'safe',
+    position: [cx, cy, cz],
+    size: [sizeX, sizeY, sizeZ],
+    label: 'Home',
+    discover: true,
+  };
+}
 
 /**
  * Build the array of Nibblers zone defs (recentered coords), spread straight onto
@@ -23,8 +64,10 @@ import { buildHomeSafe } from '../../zones/zoneConfig.js';
  * @returns {Array<Object>}
  */
 export function buildNibblersZones(levelMeta) {
-  // Reuse the houseBox auto-fit for the anchor safe zone; tag it discoverable.
-  const home = { ...buildHomeSafe(levelMeta), id: 'safe_home', label: 'Home', discover: true };
+  // Ground-anchored home anchor safe zone around the spawn; tagged discoverable AND
+  // pre-discovered at start (see discoveredSafeZonesAtom seed) so the player begins safe
+  // and sees the home pip on the minimap from the first frame.
+  const home = buildHomeSafeGrounded(levelMeta);
 
   return [
     // ── SAFE ZONES (type 'safe') — home anchor + 4 discoverable along the roads.

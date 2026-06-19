@@ -9,11 +9,13 @@
 // levelMeta.loaded so the recenter offset is real first.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useAtomValue } from 'jotai';
 import * as THREE from 'three';
 import { RigidBody, TrimeshCollider } from '@react-three/rapier';
 import { useDaHilgGLTF } from '../loaders.js';
 import { levelMeta } from '../state/refs.js';
 import { LEVEL_URL } from '../constants.js';
+import { showFacadesAtom, showWaterAtom, showGrassAtom } from '../state/settingsAtoms.js';
 import { CreekWater, computeCreekBounds, hideCreekClutter } from './CreekWater.jsx';
 import { WindGrass } from './WindGrass.jsx';
 
@@ -93,6 +95,11 @@ function bakeCollider(scene) {
 export function Level({ onReady }) {
   const { scene } = useDaHilgGLTF(LEVEL_SOURCE);
 
+  // In-game graphics toggles (pause-menu settings).
+  const showFacades = useAtomValue(showFacadesAtom);
+  const showWater = useAtomValue(showWaterAtom);
+  const showGrass = useAtomValue(showGrassAtom);
+
   const [ready, setReady] = useState(levelMeta.loaded);
   useEffect(() => {
     if (ready) return;
@@ -127,17 +134,29 @@ export function Level({ onReady }) {
     return () => cancelAnimationFrame(raf);
   }, [ready, scene]);
 
+  // Facade toggle: show/hide the Street View photo facades as a group. Names survive
+  // the meshopt build, so we gate by SVFacade*. No-op until the export carries them.
+  useEffect(() => {
+    if (!ready) return;
+    scene.traverse((o) => {
+      if (o.isMesh && (o.name || '').startsWith('SVFacade')) o.visible = showFacades;
+    });
+  }, [scene, ready, showFacades]);
+
   if (!ready) return null;
 
   return (
     <>
       <group position={recenter}>
         <primitive object={scene} />
-        {/* Flat flowing water at the low creek elevation (never climbs the hill). */}
-        <CreekWater scene={scene} bounds={creekBounds} />
-        {/* Wind-swept grass on the yard around the house (recentered origin). */}
-        <WindGrass radius={90} count={14000} groundY={levelMeta.groundY ?? 0} />
+        {/* Flat flowing water at the low creek elevation (toggleable "fancy water"). */}
+        {showWater && <CreekWater scene={scene} bounds={creekBounds} />}
       </group>
+      {/* Wind-swept grass — WORLD space, follows the player's feet (toggleable).
+          innerRadius small so blades reach right up to the player; lush + tall. */}
+      {showGrass && (
+        <WindGrass radius={22} innerRadius={0.5} count={42000} bladeHeight={0.7} />
+      )}
       {collider && (
         <RigidBody type="fixed" colliders={false}>
           <TrimeshCollider args={[collider.vertices, collider.indices]} />

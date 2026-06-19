@@ -3,7 +3,9 @@
 // them with zero remapping. Clip GLBs are already renamed to these keys and have
 // stripRootXZ applied to walk/run at build time (see scripts/build_dahilg_assets.mjs).
 
-export const CLIP_KEYS = ['idle', 'walk', 'run', 'jump', 'dance', 'wave', 'cheer'];
+// 'attack' is an aggressive looping clip used by the Nibblers swarm when clinging —
+// the family never triggers it as an emote, but every rig loads it (shared 24-bone rig).
+export const CLIP_KEYS = ['idle', 'walk', 'run', 'jump', 'dance', 'wave', 'cheer', 'attack'];
 
 export const LOCOMOTION_KEYS = ['idle', 'walk', 'run', 'jump'];
 export const EMOTE_KEYS = ['dance', 'wave', 'cheer'];
@@ -18,6 +20,7 @@ export const CLIP_LOOP = {
   dance: 'repeat',
   wave: 'once',
   cheer: 'once',
+  attack: 'repeat', // nibblers flail/slam continuously while clinging
 };
 
 // Whether an emote holds until interrupted (dance) or plays once (wave/cheer).

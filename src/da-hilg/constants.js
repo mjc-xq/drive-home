@@ -23,6 +23,7 @@ export const ANIM_URL = {
   dance: '/da-hilg/anims/dance.glb',
   wave: '/da-hilg/anims/wave.glb',
   cheer: '/da-hilg/anims/cheer.glb',
+  attack: '/da-hilg/anims/attack.glb',
 };
 export const LEVEL_URL = '/da-hilg/level.glb';
 export const LEVEL_META_URL = '/da-hilg/level.meta.json';

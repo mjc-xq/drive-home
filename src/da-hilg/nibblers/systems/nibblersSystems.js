@@ -3,9 +3,9 @@
 // post-collision feet pos + velY this frame) and after flushZones (zone membership
 // reconciled), before commitReactive.
 //
-// The whole pass is gated on assetsReady(): until the proxy GLB + VAT textures have
-// loaded there are no bodies to draw and grid.js hasn't been built, so we return
-// early (the swarm SoA stays empty, penalties stay {1,1,1}).
+// The whole pass is gated on poolReady(): until the real-NPC pool has mounted at least
+// one Cece/Drew body there is nothing to drive, so we return early (the swarm SoA stays
+// empty, penalties stay {1,1,1}). This replaced the old assetsReady() VAT-texture gate.
 //
 // Order (each step is a plain function; no per-nibbler React, no second useFrame):
 //   updateNibblerZones  marked / discovered / scatter from the reconciled zone set
@@ -17,7 +17,7 @@
 //   updateStomp         descending + grid query under feet → kill free nibblers + bounce
 //   commitNibblers      change-gated / bucketed atom writes (the React-facing surface)
 
-import { assetsReady } from '../render/nibblerAssets.js';
+import { poolReady } from '../render/npcPool.js';
 import { updateNibblerZones } from './nibblerZones.js';
 import { spawnPolicy } from '../swarm/spawner.js';
 import { updateSwarm } from '../swarm/updateSwarm.js';
@@ -33,8 +33,8 @@ import { commitNibblers } from './commitNibblers.js';
  *   cameraRig, levelMeta, now, dt, activePlayerId }
  */
 export function updateNibblers(ctx) {
-  // No assets → no horde yet. Skip the whole pass (keeps penalties at {1,1,1}).
-  if (!assetsReady()) return;
+  // No mounted NPCs → no horde yet. Skip the whole pass (keeps penalties at {1,1,1}).
+  if (!poolReady()) return;
 
   updateNibblerZones(ctx);
   spawnPolicy(ctx);

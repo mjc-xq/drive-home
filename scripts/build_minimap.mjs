@@ -1,7 +1,8 @@
 // Build the 2D minimap line-art (roads/driveways/sidewalks/curbs/lines) for Da Hilg.
 //
-// Reads the SOURCE level export (exports/1840-dahill-property.glb) — NOT public/da-hilg/
-// level.glb, whose mesh names are stripped — extracts the named road meshes (all TRIANGLES),
+// Reads the SOURCE level export (exports/1840-dahill-property-trees.glb — the SAME export
+// build_dahilg_assets.mjs bakes the runtime level + level.meta.json from) — NOT public/
+// da-hilg/level.glb, whose mesh names are stripped — extracts the named road meshes (all TRIANGLES),
 // projects their vertices to RECENTERED XZ (subtract the same offset the asset build computes
 // for level.meta.json), runs BOUNDARY-EDGE extraction per mesh (undirected edges used by
 // exactly one triangle => crisp silhouette outlines), and emits a compact set of 2D segments
@@ -19,7 +20,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, ...p);
-const LEVEL_SRC = SRC('exports', '1840-dahill-property.glb');
+// Keep this in lockstep with build_dahilg_assets.mjs's LEVEL_SRC so the road line-art
+// shares the exact geometry (and recenter offset) of the level the game actually loads.
+const LEVEL_SRC = SRC('exports', '1840-dahill-property-trees.glb');
 const OUT = SRC('public', 'da-hilg', 'minimap.json');
 
 const io = new NodeIO()
@@ -180,7 +183,7 @@ const half = Math.max(Math.abs(bounds.minX), Math.abs(bounds.maxX), Math.abs(bou
 const worldHalfExtent = Math.ceil(half);
 
 const minimap = {
-  source: '1840-dahill-property.glb',
+  source: '1840-dahill-property-trees.glb',
   note: 'Recentered XZ line-art for the minimap. Coords = world XZ minus offset[0]/offset[2]. ' +
         'Boundary-edge outlines (edges used by exactly one triangle). Segments are [x1,z1,x2,z2].',
   worldHalfExtent,

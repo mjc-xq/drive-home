@@ -23,6 +23,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { activePlayer } from '../state/refs.js';
 
 /**
  * Build one blade's geometry: two crossed thin quads (a "+" footprint) so the
@@ -221,10 +222,17 @@ export function WindGrass({
     return { mesh: inst };
   }, [geometry, material, count, radius, innerRadius, groundY, center]);
 
-  // Advance wind time on the patched shader (render-only; not the sim).
+  // Advance wind time + keep the field centered on the active player's feet, so the
+  // grass is always dense around the player AND at their actual ground level (the
+  // yard sits on a hill well above the terrain MIN, so a fixed-Y disc would bury it).
+  // Render-only (not the sim loop). The mesh lives in WORLD space (mounted outside the
+  // level's recenter group), so motion.pos — the player's recentered-world feet — maps
+  // straight onto mesh.position.
   useFrame((_, dt) => {
     const sh = material.userData.shader;
     if (sh) sh.uniforms.uTime.value += dt;
+    const p = activePlayer();
+    if (p && p.motion) mesh.position.copy(p.motion.pos);
   });
 
   return <primitive object={mesh} />;

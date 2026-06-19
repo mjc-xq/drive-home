@@ -55,6 +55,30 @@ grows as you discover more safe zones.
 
 ## 3. Swarm architecture (the heart of it)
 
+> **REWORK (real-NPC pool).** The swarm is no longer rendered as a VAT InstancedMesh.
+> The SoA sim below is **unchanged** and still the single source of truth (marked /
+> active / attached counts, penalties, health, scatter, stomp). What changed is the
+> **renderer + capacity**: the horde is now a **throttled pool of real skinned NPC
+> characters** — Cece + Drew only (the two light Meshy bodies; mike/kelli are 128k-vert
+> and excluded). Each pooled NPC is a `SkeletonUtils` clone with its **own
+> `AnimationMixer`** + the shared clips, so they move like people (smoothly cross-faded
+> `run`/`idle`/`cheer`(attack)/`dance`), not jumpy 24-frame VAT bakes.
+>
+> - `MAX_NIBBLERS` is now `NIBBLER_NPC_MAX` (32) — the SoA capacity **and** the hard pool
+>   ceiling. One SoA slot ↔ one pooled NPC, 1:1 and stable; slot character is fixed by
+>   parity (even→cece, odd→drew) so a slot's body never pops.
+> - **CPU throttle** (`render/throttle.js`): a rolling EMA of real frame time servos a
+>   dynamic active cap in `[NIBBLER_NPC_MIN, NIBBLER_NPC_MAX]` — over budget → shed NPCs,
+>   smooth → admit more. The spawner clamps `swarm.targetActive` to `activeCap()`.
+> - **Renderer** (`render/NibblerNpcs.jsx`) mounts the pool; **bridge** (`render/npcPool.js`)
+>   binds each live slot's NPC each frame (pos/face/scale/clip) and advances its mixer.
+>   The mixer tick uses the **shared sim dt** inside `updateSwarm`'s tail (was the VAT
+>   `uploadToGpu`) — still **no second `useFrame`**.
+> - **Dormant** (left on disk, unreferenced, reversible): `SwarmRenderer.jsx`,
+>   `swarmGpu.js`, `vatMaterial.js`, `swarmGeometry.js`, `nibblerAssets.js`, and the VAT
+>   bake assets. The paragraphs below describe that dormant VAT path; the live path is
+>   the NPC pool. The sim gate is now `poolReady()` (was `assetsReady()`).
+
 The swarm is **not registry actors**. Hundreds of independent Rapier bodies / React
 components would never hit frame. Instead:
 

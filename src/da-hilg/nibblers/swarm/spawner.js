@@ -39,6 +39,8 @@ import {
   swarm,
 } from './swarmState.js';
 import { alloc, free } from './swarmState.js';
+import { updateThrottle, activeCap } from '../render/throttle.js';
+import { slotCharIx } from '../render/npcPool.js';
 
 const RAY_ORIGIN_OFFSET = 50; // cast from this far above the candidate XZ
 const RAY_MAX_TOI = 120;
@@ -131,7 +133,9 @@ function spawnOne(ctx, P, camYaw) {
   phase[i] = hash01(sd);
   stateT[i] = 0;
   jumpCD[i] = 0;
-  charIx[i] = (Math.random() * 4) | 0; // 0..3
+  // Character is FIXED by slot parity (even → cece, odd → drew) so the real-NPC pool's
+  // stable 1:1 slot↔body binding always shows the right model. No random pick.
+  charIx[i] = slotCharIx(i);
   state[i] = S_SPAWN;
   return true;
 }
@@ -167,6 +171,10 @@ export function spawnPolicy(ctx) {
   const P = player.motion.pos;
   const dt = ctx.dt;
 
+  // CPU throttle: fold this frame's time into the rolling average and ramp the active
+  // cap. Always ticked (even unmarked) so the average tracks real load continuously.
+  updateThrottle(dt);
+
   // Tick the marked clock + refresh the target.
   if (swarm.marked) swarm.markedT += dt;
 
@@ -178,7 +186,10 @@ export function spawnPolicy(ctx) {
     return;
   }
 
-  const target = Math.round(targetActiveFor(swarm.markedT));
+  // Attraction curve goal, CLAMPED to the throttle's dynamic cap so the horde never
+  // asks for more real NPCs than the machine can sustain this frame.
+  const cap = activeCap();
+  const target = Math.min(Math.round(targetActiveFor(swarm.markedT)), cap);
   swarm.targetActive = target;
 
   const deficit = target - swarm.activeCount;
