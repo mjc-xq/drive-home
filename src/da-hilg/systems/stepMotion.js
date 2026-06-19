@@ -27,6 +27,7 @@ import {
   COYOTE_TIME,
   JUMP_BUFFER,
   CAPSULE_CENTER_Y,
+  MODEL_FACING_OFFSET,
 } from '../constants.js';
 // Nibblers swarm penalty: {1,1,1} in greet mode (no-op), scaled by attached count
 // in nibblers mode. Framework-level coupling kept to this one read site each.
@@ -142,8 +143,9 @@ export function stepMotion(actor, intent, ctx) {
     m.facing = angleLerp(m.facing, travel, 1 - Math.exp(-12 * dt));
   }
 
-  // Keep the visual group oriented to facing (camera owns the FP head-hide).
-  if (ref.group) ref.group.rotation.y = m.facing;
+  // Keep the visual group oriented to facing (+ the model's authored-forward
+  // offset so the body faces its travel/look direction, not the camera).
+  if (ref.group) ref.group.rotation.y = m.facing + MODEL_FACING_OFFSET;
 }
 
 export default stepMotion;

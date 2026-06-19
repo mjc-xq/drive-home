@@ -1,18 +1,18 @@
-// Loads the decimated nibbler proxy GLB and hands back the ONE BufferGeometry the
-// whole horde renders with (one InstancedMesh, MAX instances). The proxy carries
-// POSITION, NORMAL, and a baked float vertex-id attribute (_VERTEXID in the
-// current bake) — the VAT material samples the animation texture by that id.
+// Loads the FOUR decimated nibbler proxy GLBs — one per family character
+// (mike/kelli/cece/drew) — and hands back a per-character map of BufferGeometries the
+// swarm renders with (one InstancedMesh PER character, MAX instances each). Each proxy
+// carries POSITION, NORMAL, UV, and a baked float vertex-id attribute (_VERTEXID): the
+// VAT material samples its character's animation texture by that id and the REAL
+// baseColor texture by the UV.
 //
-// The material's onBeforeCompile reads `aVertexId` (its chosen attribute name), so
-// we make sure an `aVertexId` float attribute exists on the geometry: if the proxy
-// already baked one (under _VERTEXID or aVertexId), alias it; otherwise synthesize
-// [0..vertCount-1]. We also guarantee gl_VertexID can be a fallback by keeping the
-// attribute regardless of meta.aVertexId — having it is harmless and robust.
+// The material's onBeforeCompile reads `aVertexId` (its chosen attribute name), so we
+// guarantee an `aVertexId` float attribute exists on each geometry: if the proxy baked
+// one (under _VERTEXID or aVertexId), alias it; otherwise synthesize [0..vertCount-1].
 
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
-import { NIBBLER_PROXY_URL } from '../constants.js';
+import { NIBBLER_CHARS, NIBBLER_PROXY_URL } from '../constants.js';
 
 // Pull the first mesh's geometry out of a loaded GLTF scene.
 function extractGeometry(scene) {
@@ -45,20 +45,31 @@ function ensureVertexId(geometry) {
 }
 
 /**
- * Hook: returns the shared proxy geometry (with `aVertexId` guaranteed), or null
- * if the GLTF hasn't produced a mesh yet. Memoized on the loaded scene.
- * @returns {THREE.BufferGeometry|null}
+ * Hook: returns a per-character map of shared proxy geometries (each with `aVertexId`
+ * guaranteed), or null until all four GLTFs have produced a mesh. The renderer CLONES
+ * each per InstancedMesh so per-instance attributes (aPhase/aClip) live on a private
+ * geometry without clobbering the shared base.
+ * @returns {Object.<string,THREE.BufferGeometry>|null}
  */
 export function useSwarmGeometry() {
-  const { scene } = useGLTF(NIBBLER_PROXY_URL);
+  // useGLTF accepts an array of urls and returns an array of gltfs (one per url),
+  // preserving order — so we map back to NIBBLER_CHARS by index.
+  const urls = NIBBLER_CHARS.map((k) => NIBBLER_PROXY_URL(k));
+  const gltfs = useGLTF(urls);
 
   return useMemo(() => {
-    const geom = extractGeometry(scene);
-    if (!geom) return null;
-    ensureVertexId(geom);
-    return geom;
-  }, [scene]);
+    const arr = Array.isArray(gltfs) ? gltfs : [gltfs];
+    const byChar = {};
+    for (let i = 0; i < NIBBLER_CHARS.length; i++) {
+      const scene = arr[i] && arr[i].scene;
+      const geom = scene ? extractGeometry(scene) : null;
+      if (!geom) return null;
+      ensureVertexId(geom);
+      byChar[NIBBLER_CHARS[i]] = geom;
+    }
+    return byChar;
+  }, [gltfs]);
 }
 
-// Warm drei's cache so the first SwarmRenderer mount doesn't stall on the fetch.
-useGLTF.preload(NIBBLER_PROXY_URL);
+// Warm drei's cache so the first SwarmRenderer mount doesn't stall on the fetches.
+for (const k of NIBBLER_CHARS) useGLTF.preload(NIBBLER_PROXY_URL(k));

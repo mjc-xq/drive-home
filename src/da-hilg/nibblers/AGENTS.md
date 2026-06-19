@@ -280,6 +280,17 @@ you'll reach for most:
 - **Tints:** `NIBBLER_TINTS` index 0..3 = mike/kelli/cece/drew.
 - **Minimap:** `MINIMAP_VIEW_RADIUS=80`, `MINIMAP_SIZE_PX=180`.
 
+## 8b. Dev toggles (`devFlags.js`)
+
+Never on by default — read once from the URL query (or `localStorage`) so a normal
+build/play is unaffected:
+
+- **`?fastmark`** — auto-`armMarked` the player **anywhere outside a safe zone**, so the
+  swarm spawns within ~1 s without hunting for a hidden danger zone. Open
+  `/da-hilg?fastmark` (or set `localStorage['dahilg:fastmark']='1'`). Implemented as one
+  extra clause in `nibblerZones.js` gated on `DEV_FAST_MARK`. Use it to iterate on swarm
+  look/behaviour fast; turn it off to test the real explore→danger→safe loop.
+
 ## 9. Rebuilding assets
 
 Two separate build scripts (kept out of the hero asset pipeline on purpose):

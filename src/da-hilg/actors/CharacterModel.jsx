@@ -8,16 +8,16 @@
 // clips the player's own head, so no bone hacks are needed.
 
 import { useEffect, useMemo, useRef } from 'react';
-import { useGLTF } from '@react-three/drei';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { CHARACTER_URL, CAPSULE_CENTER_Y } from '../constants.js';
+import { useDaHilgGLTF } from '../loaders.js';
 import { useCharacterClips } from '../animation/useCharacterClips.js';
 
 /**
  * @param {{ actor: import('./actorRegistry.js').Actor }} props
  */
 export default function CharacterModel({ actor }) {
-  const { scene } = useGLTF(CHARACTER_URL[actor.character]);
+  const { scene } = useDaHilgGLTF(CHARACTER_URL[actor.character]);
 
   // Each actor gets its OWN clone (skeleton + materials) so animations and any
   // future per-actor tinting never bleed across the family.
@@ -62,5 +62,5 @@ export default function CharacterModel({ actor }) {
   );
 }
 
-// Warm the four character GLBs so the first actor mount doesn't stall.
-Object.values(CHARACTER_URL).forEach((url) => useGLTF.preload(url));
+// (The four character GLBs are warmed by <DaHilgPreloader/> inside the Canvas — KTX2
+// transcoding needs the live renderer, which a module-scope preload wouldn't have.)

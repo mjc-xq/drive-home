@@ -21,33 +21,19 @@ import { pushToast } from './hudEvents.js';
 const charMap = (v) => Object.fromEntries(CHARACTERS.map((id) => [id, v]));
 
 export default function HudMenu() {
-  const [open, setOpen] = useState(false);
+  // The menu's open state IS pausedAtom — single source of truth. usePointerLock
+  // sets paused=true when the pointer lock is lost (Esc/alt-tab), which opens the
+  // menu with a free cursor; the hamburger + outside-click toggle it.
+  const [open, setOpen] = useAtom(pausedAtom);
   const [cameraMode, setCameraMode] = useAtom(cameraModeAtom);
   const [settings, setSettings] = useAtom(settingsAtom);
   const [, setScore] = useAtom(scoreAtom);
   const [, setWon] = useAtom(wonAtom);
   const [, setGreeted] = useAtom(greetedAtom);
-  const [, setPaused] = useAtom(pausedAtom);
   // EXIT is a two-tap confirm so you can't rage-quit by accident.
   const [confirmExit, setConfirmExit] = useState(false);
   const confirmTimer = useRef(null);
   const panelRef = useRef(null);
-
-  // Opening the menu pauses the sim; closing resumes. ESC toggles.
-  useEffect(() => {
-    setPaused(open);
-  }, [open, setPaused]);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        // Esc is also the pointer-lock exit key, so the menu is the landing UI.
-        setOpen((o) => !o);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
 
   // Close on outside click while open.
   useEffect(() => {

@@ -262,31 +262,64 @@ regenerated from the read-only source GLBs by:
 npm run build:dahilg-assets        # → node scripts/build_dahilg_assets.mjs
 ```
 
-Outputs (all **meshopt**-compressed + **webp** textures, **offline-decodable**, no
-Draco / no CDN decoder at runtime):
+Every shipped GLB is **meshopt geometry-compressed** (`EXT_meshopt_compression`) and
+its textures are **KTX2 / Basis Universal** (`KHR_texture_basisu`) — GPU-compressed,
+so they stay compressed in VRAM (~8× less than RGBA-decoded webp) and upload fast.
+Everything is **offline-decodable**: meshopt via three's built-in `MeshoptDecoder`,
+KTX2 via a **local** basis transcoder in `public/da-hilg/basis/` (no CDN, no Draco).
 
-- `level.glb` — the neighborhood. `Collision_*` meshes preserved (hidden, used only
-  to bake the collider); `LOD_Buildings_Low` dropped (we ship full-res).
+Outputs:
+
+- `level.glb` — the neighborhood. `Collision_*` meshes preserved (hidden, used only to
+  bake the collider) but their **materials are stripped** (visual/collision separation
+  — physics geometry ships no texture payload); `LOD_Buildings_Low` dropped.
 - `mike.glb`, `kelli.glb`, `cece.glb`, `drew.glb` — the 4 characters (embedded clips
   removed; skinned-safe quantization).
 - `anims/{idle,walk,run,jump,dance,wave,cheer}.glb` — the **7 canonical clips**,
   clip-only, renamed to the canonical key, with `stripRootXZ` applied to walk/run at
-  build time. All four characters share a byte-identical 24-bone rig, so any clip
-  binds to any character with **zero remapping**.
+  build time. Skin-safe retarget: every clip **drops non-`Hips` translation channels**
+  (keeps rotations + Hips root motion), so a clip authored on one character binds to
+  any of the four without tearing the torso off the hips. (All four share a 24-bone
+  Mixamo rig but **not** identical bind transforms — see the skin-safe note below.)
 - `level.meta.json` — **computed at build time**, never hand-edited: `offset`,
-  `groundY`, `houseCenter`, `houseBox`, `spawns`, `npcSpawns` (derived from the level
-  bbox + the house wall bounds).
+  `groundY`, `houseCenter`, `houseBox`, `spawns`, `npcSpawns`.
+
+**Per-class texture caps:** the landscape caps at **1024**, characters at **512** (a
+1.7 m rig never needs more). Set in `meshoptPipeline(doc, label, quant, texCap)`.
 
 Pipeline order inside the script: `dedup → prune({keepLeaves:true}) → weld →
-textureCompress(webp 1024/q80) → reorder(MeshoptEncoder) → quantize →
-EXT_meshopt_compression.setRequired(true) → write`. The NodeIO registers the Draco
-**decoder** purely to *read* the mixed-compressed sources; nothing Draco is ever
-written back out. The build **asserts**: (a) every output GLB has no
-`KHR_draco_mesh_compression`; (b) each canonical clip binds to the reference
-skeleton with 0 unmatched tracks. It fails if either trips.
+[ktx2CompressDoc | webp fallback] → reorder(MeshoptEncoder) → quantize →
+EXT_meshopt_compression.setRequired(true) → write`. KTX2 encoding lives in
+`scripts/lib/ktx2_pass.mjs` and shells out to **`basisu`** (preferred) or `toktx`
+(`brew install basis_universal`). **If no encoder is on PATH it transparently falls
+back to webp** and logs how to enable KTX2 — the build never fails for a missing
+encoder. The NodeIO registers the Draco **decoder** only to *read* the
+mixed-compressed sources; nothing Draco is written out. The build **asserts**: (a) no
+output declares `KHR_draco_mesh_compression`; (b) every clip binds to the reference
+rig with 0 unmatched tracks; (c) no clip keeps a non-`Hips` translation channel (the
+skin-safe guard). It fails loudly if any trips.
 
-There is a dev fast-path (`DEV_RAW_LEVEL` in `constants.js`, default `false`) to
-load the raw uncompressed level export while the meshopt pipeline is mid-tune.
+**Runtime loading** goes through `loaders.js` (`useDaHilgGLTF` / `<DaHilgPreloader>`),
+which attaches a `KTX2Loader` pointed at the local transcoder and the meshopt decoder,
+with `useDraco=false`. KTX2's `detectSupport` needs the live renderer, so preloading
+is done inside the Canvas by `<DaHilgPreloader>`, not at module scope.
+
+> **Skin-safe retarget (the waist bug):** a Mixamo clip bakes a `translation` track for
+> *every* bone holding the **source** character's rest offsets. Bound onto a character
+> with a different bind, those tracks yank the torso-root bone off the hips (a floating
+> torso / waist gap). The build drops every non-`Hips` translation channel — rotations
+> carry the real motion and are bind-agnostic. If you re-author the clip pipeline, keep
+> assertion (c).
+
+The **Nibblers swarm** has its own pipeline (`npm run build:nibbler-vat`,
+`build:minimap`) — see `nibblers/AGENTS.md`.
+
+There is a dev fast-path (`DEV_RAW_LEVEL` in `constants.js`, default `false`) to load
+the raw uncompressed level export while the meshopt pipeline is mid-tune.
+
+**How-to guides:** adding a playable/NPC character → `docs/dahilg-adding-a-character.md`;
+improving the neighborhood GLB export (sidewalks, facades, creek, re-export) →
+`docs/dahilg-neighborhood-export.md`.
 
 ---
 
