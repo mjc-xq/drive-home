@@ -26,31 +26,19 @@
  * @returns {{id:string,type:string,position:number[],size:number[],label:string,discover:boolean}}
  */
 function buildHomeSafeGrounded(levelMeta) {
-  const box = levelMeta && levelMeta.houseBox;
-  const hasBox =
-    box && Array.isArray(box.min) && Array.isArray(box.max) && (box.max[0] - box.min[0]) > 0;
-
-  // XZ footprint of the house, padded to include the porch/front-yard skirt, else a
-  // generous box around origin (the spawn sits near origin in recentered space).
-  const PAD_XZ = 8;
-  const cx = hasBox ? (box.min[0] + box.max[0]) / 2 : 0;
-  const cz = hasBox ? (box.min[2] + box.max[2]) / 2 : 0;
-  const sizeX = hasBox ? (box.max[0] - box.min[0]) + PAD_XZ * 2 : 30;
-  const sizeZ = hasBox ? (box.max[2] - box.min[2]) + PAD_XZ * 2 : 30;
-
-  // Vertical span: floor a couple meters BELOW the ground (recentered ground ≈ 0) so a
-  // capsule whose feet sit at y≈0.05 is comfortably inside, and reach up over the roof
-  // (box.max[1] ≈ 14 m). Center + full-height so the AABB is [-2 .. roofTop].
-  const roofTop = hasBox ? box.max[1] : 14;
-  const floorY = -2;
-  const sizeY = roofTop - floorY;
-  const cy = (floorY + roofTop) / 2;
-
+  // Anchor the home safe zone on the actual PLAYER SPAWN (recentered), not the house
+  // box — the spawn is what must be safe, and the house-box center can be tens of
+  // meters off the spawn point. A generous footprint guarantees the player starts safe.
+  const spawn = levelMeta && Array.isArray(levelMeta.spawns) && levelMeta.spawns[0];
+  const cx = spawn ? spawn[0] : 0;
+  const cz = spawn ? spawn[2] : 0;
+  // Safe/danger membership is tested in 2D (XZ) — Y is irrelevant — so the vertical
+  // span is nominal. Footprint is a comfortable yard around the spawn.
   return {
     id: 'safe_home',
     type: 'safe',
-    position: [cx, cy, cz],
-    size: [sizeX, sizeY, sizeZ],
+    position: [cx, 0, cz],
+    size: [40, 400, 40],
     label: 'Home',
     discover: true,
     marker: true,
