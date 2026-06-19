@@ -491,9 +491,11 @@ if (houseGarage) {                                  // driveway: garage (road/NE
   let bp = null, bd = Infinity;
   for (const lw of roadLines) for (const [x, z] of lw) { const d = Math.hypot(x - houseGarage[0], z - houseGarage[1]); if (d < bd) { bd = d; bp = [x, z]; } }
   if (bp && bd < 70) {
+    let ddx = bp[0] - houseGarage[0], ddz = bp[1] - houseGarage[1]; const dl = Math.hypot(ddx, ddz) || 1;
+    const edge = [bp[0] - ddx / dl * 4, bp[1] - ddz / dl * 4];          // meet the road edge, not the centre-line
     const dvP = [], dvI = [];
-    ribbonPart([houseGarage, [(houseGarage[0] + bp[0]) / 2, (houseGarage[1] + bp[1]) / 2], bp], 3.6, 0.05, dvP, dvI);
-    if (dvI.length) scene.add(mkMesh(dvP, dvI, new THREE.Color(0.62, 0.61, 0.58), 'Driveway'));
+    ribbonPart([houseGarage, [(houseGarage[0] + edge[0]) / 2, (houseGarage[1] + edge[1]) / 2], edge], 4.2, 0.07, dvP, dvI);
+    if (dvI.length) scene.add(mkMesh(dvP, dvI, new THREE.Color(0.44, 0.44, 0.46), 'Driveway'));   // paved
   }
 }
 
