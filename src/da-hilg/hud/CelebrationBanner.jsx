@@ -3,11 +3,10 @@
 // reduced motion) and a "Play again" button that resets the objective and keeps
 // you exploring. ARIA live=assertive so the win is announced.
 
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { useAtom } from 'jotai';
 import { wonAtom, settingsAtom, scoreAtom, greetedAtom } from '../state/atoms.js';
 import { CHARACTERS } from '../constants.js';
-import { winSting } from '../audio/sfx.js';
 
 const charMap = (v) => Object.fromEntries(CHARACTERS.map((id) => [id, v]));
 const COIN = '#FFC83D';
@@ -20,8 +19,6 @@ export default function CelebrationBanner() {
   const [, setScore] = useAtom(scoreAtom);
   const [, setGreeted] = useAtom(greetedAtom);
   const reduced = !!settings?.reducedMotion;
-  // Play the win sting exactly once per win (not on every render while shown).
-  const stungRef = useRef(false);
 
   // Pre-compute confetti particle styles once (stable across renders).
   const confetti = useMemo(
@@ -35,14 +32,6 @@ export default function CelebrationBanner() {
       })),
     [],
   );
-
-  if (won && !stungRef.current) {
-    stungRef.current = true;
-    winSting();
-  }
-  if (!won && stungRef.current) {
-    stungRef.current = false; // re-arm for the next win
-  }
 
   if (!won) return null;
 

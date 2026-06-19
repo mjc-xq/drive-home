@@ -12,7 +12,6 @@ import { emoteOpenAtom, settingsAtom } from '../state/atoms.js';
 import { activePlayer } from '../state/refs.js';
 import { requestEmote } from '../systems/animationSystem.js';
 import { pushToast } from './hudEvents.js';
-import { emoteWhoosh } from '../audio/sfx.js';
 
 // The three wedges, in click/visual order. label = Chakra Petch caption, glyph =
 // a quick emoji affordance, key = the clip key handed to requestEmote.
@@ -34,7 +33,6 @@ export default function EmoteWheel() {
     const actor = activePlayer();
     if (actor) {
       requestEmote(actor, key);
-      emoteWhoosh();
       const label = EMOTES.find((e) => e.key === key)?.label || key;
       pushToast(`You ${label.toLowerCase()}d`, 'system');
     }

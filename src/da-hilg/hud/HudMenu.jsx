@@ -16,7 +16,6 @@ import {
 } from '../state/atoms.js';
 import { showFacadesAtom, showWaterAtom, showGrassAtom, perfModeAtom } from '../state/settingsAtoms.js';
 import { CHARACTERS } from '../constants.js';
-import { setVolumes } from '../audio/sfx.js';
 import { pushToast } from './hudEvents.js';
 import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
 import { initNibblers } from '../nibblers/init.js';
@@ -56,13 +55,9 @@ export default function HudMenu() {
 
   useEffect(() => () => clearTimeout(confirmTimer.current), []);
 
-  // Patch a single setting field and (for volumes) push to the audio graph.
+  // Patch a single setting field.
   function patch(key, value) {
-    const next = { ...settings, [key]: value };
-    setSettings(next);
-    if (key === 'master' || key === 'sfx' || key === 'music') {
-      setVolumes({ master: next.master, sfx: next.sfx, music: next.music });
-    }
+    setSettings({ ...settings, [key]: value });
   }
 
   // Restart the active mode. The proximity scan + Nibblers systems re-arm naturally
@@ -141,9 +136,6 @@ export default function HudMenu() {
           <div className="dhKick" style={kickStyle}>
             SETTINGS
           </div>
-          <Slider label="Master" value={settings.master} onChange={(v) => patch('master', v)} />
-          <Slider label="SFX" value={settings.sfx} onChange={(v) => patch('sfx', v)} />
-          <Slider label="Music" value={settings.music} onChange={(v) => patch('music', v)} />
           <Toggle
             label="Reduced motion"
             checked={!!settings.reducedMotion}

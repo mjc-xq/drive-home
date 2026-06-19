@@ -44,9 +44,6 @@ export const markedAtom = atom(false);
 
 // Settings.
 export const settingsAtom = atom({
-  master: 0.8,
-  sfx: 0.9,
-  music: 0.5,
   reducedMotion: false,
   showHints: true,
   invertY: false,
