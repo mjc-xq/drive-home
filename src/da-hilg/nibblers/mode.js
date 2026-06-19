@@ -22,4 +22,10 @@ export const nibblerPenalty = {
   speedMul: 1,
   jumpMul: 1,
   visibility: 1,
+  // Overwhelm arc — the swarm burying the player. Tier 0 normal · 1 stagger · 2 downed
+  // (crawl-only) · 3 pinned (can't move). moveCap is an absolute m/s ceiling stepMotion
+  // applies on top of speedMul; canJump gates jumping. Written by updateOverwhelm.
+  overwhelm: 0,
+  moveCap: Infinity,
+  canJump: true,
 };

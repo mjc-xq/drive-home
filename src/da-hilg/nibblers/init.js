@@ -1,5 +1,6 @@
 import { resetSwarm } from './swarm/swarmState.js';
 import { resetThrottle } from './render/throttle.js';
+import { resetOverwhelm } from './systems/overwhelmSystem.js';
 import { isNibblersMode, nibblerPenalty } from './mode.js';
 import { daHilgStore } from '../state/store.js';
 import { cameraModeAtom } from '../state/atoms.js';
@@ -14,6 +15,7 @@ import { discoveredSafeZonesAtom, revealedDangerZonesAtom } from './state/nibble
 export function initNibblers() {
   resetSwarm();
   resetThrottle();
+  resetOverwhelm();
   // Penalties start clean (a fresh run, or a mode re-enter).
   nibblerPenalty.speedMul = 1;
   nibblerPenalty.jumpMul = 1;

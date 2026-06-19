@@ -120,6 +120,17 @@ export const VIS_K = 44;                  // visibility = clamp(1-(a/K)^0.85, MI
 export const VIS_POW = 0.85;
 export const VIS_MIN = 0.26;
 
+// ── Overwhelm arc (the swarm burying you → stagger → knocked down → pinned) ──
+// Load accumulates while heavily-attached and bleeds off when light; tiers cross at
+// time thresholds so it "eventually" happens (the user's flinch→fall→crawl→stop).
+export const OVERWHELM_STAGGER = 5;     // attached count where staggering begins (tier 1)
+export const OVERWHELM_DOWN = 11;       // attached count that feeds the fall timer
+export const OVERWHELM_STOP = 18;       // heavy pile-on — the timer fills faster
+export const OVERWHELM_FALL_T = 2.6;    // buried-seconds → knocked down + crawl-only (tier 2)
+export const OVERWHELM_STOP_T = 5.6;    // ...→ fully pinned, can't move (tier 3)
+export const OVERWHELM_RECOVER = 1.8;   // load bleed-off per second when light
+export const OVERWHELM_CRAWL_SPEED = 1.3; // m/s movement cap while downed (crawling)
+
 // ── Health drain ────────────────────────────────────────────────────────────
 export const HEALTH_DRAIN_PER_ATTACH = 0.09; // HP/s per attached, capped
 export const HEALTH_DRAIN_CAP = 3.2;         // HP/s max
