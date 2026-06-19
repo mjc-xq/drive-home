@@ -275,12 +275,20 @@ export function Level({ onReady }) {
       const b = computeCreekBounds(scene);
       setCreekBounds(b);
       if (b) hideCreekClutter(scene, b);
-      // Top-down paved/building mask so grass skips roads/walks/driveways/buildings.
-      setPaveMask(buildPaveMask(scene, gl));
       onReadyRef.current?.();
     });
     return () => cancelAnimationFrame(raf);
   }, [ready, scene, gl]);
+
+  // Build the top-down paved/building mask (so grass skips roads/walks/driveways/
+  // buildings) LAZILY — only when grass is enabled, its single consumer. Default play
+  // (grass OFF) never pays this 2048² offscreen render on the level-ready frame.
+  const builtPaveRef = useRef(false);
+  useEffect(() => {
+    if (!ready || !showGrass || builtPaveRef.current) return;
+    builtPaveRef.current = true;
+    setPaveMask(buildPaveMask(scene, gl));
+  }, [ready, showGrass, scene, gl]);
 
   // Facade toggle: show/hide the Street View photo facades as a group. Names survive
   // the meshopt build, so we gate by SVFacade*. No-op until the export carries them.
