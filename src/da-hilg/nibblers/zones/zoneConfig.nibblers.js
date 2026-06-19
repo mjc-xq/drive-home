@@ -58,12 +58,12 @@ export function buildNibblersZones(levelMeta) {
   const home = buildHomeSafeGrounded(levelMeta);
 
   return [
-    // ── SAFE ZONES (type 'safe') — home anchor + 4 discoverable along the roads.
+    // ── SAFE ZONES (type 'safe') — sparse refuges: the home anchor + two outposts.
+    // Kept few + smallish so DANGER dominates (everywhere outside a safe footprint is
+    // danger); the player sprints between islands of safety while the swarm chases.
     home,
-    { id: 'safe_creek', type: 'safe', position: [-60, 6, -120], size: [26, 12, 26], label: 'Creek Landing', discover: true, marker: true },
-    { id: 'safe_overlook', type: 'safe', position: [130, 8, 40], size: [24, 12, 24], label: 'East Overlook', discover: true, marker: true },
-    { id: 'safe_park', type: 'safe', position: [-110, 6, 90], size: [28, 12, 28], label: 'West Green', discover: true, marker: true },
-    { id: 'safe_corner', type: 'safe', position: [70, 6, 150], size: [24, 12, 24], label: 'North Corner', discover: true, marker: true },
+    { id: 'safe_creek', type: 'safe', position: [-60, 6, -120], size: [22, 12, 22], label: 'Creek Landing', discover: true, marker: true },
+    { id: 'safe_overlook', type: 'safe', position: [130, 8, 40], size: [22, 12, 22], label: 'East Overlook', discover: true, marker: true },
 
     // ── DANGER ZONES (type 'danger') — seeded between safe zones on the approaches.
     // Labels feed toasts, the action pulse, and the minimap marker after a trigger.
