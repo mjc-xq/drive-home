@@ -15,7 +15,8 @@ import { Canvas } from '@react-three/fiber';
 import { KeyboardControls } from '@react-three/drei';
 
 import { daHilgStore } from './state/store.js';
-import { CAM_FOV, FP_NEAR, CAM_FAR } from './constants.js';
+import { CAM_FOV, FP_NEAR, CAM_FAR, LEVEL_URL, CHARACTER_URL } from './constants.js';
+import { DaHilgPreloader } from './loaders.js';
 import { keyMap } from './input/keyMap.js';
 import { usePointerLock } from './input/usePointerLock.js';
 import { useEdgeKeys } from './input/useEdgeKeys.js';
@@ -25,6 +26,9 @@ import { initNibblers } from './nibblers/index.js';
 import SceneEnv from './scene/SceneEnv.jsx';
 import Scene from './scene/Scene.jsx';
 import DaHilgHud from './hud/DaHilgHud.jsx';
+
+// Stable list of the KTX2-bearing GLBs to warm once the renderer is live.
+const PRELOAD_URLS = [LEVEL_URL, ...Object.values(CHARACTER_URL)];
 
 /**
  * Input hooks live in their own tiny component so they sit *inside* the Provider
@@ -64,6 +68,8 @@ export default function DaHilgApp() {
           camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
         >
           <SceneEnv />
+          {/* Warm the KTX2 level + character GLBs now the renderer exists. */}
+          <DaHilgPreloader urls={PRELOAD_URLS} />
           <Suspense fallback={null}>
             <Scene />
           </Suspense>

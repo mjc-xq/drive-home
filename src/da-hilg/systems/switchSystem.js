@@ -22,13 +22,13 @@ export function switchTo(nextId, ctx) {
   if (!next) return;
   const prev = registry.get(prevId);
 
-  // Previous player becomes an NPC (starts in cooldown so it won't pounce on the
-  // new player); next becomes the player.
-  if (prev) attachController(prev, 'npc');
+  // Previous player becomes an NPC and starts in greet-cooldown so it won't instantly
+  // pounce on the body the player just left; next becomes the player.
+  if (prev) {
+    attachController(prev, 'npc');
+    prev.ai.cooldownUntil = now + SWITCH_GRACE_MS;
+  }
   attachController(next, 'player');
-
-  // Spawn-in grace: the freshly-controlled actor can't be tagged for a moment.
-  next.ai.cooldownUntil = now + SWITCH_GRACE_MS;
 
   // Drop any inherited NPC momentum so control feels crisp from frame one.
   next.motion.velX = 0;

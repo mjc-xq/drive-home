@@ -1,15 +1,16 @@
-// Loads the Vertex Animation Texture artifacts baked into
-// public/da-hilg/nibblers/ — the metadata json plus the pos/normal PNGs — and
-// turns the PNGs into data-correct THREE textures (Nearest filtering, no mipmaps,
-// flipY=false, linear/no color management so the packed 0..255 bytes survive
-// untouched). The VAT is loaded ONCE for the whole horde and cached at module
-// scope; assetsReady() is the plain bool the sim gate (updateNibblers) reads, and
-// useNibblerAssets() is the React hook the renderer mounts on.
+// Loads the per-character Vertex Animation Texture artifacts baked into
+// public/da-hilg/nibblers/ — the combined manifest json plus, FOR EACH of the four
+// family characters (mike/kelli/cece/drew), the pos/normal VAT PNGs and the real
+// baseColor texture — and turns them into data-correct THREE textures. The VAT data
+// PNGs use Nearest filtering / NoColorSpace so the packed 0..255 bytes survive
+// untouched; the baseColor texture is a real color map (sRGB, mipmapped, repeat-wrap).
+// The whole set is loaded ONCE and cached at module scope; assetsReady() is the plain
+// bool the sim gate (updateNibblers) reads, useNibblerAssets() is the React hook.
 //
-// Robustness: we read everything (vertCount/rows/clip bands/pos+nrm min-max,
-// texture URLs, separate-vs-combined layout) from nibbler.vat.json at runtime —
-// nothing is hardcoded. The current bake emits separate pos/nrm PNGs; this loader
-// also tolerates a combined single-PNG layout (meta.layout / meta.combined).
+// Manifest shape (nibbler.vat.json, version 2):
+//   { version, order:[mike,kelli,cece,drew], characters:{ <key>: meta } }
+// where each meta carries vertCount/rows/clips/pos+nrm min-max + posTexture/nrmTexture/
+// colorTexture/proxy filenames. Everything is read from the json — nothing hardcoded.
 
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
@@ -23,7 +24,7 @@ let loading = null;
 let ready = false;
 
 /**
- * @typedef {Object} NibblerMeta
+ * @typedef {Object} NibblerCharMeta
  * @property {number} vertCount
  * @property {number} rows
  * @property {number} frameCount
@@ -32,21 +33,29 @@ let ready = false;
  * @property {number[]} posMax
  * @property {number[]} nrmMin
  * @property {number[]} nrmMax
- * @property {string} [layout]
- * @property {number} textureWidth
- * @property {number} textureHeight
+ * @property {string} posTexture
+ * @property {string} nrmTexture
+ * @property {string} colorTexture
+ * @property {string} proxy
  * @property {string} aVertexId  'attribute' | 'glVertexID'
- * @property {string} [attributeName]
+ */
+
+/**
+ * @typedef {Object} NibblerCharAssets
+ * @property {string} key
+ * @property {THREE.Texture} posTex
+ * @property {THREE.Texture} nrmTex
+ * @property {THREE.Texture} colorTex
+ * @property {NibblerCharMeta} meta
  */
 
 /**
  * @typedef {Object} NibblerAssets
- * @property {THREE.Texture} posTex
- * @property {THREE.Texture} nrmTex
- * @property {NibblerMeta} meta
+ * @property {string[]} order               charIx 0..3 = mike/kelli/cece/drew
+ * @property {Object.<string,NibblerCharAssets>} byChar
  */
 
-/** True once the VAT json + textures have finished loading (the sim gate reads this). */
+/** True once the manifest + every character's textures have loaded (the sim gate reads this). */
 export function assetsReady() {
   return ready;
 }
@@ -64,7 +73,7 @@ function resolveTexUrl(name) {
   return base + name;
 }
 
-// Configure a loaded VAT texture for exact, untouched texel fetches.
+// Configure a loaded VAT DATA texture for exact, untouched texel fetches.
 function configureVatTexture(tex) {
   tex.magFilter = THREE.NearestFilter;
   tex.minFilter = THREE.NearestFilter;
@@ -79,18 +88,30 @@ function configureVatTexture(tex) {
   return tex;
 }
 
-function loadTexture(loader, url) {
+// Configure a loaded COLOR (baseColor) texture: real sRGB photo map, mipmapped, the
+// UV is the character's actual UV so wrap/flip match a normal glTF baseColor sampler.
+function configureColorTexture(tex) {
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = false;            // glTF convention (proxy carries glTF UVs)
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function loadTexture(loader, url, configure) {
   return new Promise((resolve, reject) => {
     if (!url) {
       resolve(null);
       return;
     }
-    loader.load(url, (tex) => resolve(configureVatTexture(tex)), undefined, reject);
+    loader.load(url, (tex) => resolve(configure(tex)), undefined, reject);
   });
 }
 
 /**
- * Kick off (or return the in-flight / cached) VAT load. Idempotent.
+ * Kick off (or return the in-flight / cached) per-character VAT load. Idempotent.
  * @returns {Promise<NibblerAssets>}
  */
 export function loadNibblerAssets() {
@@ -100,31 +121,29 @@ export function loadNibblerAssets() {
   loading = (async () => {
     const res = await fetch(NIBBLER_VAT_JSON_URL);
     if (!res.ok) throw new Error(`nibbler.vat.json HTTP ${res.status}`);
-    /** @type {NibblerMeta} */
-    const meta = await res.json();
+    const manifest = await res.json();
 
-    // Texture URLs: read from the json when present, else fall back to the
-    // canonical names sitting beside the json.
-    const posUrl = resolveTexUrl(meta.posTexture || 'nibbler.vat.pos.png');
-    // Combined layout: pos + normal packed into one PNG → no separate nrm fetch.
-    const combined =
-      meta.combined === true || /combined/i.test(meta.layout || '');
-    const nrmUrl = combined
-      ? null
-      : resolveTexUrl(meta.nrmTexture || 'nibbler.vat.nrm.png');
-
+    const order = manifest.order || Object.keys(manifest.characters || {});
     const loader = new THREE.TextureLoader();
-    const [posTex, nrmTexLoaded] = await Promise.all([
-      loadTexture(loader, posUrl),
-      loadTexture(loader, nrmUrl),
-    ]);
 
-    // In a combined layout the normal half lives in the same texture; the material
-    // reads the band offset from meta. Expose posTex as nrmTex so callers always
-    // have a valid sampler to bind.
-    const nrmTex = nrmTexLoaded || posTex;
+    // Load every character's three textures in parallel.
+    const entries = await Promise.all(
+      order.map(async (key) => {
+        const meta = manifest.characters[key];
+        const posUrl = resolveTexUrl(meta.posTexture);
+        const nrmUrl = resolveTexUrl(meta.nrmTexture);
+        const colUrl = resolveTexUrl(meta.colorTexture);
+        const [posTex, nrmTex, colorTex] = await Promise.all([
+          loadTexture(loader, posUrl, configureVatTexture),
+          loadTexture(loader, nrmUrl, configureVatTexture),
+          loadTexture(loader, colUrl, configureColorTexture),
+        ]);
+        return { key, posTex, nrmTex: nrmTex || posTex, colorTex, meta };
+      }),
+    );
 
-    cached = { posTex, nrmTex, meta };
+    const byChar = Object.fromEntries(entries.map((e) => [e.key, e]));
+    cached = { order, byChar };
     ready = true;
     return cached;
   })();
@@ -133,8 +152,8 @@ export function loadNibblerAssets() {
 }
 
 /**
- * React hook: returns the loaded VAT assets, or null until ready. Triggers the
- * one-time load on first mount; safe to call from multiple components.
+ * React hook: returns the loaded per-character VAT assets, or null until ready.
+ * Triggers the one-time load on first mount; safe to call from multiple components.
  * @returns {NibblerAssets|null}
  */
 export function useNibblerAssets() {

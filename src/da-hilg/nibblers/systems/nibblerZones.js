@@ -28,6 +28,7 @@ import {
 } from '../state/nibblerAtoms.js';
 import { swarm } from '../swarm/swarmState.js';
 import { armMarked, clearAndScatter, setScatterCenter } from './markedSystem.js';
+import { DEV_FAST_MARK } from '../devFlags.js';
 
 /** Last currentSafeZone label we wrote, so we only set the atom on change. */
 let lastSafeLabel = null;
@@ -91,10 +92,12 @@ export function updateNibblerZones(ctx) {
   }
 
   // ── DANGER (only when not already marked) ────────────────────────────────
-  if (inDanger && !swarm.marked) {
+  // DEV_FAST_MARK (?fastmark) treats everywhere-outside-safe as danger, so the swarm
+  // spawns within ~1 s for testing without hunting for a real danger zone.
+  if ((inDanger || DEV_FAST_MARK) && !swarm.marked) {
     armMarked(ctx.now);
     ctx.store.set(markedAtom, true);
-    pushToast('MARKED — find a Safe Zone', 'danger');
+    pushToast(DEV_FAST_MARK ? 'DEV fast-mark — nibblers incoming' : 'MARKED — find a Safe Zone', 'danger');
   }
 
   // Left every safe zone — clear the current-safe-zone label (edge-gated).

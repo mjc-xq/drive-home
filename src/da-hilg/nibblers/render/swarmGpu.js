@@ -3,28 +3,32 @@
 // is the typed-array SoA (swarm/swarmState.js), and the GPU upload is folded into
 // the tail of updateSwarm(ctx).
 //
-// SwarmRenderer.jsx sets these fields on mount (the single InstancedMesh plus its
-// three InstancedBufferAttributes) and nulls them on unmount. swarm/updateSwarm.js
-// reads `swarmGpu.mesh` (skipping the upload entirely if it's null), then writes:
-//   mesh.instanceMatrix (yaw + uniform-scale per slot from px/py/pz/heading/scale),
-//   aPhase.array[i]   = phase[i],
-//   aClip.array[i]    = clip[i],
-//   aTint.array[3i..] = NIBBLER_TINTS[charIx[i]],
-// flips `.needsUpdate = true` on each attribute + instanceMatrix, and leaves
-// mesh.count = MAX_NIBBLERS (dead slots ride at scale 0 → the GPU discards them).
+// Per-character meshes. The swarm now renders as FOUR InstancedMeshes (one per family
+// member, so each shows its own decimated proxy geometry + real baseColor texture).
+// SwarmRenderer.jsx publishes one bucket per character into `swarmGpu.byChar` (indexed
+// by charIx 0..3 = mike/kelli/cece/drew); each bucket carries that mesh + its OWN
+// per-instance aPhase/aClip buffers (instanced attrs live on the geometry, so they must
+// be per-mesh). updateSwarm's uploadToGpu routes each live nibbler into its character's
+// bucket at that bucket's running index, then sets each mesh.count to its counter.
+//
+// Each bucket: { mesh, aPhase, aClip } (mesh is the InstancedMesh; aPhase/aClip are its
+// InstancedBufferAttributes). swarmGpu.byChar is a fixed-length-4 array (null until the
+// renderer mounts). The instance matrix (yaw + uniform-scale + pos) is written exactly
+// as before — only the destination mesh + index changes.
+
+/**
+ * @typedef {Object} SwarmCharBucket
+ * @property {import('three').InstancedMesh} mesh
+ * @property {import('three').InstancedBufferAttribute} aPhase float[MAX]
+ * @property {import('three').InstancedBufferAttribute} aClip  float[MAX]
+ */
 
 /**
  * @typedef {Object} SwarmGpu
- * @property {import('three').InstancedMesh|null} mesh
- * @property {import('three').InstancedBufferAttribute|null} aPhase float[MAX]
- * @property {import('three').InstancedBufferAttribute|null} aClip  float[MAX]
- * @property {import('three').InstancedBufferAttribute|null} aTint  vec3[MAX]
+ * @property {(SwarmCharBucket|null)[]} byChar  one bucket per charIx 0..3 (null until mounted)
  */
 
 /** @type {SwarmGpu} */
 export const swarmGpu = {
-  mesh: null,
-  aPhase: null,
-  aClip: null,
-  aTint: null,
+  byChar: [null, null, null, null],
 };

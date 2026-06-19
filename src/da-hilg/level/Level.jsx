@@ -1,52 +1,62 @@
-// <Level> — loads the neighborhood GLB, recenters it to origin/ground≈0, hides
-// the authored Collision_*/LOD_* proxies, and builds ONE fixed trimesh collider
-// from the Collision_* meshes. The visual terrain (hundreds of k tris) is NEVER
-// collided — we collide the decimated Collision_* proxies instead.
+// <Level> — loads the neighborhood GLB, recenters it to origin/ground≈0, hides the
+// authored Collision_*/LOD_* proxies, tunes the visual materials (so facades aren't
+// washed out), builds ONE fixed trimesh collider from the Collision_* proxies, and
+// mounts the flowing creek water + wind-swept grass inside the recenter group.
 //
-// Two subtleties this file handles carefully:
-//  • Recenter: the visual scene is wrapped in <group position={-offset}> so world
-//    coords match the recentered space spawns/zones/camera assume.
-//  • Quantization: the GLB uses KHR_mesh_quantization, so each Collision_* mesh's
-//    real-world scale lives in its node matrix, NOT its raw -1..1 positions. We
-//    therefore bake the collider from each mesh's FULL matrixWorld (after the
-//    recenter group is applied) and place the collider at IDENTITY — so the verts
-//    are already recentered real meters and there is exactly one recenter.
-//
-// We gate everything on levelMeta.loaded so the recenter offset is real before we
-// place the visual or bake the collider.
+// Subtleties: the GLB uses KHR_mesh_quantization (real scale on node matrices), so
+// the collider is baked from each Collision_* mesh's full matrixWorld (denormalized
+// via fromBufferAttribute) and mounted at identity. Everything gates on
+// levelMeta.loaded so the recenter offset is real first.
 
 import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { useGLTF } from '@react-three/drei';
 import { RigidBody, TrimeshCollider } from '@react-three/rapier';
+import { useDaHilgGLTF } from '../loaders.js';
 import { levelMeta } from '../state/refs.js';
 import { LEVEL_URL } from '../constants.js';
+import { CreekWater, computeCreekBounds, hideCreekClutter } from './CreekWater.jsx';
+import { WindGrass } from './WindGrass.jsx';
 
 const LEVEL_SOURCE = LEVEL_URL;
 
-/** Hide the collision/LOD proxies and tune the visual meshes. Runs once per glb. */
+/** Tune one mesh's material(s) so the neighborhood reads crisp + sunlit, not pale. */
+function tuneMaterial(o) {
+  const name = o.name || '';
+  const isWindow = name.toLowerCase().includes('window');
+  const isGlass = name.includes('windows') || isWindow;
+  const mats = Array.isArray(o.material) ? o.material : [o.material];
+  for (const m of mats) {
+    if (!m) continue;
+    if (m.map) m.map.colorSpace = THREE.SRGBColorSpace; // photo/colour maps are sRGB
+    if ('roughness' in m) m.roughness = isGlass ? 0.2 : 0.92;
+    if ('metalness' in m) m.metalness = isGlass ? 0.45 : 0.0;
+    if (m.emissive) m.emissive.setScalar(0); // kill any baked-in glow that washes it out
+    m.needsUpdate = true;
+  }
+}
+
+/** Hide the collision/LOD proxies, tune visual materials, set shadow flags. */
 function processScene(scene) {
   scene.traverse((o) => {
     if (!o.isMesh) return;
     const name = o.name || '';
-    if (name.startsWith('Collision_')) {
-      o.visible = false; // physics-only proxy
-    } else if (name.startsWith('LOD_')) {
-      o.visible = false; // lower-detail duplicate; we ship full-res
-    } else {
-      o.castShadow = false; // terrain is far too heavy to shadow-cast
-      o.receiveShadow = true;
-      o.frustumCulled = true;
+    if (name.startsWith('Collision_') || name.startsWith('LOD_')) {
+      o.visible = false; // physics-only / duplicate
+      return;
     }
+    o.frustumCulled = true;
+    o.receiveShadow = true;
+    // Buildings + the house cast shadows for form; the heavy terrain/roads don't.
+    o.castShadow = name.startsWith('House') || name.startsWith('Buildings');
+    tuneMaterial(o);
   });
 }
 
 /**
- * Bake every Collision_* mesh into one (vertices, indices) trimesh in recentered
- * world space, using each mesh's full world matrix (which carries the GLB's
- * quantization scale + the recenter group). The resulting collider is mounted at
- * identity.
- * @param {import('three').Object3D} scene already under the recenter group, matrices current
+ * Bake the Collision_* proxies into one (vertices, indices) trimesh in recentered
+ * world space. Collision_Trees is EXCLUDED so the player can walk past street trees
+ * (an invisible-tree-barrier along the sidewalks). Reads via fromBufferAttribute +
+ * matrixWorld so the int16/quantized positions denormalize + scale correctly.
  */
 function bakeCollider(scene) {
   scene.updateWorldMatrix(true, true);
@@ -56,13 +66,10 @@ function bakeCollider(scene) {
   const v = new THREE.Vector3();
 
   scene.traverse((o) => {
-    if (!o.isMesh || !(o.name || '').startsWith('Collision_')) return;
+    const name = o.name || '';
+    if (!o.isMesh || !name.startsWith('Collision_')) return;
+    if (name === 'Collision_Trees') return; // walk past trees — don't wall the sidewalks
     const pos = o.geometry.attributes.position;
-    // IMPORTANT: the GLB positions are int16/normalized (KHR_mesh_quantization),
-    // with the real ×scale on the node. Reading via fromBufferAttribute()
-    // denormalizes to -1..1, and applyMatrix4(matrixWorld) applies the node scale
-    // + recenter into a FRESH float array. (Transforming the geometry in place
-    // would write back into the int16 buffer and clamp everything to ±1.)
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
       positions.push(v.x, v.y, v.z);
@@ -76,10 +83,7 @@ function bakeCollider(scene) {
     base += pos.count;
   });
 
-  return {
-    vertices: new Float32Array(positions),
-    indices: new Uint32Array(indices),
-  };
+  return { vertices: new Float32Array(positions), indices: new Uint32Array(indices) };
 }
 
 /**
@@ -87,10 +91,8 @@ function bakeCollider(scene) {
  * @param {() => void} [props.onReady] called once the collider is built
  */
 export function Level({ onReady }) {
-  const { scene } = useGLTF(LEVEL_SOURCE);
+  const { scene } = useDaHilgGLTF(LEVEL_SOURCE);
 
-  // Gate on the meta load so the recenter offset is real (Actors/Scene gate the
-  // same way). levelMeta is a plain ref, so poll it into local state.
   const [ready, setReady] = useState(levelMeta.loaded);
   useEffect(() => {
     if (ready) return;
@@ -103,20 +105,23 @@ export function Level({ onReady }) {
     return () => clearInterval(id);
   }, [ready]);
 
-  // Hide proxies/LOD once.
+  // Hide proxies/LOD + tune materials once.
   useMemo(() => processScene(scene), [scene]);
 
   const offset = levelMeta.offset || [0, 0, 0];
   const recenter = [-offset[0], -offset[1], -offset[2]];
 
-  // Bake the collider AFTER the visual mounts under the recenter group so each
-  // mesh's matrixWorld already includes the recenter + quantization scale.
+  // After the visual mounts under the recenter group: bake the collider, compute
+  // the creek footprint, and hide the road-line clutter overlapping the creek.
   const [collider, setCollider] = useState(null);
+  const [creekBounds, setCreekBounds] = useState(null);
   useEffect(() => {
     if (!ready) return;
-    // Defer one frame so the recenter <group> transform is committed.
     const raf = requestAnimationFrame(() => {
       setCollider(bakeCollider(scene));
+      const b = computeCreekBounds(scene);
+      setCreekBounds(b);
+      if (b) hideCreekClutter(scene, b);
       onReady?.();
     });
     return () => cancelAnimationFrame(raf);
@@ -128,6 +133,10 @@ export function Level({ onReady }) {
     <>
       <group position={recenter}>
         <primitive object={scene} />
+        {/* Flat flowing water at the low creek elevation (never climbs the hill). */}
+        <CreekWater scene={scene} bounds={creekBounds} />
+        {/* Wind-swept grass on the yard around the house (recentered origin). */}
+        <WindGrass radius={90} count={14000} groundY={levelMeta.groundY ?? 0} />
       </group>
       {collider && (
         <RigidBody type="fixed" colliders={false}>
@@ -138,6 +147,7 @@ export function Level({ onReady }) {
   );
 }
 
-useGLTF.preload(LEVEL_SOURCE);
+// (Preloading happens in <DaHilgPreloader/> inside the Canvas — KTX2 needs the live
+// renderer, which a module-scope useGLTF.preload wouldn't have.)
 
 export default Level;
