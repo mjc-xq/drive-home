@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { CHARACTERS } from '../constants.js';
 import { registry, cameraRig } from '../state/refs.js';
 import { daHilgStore } from '../state/store.js';
-import { rolesAtom } from '../state/atoms.js';
+import { rolesAtom, activePlayerIdAtom } from '../state/atoms.js';
 import { attachController } from '../controllers/assign.js';
 
 /**
@@ -117,15 +117,20 @@ export function buildRegistry(levelMeta) {
   const spawns = levelMeta?.spawns ?? [[0, 0.1, 0]];
   const npcSpawns = levelMeta?.npcSpawns ?? [];
 
-  CHARACTERS.forEach((id, i) => {
+  // The active player (activePlayerIdAtom, defaults to Cece) takes the PRIMARY spawn
+  // (the home/lawn spot); whoever it is must land there, not at a per-character slot.
+  const wantId = daHilgStore.get(activePlayerIdAtom);
+  const activeId = CHARACTERS.includes(wantId) ? wantId : CHARACTERS[0];
+
+  let npcIndex = 0;
+  CHARACTERS.forEach((id) => {
     const actor = createActor(id);
 
-    if (i === 0) {
+    if (id === activeId) {
       // The player takes the first/primary spawn.
       placeActor(actor, spawns[0] ?? [0, 0.1, 0]);
     } else {
       // NPCs take npcSpawns in order; fall back to a fixed spread around spawn0.
-      const npcIndex = i - 1;
       const spawn =
         npcSpawns[npcIndex] ??
         (() => {
@@ -133,20 +138,21 @@ export function buildRegistry(levelMeta) {
           const off = FALLBACK_SPREAD[npcIndex % FALLBACK_SPREAD.length];
           return [base[0] + off[0], base[1] + off[1], base[2] + off[2]];
         })();
+      npcIndex++;
       placeActor(actor, spawn);
     }
 
     registry.set(id, actor);
   });
 
-  // First character is the player; the rest are NPCs. attachController also sets
-  // role + fsm per the contract.
-  CHARACTERS.forEach((id, i) => {
-    attachController(registry.get(id), i === 0 ? 'player' : 'npc');
+  // Attach controllers: the active player (chosen above) gets the player controller,
+  // everyone else an NPC controller. attachController also sets role + fsm per contract.
+  CHARACTERS.forEach((id) => {
+    attachController(registry.get(id), id === activeId ? 'player' : 'npc');
   });
 
   // Camera targets the player from the very first frame.
-  cameraRig.targetId = CHARACTERS[0];
+  cameraRig.targetId = activeId;
 
   // Mirror the initial roles to the HUD (discrete write, once).
   const roles = {};
