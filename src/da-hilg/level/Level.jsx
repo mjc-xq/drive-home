@@ -61,11 +61,14 @@ function tuneMaterial(o, maxAniso) {
     if ('metalness' in m) m.metalness = isGlass ? 0.45 : 0.0;
     if (m.emissive) m.emissive.setScalar(0); // kill any baked-in glow that washes it out
     if (paved) {
+      // GENTLE bias: just enough to win the depth test against the terrain at coincident
+      // points, but small so a road dipping slightly below the terrain on a slope does NOT
+      // bleed its dark asphalt over a wide band (the small geometric lift does the rest).
       m.polygonOffset = true;
-      m.polygonOffsetFactor = -4;
-      m.polygonOffsetUnits = -8;
+      m.polygonOffsetFactor = -1;
+      m.polygonOffsetUnits = -1;
     }
-    if (terrain) m.side = THREE.DoubleSide;
+    void terrain; // (terrain double-side reverted — heightfield normals already face up)
     m.needsUpdate = true;
   }
 }
