@@ -30,14 +30,36 @@ namespace DaHilg
             m_Controller.center = new Vector3(0f, 0.85f * scale, 0f);
             m_Controller.stepOffset = 0.15f;
 
-            m_Animator = Root.GetComponentInChildren<Animator>();
-            if (m_Animator != null)
+            Transform animatorRoot = ResolveAnimatorRoot(Root.transform);
+            m_Animator = animatorRoot.GetComponent<Animator>();
+            if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
+            foreach (Animator childAnimator in Root.GetComponentsInChildren<Animator>(true))
             {
-                m_Animator.applyRootMotion = false;
-                if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
+                if (childAnimator != m_Animator) childAnimator.enabled = false;
             }
+            m_Animator.applyRootMotion = false;
+            m_Animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
 
             Root.SetActive(false);
+        }
+
+        static Transform ResolveAnimatorRoot(Transform visualRoot)
+        {
+            if (visualRoot.Find("Armature") != null) return visualRoot;
+            Transform root = FindTransformWithDirectChild(visualRoot, "Armature");
+            return root != null ? root : visualRoot;
+        }
+
+        static Transform FindTransformWithDirectChild(Transform parent, string childName)
+        {
+            if (parent.Find(childName) != null) return parent;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform found = FindTransformWithDirectChild(parent.GetChild(i), childName);
+                if (found != null) return found;
+            }
+            return null;
         }
 
         public void Spawn(Vector3 position)
@@ -129,7 +151,7 @@ namespace DaHilg
         void Play(string state)
         {
             if (m_Animator == null || m_Anim == state) return;
-            int hash = Animator.StringToHash(state);
+            int hash = Animator.StringToHash("Base Layer." + state);
             if (m_Animator.HasState(0, hash))
             {
                 m_Animator.CrossFade(hash, 0.12f);
