@@ -39,6 +39,7 @@ namespace DaHilg.Editor
         public static void BuildWebGLExport()
         {
             RebuildUnityScene();
+            ValidateSpawnGroundingAssets();
 
             string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
@@ -75,6 +76,13 @@ namespace DaHilg.Editor
             CustomizeWebGLExport(output);
             CleanupGeneratedBuildSidecars(projectRoot, output);
             Debug.Log("[DaHilg] WebGL export built at " + output);
+        }
+
+        [MenuItem("Da Hilg/Validate Spawn Grounding")]
+        public static void ValidateSpawnGrounding()
+        {
+            RebuildUnityScene();
+            ValidateSpawnGroundingAssets();
         }
 
         static void CleanupGeneratedBuildSidecars(string projectRoot, string output)
@@ -464,6 +472,7 @@ body {
             profile.Minimap = AssetDatabase.LoadAssetAtPath<TextAsset>(k_Root + "/Data/" + minimapName + ".json");
 
             string json = profile.SourceMeta != null ? profile.SourceMeta.text : string.Empty;
+            profile.LevelOffset = ExtractFirstVector(json, "offset");
             Vector3[] spawns = ExtractVectorArray(json, "spawns");
             Vector3[] npcSpawns = ExtractVectorArray(json, "npcSpawns");
             if (spawns.Length == 0) spawns = new[] { new Vector3(0f, 0.05f, 12f) };
@@ -626,6 +635,62 @@ body {
                 vectors.Add(new Vector3(nums[i], nums[i + 1], nums[i + 2]));
             }
             return vectors.ToArray();
+        }
+
+        static Vector3 ExtractFirstVector(string json, string key)
+        {
+            Vector3[] vectors = ExtractVectorArray(json, key);
+            return vectors.Length > 0 ? vectors[0] : Vector3.zero;
+        }
+
+        static void ValidateSpawnGroundingAssets()
+        {
+            DaHilgGameSettings settings = AssetDatabase.LoadAssetAtPath<DaHilgGameSettings>(k_SettingsPath);
+            if (settings == null) throw new InvalidOperationException("Da Hilg settings asset was not built.");
+
+            int checkedSpawns = 0;
+            for (int i = 0; i < settings.Levels.Length; i++)
+            {
+                DaHilgLevelProfile profile = settings.Levels[i];
+                if (profile == null || profile.LevelPrefab == null) continue;
+
+                GameObject level = PrefabUtility.InstantiatePrefab(profile.LevelPrefab) as GameObject;
+                if (level == null) level = UnityEngine.Object.Instantiate(profile.LevelPrefab);
+                level.name = "SpawnValidation_" + profile.Slug;
+                try
+                {
+                    DaHilgLevelRuntime.ApplyLevelOffset(level, profile);
+                    DaHilgLevelRuntime.PrepareLevelColliders(level);
+                    ValidateSpawnArray(profile, profile.PlayerSpawns, "player", ref checkedSpawns);
+                    ValidateSpawnArray(profile, profile.NpcSpawns, "npc", ref checkedSpawns);
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(level);
+                }
+            }
+
+            if (checkedSpawns == 0) throw new InvalidOperationException("No Da Hilg spawn points were checked.");
+            Debug.Log("[DaHilg] Spawn grounding validated for " + checkedSpawns + " spawn points.");
+        }
+
+        static void ValidateSpawnArray(DaHilgLevelProfile profile, Vector3[] spawns, string group, ref int checkedSpawns)
+        {
+            for (int i = 0; i < spawns.Length; i++)
+            {
+                Vector3 spawn = spawns[i];
+                if (!DaHilgLevelRuntime.TryFindSpawnGround(spawn, out RaycastHit hit))
+                {
+                    throw new InvalidOperationException(profile.Slug + " " + group + " spawn " + i + " has no ground below " + spawn + ".");
+                }
+
+                if (!profile.PlayBounds.Contains(hit.point))
+                {
+                    throw new InvalidOperationException(profile.Slug + " " + group + " spawn " + i + " resolves outside play bounds at " + hit.point + ".");
+                }
+
+                checkedSpawns++;
+            }
         }
 
         static Bounds ExtractHouseBounds(string json)

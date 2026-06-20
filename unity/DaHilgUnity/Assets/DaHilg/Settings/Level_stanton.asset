@@ -18,6 +18,7 @@ MonoBehaviour:
   LevelPrefab: {fileID: 8771091787928289351, guid: fcf43ee3a8b5c4a37827632ee45b346f, type: 3}
   SourceMeta: {fileID: 4900000, guid: 0756fc9572c454b7a8c3d645afdd5ed3, type: 3}
   Minimap: {fileID: 4900000, guid: 63616b6e08b604a1f937600615de3cef, type: 3}
+  LevelOffset: {x: -26.245, y: 58.545, z: 50.17}
   PlayerSpawns:
   - {x: 0, y: 0.05, z: 24.17}
   - {x: 30.585, y: 0.05, z: 0}
