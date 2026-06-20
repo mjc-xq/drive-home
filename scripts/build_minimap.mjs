@@ -26,9 +26,9 @@ const SRC = (...p) => path.join(ROOT, ...p);
 // exact geometry (and recenter offset) of the level the game actually loads. dahill keeps
 // the legacy minimap.json name; canyon/stanton get slug-prefixed outputs.
 const LEVEL_CONFIG = {
-  dahill:  { src: '1840-dahill-property-trees.glb',         out: 'minimap.json' },
-  canyon:  { src: 'canyon-middle-school-property-trees.glb', out: 'canyon.minimap.json' },
-  stanton: { src: 'stanton-elementary-property-trees.glb',  out: 'stanton.minimap.json' },
+  dahill:  { src: '1840-dahill-property.glb',         out: 'minimap.json' },
+  canyon:  { src: 'canyon-middle-school-property.glb', out: 'canyon.minimap.json' },
+  stanton: { src: 'stanton-elementary-property.glb',  out: 'stanton.minimap.json' },
 };
 const SLUG = process.argv[2] || 'dahill';
 const cfg = LEVEL_CONFIG[SLUG];

@@ -37,8 +37,95 @@ import { clipPolylineToBox, smoothLine, buildVertHit, vkey, roadSpec, roadRank, 
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
 
+// ---- tree-library loader (self-contained tree emission; no Blender) -------
+// Reads the 6 exports/tree_lib/tree_0N.glb templates with a gltf-transform NodeIO
+// (registering the meshopt + draco decoders exactly like build_dahilg_assets.mjs) and
+// converts EACH template ONCE into a single shared THREE.BufferGeometry + a single shared
+// THREE.MeshStandardMaterial. All prims of a template are merged into one positions/normals/
+// (uvs) buffer; a per-vertex COLOR carries each prim's representative base colour (bark brown
+// vs leaf green, alpha-weighted from its baseColor texture), so the foliage/trunk read right
+// with ONE vertex-coloured material. Sharing the SAME geom+mat object across all placed trees
+// of a template lets the downstream build (dedup + instanceStaticRepeats) collapse them into
+// EXT_mesh_gpu_instancing. Falls back to a name-based colour if a texture can't be decoded.
+async function loadTreeTemplates() {
+  const libDir = path.join(ROOT, 'exports/tree_lib');
+  const manifestPath = path.join(libDir, 'manifest.json');
+  if (!existsSync(manifestPath)) return null;
+  const { NodeIO, Logger } = await import('@gltf-transform/core');
+  const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions');
+  const { MeshoptDecoder } = await import('meshoptimizer');
+  const { default: draco3d } = await import('draco3dgltf');
+  const { default: sharpTex } = await import('sharp');
+  const tio = new NodeIO()
+    .setLogger(new Logger(Logger.Verbosity.ERROR))
+    .registerExtensions(ALL_EXTENSIONS)
+    .registerDependencies({
+      'draco3d.decoder': await draco3d.createDecoderModule(),
+      'meshopt.decoder': MeshoptDecoder,
+    });
+  await MeshoptDecoder.ready;
+  // alpha-weighted average sRGB of a baseColor texture -> linear THREE.Color (so transparent
+  // leaf-card background doesn't drag the foliage colour dark); null if it can't be decoded.
+  const texColor = async (mat) => {
+    try {
+      const tex = mat && mat.getBaseColorTexture();
+      const img = tex && tex.getImage();
+      if (!img) return null;
+      const { data } = await sharpTex(Buffer.from(img)).resize(16, 16, { fit: 'fill' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      let r = 0, g = 0, b = 0, w = 0;
+      for (let i = 0; i < data.length; i += 4) { const a = data[i + 3] / 255; r += data[i] * a; g += data[i + 1] * a; b += data[i + 2] * a; w += a; }
+      if (w < 1e-3) return null;
+      return new THREE.Color().setRGB(r / w / 255, g / w / 255, b / w / 255, THREE.SRGBColorSpace);
+    } catch { return null; }
+  };
+  const nameColor = (n) => /leaf|leaves|acacia|foliage/i.test(n) ? new THREE.Color(0.34, 0.55, 0.10)
+    : /bark|trunk|wood/i.test(n) ? new THREE.Color(0.32, 0.20, 0.13) : new THREE.Color(0.40, 0.40, 0.40);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const templates = [];
+  for (const entry of manifest.trees) {
+    const f = path.join(libDir, entry.file);
+    if (!existsSync(f)) continue;
+    const doc = await tio.read(f);
+    const pos = [], nor = [], uv = [], col = [], idx = [];
+    let vbase = 0;
+    for (const mesh of doc.getRoot().listMeshes()) {
+      for (const prim of mesh.listPrimitives()) {
+        const P = prim.getAttribute('POSITION'); if (!P) continue;
+        const N = prim.getAttribute('NORMAL'), U = prim.getAttribute('TEXCOORD_0'), I = prim.getIndices();
+        const c = (await texColor(prim.getMaterial())) || nameColor(prim.getMaterial()?.getName() || '');
+        const n = P.getCount(), e = [];
+        for (let k = 0; k < n; k++) {
+          P.getElement(k, e); pos.push(e[0], e[1], e[2]);
+          if (N) { N.getElement(k, e); nor.push(e[0], e[1], e[2]); }
+          if (U) { U.getElement(k, e); uv.push(e[0], e[1]); }
+          col.push(c.r, c.g, c.b);
+        }
+        if (I) { const ia = I.getArray(); for (let k = 0; k < ia.length; k++) idx.push(vbase + ia[k]); }
+        else { for (let k = 0; k < n; k++) idx.push(vbase + k); }
+        vbase += n;
+      }
+    }
+    if (!pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    if (nor.length === pos.length) g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    if (uv.length === (pos.length / 3) * 2) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    if (nor.length !== pos.length) g.computeVertexNormals();
+    const m = new THREE.MeshStandardMaterial({ name: `Tree_${entry.id}_mat`, vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+    templates.push({ id: entry.id, geom: g, mat: m, height_m: entry.height_m || 6, feature: !!entry.feature });
+  }
+  return templates.length ? templates : null;
+}
+
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf8'));
+// School/place exports (canyon, stanton) carry meta.kind === 'school-region-export'.
+// Their scene.json may still mark one footprint house:true, but it's a SCHOOL — so the
+// residential owner-house cues (front door/garage, bi===0 garage door) must NOT fire on
+// them. Dahill is the residential export (no meta) and keeps every cue.
+const IS_SCHOOL_EXPORT = S.meta?.kind === 'school-region-export';
 const C = S.center;                                        // house centroid (flat ENU)
 let A = S.aerial;                                          // aerial bounds (flat ENU)
 const GAERIAL = path.join(ROOT, 'exports/google_aerial.json');
@@ -152,6 +239,32 @@ function gableTris(rect, base, wallH) {
 // gables, UV = nadir aerial projection -> real satellite roof imagery).
 const TILE = 5.0;   // bigger facade tile -> sparser windows (was a dense 3 m grid)
 const aerialUV = (X, Z) => aerialUVen(X + C[0], C[1] - Z);
+// Decode the SAME aerial JPEG used for the Terrain/roofs_photo texture so per-vertex roof
+// colour (Step 5) can sample the real satellite roof tint. aerialUV(X,Z) already maps a
+// world XZ to this image's [0,1] UV (v=0 at the top), so we just read the pixel there.
+// Falls back to null when the image isn't decodable -> roofColor() palette is used.
+const { default: _sharpAerial } = await import('sharp');
+let AERIAL_PX = null, AERIAL_W = 0, AERIAL_H = 0, AERIAL_CH = 3;
+try {
+  const _aerialPath = existsSync(path.join(ROOT, 'exports/google_aerial.jpg'))
+    ? path.join(ROOT, 'exports/google_aerial.jpg') : path.join(ROOT, 'src/assets/aerial_opt.jpg');
+  if (existsSync(_aerialPath)) {
+    const { data, info } = await _sharpAerial(_aerialPath).raw().toBuffer({ resolveWithObject: true });
+    AERIAL_PX = data; AERIAL_W = info.width; AERIAL_H = info.height; AERIAL_CH = info.channels;
+  }
+} catch { AERIAL_PX = null; }
+const _s2l = s => { const c = s / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+// aerialColorAt(worldX, worldZ) -> linear-rgb [r,g,b] sampled from the decoded aerial at
+// the vertex's aerial UV, or null when the image is missing / the UV is out of bounds.
+const aerialColorAt = (worldX, worldZ) => {
+  if (!AERIAL_PX) return null;
+  const [u, v] = aerialUV(worldX, worldZ);
+  if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return null;
+  const px = Math.min(AERIAL_W - 1, Math.max(0, Math.round(u * (AERIAL_W - 1))));
+  const py = Math.min(AERIAL_H - 1, Math.max(0, Math.round(v * (AERIAL_H - 1))));
+  const k = (py * AERIAL_W + px) * AERIAL_CH;
+  return [_s2l(AERIAL_PX[k]), _s2l(AERIAL_PX[k + 1]), _s2l(AERIAL_PX[k + 2])];
+};
 // Per-building wall colour from Street View (exports/buildings_color.json) and a
 // clean solid roof colour (NADIR aerial on pitched roofs looks wrong, so roofs are
 // solid). Walls = facade window texture x SV colour; roofs = solid shingle.
@@ -217,9 +330,13 @@ const wallColor = ib => {
   return c.map(clamp01);
 };
 // roofs: real sampled colour, but lift deep satellite shadows so they read as roof
-// material instead of black voids in review renders.
+// material instead of black voids in review renders. When fetch_roof_colors gave us a real
+// per-roof colour (RCOL[ib]), use it DIRECTLY (only the shadow lift) — the old 40% mix toward a
+// random ROOF_PALETTE colour diluted every real terracotta/grey toward the same muddy average.
+// The palette stays ONLY as the no-sample fallback for roofs the fetch missed.
 const roofColor = ib => {
-  const src = RCOL[ib] || ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
+  if (RCOL[ib]) return liftLuma(RCOL[ib], 0.48);
+  const src = ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
   return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.40), 0.48, seededColor(ROOF_PALETTE, ib));
 };
 
@@ -275,7 +392,25 @@ function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
     const bay = opts.house ? 3.0 : 3.35 + (((i * 97 + Math.round(L * 10)) % 5) - 2) * 0.10;
     const count = Math.max(1, Math.min(12, Math.floor((L - 1.0) / bay)));
     const floors = Math.max(1, Math.min(3, Math.floor((wallH - 1.15) / 2.55)));
+    // SCHOOL/commercial storefront: a long, tall, non-residential wall gets a CONTINUOUS
+    // ground-floor glass band with vertical mullions instead of the punched window grid.
+    const commercial = !opts.house && L >= 9 && wallH >= 4;
+    if (commercial) {
+      const gy0 = base + 0.85, gy1 = base + Math.min(3.2, wallH - 1.4);   // ground-floor band
+      if (gy1 - gy0 > 0.6) {
+        // base sill + head trim spanning the wall, the glass band between, and mullions
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.45, L - 0.45, gy0 - 0.18, gy0, 0.10);          // sill
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.45, L - 0.45, gy1, gy1 + 0.16, 0.10);          // head
+        pushWallRect(D.glass, ax, az, ex, ez, nx, nz, 0.5, L - 0.5, gy0, gy1, 0.085);                 // continuous glass band
+        const mull = Math.max(2, Math.round((L - 1.0) / 2.0));
+        for (let mI = 0; mI <= mull; mI++) {
+          const ms = 0.5 + (L - 1.0) * mI / mull;
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, ms - 0.05, ms + 0.05, gy0, gy1, 0.10);         // vertical mullion
+        }
+      }
+    }
     for (let f = 0; f < floors; f++) {
+      if (commercial && f === 0) continue;     // ground floor is the storefront band above
       const y0 = base + 1.10 + f * 2.45;
       const y1 = Math.min(y0 + 1.02, yt - 0.42);
       if (y1 - y0 < 0.45) continue;
@@ -294,11 +429,30 @@ function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
   }
 }
 
-// push a roof triangle with upward-facing winding, solid roof colour (no texture)
+// push a roof triangle with upward-facing winding. Colour rides per-vertex COLOR_0: each vertex
+// is the building's roof median (col, no longer palette-diluted) blended 60% toward the real
+// aerial pixel sampled at that vertex — so a roof keeps its terracotta/grey identity while
+// picking up the satellite's lights/shadows/streaks instead of one flat fill. The sample point
+// is nudged 25% toward the triangle centroid so eave/edge vertices don't bleed neighbour pixels.
+// Missing/out-of-bounds aerial -> the flat roof colour.
 function pushUpTri(Rf, col, a, b, c) {
   const ux = b[0] - a[0], uz = b[2] - a[2], vx = c[0] - a[0], vz = c[2] - a[2];
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
-  for (const v of tri) { Rf.pos.push(v[0], v[1], v[2]); Rf.col.push(col[0], col[1], col[2]); }
+  const ctx = (a[0] + b[0] + c[0]) / 3, ctz = (a[2] + b[2] + c[2]) / 3;
+  for (const v of tri) {
+    const sx = v[0] + (ctx - v[0]) * 0.25, sz = v[2] + (ctz - v[2]) * 0.25;
+    const samp = aerialColorAt(sx, sz);
+    const cv = samp ? mix3(col, samp, 0.6) : col;
+    // Store a per-vertex MULTIPLIER (cv / roofMedian), clamped, so baseColorFactor (= roofMedian,
+    // group colour) stays unchanged and COLOR_0 only carries the aerial light/shadow deviation —
+    // renderers that ignore COLOR_0 still get the flat roof colour, no double-darkening.
+    Rf.pos.push(v[0], v[1], v[2]);
+    Rf.col.push(
+      Math.min(2, cv[0] / Math.max(1e-3, col[0])),
+      Math.min(2, cv[1] / Math.max(1e-3, col[1])),
+      Math.min(2, cv[2] / Math.max(1e-3, col[2])),
+    );
+  }
 }
 // push a roof-PHOTO triangle (upward winding) with nadir aerial UV -> real satellite
 // roof imagery. Used only on flat roofs (nadir on pitched roofs smears), as a separate
@@ -308,15 +462,24 @@ function pushPhotoTri(RfP, a, b, c) {
   const tri = (uz * vx - ux * vz) < 0 ? [a, c, b] : [a, b, c];
   for (const v of tri) { RfP.pos.push(v[0], v[1], v[2]); const w = aerialUV(v[0], v[2]); RfP.uv.push(w[0], w[1]); }
 }
+const WALL_EMBED = 0.4;   // wall bottoms drop to per-corner terrain - EMBED so they touch ground on slopes
 function pushWallFace(W, wallC, xi, zi, xj, zj, yb, yt, u0, u1, vt, cen) {
-  const A = [xi, yb, zi], B = [xj, yb, zj], Cc = [xj, yt, zj], Dd = [xi, yt, zi];
+  // Wall TOP stays flat at yt (= base + wallH); each BOTTOM corner drops to its own terrain
+  // minus a small embed, so a facade on a slope is watertight (adjacent walls share endpoint
+  // samples) and never floats at one corner. Per-corner UV-V = (top - thatBottom)/TILE keeps
+  // the stucco/window texture from stretching where the wall is taller on the downhill side.
+  const ybi = Math.min(yt - 0.1, terrainAt(xi, zi) - WALL_EMBED);
+  const ybj = Math.min(yt - 0.1, terrainAt(xj, zj) - WALL_EMBED);
+  const vi = (yt - ybi) / TILE, vj = (yt - ybj) / TILE;
+  const A = [xi, ybi, zi], B = [xj, ybj, zj], Cc = [xj, yt, zj], Dd = [xi, yt, zi];
   const L = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
   const nx = -(zj - zi) / L, nz = (xj - xi) / L;
   const out = (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz) >= 0;
   const verts = out ? [A, B, Cc, A, Cc, Dd] : [A, Cc, B, A, Dd, Cc];
+  // V=0 at each corner's bottom row; V rises to the per-corner height at the (shared, flat) top.
   const uvs = out
-    ? [u0, 0, u1, 0, u1, vt, u0, 0, u1, vt, u0, vt]
-    : [u0, 0, u1, vt, u1, 0, u0, 0, u0, vt, u1, vt];
+    ? [u0, 0, u1, 0, u1, vj, u0, 0, u1, vj, u0, vi]
+    : [u0, 0, u1, vj, u1, 0, u0, 0, u0, vi, u1, vj];
   for (const v of verts) W.pos.push(v[0], v[1], v[2]);
   W.uv.push(...uvs);
   for (let k = 0; k < 6; k++) W.col.push(wallC[0], wallC[1], wallC[2]);
@@ -337,6 +500,26 @@ function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, RfP, detail
   const capTris = THREE.ShapeUtils.triangulateShape(v2, []);
   for (const [a, c, d] of capTris)
     pushUpTri(Rf, roofC, [ring[a][0], yt, ring[a][1]], [ring[c][0], yt, ring[c][1]], [ring[d][0], yt, ring[d][1]]);
+  // EAVE OVERHANG: push the cap edge ~0.35 m outward as a flat lip ring at the eave height,
+  // plus a ~0.18 m vertical fascia band hanging under that lip — so the roof reads as a real
+  // overhanging eave instead of a wall-flush slab. Emitted into Rf (Buildings_roofs); the
+  // collision proxy keeps the UN-offset ring so the overhang never blocks the player.
+  {
+    const OVER = 0.35, FASCIA = 0.18, yf = yt - FASCIA;
+    for (let i = 0; i < ring.length; i++) {
+      const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
+      const L = Math.hypot(xj - xi, zj - zi); if (L < 1e-4) continue;
+      let nx = -(zj - zi) / L, nz = (xj - xi) / L;          // outward edge normal (away from centroid)
+      if (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+      const oi = [xi + nx * OVER, zi + nz * OVER], oj = [xj + nx * OVER, zj + nz * OVER];
+      // overhang lip (horizontal, faces up): inner edge -> outer edge at the eave
+      pushUpTri(Rf, roofC, [xi, yt, zi], [xj, yt, zj], [oj[0], yt, oj[1]]);
+      pushUpTri(Rf, roofC, [xi, yt, zi], [oj[0], yt, oj[1]], [oi[0], yt, oi[1]]);
+      // fascia band (vertical, faces out): hangs from the lip edge down FASCIA metres
+      pushUpTri(Rf, roofC, [oi[0], yt, oi[1]], [oj[0], yt, oj[1]], [oj[0], yf, oj[1]]);
+      pushUpTri(Rf, roofC, [oi[0], yt, oi[1]], [oj[0], yf, oj[1]], [oi[0], yf, oi[1]]);
+    }
+  }
   // satellite roof-photo cap: ONLY flat roofs (no gable), lifted just above the solid cap
   if (RfP && !(roofRects && roofRects.length)) {
     const yp = yt + 0.06;
@@ -360,6 +543,13 @@ scene.add(terrainMesh);
 
 // OSM/Overture height (or a sane default) — NOT LiDAR (the LiDAR heights were noisy)
 const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
+// SHARED foundation level for one footprint: the LOWEST terrain under any of its world-space
+// ring corners, minus a 0.5 m embed. Using the min (not the centroid) means the eave-flat
+// wall top sits above grade everywhere and the per-corner wall bottoms (pushWallFace) drop to
+// real terrain, so a facade on a slope never floats at one corner / buries at another. Every
+// consumer of a building's base (walls, SV overlay, collision) MUST use this same groundMin so
+// the photo facades stay coplanar with the extruded walls.
+const buildingBase = ringW => Math.min(...ringW.map(([x, z]) => terrainAt(x, z))) - 0.5;
 const houseIdx = S.buildings.findIndex(b => b.house);
 const buildingPolys = [];                       // world-space rings for tree avoidance
 const buildingCollision = [];
@@ -370,7 +560,7 @@ let houseRing = null, houseWallH = 0;
 const RfP = { pos: [], uv: [] };   // satellite roof-photo caps (flat roofs) -> toggle layer
 if (houseIdx >= 0) {
   const houseB = S.buildings[houseIdx];
-  const hc = centroidEN(houseB.p), base = terrainAt(...w2(hc[0], hc[1])) - 0.5;
+  const base = buildingBase(houseB.p.map(([e, n]) => w2(e, n)));   // min terrain under the footprint - 0.5 (slope-safe)
   houseWallH = wallHeight(houseB, houseIdx);
   houseRing = emitBuilding(houseB, houseIdx, base, houseWallH, hW, hRf, RfP, hD, { house: true, autoWindows: false });
   buildingPolys.push(houseRing);
@@ -378,7 +568,7 @@ if (houseIdx >= 0) {
   // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
   // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
   scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv, emissive: 0.42 }));
-  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36, planarUV: 1.6, rough: 0.85 }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36, planarUV: 1.6, rough: 0.85, colors: hRf.col.length === hRf.pos.length ? hRf.col : undefined }));
   if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0xbcb4a4, 'House_siding_lines', { emissive: 0.18 }));
   if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim'));
   if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows'));
@@ -397,7 +587,7 @@ S.buildings.forEach((b, ib) => {
   if (b.house) return;
   const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }     // never put others' buildings on the owner's lots
-  const base = terrainAt(cw[0], cw[1]) - 0.5;
+  const base = buildingBase(b.p.map(([e, n]) => w2(e, n)));   // min terrain under the footprint - 0.5 (slope-safe)
   const h = wallHeight(b, ib);
   const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
   const ring = emitBuilding(b, ib, base, h, bW, bRf, RfP, bD, {});
@@ -426,6 +616,11 @@ function groupedMesh(buf, groups, name, withUV, planarUV) {
   }
   g.computeVertexNormals();
   const isRoof = /roofs/i.test(name);
+  // roofs carry a per-vertex COLOR_0 multiplier (aerial light/shadow over the flat roof colour);
+  // attach it and enable vertexColors on the roof materials. Walls deliberately do NOT (they
+  // rely on the per-building baseColorFactor only, so colour renders in every viewer).
+  const hasVColor = isRoof && buf.col && buf.col.length === buf.pos.length;
+  if (hasVColor) g.setAttribute('color', new THREE.Float32BufferAttribute(buf.col, 3));
   const mats = groups.map(([start, count, col], i) => {
     g.addGroup(start, count, i);
     const base = new THREE.Color(col[0], col[1], col[2]);
@@ -433,6 +628,7 @@ function groupedMesh(buf, groups, name, withUV, planarUV) {
     // walls keep 0.95. metalness stays 0.
     const m = new THREE.MeshStandardMaterial({ color: base, roughness: isRoof ? 0.85 : 0.95, metalness: 0, name: `${name}_${i}` });
     m.emissive = base.clone().multiplyScalar(/walls/i.test(name) ? 0.42 : 0.36);
+    if (hasVColor) m.vertexColors = true;
     m.side = THREE.DoubleSide; return m;
   });
   const mesh = new THREE.Mesh(g, mats); mesh.name = name; return mesh;
@@ -467,10 +663,9 @@ function addStreetViewFacadeOverlays() {
     const mx = (A0[0] + B0[0]) / 2, mz = (A0[1] + B0[1]) / 2;
     if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
     // Base MUST match the extruded wall this overlays, or the panel floats above /
-    // sinks below it on a slope (the wall samples terrain at the building CENTROID -0.5,
-    // and uses wallHeight(b) — sampling the wall midpoint here instead left up to ~2.3 m
-    // of Y drift + a mismatched top). Mirror the wall exactly so the photo is coplanar.
-    const base = terrainAt(cen[0], cen[1]) - 0.5;
+    // sinks below it on a slope. The wall now anchors at buildingBase(ring) = min terrain
+    // under the footprint - 0.5 (slope-safe), so the overlay uses the SAME shared helper.
+    const base = buildingBase(ring);   // SAME slope-safe groundMin as the extruded wall -> coplanar
     const wallH = wallHeight(b);
     // The SV JPEG (fetch_sv_facades.py crop_to_wall) is cropped to the band
     // ground..eave+0.6 m under a pinhole model: image V=0 (top row) is the eave+pad,
@@ -485,6 +680,16 @@ function addStreetViewFacadeOverlays() {
     const CAM_EYE = 2.5, PITCH = 6, IMG_W = 640, IMG_H = 512, RAD = Math.PI / 180;
     const cv = wall.crop_v, fov = wall.fov, dist = wall.dist;
     let bottomY = base, topY = base + wallH, vBottom = 1, vTop = 0;
+    // HORIZONTAL: the capture heading points at the wall midpoint, so the wall is CENTRED in
+    // the photo. The panel was sampling the whole 0..1 width, squashing a fov-degree frame onto
+    // the L-metre wall. Instead sample only the centred slice the wall actually subtends:
+    // trueFovH = angle the wall spans at the camera; uHalf = that as a fraction of the photo fov.
+    let u0 = 0, u1 = 1;
+    if (fov > 0 && dist > 0) {
+      const trueFovH = 2 * Math.atan((L / 2) / dist) / RAD;
+      const uHalf = Math.min(0.5, (trueFovH / fov) / 2);
+      u0 = 0.5 - uHalf; u1 = 0.5 + uHalf;
+    }
     if (Array.isArray(cv) && cv.length === 2 && fov > 0 && dist > 0) {
       const fovV = 2 * Math.atan(Math.tan(fov / 2 * RAD) * IMG_H / IMG_W) / RAD;
       const yAtV = v => CAM_EYE + dist * Math.tan((PITCH + (0.5 - v) * fovV) * RAD); // world-Y of crop row v
@@ -492,18 +697,15 @@ function addStreetViewFacadeOverlays() {
       const yPhotoBot = yAtV(cv[1]);   // ground (or, if crop_v clamped, slightly above ground)
       const span = yPhotoTop - yPhotoBot;
       if (span > 0.5) {
-        // The quad must FILL the wall base..eave exactly (no plinth gap, no roof pad):
-        //  - bottom always at the wall base (any small positive yPhotoBot left a strip of
-        //    bare stucco under the photo and made the panel look like a floating decal);
-        //  - top clipped to the wall eave so the eave+0.6 m roof pad is dropped.
-        // Then map the UV-V so the photo's real ground row sits at the base and its eave row
-        // at the top — i.e. solve V at world-Y = base (0) and Y = wallH from the linear
-        // pinhole band, clamped to the captured [cv0..cv1] range so we never sample sky.
-        const vAtY = y => (yPhotoTop - y) / span;                // inverse of yAtV, in [0..1] over the band
-        bottomY = base;
+        // VERTICAL: DON'T extrapolate the photo past its captured band. The quad spans exactly
+        // the band that the camera saw — bottom = base + max(0, yPhotoBot) (the photo's real
+        // lowest row, V=1), top clipped to the wall eave (drops the eave+0.6 m roof pad). The
+        // thin base..yPhotoBot strip below is covered by the underlying Buildings_walls colour
+        // floor, so there's no stretched-down photo and no roof-on-wall.
+        bottomY = base + Math.max(0, yPhotoBot);
         topY = base + Math.min(wallH, yPhotoTop);
-        vBottom = Math.min(1, vAtY(0));                          // photo row at the wall base (ground)
-        vTop = Math.max(0, vAtY(Math.min(wallH, yPhotoTop)));    // photo row at the wall eave (crops roof pad)
+        vBottom = 1;                                             // photo's captured bottom row
+        vTop = Math.max(0, (yPhotoTop - Math.min(wallH, yPhotoTop)) / span);   // eave row (crops roof pad)
       }
     }
     // Inset: the panel must sit JUST proud of the wall and all its surface details
@@ -516,7 +718,7 @@ function addStreetViewFacadeOverlays() {
     const Dd = [A0[0] + nx * off, topY, A0[1] + nz * off];
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute([...A, ...B, ...Cc, ...A, ...Cc, ...Dd], 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, vBottom, 1, vBottom, 1, vTop, 0, vBottom, 1, vTop, 0, vTop], 2));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute([u0, vBottom, u1, vBottom, u1, vTop, u0, vBottom, u1, vTop, u0, vTop], 2));
     g.computeVertexNormals();
     const matName = `SVFacade_${wall.building}_${wall.edge}`;
     // Low emissive: the SV JPEG is already a fully-lit photo, so a high emissive (was 0.16)
@@ -837,7 +1039,44 @@ for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LI
 for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
 sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
 sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx, skipMappedSidewalk, SKIRT_SIDEWALK, swSrcUv);
-sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
+// ZEBRA crosswalk: instead of one solid concrete ribbon, lay painted bars ALONG each crossing
+// path (parallel to traffic), each bar spanning the crossing width — the classic zebra look.
+// Reuses the dash-walk cadence (centreDashes) but emits full-width quads. Kept in xwalkPos/Idx
+// so it stays the Crosswalks_Mapped node (same material/UV treatment downstream).
+function zebraCrosswalk(lines, width, lift, posArr, idxArr) {
+  const hw = width / 2, BAR = 0.6, GAP = 0.6;        // 0.6 m painted bar / 0.6 m gap
+  for (const src of lines || []) {
+    const pl = src.p || src;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
+      piece = smoothLine(piece);
+      if (piece.length < 2) continue;
+      let draw = true, acc = 0;
+      for (let k = 1; k < piece.length; k++) {
+        const a = piece[k - 1], b = piece[k];
+        let dx = b[0] - a[0], dz = b[1] - a[1];
+        const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg;
+        const nx = -dz, nz = dx;                       // across-path = crossing width direction
+        let t = 0;
+        while (t < seg - 1e-6) {
+          const len = Math.min((draw ? BAR : GAP) - acc, seg - t);
+          if (draw) {
+            const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
+            const o = posArr.length / 3;
+            posArr.push(x0 + nx * hw, terrainAt(x0 + nx * hw, z0 + nz * hw) + lift, z0 + nz * hw,
+                        x0 - nx * hw, terrainAt(x0 - nx * hw, z0 - nz * hw) + lift, z0 - nz * hw,
+                        x1 - nx * hw, terrainAt(x1 - nx * hw, z1 - nz * hw) + lift, z1 - nz * hw,
+                        x1 + nx * hw, terrainAt(x1 + nx * hw, z1 + nz * hw) + lift, z1 + nz * hw);
+            idxArr.push(o, o + 1, o + 2, o, o + 2, o + 3);
+          }
+          t += len; acc += len;
+          if (acc >= (draw ? BAR : GAP) - 1e-6) { draw = !draw; acc = 0; }
+        }
+      }
+    }
+  }
+}
+zebraCrosswalk(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
 const DRIVEWAYSJSON = path.join(ROOT, 'exports/driveways_osm.json');
 if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
   const mapped = JSON.parse(readFileSync(DRIVEWAYSJSON, 'utf8')).driveways || [];
@@ -958,12 +1197,18 @@ function emitOwnerHouseFacadeCues(ring, wallH, out) {
 }
 
 // ---- Doors ----------------------------------------------------------------
+// Owner-house cues (front door/garage window placement) are RESIDENTIAL — on a school/place
+// export the house:true footprint is actually a SCHOOL, so skip these cues there.
 const houseCue = { glass: [], trim: [] };
-emitOwnerHouseFacadeCues(houseRing, houseWallH, houseCue);
+if (!IS_SCHOOL_EXPORT) emitOwnerHouseFacadeCues(houseRing, houseWallH, houseCue);
 if (houseCue.trim.length) scene.add(mkMesh(houseCue.trim, null, 0xd8d0bd, 'House_window_trim'));
 if (houseCue.glass.length) scene.add(mkMesh(houseCue.glass, null, 0x223647, 'House_windows'));
 
 const dwPos = [], dwCol = [], garagePos = [], garageTrim = [], DOORCOL = [0.26, 0.18, 0.12];
+// Door FRAME (jambs + lintel) and a TRANSOM glass panel above each door. Coloured to match the
+// building window trim/windows so they fold visually into that family. Kept in their own meshes
+// because bD.trim/bD.glass are already consumed into Buildings_window_trim/Buildings_windows above.
+const doorTrim = [], doorGlass = [];
 let houseDoor = null, houseGarage = null;       // for the tree clear-zone / front fence orientation
 buildingPolys.forEach((ring, bi) => {
   if (ring.length < 2) return;
@@ -990,7 +1235,15 @@ buildingPolys.forEach((ring, bi) => {
   const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
   const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
   for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) { dwPos.push(v[0], v[1], v[2]); dwCol.push(...DOORCOL); }
-  if (bi === 0) {
+  // DOOR FRAME + TRANSOM: a trim surround (left/right jambs + a head lintel) just proud of the
+  // slab, plus a glass transom panel above the head. `sd` = door centre distance along the edge,
+  // `base` here is the door slab base (terrainAt - 0.1). pushWallRect measures s from (ax,az).
+  const sd = t * L, jw = 0.10, head = 0.10;
+  pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd - hw - jw, sd - hw, base, base + H + head, 0.10);          // left jamb
+  pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd + hw, sd + hw + jw, base, base + H + head, 0.10);          // right jamb
+  pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd - hw - jw, sd + hw + jw, base + H, base + H + head, 0.10); // head lintel
+  pushWallRect(doorGlass, ax, az, ex, ez, nx, nz, sd - hw + 0.04, sd + hw - 0.04, base + H + head, base + H + head + 0.42, 0.112); // transom
+  if (bi === 0 && !IS_SCHOOL_EXPORT) {     // residential owner-house garage; never on a SCHOOL export
     houseDoor = [dcx, dcz]; houseGarage = (ax > bx) ? [ax, az] : [bx, bz];
     const gt = (ax > bx) ? 0.20 : 0.80;
     const gs = L * gt, ghw = Math.min(1.65, Math.max(1.25, L * 0.16));
@@ -1005,6 +1258,9 @@ buildingPolys.forEach((ring, bi) => {
   }
 });
 if (dwPos.length) scene.add(mkMesh(dwPos, null, new THREE.Color(...DOORCOL), 'Doors', {}));
+// door frame trim / transom glass — same colours as Buildings_window_trim / Buildings_windows
+if (doorTrim.length) scene.add(mkMesh(doorTrim, null, 0xd2c9b8, 'Doors_trim'));
+if (doorGlass.length) scene.add(mkMesh(doorGlass, null, 0x203342, 'Doors_transom'));
 if (garageTrim.length) scene.add(mkMesh(garageTrim, null, 0xd8d0bd, 'GarageDoor_trim'));
 if (garagePos.length) scene.add(mkMesh(garagePos, null, 0x5e6266, 'GarageDoors'));
 
@@ -1201,11 +1457,86 @@ function addGameLevelLayers() {
     scene.add(mkMesh(bPos, bIdx, 0x808080, 'LOD_Buildings_Low', { opacity: 0 }));
   }
 
-  const trPos = [], trIdx = [];
-  for (const [x, z, cr = 2.5, th = 7] of trees) pushTreeCylinder(trPos, trIdx, x, z, Math.max(0.28, Math.min(0.55, cr * 0.16)), Math.max(2.2, Math.min(4.2, th * 0.38)));
-  if (trIdx.length) scene.add(mkMesh(trPos, trIdx, 0x00ff00, 'Collision_Trees', { opacity: 0 }));
+  // NOTE: the visual 'Trees' group + the 'Collision_Trees' trunk-box collider are emitted by
+  // emitTreeLayers() below, driven by exports/trees_placed.json (so an orchestrator can swap in
+  // canyon/stanton's placements). pushTreeCylinder stays available for that path's fallback.
 }
 addGameLevelLayers();
+
+// ---- Trees: self-contained, Blender-free emission ------------------------
+// Reads exports/trees_placed.json (written above for dahill; an orchestrator swaps the file
+// for canyon/stanton) and adds TWO nodes:
+//   'Trees'           — a Group of per-placement instanced tree meshes. Each placed tree picks
+//                       the library template whose height_m is closest to its target height,
+//                       scales s = height / template.height_m, yaws by a DETERMINISTIC angle
+//                       from the tree index (stable across re-runs, no Math.random), and REUSES
+//                       the SAME 6 shared geom+mat objects so the downstream build folds them
+//                       into EXT_mesh_gpu_instancing (do NOT bake per-tree transformed geometry).
+//   'Collision_Trees' — one merged mesh of thin trunk boxes (0.35 m square, 2.2 m tall) so the
+//                       player bumps trunks without the canopy blocking. The build pipeline
+//                       ASSERTS a node named Collision_Trees exists.
+// Missing trees_placed.json or tree_lib -> trees are skipped gracefully (still emits an empty
+// Collision_Trees so the downstream assertion holds).
+let nTreeInstances = 0, treeLayerSrc = 'none';
+async function emitTreeLayers() {
+  const placedPath = path.join(ROOT, 'exports/trees_placed.json');
+  // thin trunk-box collider, baked into plain arrays (one ~0.35 m x 2.2 m box per tree).
+  const trPos = [], trIdx = [];
+  const pushTrunkBox = (x, z, half = 0.175, h = 2.2) => {
+    const base = trPos.length / 3, y0 = terrainAt(x, z), y1 = y0 + h;
+    const c = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+    for (const [sx, sz] of c) trPos.push(x + sx * half, y0, z + sz * half, x + sx * half, y1, z + sz * half);
+    for (let k = 0; k < 4; k++) {
+      const j = (k + 1) % 4;
+      trIdx.push(base + k * 2, base + j * 2, base + j * 2 + 1, base + k * 2, base + j * 2 + 1, base + k * 2 + 1);
+    }
+    // cap top so the collider is a closed box (floor sits on terrain; top closes the prism)
+    trIdx.push(base + 1, base + 3, base + 5, base + 1, base + 5, base + 7);
+  };
+
+  if (existsSync(placedPath)) {
+    const placed = (JSON.parse(readFileSync(placedPath, 'utf8')).trees) || [];
+    const templates = await loadTreeTemplates();
+    if (templates && templates.length && placed.length) {
+      const treesGroup = new THREE.Group(); treesGroup.name = 'Trees';
+      // deterministic per-index yaw (stable across runs; no Math.random)
+      const yawOf = (i) => { let h = Math.imul((i | 0) + 0x9e3779b9, 2654435761) >>> 0; return (h / 4294967296) * Math.PI * 2; };
+      // pick template whose native height_m is closest to the target tree height
+      const pickTemplate = (height) => {
+        let best = templates[0], bd = Infinity;
+        for (const t of templates) { const d = Math.abs((t.height_m || 6) - height); if (d < bd) { bd = d; best = t; } }
+        return best;
+      };
+      for (const t of placed) {
+        const x = +t.x, z = +t.z, height = +t.height || 7;
+        const base = Number.isFinite(+t.base) ? +t.base : terrainAt(x, z);
+        if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(base)) continue;
+        const tmpl = pickTemplate(height);
+        const s = Math.max(0.1, height / (tmpl.height_m || 6));
+        const m = new THREE.Mesh(tmpl.geom, tmpl.mat);   // SHARE geom+mat by reference (-> GPU instancing)
+        m.position.set(x, base, z);
+        m.scale.setScalar(s);
+        m.rotation.y = yawOf(t.i ?? nTreeInstances);
+        m.name = 'Tree_' + (t.i ?? nTreeInstances);
+        treesGroup.add(m);
+        pushTrunkBox(x, z);
+        nTreeInstances++;
+      }
+      scene.add(treesGroup);
+      treeLayerSrc = `trees_placed.json (${nTreeInstances} instances, ${templates.length} templates)`;
+    } else {
+      treeLayerSrc = templates ? 'trees_placed.json empty' : 'tree_lib missing (visual trees skipped)';
+    }
+  } else {
+    treeLayerSrc = 'no trees_placed.json (trees skipped)';
+  }
+  // Always emit Collision_Trees (the downstream build asserts the node exists). If no trees were
+  // placed, drop ONE tiny throwaway box at the patch corner so the node carries valid (finite,
+  // non-empty) geometry instead of a degenerate index into an empty buffer.
+  if (!trIdx.length) pushTrunkBox(tXmin + 1, tZmin + 1, 0.05, 0.1);
+  scene.add(mkMesh(trPos, trIdx, 0x00ff00, 'Collision_Trees', { opacity: 0 }));
+}
+await emitTreeLayers();
 
 // ---- Parcels / lot lines (real fences run along these) -------------------
 // LotLines = all county parcel boundaries; YourLots = APN 416-120-67 (house) +
@@ -1365,6 +1696,7 @@ const objs = [];
 scene.traverse(o => { if (o.isMesh) objs.push(`  ${o.name.padEnd(18)} ${o.geometry.attributes.position.count} verts`); });
 console.log(`terrain: ${terrSrc}`);
 console.log(`crop half: ${cropHalf.toFixed(0)} m   buildings: ${nBld} (${nSkip} skipped on owner lots)   trees: ${trees.length} (${treeSrc})`);
+console.log(`tree layer: ${nTreeInstances} visual instances -> 'Trees' group + 'Collision_Trees' trunk boxes  [${treeLayerSrc}]`);
 console.log('layers:\n' + objs.join('\n'));
 console.log(`street-view facade overlays: ${nSVFacades}`);
 console.log(`textured materials: ${textured} (aerial->terrain/roofs_photo, facade->walls, asphalt->roads/driveways/parking/crosswalks, concrete->sidewalks/curbs, shingle->solid roofs)`);

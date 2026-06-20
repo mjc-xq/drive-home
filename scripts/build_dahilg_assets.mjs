@@ -63,10 +63,13 @@ const DRACO_EXT = 'KHR_draco_mesh_compression';
 //   - src:        the raw export filename in exports/
 //   - out:        output basename → OUT(`${out}.glb`) + OUT(`${out}.meta.json`)
 //   - metaSource: the `source` string recorded in the .meta.json (the original property GLB)
+// The exporter now emits trees itself (Node-only, no Blender), so the self-contained
+// *-property.glb IS the level source. Canyon/Stanton -property.glb are regenerated with
+// the same improved exporter via scripts/reexport_places.mjs before this build runs.
 const LEVELS = [
-  { src: '1840-dahill-property-trees.glb',         out: 'level',   metaSource: '1840-dahill-property.glb' },
-  { src: 'canyon-middle-school-property-trees.glb', out: 'canyon',  metaSource: 'canyon-middle-school-property.glb' },
-  { src: 'stanton-elementary-property-trees.glb',  out: 'stanton', metaSource: 'stanton-elementary-property.glb' },
+  { src: '1840-dahill-property.glb',          out: 'level',   metaSource: '1840-dahill-property.glb' },
+  { src: 'canyon-middle-school-property.glb',  out: 'canyon',  metaSource: 'canyon-middle-school-property.glb' },
+  { src: 'stanton-elementary-property.glb',   out: 'stanton', metaSource: 'stanton-elementary-property.glb' },
 ];
 
 // ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----
