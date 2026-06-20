@@ -20,6 +20,48 @@
 </head>
 <body>
 <div id="root"></div>
+<!-- Last-resort recovery surface. If the app fails to mount (an uncaught error, a
+     failed dynamic import, or a stale/stuck cached version), show a readable message
+     with a "Clear cache & reload" button instead of a blank screen. iOS Safari in
+     particular could get wedged on an old service-worker cache; this lets the device
+     recover without the user knowing how to clear site data. -->
+<script>
+(function () {
+  function appMounted() {
+    var r = document.getElementById('root');
+    return !!(r && r.childElementCount > 0);
+  }
+  function show(detail) {
+    if (appMounted()) return; // app rendered fine — never clobber it
+    var r = document.getElementById('root');
+    if (!r) return;
+    r.innerHTML =
+      '<div style="font:15px/1.5 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:#e6e8ec;background:#15171c;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:28px;box-sizing:border-box">' +
+      '<h2 style="margin:0 0 10px;font-size:20px">Couldn’t start the game</h2>' +
+      '<p style="margin:0 0 18px;max-width:30em;opacity:.75">This is usually an old cached version. Tap below to clear it and reload.</p>' +
+      '<button id="__heal" style="padding:12px 20px;border:0;border-radius:10px;background:#3b82f6;color:#fff;font-weight:600;font-size:15px">Clear cache &amp; reload</button>' +
+      (detail ? '<p style="margin:18px 0 0;font-size:11px;opacity:.4;max-width:34em;word-break:break-word">' + String(detail).slice(0, 300) + '</p>' : '') +
+      '</div>';
+    var btn = document.getElementById('__heal');
+    if (btn) btn.onclick = function () {
+      btn.textContent = 'Clearing…';
+      Promise.all([
+        (window.caches ? caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }) : Promise.resolve()),
+        (navigator.serviceWorker ? navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }) : Promise.resolve())
+      ]).catch(function () {}).then(function () {
+        try { sessionStorage.clear(); } catch (e) {}
+        setTimeout(function () { location.reload(); }, 150);
+      });
+    };
+  }
+  window.addEventListener('error', function (e) { show(e && e.message); });
+  window.addEventListener('unhandledrejection', function (e) { show(e && e.reason && (e.reason.message || e.reason)); });
+  // Catch-all: if nothing has mounted after a generous window, surface the recovery UI.
+  window.addEventListener('load', function () {
+    setTimeout(function () { if (!appMounted()) show('The game took too long to start.'); }, 12000);
+  });
+})();
+</script>
 <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

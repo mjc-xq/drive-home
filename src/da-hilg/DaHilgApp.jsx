@@ -31,6 +31,49 @@ import Scene from './scene/Scene.jsx';
 import PostFX from './scene/PostFX.jsx';
 import { renderState } from './scene/RenderLoop.jsx';
 import DaHilgHud from './hud/DaHilgHud.jsx';
+import ErrorBoundary from './hud/ErrorBoundary.jsx';
+
+/** Visible fallback when the 3D canvas fails to initialize (e.g. no usable WebGL2). */
+function GlFallback() {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        textAlign: 'center',
+        padding: 28,
+        font: '15px/1.5 system-ui, -apple-system, sans-serif',
+        color: '#e6e8ec',
+        background: '#15171c',
+      }}
+    >
+      <h2 style={{ margin: '0 0 10px', fontSize: 20 }}>3D couldn’t start on this device</h2>
+      <p style={{ margin: '0 0 18px', maxWidth: '30em', opacity: 0.75 }}>
+        Your browser may not support WebGL2, or it ran low on memory. Try reloading, or
+        switch to the latest Safari/Chrome.
+      </p>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        style={{
+          padding: '12px 20px',
+          border: 0,
+          borderRadius: 10,
+          background: '#3b82f6',
+          color: '#fff',
+          fontWeight: 600,
+          fontSize: 15,
+        }}
+      >
+        Reload
+      </button>
+    </div>
+  );
+}
 
 /**
  * Wire WebGL context-loss recovery on the live renderer's canvas. iOS reclaims the GPU
@@ -102,27 +145,32 @@ export default function DaHilgApp() {
       {/* Desktop pointer-lock + edge-key verbs (Tab/V/E/1-3/Esc). */}
       <InputLayer />
 
-      {/* Held movement keys are read transiently inside the sim via getKeys(). */}
-      <KeyboardControls map={keyMap}>
-        <Canvas
-          shadows={{ type: THREE.PCFShadowMap }}
-          dpr={[1, deviceTier.dprMax]}
-          gl={{ powerPreference: 'high-performance', stencil: false }}
-          onCreated={onCanvasCreated}
-          camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
-        >
-          <SceneEnv />
-          {/* Warm the KTX2 level + character GLBs now the renderer exists. */}
-          <DaHilgPreloader urls={PRELOAD_URLS} />
-          <Suspense fallback={null}>
-            <Scene />
-          </Suspense>
-          {/* Post-processing composer (only when performance mode is off). Mounts after
-              the scene; publishes a composer that RenderLoop drives as the SOLE
-              priority-100 render (composited). In perf mode RenderLoop plain-renders. */}
-          <PostFXGate />
-        </Canvas>
-      </KeyboardControls>
+      {/* Held movement keys are read transiently inside the sim via getKeys().
+          The Canvas is wrapped in an error boundary so a failed WebGL2 init (common on
+          locked-down / low-memory mobile GPUs) shows a readable fallback instead of
+          unmounting the whole app — HUD included — into a blank screen. */}
+      <ErrorBoundary fallback={<GlFallback />}>
+        <KeyboardControls map={keyMap}>
+          <Canvas
+            shadows={{ type: THREE.PCFShadowMap }}
+            dpr={[1, deviceTier.dprMax]}
+            gl={{ powerPreference: 'high-performance', stencil: false }}
+            onCreated={onCanvasCreated}
+            camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
+          >
+            <SceneEnv />
+            {/* Warm the KTX2 level + character GLBs now the renderer exists. */}
+            <DaHilgPreloader urls={PRELOAD_URLS} />
+            <Suspense fallback={null}>
+              <Scene />
+            </Suspense>
+            {/* Post-processing composer (only when performance mode is off). Mounts after
+                the scene; publishes a composer that RenderLoop drives as the SOLE
+                priority-100 render (composited). In perf mode RenderLoop plain-renders. */}
+            <PostFXGate />
+          </Canvas>
+        </KeyboardControls>
+      </ErrorBoundary>
     </Provider>
   );
 }
