@@ -357,7 +357,7 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .pbNum{font-weight:600;font-size:13px;color:#fff}.pbNum i{font-style:normal;color:rgba(255,255,255,.45)}
 .pbLbl{font-weight:500;font-size:9px;line-height:1.1;color:rgba(255,255,255,.5);max-width:54px}
 .modeCards{display:flex;flex-wrap:wrap;gap:12px;margin-top:auto;padding-top:30px}
-.modeCard{flex:1 1 140px;display:flex;flex-direction:column;gap:10px;padding:16px 14px;text-align:left;color:#fff;cursor:pointer;
+.modeCard{flex:1 1 140px;display:flex;flex-direction:column;gap:10px;padding:16px 14px;text-align:left;color:#fff;text-decoration:none;cursor:pointer;
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);transition:background .15s ease,transform .1s ease}
 .modeCard:hover{background:rgba(255,255,255,.09)}
 .modeCard:active{transform:scale(.98)}
