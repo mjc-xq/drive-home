@@ -72,6 +72,14 @@ function PooledNpc({ slot, charScene, clipByKey }) {
     // Stable per-NPC clinging emote so the pile varies (mostly climbing, a slice
     // slamming) instead of every rider doing the same move.
     const clingClip = slot % 3 === 0 ? 'attack' : 'climb';
+    // Desync the horde so it reads as ALIVE, not a synchronized clone army: a per-NPC
+    // phase offset + a small speed jitter on the clinging emotes (climb/slam) so each
+    // rider grabs/climbs at its own beat.
+    mixer.setTime((slot * 0.37) % 2);
+    const jitter = 0.82 + ((slot * 7) % 11) / 20; // 0.82..1.32
+    if (actions.climb) actions.climb.timeScale = jitter;
+    if (actions.attack) actions.attack.timeScale = jitter;
+    if (actions.dance) actions.dance.timeScale = 0.9 + ((slot * 5) % 8) / 20;
     const entry = { group, mixer, actions, current: null, character, slot, clingClip };
     registerNpc(slot, entry);
     return () => {
