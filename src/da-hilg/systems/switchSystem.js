@@ -33,6 +33,11 @@ export function switchTo(nextId, ctx) {
   // Drop any inherited NPC momentum so control feels crisp from frame one.
   next.motion.velX = 0;
   next.motion.velZ = 0;
+  // Clear any emote the body was playing as an NPC (e.g. a pester-dance, a held loop
+  // with no expiry). pickAnimState returns motion.action first, so without this the
+  // character you switch INTO keeps dancing instead of obeying your movement.
+  next.motion.action = null;
+  next.motion.actionUntil = 0;
 
   // Re-point the camera and adopt the new body's facing for visual continuity.
   cameraRig.targetId = nextId;

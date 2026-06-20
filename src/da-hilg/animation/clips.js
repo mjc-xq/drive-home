@@ -40,6 +40,16 @@ export const SIGNATURE_DANCE = { mike: 'dance', kelli: 'dance', cece: 'dance', d
 // Map an emote key (1/2/3 or HUD) to its clip key.
 export const EMOTE_SLOT = { 1: 'wave', 2: 'cheer', 3: 'dance' };
 
+// Clips whose feet must stay on the ground. The family rigs are pure FK (no foot IK),
+// so ANY Hips-Y motion in a clip lifts the whole chain — feet included — off the
+// grounded motion.pos origin: the body floats AND the feet-anchored clinging nibblers
+// detach. For these clips we pin Hips Y to its frame-0 value (see retargetSkinSafeClip).
+// jump/climb/crawl intentionally keep their vertical motion; knockdown is clamped (it
+// may sink toward the ground as the body falls, but must never rise above standing).
+const GROUNDED_FLAT_Y = new Set([
+  'idle', 'walk', 'run', 'dance', 'wave', 'cheer', 'stumble', 'attack', 'hit',
+]);
+
 const SKIN_SAFE_CLIP_CACHE = new WeakMap();
 const RETARGETED_CLIP_CACHE = new Map();
 
@@ -104,12 +114,14 @@ export function skinSafeClip(clip) {
  * @param {import('three').Object3D|null|undefined} sourceRoot clip GLB scene/root
  * @param {import('three').Object3D|null|undefined} targetRoot character clone/root
  * @param {string} targetKey stable character/rig key for cache reuse
+ * @param {string} clipKey canonical clip key (idle/walk/dance/...) — drives the grounded
+ *   Hips-Y flatten so the feet stay planted on the family's FK rigs
  * @returns {import('three').AnimationClip}
  */
-export function retargetSkinSafeClip(clip, sourceRoot, targetRoot, targetKey = '') {
+export function retargetSkinSafeClip(clip, sourceRoot, targetRoot, targetKey = '', clipKey = '') {
   if (!clip || !sourceRoot || !targetRoot || !targetKey) return skinSafeClip(clip);
 
-  const cacheKey = `${targetKey}:${clip.uuid}`;
+  const cacheKey = `${targetKey}:${clipKey}:${clip.uuid}`;
   const cached = RETARGETED_CLIP_CACHE.get(cacheKey);
   if (cached) return cached;
 
@@ -150,6 +162,20 @@ export function retargetSkinSafeClip(clip, sourceRoot, targetRoot, targetKey = '
         track.values[i] = targetRestP.x + (track.values[i] - sourceRestP.x);
         track.values[i + 1] = targetRestP.y + (track.values[i + 1] - sourceRestP.y);
         track.values[i + 2] = targetRestP.z + (track.values[i + 2] - sourceRestP.z);
+      }
+      // Keep the feet on the ground (FK rig — no foot IK). Grounded clips get Hips Y
+      // pinned to frame 0 so a dance/strut/flinch can't lift the body off motion.pos
+      // (which is what made emotes float and the clinging nibblers detach). Knockdown
+      // is only clamped: it may drop toward the ground but must never rise above
+      // standing rest, so the "fall" reads without popping the body upward first.
+      if (GROUNDED_FLAT_Y.has(clipKey)) {
+        const groundedY = track.values[1];
+        for (let i = 1; i < track.values.length; i += 3) track.values[i] = groundedY;
+      } else if (clipKey === 'knockdown') {
+        const restY = track.values[1];
+        for (let i = 1; i < track.values.length; i += 3) {
+          if (track.values[i] > restY) track.values[i] = restY;
+        }
       }
     }
   }

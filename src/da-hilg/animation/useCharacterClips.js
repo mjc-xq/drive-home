@@ -35,7 +35,7 @@ export function useCharacterClips(clonedScene, character) {
       const sourceClip = gltfs[i]?.animations?.[0];
       if (!sourceClip) return;
 
-      const clip = retargetSkinSafeClip(sourceClip, gltfs[i]?.scene, clonedScene, character);
+      const clip = retargetSkinSafeClip(sourceClip, gltfs[i]?.scene, clonedScene, character, key);
       const action = mixer.clipAction(clip);
       if (CLIP_LOOP[key] === 'once') {
         action.setLoop(THREE.LoopOnce, 1);
