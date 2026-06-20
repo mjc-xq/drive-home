@@ -106,3 +106,36 @@ export function clearAndScatter(now) {
 export function setScatterCenter(pos) {
   clearAndScatter._player = pos;
 }
+
+/**
+ * Fling up to `n` ATTACHED nibblers OFF the player (S_ATTACHED → S_FALL with an
+ * outward+up impulse), decrementing attachedCount. The partial-shed counterpart to
+ * clearAndScatter — the overwhelm "struggle" calls this so a buried/pinned player
+ * progressively throws the pile off and gets back up (no hard soft-lock). Does NOT
+ * clear `marked` or start a panic window; the danger isn't over, you're just digging out.
+ * @param {{x:number,z:number}} center player feet pos (burst radiates from here)
+ * @param {number} n max nibblers to shed this call
+ * @returns {number} how many were actually shed
+ */
+export function shedAttached(center, n) {
+  const cx = center ? center.x : 0;
+  const cz = center ? center.z : 0;
+  let shed = 0;
+  for (let i = 0; i < scale.length && shed < n; i++) {
+    if (state[i] !== S_ATTACHED || scale[i] <= 0) continue;
+    let ox = px[i] - cx;
+    let oz = pz[i] - cz;
+    const d = Math.sqrt(ox * ox + oz * oz) + 1e-5;
+    ox /= d;
+    oz /= d;
+    state[i] = S_FALL;
+    stateT[i] = 0;
+    vx[i] = ox * PANIC_FLEE;
+    vz[i] = oz * PANIC_FLEE;
+    vy[i] = PANIC_POP;
+    py[i] += 0.2; // lift off the capsule so the FALL arc reads
+    shed++;
+  }
+  swarm.attachedCount = Math.max(0, swarm.attachedCount - shed);
+  return shed;
+}

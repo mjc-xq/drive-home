@@ -13,6 +13,8 @@
 
 import { nibblerPenalty } from '../mode.js';
 import { swarm } from '../swarm/swarmState.js';
+import { shedAttached } from './markedSystem.js';
+import { input } from '../../state/refs.js';
 import {
   OVERWHELM_STAGGER,
   OVERWHELM_DOWN,
@@ -21,17 +23,57 @@ import {
   OVERWHELM_STOP_T,
   OVERWHELM_RECOVER,
   OVERWHELM_CRAWL_SPEED,
+  STRUGGLE_AUTO,
+  STRUGGLE_PRESS,
+  STRUGGLE_SHED_T,
+  STRUGGLE_SHED_N,
+  STRUGGLE_LOAD_RELIEF,
 } from '../constants.js';
 
 /** Accumulated "buried" time (seconds). */
 let load = 0;
+/** Accumulated struggle toward the next shed (seconds-equivalent). */
+let struggle = 0;
+/** Last seen jump-press timestamp, to edge-detect a fresh "shake them off" press. */
+let lastJumpT = -1;
 
 /** Reset on a fresh run / mode re-enter. */
 export function resetOverwhelm() {
   load = 0;
+  struggle = 0;
+  lastJumpT = -1;
   nibblerPenalty.overwhelm = 0;
   nibblerPenalty.moveCap = Infinity;
   nibblerPenalty.canJump = true;
+}
+
+/**
+ * While downed/pinned, throw nibblers off so the player always gets back up. Auto-
+ * struggle is the safety net (recovery even with no input); a fresh jump press adds a
+ * burst (mash to escape). Each shed flings a batch into a FALL and relieves the buried
+ * timer, so a pinned player breaks the pin → crawls → stands.
+ * @param {object} ctx per-frame ctx { registry, activePlayerId, dt }
+ * @param {number} tier current overwhelm tier
+ */
+function updateStruggle(ctx, tier) {
+  if (tier < 2 || swarm.attachedCount === 0) {
+    struggle = 0;
+    lastJumpT = input.jumpQueuedT; // don't bank presses made before going down
+    return;
+  }
+  struggle += ctx.dt * STRUGGLE_AUTO;
+  // A jump press while pinned can't actually jump (canJump=false) — repurpose it as a
+  // shake-off burst. Edge-detected off the jump-buffer timestamp.
+  if (input.jumpQueuedT !== lastJumpT) {
+    lastJumpT = input.jumpQueuedT;
+    if (input.jumpQueuedT >= 0) struggle += STRUGGLE_PRESS;
+  }
+  if (struggle >= STRUGGLE_SHED_T) {
+    struggle -= STRUGGLE_SHED_T;
+    const player = ctx.registry.get(ctx.activePlayerId);
+    const shed = shedAttached(player ? player.motion.pos : null, STRUGGLE_SHED_N);
+    if (shed > 0) load = Math.max(0, load - STRUGGLE_LOAD_RELIEF);
+  }
 }
 
 /**
@@ -64,4 +106,9 @@ export function updateOverwhelm(ctx) {
   nibblerPenalty.overwhelm = tier;
   nibblerPenalty.moveCap = tier >= 3 ? 0 : tier >= 2 ? OVERWHELM_CRAWL_SPEED : Infinity;
   nibblerPenalty.canJump = tier < 2;
+
+  // Throw nibblers off while down so the player always recovers (runs after the tier
+  // is published so this frame's anim/penalty reflect being down; the shed thins the
+  // pile over the next frames).
+  updateStruggle(ctx, tier);
 }
