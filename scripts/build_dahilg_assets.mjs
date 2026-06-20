@@ -399,10 +399,10 @@ const levelOut = await io.read(OUT('level.glb'));
 }
 
 // -------------------------------------------------------------------------------------
-// 2) ANIMS: 7 tiny clip-only GLBs (channels + bone hierarchy only, no mesh payload).
+// 2) ANIMS: tiny clip-only GLBs (channels + bone hierarchy only, no mesh payload).
 //    Done BEFORE characters so the clip-bind sanity (B) runs against dad's rig early.
 // -------------------------------------------------------------------------------------
-console.log('\n[2/4] anims (7 clip-only GLBs)');
+console.log('\n[2/4] anims (clip-only GLBs)');
 
 // Canonical clip table: key -> { src, clip, stripRootXZ }
 // Most clips now come from the shared family-anims.glb. The four character rigs share
@@ -410,18 +410,33 @@ console.log('\n[2/4] anims (7 clip-only GLBs)');
 // identical; runtime binding retargets rotations by rest-pose delta before creating
 // AnimationActions. Build-time still strips unsafe foreign translations/scale.
 const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';
+// jack-hartmann.glb shares the SAME 24 bone names as family-anims/dad, so its clips bind
+// to the shared rig with no remap — we source the cleaner locomotion + the new
+// climb/crawl/stumble/hit/knockdown set from it.
+const JACK_ANIMS = 'src/assets/jack-hartmann.glb';
 const ANIMS = [
   { key: 'idle',  src: 'src/assets/anim/drew-idle.glb', clip: 'Armature|Boxing_Warmup|baselayer' },
-  // Flirty_Strut_inplace is authored IN-PLACE (Hips XZ travel ~0.085 m / ~0.025 m over the
-  // whole clip — negligible) so we do NOT stripRootXZ; the small residual bob stays put.
-  { key: 'walk',  src: FAMILY_ANIMS,                    clip: 'Flirty_Strut_inplace' },
-  { key: 'run',   src: FAMILY_ANIMS,                    clip: 'Running',                  stripRootXZ: true },
+  // walk/run now come from jack-hartmann (cleaner gait than the old Flirty_Strut). Both
+  // travel forward, so stripRootXZ pins them in place — the capsule drives world position.
+  { key: 'walk',  src: JACK_ANIMS,                      clip: 'Walking',                  stripRootXZ: true },
+  { key: 'run',   src: JACK_ANIMS,                      clip: 'Running',                  stripRootXZ: true },
   { key: 'jump',  src: 'src/assets/dad.glb',            clip: '360_Power_Spin_Jump' },
   { key: 'dance', src: FAMILY_ANIMS,                    clip: 'Love_You_Pop_Dance' },
   { key: 'wave',  src: FAMILY_ANIMS,                    clip: 'Agree_Gesture' },
   { key: 'cheer', src: FAMILY_ANIMS,                    clip: 'Cheer_with_Both_Hands_Up' },
   // Aggressive clip the Nibbler swarm rides while clinging — a downward ground slam.
   { key: 'attack', src: FAMILY_ANIMS,                   clip: 'Charged_Ground_Slam' },
+  // --- jack-hartmann gameplay clips (nibblers / downed player) ---
+  // climb: the player scaling a wall with nibblers clinging — authored in-place, loops.
+  { key: 'climb',     src: JACK_ANIMS, clip: 'Climb_Left_with_Both_Limbs_inplace' },
+  // crawl: the downed player crawling forward — loops; pin XZ so the capsule drives position.
+  { key: 'crawl',     src: JACK_ANIMS, clip: 'Climb_Right_with_Both_Limbs',        stripRootXZ: true },
+  // stumble: an off-balance walk — loops; pin XZ so the capsule drives position.
+  { key: 'stumble',   src: JACK_ANIMS, clip: 'Stumble_Walk',                       stripRootXZ: true },
+  // hit: a one-shot flinch — played anchored, keep its (in-place) authored motion.
+  { key: 'hit',       src: JACK_ANIMS, clip: 'Hit_Reaction' },
+  // knockdown: a one-shot fall — played anchored, keep its authored fall motion.
+  { key: 'knockdown', src: JACK_ANIMS, clip: 'Knock_Down' },
 ];
 
 // Load dad's skeleton bone names once — assertion (B) checks every clip channel binds
@@ -560,7 +575,10 @@ for (const a of ANIMS) await buildAnim(a);
 // -------------------------------------------------------------------------------------
 console.log('\n[3/4] characters (mike, kelli, cece, drew)');
 const CHARS = [
-  { out: 'mike.glb',  src: 'src/assets/dad.glb' },
+  // Mike now uses the NEW jack-hartmann body (~11.6k verts vs dad's ~128k), SAME 24 bone
+  // names — a clean small rig that fixes the floating-torso/waist break. It is under the
+  // 40k-vert SIMPLIFY_VERT_THRESHOLD so decimation is skipped; the shared clips still bind.
+  { out: 'mike.glb',  src: 'src/assets/jack-hartmann.glb' },
   { out: 'kelli.glb', src: 'src/assets/mom.glb' },
   // Cece now uses the NEW low-poly Meshy body (~5.6k verts vs the old ~128k), same 24 bone names.
   { out: 'cece.glb',  src: 'src/assets/cece-meshy.glb' },

@@ -332,6 +332,15 @@ export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, 
   const crossStep = opts.crossStep ?? 0.75;
   const skirt = opts.skirt ?? 0;            // >0 emits side walls down to grade
   const skirtFoot = opts.skirtFoot ?? 0.02; // wall foot height above terrain
+  // PATH-ALIGNED UVs: when opts.uvArr + opts.uvTile are supplied, emit a uv per vert with
+  //   u = cumulative distance ALONG the ribbon / uvTile,  v = cross offset / uvTile.
+  // A world-planar uv (worldX/tile, worldZ/tile) keeps the concrete score-line grid locked
+  // to the world axes, so on a ribbon that runs DIAGONALLY the square joints read as rotated
+  // DIAMONDS cutting across the walk. Anchoring u to the path direction makes the joints run
+  // perpendicular/parallel to the ribbon → classic sidewalk SQUARES. v is anchored so the
+  // ribbon's left edge is v=0 (the cross joints stay put as the ribbon curves).
+  const uvArr = opts.uvArr || null;
+  const uvTile = opts.uvTile || 1;
   const dense = [lineW[0]];
   for (let k = 1; k < lineW.length; k++) {
     const a = lineW[k - 1], b = lineW[k];
@@ -346,9 +355,11 @@ export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, 
   let prevBase = null;
   // Per cross-section edge verts (slab edge + its ground-foot vert), to stitch skirt walls.
   let prevEdge = null;        // { lTop, lFoot, rTop, rFoot } indices of the previous section
+  let along = 0;              // cumulative distance along the ribbon centreline (for path-aligned u)
 
   for (let k = 0; k < dense.length; k++) {
     const [x, z] = dense[k];
+    if (k > 0) along += Math.hypot(x - dense[k - 1][0], z - dense[k - 1][1]);
     if (skip && skip(x, z)) { prevBase = null; prevEdge = null; continue; }
     const p = dense[Math.max(0, k - 1)], q = dense[Math.min(dense.length - 1, k + 1)];
     let dx = q[0] - p[0], dz = q[1] - p[1];
@@ -356,10 +367,12 @@ export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, 
     dx /= L; dz /= L;
     const nx = -dz, nz = dx;
     const base = posArr.length / 3;
+    const u = along / uvTile;
     for (let c = 0; c <= cols; c++) {
       const off = -hw + width * c / cols;
       const px = x + nx * off, pz = z + nz * off;
       posArr.push(px, terrainAt(px, pz) + lift, pz);
+      if (uvArr) uvArr.push(u, (off + hw) / uvTile);   // path-aligned: u along, v across (left edge=0)
     }
     if (prevBase !== null) {
       for (let c = 0; c < cols; c++) {
@@ -376,8 +389,10 @@ export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, 
       const rpx = x + nx * hw, rpz = z + nz * hw;
       const lFoot = posArr.length / 3;
       posArr.push(lpx, terrainAt(lpx, lpz) + skirtFoot, lpz);
+      if (uvArr) uvArr.push(u, 0);
       const rFoot = posArr.length / 3;
       posArr.push(rpx, terrainAt(rpx, rpz) + skirtFoot, rpz);
+      if (uvArr) uvArr.push(u, width / uvTile);
       edge = { lTop: base, lFoot, rTop: base + cols, rFoot };
       if (prevEdge) {
         // left wall (wind outward-facing) and right wall, two tris each.
