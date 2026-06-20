@@ -43,13 +43,17 @@ namespace DaHilg.Editor
             string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
             string output = Path.Combine(repoRoot, "public/unity/da-hilg");
+            if (Directory.Exists(output))
+            {
+                Directory.Delete(output, true);
+            }
             Directory.CreateDirectory(output);
 
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.WebGL, BuildTarget.WebGL);
             PlayerSettings.productName = "Da Hilg Unity";
             PlayerSettings.companyName = "Da Hilg";
             PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.WebGL, "com.dahilg.unity");
-            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
+            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
             PlayerSettings.WebGL.dataCaching = true;
             PlayerSettings.WebGL.decompressionFallback = true;
             PlayerSettings.WebGL.threadsSupport = false;
@@ -107,7 +111,12 @@ namespace DaHilg.Editor
             string templateData = Path.Combine(output, "TemplateData");
             Directory.CreateDirectory(templateData);
 
-            File.WriteAllText(Path.Combine(output, "index.html"), @"<!DOCTYPE html>
+            string loaderUrl = FindBuildFile(output, "da-hilg.loader.js");
+            string dataUrl = FindBuildFile(output, "da-hilg.data");
+            string frameworkUrl = FindBuildFile(output, "da-hilg.framework.js");
+            string codeUrl = FindBuildFile(output, "da-hilg.wasm");
+
+            string html = @"<!DOCTYPE html>
 <html lang=""en-us"">
   <head>
     <meta charset=""utf-8"">
@@ -150,13 +159,11 @@ namespace DaHilg.Editor
         }
       }
 
-      const buildUrl = 'Build';
-      const loaderUrl = buildUrl + '/da-hilg.loader.js';
       const config = {
         arguments: [],
-        dataUrl: buildUrl + '/da-hilg.data',
-        frameworkUrl: buildUrl + '/da-hilg.framework.js',
-        codeUrl: buildUrl + '/da-hilg.wasm',
+        dataUrl: '__DATA_URL__',
+        frameworkUrl: '__FRAMEWORK_URL__',
+        codeUrl: '__CODE_URL__',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -168,7 +175,7 @@ namespace DaHilg.Editor
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = loaderUrl;
+      script.src = '__LOADER_URL__';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
@@ -186,7 +193,15 @@ namespace DaHilg.Editor
     </script>
   </body>
 </html>
-");
+";
+
+            html = html
+                .Replace("__LOADER_URL__", JsString(loaderUrl))
+                .Replace("__DATA_URL__", JsString(dataUrl))
+                .Replace("__FRAMEWORK_URL__", JsString(frameworkUrl))
+                .Replace("__CODE_URL__", JsString(codeUrl));
+
+            File.WriteAllText(Path.Combine(output, "index.html"), html);
 
             File.WriteAllText(Path.Combine(templateData, "style.css"), @"html,
 body {
@@ -290,6 +305,23 @@ body {
   }
 }
 ");
+        }
+
+        static string FindBuildFile(string output, string fileName)
+        {
+            string buildDir = Path.Combine(output, "Build");
+            string[] suffixes = { "", ".gz", ".br", ".unityweb" };
+            foreach (string suffix in suffixes)
+            {
+                string path = Path.Combine(buildDir, fileName + suffix);
+                if (File.Exists(path)) return "Build/" + fileName + suffix;
+            }
+            throw new FileNotFoundException("Unity WebGL build file not found.", fileName);
+        }
+
+        static string JsString(string value)
+        {
+            return value.Replace("\\", "\\\\").Replace("'", "\\'");
         }
 
         [MenuItem("Da Hilg/Sync Source Assets From Web")]

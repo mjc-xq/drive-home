@@ -41,13 +41,11 @@
         }
       }
 
-      const buildUrl = 'Build';
-      const loaderUrl = buildUrl + '/da-hilg.loader.js';
       const config = {
         arguments: [],
-        dataUrl: buildUrl + '/da-hilg.data',
-        frameworkUrl: buildUrl + '/da-hilg.framework.js',
-        codeUrl: buildUrl + '/da-hilg.wasm',
+        dataUrl: 'Build/da-hilg.data.unityweb',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb',
+        codeUrl: 'Build/da-hilg.wasm.unityweb',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -59,7 +57,7 @@
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = loaderUrl;
+      script.src = 'Build/da-hilg.loader.js';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
