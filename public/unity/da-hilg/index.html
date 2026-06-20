@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes">
+    <title>Da Hilg Unity</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="stylesheet" href="TemplateData/style.css">
+  </head>
+  <body>
+    <div id="unity-container">
+      <canvas id="unity-canvas" width="1280" height="720" tabindex="-1"></canvas>
+      <div id="unity-loading-bar">
+        <div id="unity-logo"></div>
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+      </div>
+      <div id="unity-warning"></div>
+      <div id="unity-footer">
+        <div id="unity-fullscreen-button" title="Fullscreen"></div>
+        <div id="unity-build-title">Da Hilg Unity</div>
+      </div>
+    </div>
+    <script>
+      const canvas = document.querySelector('#unity-canvas');
+
+      function unityShowBanner(msg, type) {
+        const warningBanner = document.querySelector('#unity-warning');
+        const div = document.createElement('div');
+        div.textContent = msg;
+        div.className = type === 'error' ? 'unity-error' : type === 'warning' ? 'unity-warning-line' : 'unity-message';
+        warningBanner.appendChild(div);
+        warningBanner.style.display = 'block';
+        if (type !== 'error') {
+          setTimeout(() => {
+            warningBanner.removeChild(div);
+            warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+          }, 5000);
+        }
+      }
+
+      const buildUrl = 'Build';
+      const loaderUrl = buildUrl + '/da-hilg.loader.js';
+      const config = {
+        arguments: [],
+        dataUrl: buildUrl + '/da-hilg.data',
+        frameworkUrl: buildUrl + '/da-hilg.framework.js',
+        codeUrl: buildUrl + '/da-hilg.wasm',
+        streamingAssetsUrl: 'StreamingAssets',
+        companyName: 'Da Hilg',
+        productName: 'Da Hilg Unity',
+        productVersion: '1.0',
+        showBanner: unityShowBanner
+      };
+
+      config.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+      document.querySelector('#unity-loading-bar').style.display = 'grid';
+
+      const script = document.createElement('script');
+      script.src = loaderUrl;
+      script.onload = () => {
+        createUnityInstance(canvas, config, (progress) => {
+          document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
+        }).then((unityInstance) => {
+          document.querySelector('#unity-loading-bar').style.display = 'none';
+          document.querySelector('#unity-fullscreen-button').onclick = () => {
+            unityInstance.SetFullscreen(1);
+          };
+        }).catch((message) => {
+          alert(message);
+        });
+      };
+
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
