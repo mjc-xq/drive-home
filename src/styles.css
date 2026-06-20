@@ -349,21 +349,23 @@ body{position:fixed;inset:0;font-family:system-ui,-apple-system,sans-serif;color
 .menuSheet{position:relative;width:min(94vw,560px);padding:22px 22px 24px;color:#fff;
   background:linear-gradient(160deg,#1a2236,#0a0c12);border:1px solid rgba(255,255,255,.14);box-shadow:0 30px 80px rgba(0,0,0,.6);
   font-family:'Chakra Petch',system-ui,sans-serif;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-.startSheet{min-height:300px;display:flex;flex-direction:column}
+.startSheet{width:min(94vw,680px);min-height:340px;display:flex;flex-direction:column}
 .menuHead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
 .menuKick{font-weight:600;font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--nav)}
 .menuTitle{font-family:'AGC';font-weight:900;font-size:clamp(30px,7vw,40px);line-height:.86;letter-spacing:0;text-transform:uppercase;margin:8px 0 0}
 .placesBadge{display:flex;align-items:center;gap:8px;padding:9px 13px;flex:0 0 auto;background:rgba(43,232,79,.1);border:1px solid rgba(43,232,79,.4)}
 .pbNum{font-weight:600;font-size:13px;color:#fff}.pbNum i{font-style:normal;color:rgba(255,255,255,.45)}
 .pbLbl{font-weight:500;font-size:9px;line-height:1.1;color:rgba(255,255,255,.5);max-width:54px}
-.modeCards{display:flex;gap:12px;margin-top:auto;padding-top:30px}
-.modeCard{flex:1;display:flex;flex-direction:column;gap:10px;padding:16px 14px;text-align:left;color:#fff;cursor:pointer;
+.modeCards{display:flex;flex-wrap:wrap;gap:12px;margin-top:auto;padding-top:30px}
+.modeCard{flex:1 1 140px;display:flex;flex-direction:column;gap:10px;padding:16px 14px;text-align:left;color:#fff;cursor:pointer;
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);transition:background .15s ease,transform .1s ease}
 .modeCard:hover{background:rgba(255,255,255,.09)}
 .modeCard:active{transform:scale(.98)}
 .modeCard.drive{background:rgba(43,232,79,.14);border-color:var(--go);box-shadow:0 0 20px rgba(43,232,79,.2)}
+.modeCard.unity{background:rgba(94,154,255,.14);border-color:rgba(94,154,255,.58);box-shadow:0 0 20px rgba(94,154,255,.16)}
 .mcTitle{font-family:'AGC';font-weight:800;font-size:22px;text-transform:uppercase}
 .modeCard.drive .mcTitle{color:var(--go)}
+.modeCard.unity .mcTitle{color:#9fc2ff}
 .mcSub{font-weight:500;font-size:11px;line-height:1.2;color:rgba(255,255,255,.5)}
 @media (max-width:600px){.modeCards{flex-direction:column;gap:9px}.modeCard{flex-direction:row;align-items:center;gap:14px;padding:13px 14px}.modeCard svg{flex:0 0 auto}.modeCard .mcTitle{font-size:18px}.modeCard .mcSub{margin-left:auto;text-align:right}}
 #shiftLock.on{background:var(--poppy);border-color:transparent}
