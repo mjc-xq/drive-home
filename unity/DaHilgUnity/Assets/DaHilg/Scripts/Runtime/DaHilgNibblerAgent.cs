@@ -333,7 +333,8 @@ namespace DaHilg
 
             float probeHeight = Mathf.Max(settings.GroundProbeHeight, m_Controller.height * 4f);
             float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, settings.StepOffset);
-            if (!DaHilgLevelRuntime.TryFindGround(Root.transform.position, out RaycastHit hit, probeHeight, probeDistance)) return false;
+            float maxAbove = Mathf.Max(settings.GroundSnapDistance * 1.2f, settings.StepOffset + 0.28f);
+            if (!DaHilgLevelRuntime.TryFindGround(Root.transform.position, out RaycastHit hit, probeHeight, probeDistance, maxAbove)) return false;
 
             float targetY = hit.point.y + Mathf.Max(0.018f, settings.GroundSkin * 0.5f);
             float deltaY = targetY - Root.transform.position.y;

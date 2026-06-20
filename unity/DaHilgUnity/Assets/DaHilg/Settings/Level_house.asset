@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 39525536a00ea4f5a9129560e691ab09, type: 3}
+  m_Name: Level_house
+  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgLevelProfile
+  Slug: house
+  Label: Inside House
+  SubLabel: Scoop interior
+  LevelPrefab: {fileID: -5656637751275249436, guid: 795238c0d9a584d108c83ee9286f6838, type: 3}
+  SourceMeta: {fileID: 0}
+  Minimap: {fileID: 0}
+  LevelOffset: {x: 0.045, y: -1.402, z: -0.063}
+  PlayerSpawns:
+  - {x: 0, y: 0.08, z: 0}
+  NpcSpawns:
+  - {x: 1.9, y: 0.08, z: 2.4}
+  - {x: -1.8, y: 0.08, z: 2}
+  - {x: 1.6, y: 0.08, z: -2.5}
+  GreetSafeZones:
+  - Id: house_living
+    Label: Living Room
+    Center: {x: 0, y: 1.2, z: 0}
+    Size: {x: 5.2, y: 3, z: 5.8}
+  NibblerSafeZones:
+  - Id: house_entry
+    Label: Entry
+    Center: {x: 0, y: 1.4, z: -6.2}
+    Size: {x: 4.8, y: 3, z: 4.2}
+  DangerZones:
+  - Id: house_kitchen
+    Label: Kitchen Swarm
+    Center: {x: 0, y: 1.4, z: 4.8}
+    Size: {x: 6.2, y: 3.2, z: 4.8}
+  - Id: house_hall
+    Label: Hallway Swarm
+    Center: {x: 0, y: 1.4, z: -2.8}
+    Size: {x: 5.4, y: 3.2, z: 4.8}
+  AnimalSpawns: []
+  PlayBounds:
+    m_Center: {x: 0, y: 2, z: 0}
+    m_Extent: {x: 9, y: 4, z: 17}

@@ -128,26 +128,31 @@ namespace DaHilg
             return TryFindGround(spawn, out bestHit);
         }
 
-        public static bool TryFindGround(Vector3 point, out RaycastHit bestHit, float probeHeight = k_SpawnProbeHeight, float probeDistance = k_SpawnProbeDistance)
+        public static bool TryFindGround(Vector3 point, out RaycastHit bestHit, float probeHeight = k_SpawnProbeHeight, float probeDistance = k_SpawnProbeDistance, float maxAbovePoint = float.PositiveInfinity)
         {
             Vector3 origin = point + Vector3.up * Mathf.Max(0.01f, probeHeight);
             int count = Physics.RaycastNonAlloc(origin, Vector3.down, s_GroundHits, Mathf.Max(0.01f, probeDistance), Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             bestHit = default;
+            float bestScore = float.MaxValue;
             float bestDistance = float.MaxValue;
 
             for (int i = 0; i < count; i++)
             {
                 RaycastHit hit = s_GroundHits[i];
                 if (!IsLevelCollider(hit.collider)) continue;
+                if (hit.normal.y < 0.35f) continue;
+                if (!float.IsInfinity(maxAbovePoint) && !float.IsNaN(maxAbovePoint) && hit.point.y - point.y > maxAbovePoint) continue;
 
-                if (hit.distance < bestDistance)
+                float heightScore = Mathf.Abs(hit.point.y - point.y);
+                if (heightScore < bestScore || (Mathf.Approximately(heightScore, bestScore) && hit.distance < bestDistance))
                 {
+                    bestScore = heightScore;
                     bestDistance = hit.distance;
                     bestHit = hit;
                 }
             }
 
-            return bestDistance < float.MaxValue;
+            return bestScore < float.MaxValue;
         }
 
         public static bool SphereCastLevel(Vector3 origin, float radius, Vector3 direction, out RaycastHit bestHit, float distance)

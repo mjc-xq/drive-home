@@ -22,6 +22,7 @@ namespace DaHilg.Editor
         const string k_SettingsPath = k_SettingsDir + "/DaHilgGameSettings.asset";
         const string k_ControllerPath = k_SettingsDir + "/DaHilgCharacter.controller";
         const string k_CharacterControllerDir = k_SettingsDir + "/CharacterControllers";
+        const string k_AnimalControllerDir = k_SettingsDir + "/AnimalControllers";
         const string k_PanelSettingsPath = k_Root + "/UI/DaHilgPanelSettings.asset";
         const string k_GeneratedAnimationDir = k_SettingsDir + "/GeneratedAnimations";
         static readonly string[] s_CharacterAnimationStates =
@@ -57,8 +58,10 @@ namespace DaHilg.Editor
         public static void RebuildUnityScene()
         {
             EnsureFolders();
+            SyncSupplementalSourceAssets();
             Dictionary<string, AnimatorController> controllers = BuildAnimatorControllers();
-            DaHilgLevelProfile[] levels = BuildLevelProfiles();
+            Dictionary<string, AnimatorController> animalControllers = BuildAnimalControllers();
+            DaHilgLevelProfile[] levels = BuildLevelProfiles(animalControllers);
             DaHilgGameSettings settings = BuildSettings(levels, controllers);
             BuildScene(settings);
             AssetDatabase.SaveAssets();
@@ -72,6 +75,7 @@ namespace DaHilg.Editor
             RebuildUnityScene();
             ValidateSpawnGroundingAssets();
             ValidateCharacterAnimationAssets();
+            ValidateAnimalAnimationAssets();
 
             string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
@@ -122,6 +126,13 @@ namespace DaHilg.Editor
         {
             RebuildUnityScene();
             ValidateCharacterAnimationAssets();
+        }
+
+        [MenuItem("Da Hilg/Validate Animal Animations")]
+        public static void ValidateAnimalAnimations()
+        {
+            RebuildUnityScene();
+            ValidateAnimalAnimationAssets();
         }
 
         static void CleanupGeneratedBuildSidecars(string projectRoot, string output)
@@ -395,6 +406,23 @@ body {
             Debug.Log("[DaHilg] Source assets synced.");
         }
 
+        [MenuItem("Da Hilg/Sync Supplemental Assets From Web")]
+        public static void SyncSupplementalSourceAssets()
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
+            string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
+            string sourceAssets = Path.Combine(repoRoot, "src/assets");
+            if (!Directory.Exists(sourceAssets))
+            {
+                Debug.LogWarning("[DaHilg] Supplemental asset folder not found: " + sourceAssets);
+                return;
+            }
+
+            CopyFiles(sourceAssets, Path.Combine(Application.dataPath, "DaHilg/Art/Animals"), "*.glb", "pig", "duck");
+            AssetDatabase.Refresh();
+            Debug.Log("[DaHilg] Supplemental source assets synced.");
+        }
+
         static void EnsureFolders()
         {
             string[] folders =
@@ -403,6 +431,7 @@ body {
                 k_Root + "/Art",
                 k_Root + "/Art/Characters",
                 k_Root + "/Art/Levels",
+                k_Root + "/Art/Animals",
                 k_Root + "/Art/Animations",
                 k_Root + "/Data",
                 k_Root + "/Scenes",
@@ -410,6 +439,7 @@ body {
                 k_Root + "/UI",
                 k_SettingsDir,
                 k_CharacterControllerDir,
+                k_AnimalControllerDir,
                 k_GeneratedAnimationDir
             };
 
@@ -451,6 +481,64 @@ body {
             }
 
             return controllers;
+        }
+
+        static Dictionary<string, AnimatorController> BuildAnimalControllers()
+        {
+            Dictionary<string, AnimatorController> controllers = new Dictionary<string, AnimatorController>();
+            controllers["pig"] = BuildAnimalController("pig");
+            controllers["duck"] = BuildAnimalController("duck");
+            return controllers;
+        }
+
+        static AnimatorController BuildAnimalController(string id)
+        {
+            string modelPath = k_Root + "/Art/Animals/" + id + ".glb";
+            GameObject model = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
+            if (model == null)
+            {
+                throw new InvalidOperationException("Missing Da Hilg animal prefab: " + id + ".");
+            }
+
+            AnimationClip clip = FirstAnimationClip(modelPath);
+            if (clip == null)
+            {
+                throw new InvalidOperationException("Missing Da Hilg animal animation clip: " + id + ".");
+            }
+
+            string controllerPath = k_AnimalControllerDir + "/" + id + ".controller";
+            AnimatorController controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
+            if (controller != null && (controller.layers == null || controller.layers.Length == 0))
+            {
+                AssetDatabase.DeleteAsset(controllerPath);
+                controller = null;
+            }
+            if (controller == null)
+            {
+                controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            }
+
+            AnimatorStateMachine machine = controller.layers[0].stateMachine;
+            ClearStates(machine);
+            AnimatorState move = machine.AddState("Move", new Vector3(260f, 80f, 0f));
+            move.motion = clip;
+            move.writeDefaultValues = true;
+            machine.defaultState = move;
+            EditorUtility.SetDirty(controller);
+            return controller;
+        }
+
+        static AnimationClip FirstAnimationClip(string assetPath)
+        {
+            UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+            for (int i = 0; i < assets.Length; i++)
+            {
+                if (assets[i] is AnimationClip clip && !clip.name.StartsWith("__", StringComparison.Ordinal))
+                {
+                    return clip;
+                }
+            }
+            return null;
         }
 
         static AnimatorController BuildAnimatorController(string characterId, GameObject targetPrefab, Dictionary<string, AnimationClip> clips, string controllerPath)
@@ -756,17 +844,18 @@ body {
             return slash >= 0 ? path.Substring(slash + 1) : path;
         }
 
-        static DaHilgLevelProfile[] BuildLevelProfiles()
+        static DaHilgLevelProfile[] BuildLevelProfiles(Dictionary<string, AnimatorController> animalControllers)
         {
             return new[]
             {
-                BuildLevel("dahill", "1840 Dahill", "Home neighborhood", "level", "level.meta", "minimap"),
-                BuildLevel("canyon", "Canyon Middle", "Castro Valley", "canyon", "canyon.meta", "canyon.minimap"),
-                BuildLevel("stanton", "Stanton Elementary", "Castro Valley", "stanton", "stanton.meta", "stanton.minimap")
+                BuildLevel("dahill", "1840 Dahill", "Home neighborhood", "level", "level.meta", "minimap", animalControllers),
+                BuildLevel("canyon", "Canyon Middle", "Castro Valley", "canyon", "canyon.meta", "canyon.minimap", animalControllers),
+                BuildLevel("stanton", "Stanton Elementary", "Castro Valley", "stanton", "stanton.meta", "stanton.minimap", animalControllers),
+                BuildInteriorLevel()
             };
         }
 
-        static DaHilgLevelProfile BuildLevel(string slug, string label, string subLabel, string glbName, string metaName, string minimapName)
+        static DaHilgLevelProfile BuildLevel(string slug, string label, string subLabel, string glbName, string metaName, string minimapName, Dictionary<string, AnimatorController> animalControllers)
         {
             string assetPath = k_SettingsDir + "/Level_" + slug + ".asset";
             DaHilgLevelProfile profile = AssetDatabase.LoadAssetAtPath<DaHilgLevelProfile>(assetPath);
@@ -825,9 +914,93 @@ body {
                 new DaHilgBoxZone { Id = "danger_east", Label = "East Road Swarm", Center = new Vector3(80f, 6f, 0f), Size = new Vector3(104f, 18f, 82f) },
                 new DaHilgBoxZone { Id = "danger_west", Label = "West Road Swarm", Center = new Vector3(-80f, 6f, 40f), Size = new Vector3(104f, 18f, 92f) }
             };
+            profile.AnimalSpawns = slug == "dahill" ? BuildDahillAnimalSpawns(animalControllers) : Array.Empty<DaHilgAnimalSpawn>();
             profile.PlayBounds = new Bounds(Vector3.zero, slug == "dahill" ? new Vector3(230f, 120f, 230f) : new Vector3(420f, 160f, 420f));
             EditorUtility.SetDirty(profile);
             return profile;
+        }
+
+        static DaHilgLevelProfile BuildInteriorLevel()
+        {
+            const string slug = "house";
+            string assetPath = k_SettingsDir + "/Level_" + slug + ".asset";
+            DaHilgLevelProfile profile = AssetDatabase.LoadAssetAtPath<DaHilgLevelProfile>(assetPath);
+            if (profile == null)
+            {
+                profile = ScriptableObject.CreateInstance<DaHilgLevelProfile>();
+                AssetDatabase.CreateAsset(profile, assetPath);
+            }
+
+            profile.Slug = slug;
+            profile.Label = "Inside House";
+            profile.SubLabel = "Scoop interior";
+            profile.LevelPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Levels/house-interior.glb");
+            if (profile.LevelPrefab == null)
+            {
+                throw new InvalidOperationException("Missing Da Hilg house interior prefab.");
+            }
+            profile.SourceMeta = null;
+            profile.Minimap = null;
+            profile.LevelOffset = new Vector3(0.045f, -1.402f, -0.063f);
+            profile.PlayerSpawns = new[] { new Vector3(0f, 0.08f, 0f) };
+            profile.NpcSpawns = new[]
+            {
+                new Vector3(1.9f, 0.08f, 2.4f),
+                new Vector3(-1.8f, 0.08f, 2.0f),
+                new Vector3(1.6f, 0.08f, -2.5f)
+            };
+            profile.GreetSafeZones = new[]
+            {
+                new DaHilgBoxZone { Id = "house_living", Label = "Living Room", Center = new Vector3(0f, 1.2f, 0f), Size = new Vector3(5.2f, 3f, 5.8f) }
+            };
+            profile.NibblerSafeZones = new[]
+            {
+                new DaHilgBoxZone { Id = "house_entry", Label = "Entry", Center = new Vector3(0f, 1.4f, -6.2f), Size = new Vector3(4.8f, 3f, 4.2f) }
+            };
+            profile.DangerZones = new[]
+            {
+                new DaHilgBoxZone { Id = "house_kitchen", Label = "Kitchen Swarm", Center = new Vector3(0f, 1.4f, 4.8f), Size = new Vector3(6.2f, 3.2f, 4.8f) },
+                new DaHilgBoxZone { Id = "house_hall", Label = "Hallway Swarm", Center = new Vector3(0f, 1.4f, -2.8f), Size = new Vector3(5.4f, 3.2f, 4.8f) }
+            };
+            profile.AnimalSpawns = Array.Empty<DaHilgAnimalSpawn>();
+            profile.PlayBounds = new Bounds(new Vector3(0f, 2f, 0f), new Vector3(18f, 8f, 34f));
+            EditorUtility.SetDirty(profile);
+            return profile;
+        }
+
+        static DaHilgAnimalSpawn[] BuildDahillAnimalSpawns(Dictionary<string, AnimatorController> animalControllers)
+        {
+            animalControllers.TryGetValue("pig", out AnimatorController pigController);
+            animalControllers.TryGetValue("duck", out AnimatorController duckController);
+            return new[]
+            {
+                new DaHilgAnimalSpawn
+                {
+                    Id = "pig",
+                    Label = "Pig",
+                    Prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Animals/pig.glb"),
+                    AnimatorController = pigController,
+                    Count = 5,
+                    Home = new Vector3(7.5f, 0.1f, 55f),
+                    WanderRadius = 5.5f,
+                    Speed = 0.55f,
+                    Scale = 0.13f,
+                    VisualYawOffset = 90f
+                },
+                new DaHilgAnimalSpawn
+                {
+                    Id = "duck",
+                    Label = "Duck",
+                    Prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Animals/duck.glb"),
+                    AnimatorController = duckController,
+                    Count = 2,
+                    Home = new Vector3(4f, 0.1f, 50.3f),
+                    WanderRadius = 4.5f,
+                    Speed = 0.8f,
+                    Scale = 0.16f,
+                    VisualYawOffset = 90f
+                }
+            };
         }
 
         static DaHilgGameSettings BuildSettings(DaHilgLevelProfile[] levels, Dictionary<string, AnimatorController> controllers)
@@ -992,6 +1165,7 @@ body {
                     DaHilgLevelRuntime.PrepareLevelColliders(level);
                     ValidateSpawnArray(profile, profile.PlayerSpawns, "player", ref checkedSpawns);
                     ValidateSpawnArray(profile, profile.NpcSpawns, "npc", ref checkedSpawns);
+                    ValidateAnimalSpawnArray(profile, ref checkedSpawns);
                 }
                 finally
                 {
@@ -1021,6 +1195,41 @@ body {
             ValidateCharacterPrefabAnimationBindings(settings);
 
             Debug.Log("[DaHilg] Character animations validated for " + checkedControllers + " controllers and " + s_CharacterAnimationStates.Length + " states.");
+        }
+
+        static void ValidateAnimalAnimationAssets()
+        {
+            DaHilgGameSettings settings = AssetDatabase.LoadAssetAtPath<DaHilgGameSettings>(k_SettingsPath);
+            if (settings == null) throw new InvalidOperationException("Da Hilg settings asset was not built.");
+
+            int checkedAnimals = 0;
+            for (int i = 0; i < settings.Levels.Length; i++)
+            {
+                DaHilgLevelProfile profile = settings.Levels[i];
+                if (profile == null || profile.AnimalSpawns == null) continue;
+
+                for (int n = 0; n < profile.AnimalSpawns.Length; n++)
+                {
+                    DaHilgAnimalSpawn spawn = profile.AnimalSpawns[n];
+                    if (spawn.Count <= 0) continue;
+                    if (spawn.Prefab == null) throw new InvalidOperationException("Da Hilg animal prefab is missing for " + spawn.Id + ".");
+
+                    AnimatorController controller = spawn.AnimatorController as AnimatorController;
+                    if (controller == null) throw new InvalidOperationException("Da Hilg animal animation controller is missing for " + spawn.Id + ".");
+                    if (controller.layers.Length == 0) throw new InvalidOperationException("Da Hilg animal animation controller has no layers for " + spawn.Id + ".");
+
+                    AnimatorStateMachine machine = controller.layers[0].stateMachine;
+                    if (machine == null || machine.defaultState == null || machine.defaultState.motion == null)
+                    {
+                        throw new InvalidOperationException("Da Hilg animal animation controller has no default motion for " + spawn.Id + ".");
+                    }
+
+                    checkedAnimals++;
+                }
+            }
+
+            if (checkedAnimals == 0) throw new InvalidOperationException("No Da Hilg animal animation controllers were checked.");
+            Debug.Log("[DaHilg] Animal animations validated for " + checkedAnimals + " spawn groups.");
         }
 
         static AnimatorStateMachine ValidateAnimatorController(string owner, RuntimeAnimatorController runtimeController)
@@ -1331,6 +1540,18 @@ body {
                 }
 
                 checkedSpawns++;
+            }
+        }
+
+        static void ValidateAnimalSpawnArray(DaHilgLevelProfile profile, ref int checkedSpawns)
+        {
+            if (profile.AnimalSpawns == null) return;
+
+            for (int i = 0; i < profile.AnimalSpawns.Length; i++)
+            {
+                DaHilgAnimalSpawn spawn = profile.AnimalSpawns[i];
+                if (spawn.Count <= 0) continue;
+                ValidateSpawnArray(profile, new[] { spawn.Home }, "animal " + spawn.Id, ref checkedSpawns);
             }
         }
 

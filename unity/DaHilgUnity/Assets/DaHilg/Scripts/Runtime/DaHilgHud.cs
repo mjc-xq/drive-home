@@ -23,6 +23,7 @@ namespace DaHilg
         VisualElement m_CharacterBar;
         VisualElement m_EmoteBar;
         VisualElement m_CameraBar;
+        VisualElement m_LevelBar;
         VisualElement m_Joy;
         VisualElement m_Knob;
         Button m_RunButton;
@@ -34,6 +35,7 @@ namespace DaHilg
         readonly List<Button> m_CharacterButtons = new List<Button>(4);
         readonly List<Button> m_EmoteButtons = new List<Button>(4);
         readonly List<Button> m_CameraButtons = new List<Button>(5);
+        readonly List<Button> m_LevelButtons = new List<Button>(4);
         readonly List<MenuEntry> m_MenuEntries = new List<MenuEntry>(16);
         int m_SelectedMenuIndex = -1;
         bool m_MenuFocused;
@@ -101,6 +103,22 @@ namespace DaHilg
                     && button.userData is DaHilgCameraMode mode
                     && mode == m_Manager.CameraRig.Mode;
                 button.style.backgroundColor = active ? new Color(0.16f, 0.46f, 0.92f, 0.88f) : new Color(1f, 1f, 1f, 0.12f);
+                button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.22f);
+                button.style.borderBottomColor = button.style.borderTopColor.value;
+                button.style.borderLeftColor = button.style.borderTopColor.value;
+                button.style.borderRightColor = button.style.borderTopColor.value;
+                button.style.borderTopWidth = active ? 2 : 1;
+                button.style.borderBottomWidth = button.style.borderTopWidth.value;
+                button.style.borderLeftWidth = button.style.borderTopWidth.value;
+                button.style.borderRightWidth = button.style.borderTopWidth.value;
+            }
+
+            for (int i = 0; i < m_LevelButtons.Count; i++)
+            {
+                Button button = m_LevelButtons[i];
+                string slug = button.userData as string;
+                bool active = m_Manager.CurrentLevel != null && slug == m_Manager.CurrentLevel.Slug;
+                button.style.backgroundColor = active ? new Color(0.12f, 0.56f, 0.38f, 0.88f) : new Color(1f, 1f, 1f, 0.12f);
                 button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.22f);
                 button.style.borderBottomColor = button.style.borderTopColor.value;
                 button.style.borderLeftColor = button.style.borderTopColor.value;
@@ -263,6 +281,7 @@ namespace DaHilg
             BuildTouchControls();
             BuildEmoteBar();
             BuildCameraBar();
+            BuildLevelBar();
         }
 
         void BuildMinimap()
@@ -430,6 +449,7 @@ namespace DaHilg
                 SetBarFrame(m_CharacterBar, StyleKeyword.Auto, 12, 152, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_EmoteBar, StyleKeyword.Auto, 12, 198, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_CameraBar, StyleKeyword.Auto, 12, 244, StyleKeyword.Auto, new Translate(0, 0));
+                SetBarFrame(m_LevelBar, StyleKeyword.Auto, 12, 290, StyleKeyword.Auto, new Translate(0, 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, 14, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0), 300, 12);
 
                 if (m_Joy != null)
@@ -455,7 +475,8 @@ namespace DaHilg
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 118, new Translate(Length.Percent(-50), 0));
-                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 214, new Translate(Length.Percent(-50), 0), 340, 13);
+                SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 166, new Translate(Length.Percent(-50), 0));
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 258, new Translate(Length.Percent(-50), 0), 340, 13);
 
                 if (m_Joy != null)
                 {
@@ -480,6 +501,7 @@ namespace DaHilg
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 116, new Translate(Length.Percent(-50), 0));
+                SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, 18, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 164, new Translate(Length.Percent(-50), 0), 680, 13);
             }
         }
@@ -600,6 +622,39 @@ namespace DaHilg
             m_Root.Add(m_CameraBar);
         }
 
+        void BuildLevelBar()
+        {
+            m_LevelBar = new VisualElement();
+            m_LevelBar.style.position = Position.Absolute;
+            m_LevelBar.style.left = Length.Percent(50);
+            m_LevelBar.style.top = 18;
+            m_LevelBar.style.translate = new Translate(Length.Percent(-50), 0);
+            m_LevelBar.style.flexDirection = FlexDirection.Row;
+            m_LevelBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.55f);
+            m_LevelBar.style.paddingLeft = 5;
+            m_LevelBar.style.paddingRight = 5;
+            m_LevelBar.style.paddingTop = 5;
+            m_LevelBar.style.paddingBottom = 5;
+            m_LevelBar.style.borderTopLeftRadius = 8;
+            m_LevelBar.style.borderTopRightRadius = 8;
+            m_LevelBar.style.borderBottomLeftRadius = 8;
+            m_LevelBar.style.borderBottomRightRadius = 8;
+
+            m_LevelButtons.Clear();
+            RemoveMenuEntriesForRow(3);
+            if (m_Manager.Settings != null && m_Manager.Settings.Levels != null)
+            {
+                for (int i = 0; i < m_Manager.Settings.Levels.Length; i++)
+                {
+                    DaHilgLevelProfile profile = m_Manager.Settings.Levels[i];
+                    if (profile == null) continue;
+                    AddLevelButton(profile, i);
+                }
+            }
+
+            m_Root.Add(m_LevelBar);
+        }
+
         void AddCameraButton(DaHilgCameraMode mode, string label, int column)
         {
             Action activate = () => m_Manager.SetCameraMode(mode);
@@ -625,6 +680,46 @@ namespace DaHilg
             m_CameraBar.Add(button);
             m_CameraButtons.Add(button);
             RegisterMenuButton(button, 2, column, activate);
+        }
+
+        void AddLevelButton(DaHilgLevelProfile profile, int column)
+        {
+            string slug = profile.Slug;
+            Action activate = () => m_Manager.SetLevel(slug);
+            Button button = new Button(activate) { text = LevelButtonLabel(profile) };
+            button.userData = slug;
+            button.focusable = true;
+            button.tabIndex = 30 + column;
+            button.style.marginLeft = 3;
+            button.style.marginRight = 3;
+            button.style.height = 30;
+            button.style.minWidth = 68;
+            button.style.unityFontStyleAndWeight = FontStyle.Bold;
+            button.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+            button.style.color = Color.white;
+            button.style.borderTopWidth = 1;
+            button.style.borderBottomWidth = 1;
+            button.style.borderLeftWidth = 1;
+            button.style.borderRightWidth = 1;
+            button.style.borderTopLeftRadius = 6;
+            button.style.borderTopRightRadius = 6;
+            button.style.borderBottomLeftRadius = 6;
+            button.style.borderBottomRightRadius = 6;
+            m_LevelBar.Add(button);
+            m_LevelButtons.Add(button);
+            RegisterMenuButton(button, 3, column, activate);
+        }
+
+        static string LevelButtonLabel(DaHilgLevelProfile profile)
+        {
+            switch (profile.Slug)
+            {
+                case "dahill": return "Home";
+                case "house": return "House";
+                case "canyon": return "Canyon";
+                case "stanton": return "Stanton";
+                default: return string.IsNullOrEmpty(profile.Label) ? profile.Slug : profile.Label;
+            }
         }
 
         void RegisterMenuButton(Button button, int row, int column, Action activate)
@@ -783,11 +878,15 @@ namespace DaHilg
                     && m_Manager.CameraRig != null
                     && button.userData is DaHilgCameraMode mode
                     && m_Manager.CameraRig.Mode == mode;
+                bool activeLevel = entry.Row == 3
+                    && m_Manager != null
+                    && m_Manager.CurrentLevel != null
+                    && (button.userData as string) == m_Manager.CurrentLevel.Slug;
 
                 Color border = selected
                     ? new Color(1f, 0.78f, 0.22f, 1f)
-                    : (activeCharacter || activeCamera ? Color.white : new Color(1f, 1f, 1f, 0.24f));
-                float borderWidth = selected ? 3f : (activeCharacter || activeCamera ? 2f : 1f);
+                    : (activeCharacter || activeCamera || activeLevel ? Color.white : new Color(1f, 1f, 1f, 0.24f));
+                float borderWidth = selected ? 3f : (activeCharacter || activeCamera || activeLevel ? 2f : 1f);
 
                 button.style.borderTopColor = border;
                 button.style.borderBottomColor = border;

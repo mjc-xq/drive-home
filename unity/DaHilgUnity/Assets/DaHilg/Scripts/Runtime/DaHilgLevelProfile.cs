@@ -3,6 +3,21 @@ using UnityEngine;
 
 namespace DaHilg
 {
+    [Serializable]
+    public struct DaHilgAnimalSpawn
+    {
+        public string Id;
+        public string Label;
+        public GameObject Prefab;
+        public RuntimeAnimatorController AnimatorController;
+        public int Count;
+        public Vector3 Home;
+        public float WanderRadius;
+        public float Speed;
+        public float Scale;
+        public float VisualYawOffset;
+    }
+
     [CreateAssetMenu(menuName = "Da Hilg/Level Profile", fileName = "DaHilgLevelProfile")]
     public sealed class DaHilgLevelProfile : ScriptableObject
     {
@@ -18,6 +33,7 @@ namespace DaHilg
         public DaHilgBoxZone[] GreetSafeZones = Array.Empty<DaHilgBoxZone>();
         public DaHilgBoxZone[] NibblerSafeZones = Array.Empty<DaHilgBoxZone>();
         public DaHilgBoxZone[] DangerZones = Array.Empty<DaHilgBoxZone>();
+        public DaHilgAnimalSpawn[] AnimalSpawns = Array.Empty<DaHilgAnimalSpawn>();
         public Bounds PlayBounds = new Bounds(Vector3.zero, new Vector3(220f, 80f, 220f));
     }
 }
