@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &201870918
+--- !u!1 &105704600
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,11 +127,11 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 201870923}
-  - component: {fileID: 201870922}
-  - component: {fileID: 201870921}
-  - component: {fileID: 201870920}
-  - component: {fileID: 201870919}
+  - component: {fileID: 105704605}
+  - component: {fileID: 105704604}
+  - component: {fileID: 105704603}
+  - component: {fileID: 105704602}
+  - component: {fileID: 105704601}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -139,25 +139,25 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &201870919
+--- !u!114 &105704601
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 201870918}
+  m_GameObject: {fileID: 105704600}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 0ce80b0eff50c467bb2ec968bf6e9da4, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgCameraRig
---- !u!114 &201870920
+--- !u!114 &105704602
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 201870918}
+  m_GameObject: {fileID: 105704600}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 72ece51f2901e7445ab60da3685d6b5f, type: 3}
@@ -183,21 +183,21 @@ MonoBehaviour:
       m_PostInfinity: 2
       m_RotationOrder: 4
   CustomBlends: {fileID: 0}
---- !u!81 &201870921
+--- !u!81 &105704603
 AudioListener:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 201870918}
+  m_GameObject: {fileID: 105704600}
   m_Enabled: 1
---- !u!20 &201870922
+--- !u!20 &105704604
 Camera:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 201870918}
+  m_GameObject: {fileID: 105704600}
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
@@ -242,13 +242,13 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!4 &201870923
+--- !u!4 &105704605
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 201870918}
+  m_GameObject: {fileID: 105704600}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -257,7 +257,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &377172345
+--- !u!1 &1031068806
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -265,9 +265,9 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 377172348}
-  - component: {fileID: 377172347}
-  - component: {fileID: 377172346}
+  - component: {fileID: 1031068809}
+  - component: {fileID: 1031068808}
+  - component: {fileID: 1031068807}
   m_Layer: 0
   m_Name: DaHilgHUD
   m_TagString: Untagged
@@ -275,25 +275,25 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &377172346
+--- !u!114 &1031068807
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 377172345}
+  m_GameObject: {fileID: 1031068806}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 649f73e5ecf4940dea99933c61da6696, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgHud
---- !u!114 &377172347
+--- !u!114 &1031068808
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 377172345}
+  m_GameObject: {fileID: 1031068806}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 19102, guid: 0000000000000000e000000000000000, type: 0}
@@ -310,13 +310,13 @@ MonoBehaviour:
   m_PivotReferenceSize: 0
   m_Pivot: 0
   m_WorldSpaceCollider: {fileID: 0}
---- !u!4 &377172348
+--- !u!4 &1031068809
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 377172345}
+  m_GameObject: {fileID: 1031068806}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -325,7 +325,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1834125131
+--- !u!1 &1404611533
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -333,69 +333,8 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 1834125134}
-  - component: {fileID: 1834125133}
-  - component: {fileID: 1834125132}
-  m_Layer: 0
-  m_Name: DaHilgGame
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1834125132
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1834125131}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 168a9e2ca405549f8b367cb2041e71fe, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgGameManager
-  Settings: {fileID: 11400000, guid: 417d5b9a6af3d4df8b5849f09911b139, type: 2}
-  Input: {fileID: 1834125133}
-  CameraRig: {fileID: 201870919}
-  Hud: {fileID: 377172346}
---- !u!114 &1834125133
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1834125131}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: dcb5585654b994897af98ce0503e70a3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgInputRouter
---- !u!4 &1834125134
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1834125131}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &2091813246
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 2091813248}
-  - component: {fileID: 2091813247}
+  - component: {fileID: 1404611535}
+  - component: {fileID: 1404611534}
   m_Layer: 0
   m_Name: Sun
   m_TagString: Untagged
@@ -403,13 +342,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!108 &2091813247
+--- !u!108 &1404611534
 Light:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2091813246}
+  m_GameObject: {fileID: 1404611533}
   m_Enabled: 1
   serializedVersion: 13
   m_Type: 1
@@ -468,15 +407,76 @@ Light:
   m_LightUnit: 1
   m_LuxAtDistance: 1
   m_EnableSpotReflector: 1
---- !u!4 &2091813248
+--- !u!4 &1404611535
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2091813246}
+  m_GameObject: {fileID: 1404611533}
   serializedVersion: 2
   m_LocalRotation: {x: 0.38457704, y: -0.29742128, z: 0.1324205, w: 0.8637742}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1833419125
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1833419128}
+  - component: {fileID: 1833419127}
+  - component: {fileID: 1833419126}
+  m_Layer: 0
+  m_Name: DaHilgGame
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1833419126
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1833419125}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 168a9e2ca405549f8b367cb2041e71fe, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgGameManager
+  Settings: {fileID: 11400000, guid: 417d5b9a6af3d4df8b5849f09911b139, type: 2}
+  Input: {fileID: 1833419127}
+  CameraRig: {fileID: 105704601}
+  Hud: {fileID: 1031068807}
+--- !u!114 &1833419127
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1833419125}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dcb5585654b994897af98ce0503e70a3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgInputRouter
+--- !u!4 &1833419128
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1833419125}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -487,7 +487,7 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 2091813248}
-  - {fileID: 201870923}
-  - {fileID: 1834125134}
-  - {fileID: 377172348}
+  - {fileID: 1404611535}
+  - {fileID: 105704605}
+  - {fileID: 1833419128}
+  - {fileID: 1031068809}

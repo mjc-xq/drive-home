@@ -311,7 +311,8 @@ namespace DaHilg
         {
             float probeHeight = Mathf.Max(settings.GroundProbeHeight, m_BodyHeight * 1.5f);
             float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, settings.StepOffset + settings.ControllerSkinWidth);
-            return DaHilgLevelRuntime.TryFindGround(transform.position, out hit, probeHeight, probeDistance);
+            float maxAbove = Mathf.Max(settings.GroundSnapDistance * 1.2f, settings.StepOffset + settings.ControllerSkinWidth + 0.35f);
+            return DaHilgLevelRuntime.TryFindGround(transform.position, out hit, probeHeight, probeDistance, maxAbove);
         }
 
         void UpdateGroundNormal(DaHilgGameSettings settings, float dt)

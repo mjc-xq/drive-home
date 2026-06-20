@@ -69,6 +69,27 @@ MonoBehaviour:
     Label: West Road Swarm
     Center: {x: -80, y: 6, z: 40}
     Size: {x: 104, y: 18, z: 92}
+  AnimalSpawns:
+  - Id: pig
+    Label: Pig
+    Prefab: {fileID: 8771091787928289351, guid: c8e7c2a6abda94d1c97c70c4e4865834, type: 3}
+    AnimatorController: {fileID: 9100000, guid: 4d036daf617844832bf8439d55ccfa62, type: 2}
+    Count: 5
+    Home: {x: 7.5, y: 0.1, z: 55}
+    WanderRadius: 5.5
+    Speed: 0.55
+    Scale: 0.13
+    VisualYawOffset: 90
+  - Id: duck
+    Label: Duck
+    Prefab: {fileID: 8128668236925612103, guid: 2291438b8861d454690c2bd312e78fe2, type: 3}
+    AnimatorController: {fileID: 9100000, guid: ad1472de7ff364711948b7f6738e0a2c, type: 2}
+    Count: 2
+    Home: {x: 4, y: 0.1, z: 50.3}
+    WanderRadius: 4.5
+    Speed: 0.8
+    Scale: 0.16
+    VisualYawOffset: 90
   PlayBounds:
     m_Center: {x: 0, y: 0, z: 0}
     m_Extent: {x: 115, y: 60, z: 115}

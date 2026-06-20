@@ -8,10 +8,12 @@ namespace DaHilg
     {
         readonly List<DaHilgActor> m_Actors = new List<DaHilgActor>(4);
         readonly List<DaHilgNibblerAgent> m_Nibblers = new List<DaHilgNibblerAgent>(32);
+        readonly List<DaHilgAnimalAgent> m_Animals = new List<DaHilgAnimalAgent>(8);
         readonly string[] m_Emotes = { "Dance", "Wave", "Cheer", "Attack" };
 
         Transform m_LevelRoot;
         Transform m_NibblerRoot;
+        Transform m_AnimalRoot;
         DaHilgActor m_ActiveActor;
         DaHilgActor m_NearbyGreetable;
         DaHilgLevelProfile m_CurrentLevel;
@@ -28,6 +30,7 @@ namespace DaHilg
         public int Score { get; private set; }
         public IReadOnlyList<DaHilgActor> Actors => m_Actors;
         public IReadOnlyList<DaHilgNibblerAgent> Nibblers => m_Nibblers;
+        public IReadOnlyList<DaHilgAnimalAgent> Animals => m_Animals;
         public DaHilgActor ActiveActor => m_ActiveActor;
         public DaHilgLevelProfile CurrentLevel => m_CurrentLevel;
         public DaHilgActor NearbyGreetable => m_NearbyGreetable;
@@ -60,6 +63,7 @@ namespace DaHilg
             SpawnActors();
             SwitchTo(Settings.DefaultCharacterId);
             BuildNibblerPool();
+            SpawnAnimals();
 
             if (Hud != null) Hud.Initialize(this, Input);
             Debug.Log("[DaHilg] Runtime ready: level=" + (m_CurrentLevel != null ? m_CurrentLevel.Slug : "none")
@@ -108,6 +112,7 @@ namespace DaHilg
                 if (actor == m_ActiveActor) continue;
                 TickNpc(actor, dt);
             }
+            for (int i = 0; i < m_Animals.Count; i++) m_Animals[i].Tick(dt);
 
             ClampToLevelBounds();
 
@@ -161,6 +166,29 @@ namespace DaHilg
         public void SetCameraMode(DaHilgCameraMode mode)
         {
             CameraRig?.SetMode(mode);
+        }
+
+        public void SetLevel(string slug)
+        {
+            if (Settings == null || Settings.FindLevel(slug) == null) return;
+            if (m_CurrentLevel != null && m_CurrentLevel.Slug == slug) return;
+
+            PlayerPrefs.SetString("dahilg:level", slug);
+            PlayerPrefs.Save();
+
+            Score = 0;
+            m_Won = false;
+            AttachedNibblerCount = 0;
+            m_ModeStartedAt = Time.time;
+            m_NextNibblerSpawn = 0f;
+            for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].Despawn();
+
+            LoadLevel(slug);
+            SpawnActors();
+            SwitchTo(Settings.DefaultCharacterId);
+            BuildNibblerPool();
+            SpawnAnimals();
+            Hud?.Refresh();
         }
 
         public void RequestGreet()
@@ -423,6 +451,32 @@ namespace DaHilg
                 DaHilgCharacterSlot slot = Settings.Characters[i % Settings.Characters.Length];
                 if (slot.Prefab == null) continue;
                 m_Nibblers.Add(new DaHilgNibblerAgent(slot.Prefab, m_NibblerRoot, m_ActiveActor.transform, ResolveAnimator(slot), Settings.NibblerScale, i));
+            }
+        }
+
+        void SpawnAnimals()
+        {
+            if (m_AnimalRoot != null) Destroy(m_AnimalRoot.gameObject);
+            m_AnimalRoot = new GameObject("Animals").transform;
+            m_AnimalRoot.SetParent(transform);
+            m_Animals.Clear();
+
+            if (m_CurrentLevel == null || m_CurrentLevel.AnimalSpawns == null) return;
+
+            for (int i = 0; i < m_CurrentLevel.AnimalSpawns.Length; i++)
+            {
+                DaHilgAnimalSpawn spawn = m_CurrentLevel.AnimalSpawns[i];
+                if (spawn.Prefab == null || spawn.Count <= 0) continue;
+                for (int n = 0; n < spawn.Count; n++)
+                {
+                    GameObject root = new GameObject("Animal_" + spawn.Label + "_" + n);
+                    root.transform.SetParent(m_AnimalRoot);
+                    DaHilgAnimalAgent agent = root.AddComponent<DaHilgAnimalAgent>();
+                    DaHilgAnimalSpawn instance = spawn;
+                    instance.Home += new Vector3(UnityEngine.Random.Range(-1.5f, 1.5f), 0f, UnityEngine.Random.Range(-1.2f, 1.2f));
+                    agent.Initialize(instance, n);
+                    m_Animals.Add(agent);
+                }
             }
         }
 

@@ -16,6 +16,7 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 4512fd9c86a3b4659bec174467427dc9, type: 2}
   - {fileID: 11400000, guid: e26dfc6f257244484ba9445aad1298bf, type: 2}
   - {fileID: 11400000, guid: 71866c7a06a9245c68fd3cbc16321d84, type: 2}
+  - {fileID: 11400000, guid: 42d373b7e570b4baead063d26f7cb388, type: 2}
   Characters:
   - Id: mike
     Label: Mike

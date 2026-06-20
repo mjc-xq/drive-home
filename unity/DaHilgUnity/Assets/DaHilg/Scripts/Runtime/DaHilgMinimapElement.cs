@@ -102,6 +102,7 @@ namespace DaHilg
             }
 
             DrawActors(painter, mapRect);
+            DrawAnimals(painter, mapRect);
         }
 
         void DrawSegments(Painter2D painter, Rect rect, List<Segment> segments, Color color, float width)
@@ -166,6 +167,18 @@ namespace DaHilg
                     painter.LineTo(p + heading * 10f);
                     painter.Stroke();
                 }
+            }
+        }
+
+        void DrawAnimals(Painter2D painter, Rect rect)
+        {
+            if (m_Manager == null || m_Manager.Animals == null) return;
+            IReadOnlyList<DaHilgAnimalAgent> animals = m_Manager.Animals;
+            for (int i = 0; i < animals.Count; i++)
+            {
+                DaHilgAnimalAgent animal = animals[i];
+                if (animal == null) continue;
+                DrawDisk(painter, WorldToMap(animal.Position.x, animal.Position.z, rect), 2.8f, new Color(1f, 0.73f, 0.26f, 0.86f));
             }
         }
 

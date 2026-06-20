@@ -69,6 +69,7 @@ MonoBehaviour:
     Label: West Road Swarm
     Center: {x: -80, y: 6, z: 40}
     Size: {x: 104, y: 18, z: 92}
+  AnimalSpawns: []
   PlayBounds:
     m_Center: {x: 0, y: 0, z: 0}
     m_Extent: {x: 210, y: 80, z: 210}
