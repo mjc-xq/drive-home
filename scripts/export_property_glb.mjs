@@ -596,6 +596,12 @@ function flatWaterRibbon(lineW, width, lift, posArr, idxArr) {
 const ROAD_HALF = cropHalf;
 const cuPos = [], cuIdx = [], dPos = [];
 const swPos = [], swIdx = [], swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalkIdx = [];
+// Path-aligned UVs for the concrete ribbons (sidewalks + curbs). Anchoring the score-line
+// grid to the ribbon direction (not the world axes) keeps the joints as classic SQUARES on
+// diagonal runs instead of rotated DIAMONDS. CONCRETE_TILE sets the joint cell size: lines
+// fall at u=0.25,0.75 within each tile (half-tile spacing), so a 2.5 m tile → ~1.25 m cells.
+const swUv = [], cuUv = [], swSrcUv = [];
+const CONCRETE_TILE = 2.5;
 // layer stack (m above terrain). These are still low enough to read as ground-hugging,
 // but high enough that the DEM/aerial terrain cannot poke through paved overlays.
 const LIFT_ASPHALT = 0.22, LIFT_DRIVEWAY = 0.24, LIFT_SIDEWALK = 0.26, LIFT_CURB = 0.34, LIFT_DASH = 0.31;
@@ -606,6 +612,13 @@ const LIFT_ASPHALT = 0.22, LIFT_DRIVEWAY = 0.24, LIFT_SIDEWALK = 0.26, LIFT_CURB
 // layer and the curb already walls its edge).
 const SKIRT_SIDEWALK = LIFT_SIDEWALK - 0.02, SKIRT_CURB = LIFT_CURB - 0.02;
 const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
+const CURB_WIDTH = 0.55;                     // curb ribbon width (top score lines tile across this)
+// Gap-fill DIRT strip between the curb's outer edge and the sidewalk's inner edge. Sits a
+// hair above the asphalt and BELOW both concrete tops; built wide enough (+0.3 m) to tuck
+// UNDER the curb + sidewalk edges so there is no open vertical trench to fall into. Matte
+// brown 'GapDirt' material; collider copies these buffers so collision stays consistent.
+const LIFT_GAPFILL = LIFT_ASPHALT + 0.02;
+const gfPos = [], gfIdx = [];
 const MAPSURFACES = path.join(ROOT, 'exports/map_surfaces_osm.json');
 const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
 const hasMappedDriveways = !!((mapSurfaces.drivewayPolygons || []).length || (mapSurfaces.driveways || []).length || (mapSurfaces.parkingAreas || []).length);
@@ -644,10 +657,12 @@ function centreDashes(lw, halfW, lift, skip) {      // 3 m dash / 3.5 m gap, 0.2
 // curb ribbon that skips samples within R_TRIM of a junction (no curb across an
 // intersection). Densify + offset already done by the caller; here we just drop
 // quads whose midpoint is near a junction.
-function curbRibbon(lineW, width, lift, posArr, idxArr, skip, skirt) {
+function curbRibbon(lineW, width, lift, posArr, idxArr, skip, skirt, uvArr) {
   // skirt = slab thickness to drop a vertical edge wall to grade (no floating gap);
   // pass the layer's lift so the slab visibly meets the lawn instead of hovering.
-  emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, { skip, skirt: skirt || 0 });
+  // uvArr (optional): path-aligned concrete UVs (square joints on diagonal runs).
+  emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr,
+    { skip, skirt: skirt || 0, uvArr: uvArr || null, uvTile: CONCRETE_TILE });
 }
 function surfacePolygon(poly, lift, posArr, idxArr) {
   const ring = (poly || []).filter(p => Array.isArray(p) && p.length >= 2);
@@ -660,14 +675,14 @@ function surfacePolygon(poly, lift, posArr, idxArr) {
   for (const [a, b, c] of tris) idxArr.push(base + a, base + b, base + c);
   return true;
 }
-function sourceRibbon(lines, width, lift, posArr, idxArr, skip = null, skirt = 0) {
+function sourceRibbon(lines, width, lift, posArr, idxArr, skip = null, skirt = 0, uvArr = null) {
   for (const src of lines || []) {
     const pl = src.p || src;
     if (!Array.isArray(pl) || pl.length < 2) continue;
     for (let piece of clipPolylineToBox(pl, ROAD_HALF)) {
       piece = smoothLine(piece);
       if (piece.length < 2) continue;
-      curbRibbon(piece, width, lift, posArr, idxArr, skip, skirt);
+      curbRibbon(piece, width, lift, posArr, idxArr, skip, skirt, uvArr);
       roadLines.push(piece);
     }
   }
@@ -748,13 +763,22 @@ for (const r of S.roads || []) {
     }
     streetLines.push(piece);
     ribbon(piece, spec.width, LIFT_ASPHALT, rPos, rIdx);                                // asphalt
-    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction, SKIRT_CURB);
-    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), 0.55, LIFT_CURB, cuPos, cuIdx, skipNearJunction, SKIRT_CURB);
+    curbRibbon(offsetLine(piece, spec.width / 2 + 0.3), CURB_WIDTH, LIFT_CURB, cuPos, cuIdx, skipNearJunction, SKIRT_CURB, cuUv);
+    curbRibbon(offsetLine(piece, -(spec.width / 2 + 0.3)), CURB_WIDTH, LIFT_CURB, cuPos, cuIdx, skipNearJunction, SKIRT_CURB, cuUv);
     if (spec.lanes >= 2) centreDashes(piece, 0.14, LIFT_DASH, skipNearJunction);
     if (!spec.isService) {
       const swDist = spec.width / 2 + SW_GAP;
-      curbRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk, SKIRT_SIDEWALK);
-      curbRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk, SKIRT_SIDEWALK);
+      curbRibbon(offsetLine(piece, swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk, SKIRT_SIDEWALK, swUv);
+      curbRibbon(offsetLine(piece, -swDist), SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, skipGeneratedSidewalk, SKIRT_SIDEWALK, swUv);
+      // GAP FILLER: a thin DIRT/ground strip bridging the open vertical gap between the
+      // sidewalk's road-side edge and the curb (sidewalk inner edge ≈ road+1.3 m, curb outer
+      // edge ≈ road+0.575 m → ~0.7 m of open trench you could fall into). Build a flat brown
+      // ribbon centred in that band so there is no hole and the player can't fall through.
+      const gapInner = spec.width / 2 + 0.3 + CURB_WIDTH / 2;       // curb outer edge
+      const gapOuter = swDist - SW_WIDTH / 2;                       // sidewalk inner edge
+      const gapMid = (gapInner + gapOuter) / 2, gapW = Math.max(0.25, gapOuter - gapInner + 0.3);
+      curbRibbon(offsetLine(piece, gapMid), gapW, LIFT_GAPFILL, gfPos, gfIdx, skipNearJunction, 0);
+      curbRibbon(offsetLine(piece, -gapMid), gapW, LIFT_GAPFILL, gfPos, gfIdx, skipNearJunction, 0);
     }
   }
 }
@@ -766,20 +790,22 @@ for (const run of buildSidewalkConnectors(S.roads || [], w2, {
   avoid: nearMappedWalk,
   junctions: roadJunctions,
   roadSegments: streetSegs,
-})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK);
+})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK, swUv);
 for (const run of buildSidewalkEndCaps(S.roads || [], w2, {
   sideGap: SW_GAP,
   inPatch: (x, z) => inTerrain(x, z, 6),
   avoid: nearMappedWalk,
   isCourt,
-})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK);
+})) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK, swUv);
 // cul-de-sac bulbs / service end-caps at true dead-ends inside ROAD_HALF.
 // Court bulbs were precomputed above (reused here so dashes/curbs avoided them);
 // service stubs just get a small rounded end-cap (no fake roundabout).
 const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + LIFT_ASPHALT, z); return o; };
 const emitDriveway = (x, z) => { const o = drvPos.length / 3; drvPos.push(x, terrainAt(x, z) + LIFT_DRIVEWAY, z); return o; };
-const emitCurb = (x, z) => { const o = cuPos.length / 3; cuPos.push(x, terrainAt(x, z) + LIFT_CURB, z); return o; };
-const emitSidewalk = (x, z) => { const o = swPos.length / 3; swPos.push(x, terrainAt(x, z) + LIFT_SIDEWALK, z); return o; };
+// Bulb rings are circular (no diagonal run), so a world-planar concrete UV reads fine here;
+// we still push a uv per vert so the merged mesh's uv attribute count matches its positions.
+const emitCurb = (x, z) => { const o = cuPos.length / 3; cuPos.push(x, terrainAt(x, z) + LIFT_CURB, z); cuUv.push(x / CONCRETE_TILE, z / CONCRETE_TILE); return o; };
+const emitSidewalk = (x, z) => { const o = swPos.length / 3; swPos.push(x, terrainAt(x, z) + LIFT_SIDEWALK, z); swUv.push(x / CONCRETE_TILE, z / CONCRETE_TILE); return o; };
 for (const { cx, cz, R } of bulbs) {
   fanDisc(cx, cz, R, 24, emitAsphalt, rIdx);
   ringAnnulus(cx, cz, R, R + 0.3, 24, emitCurb, cuIdx);
@@ -810,7 +836,7 @@ for (const [px, pz] of junctionPts) {
 for (const d of mapSurfaces.drivewayPolygons || []) surfacePolygon(d.polygon, LIFT_DRIVEWAY + 0.02, drvSrcPos, drvSrcIdx);
 for (const p of mapSurfaces.parkingAreas || []) surfacePolygon(p.polygon, LIFT_DRIVEWAY + 0.01, parkSrcPos, parkSrcIdx);
 sourceRibbon((mapSurfaces.driveways || []).filter(d => !(d.polygon)), 3.6, LIFT_DRIVEWAY + 0.03, drvSrcPos, drvSrcIdx);
-sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx, skipMappedSidewalk, SKIRT_SIDEWALK);
+sourceRibbon(mapSurfaces.sidewalks || [], SW_WIDTH, LIFT_SIDEWALK + 0.03, swSrcPos, swSrcIdx, skipMappedSidewalk, SKIRT_SIDEWALK, swSrcUv);
 sourceRibbon(mapSurfaces.crossings || [], 2.4, LIFT_SIDEWALK + 0.04, xwalkPos, xwalkIdx);
 const DRIVEWAYSJSON = path.join(ROOT, 'exports/driveways_osm.json');
 if (!hasMappedDriveways && existsSync(DRIVEWAYSJSON)) {
@@ -832,10 +858,16 @@ if (rIdx.length) scene.add(mkMesh(rPos, rIdx, 0x2f2f33, 'Roads', { planarUV: 5.0
 if (drvIdx.length) scene.add(mkMesh(drvPos, drvIdx, 0x77787a, 'Driveways', { planarUV: 4.5, rough: 0.95 }));
 if (drvSrcIdx.length) scene.add(mkMesh(drvSrcPos, drvSrcIdx, 0x7d7f80, 'Driveways_Mapped', { planarUV: 4.5, rough: 0.95 }));
 if (parkSrcIdx.length) scene.add(mkMesh(parkSrcPos, parkSrcIdx, 0x6f7272, 'ParkingAreas_Mapped', { planarUV: 5.0, rough: 0.95 }));
-if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { planarUV: 2.5, rough: 0.9 }));   // light concrete, road-edge derived
-if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped', { planarUV: 2.5, rough: 0.9 }));
+// Sidewalks/curbs use PATH-ALIGNED uvs (built alongside their geometry) so the concrete
+// score-line grid reads as classic SQUARES along the walk instead of world-axis diamonds.
+if (swIdx.length) scene.add(mkMesh(swPos, swIdx, 0xb9b6ae, 'Sidewalks', { uvs: swUv, rough: 0.9 }));   // light concrete, road-edge derived
+if (swSrcIdx.length) scene.add(mkMesh(swSrcPos, swSrcIdx, 0xc4c0b6, 'Sidewalks_Mapped', { uvs: swSrcUv, rough: 0.9 }));
 if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_Mapped', { planarUV: 3.0, rough: 0.95 }));
-if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs', { planarUV: 2.5, rough: 0.9 }));
+// Curb tops now carry the SAME path-aligned concrete score lines the sidewalks have (they
+// were blank before): the concrete material keys off /curb/i and these uvs tile the joints.
+if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs', { uvs: cuUv, rough: 0.9 }));
+// Gap-fill dirt strip bridging sidewalk edge → curb (matte brown, no score texture).
+if (gfIdx.length) scene.add(mkMesh(gfPos, gfIdx, 0x6b5a44, 'GapDirt', { rough: 1.0 }));
 if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
 // creek ribbon
@@ -1156,8 +1188,10 @@ function addGameLevelLayers() {
   }
   if (tIdx.length) scene.add(mkMesh(tPos, tIdx, 0xff00ff, 'Collision_Terrain', { opacity: 0 }));
 
+  // Include the GapDirt filler (gfPos/gfIdx) in the road collider so the player walks across
+  // the sidewalk→curb bridge instead of falling into the gap it closes (collision consistent).
   const roadColPos = [], roadColIdx = [];
-  for (const [p, ix] of [[rPos, rIdx], [drvPos, drvIdx], [drvSrcPos, drvSrcIdx], [parkSrcPos, parkSrcIdx], [swPos, swIdx], [swSrcPos, swSrcIdx], [xwalkPos, xwalkIdx]]) appendIndexed(p, ix, roadColPos, roadColIdx);
+  for (const [p, ix] of [[rPos, rIdx], [drvPos, drvIdx], [drvSrcPos, drvSrcIdx], [parkSrcPos, parkSrcIdx], [swPos, swIdx], [swSrcPos, swSrcIdx], [xwalkPos, xwalkIdx], [gfPos, gfIdx]]) appendIndexed(p, ix, roadColPos, roadColIdx);
   if (roadColIdx.length) scene.add(mkMesh(roadColPos, roadColIdx, 0x00ffff, 'Collision_Roads', { opacity: 0 }));
 
   const bPos = [], bIdx = [];
