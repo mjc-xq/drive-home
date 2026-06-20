@@ -22,6 +22,7 @@ namespace DaHilg
         DaHilgMinimapElement m_Minimap;
         VisualElement m_CharacterBar;
         VisualElement m_EmoteBar;
+        VisualElement m_CameraBar;
         VisualElement m_Joy;
         VisualElement m_Knob;
         Button m_RunButton;
@@ -32,7 +33,8 @@ namespace DaHilg
         Vector2 m_LookLast;
         readonly List<Button> m_CharacterButtons = new List<Button>(4);
         readonly List<Button> m_EmoteButtons = new List<Button>(4);
-        readonly List<MenuEntry> m_MenuEntries = new List<MenuEntry>(8);
+        readonly List<Button> m_CameraButtons = new List<Button>(5);
+        readonly List<MenuEntry> m_MenuEntries = new List<MenuEntry>(16);
         int m_SelectedMenuIndex = -1;
         bool m_MenuFocused;
 
@@ -69,11 +71,12 @@ namespace DaHilg
             if (m_Manager.IsPaused()) m_Prompt.text = "Paused";
             else if (m_Manager.Mode == DaHilgGameMode.Greet && m_Manager.NearbyGreetable != null) m_Prompt.text = "E greet " + m_Manager.NearbyGreetable.Label;
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.PlayerInSafeZone()) m_Prompt.text = "Safe zone";
+            else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.PlayerInDangerZone()) m_Prompt.text = "Danger zone · nibblers incoming";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && actor.AttachedNibblers >= m_Manager.Settings.OverwhelmStop) m_Prompt.text = "Pinned · jump to shake loose";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && actor.AttachedNibblers >= m_Manager.Settings.OverwhelmDown) m_Prompt.text = "Downed · crawl and jump";
             else m_Prompt.text = ShouldShowTouchControls()
                 ? "Stick move · drag look · jump · emotes"
-                : "WASD move · mouse look · Space jump · Tab switch · V camera · N mode";
+                : "WASD move · right-drag look · Space jump · Tab switch · C/V camera · N mode";
 
             for (int i = 0; i < m_CharacterButtons.Count; i++)
             {
@@ -82,6 +85,23 @@ namespace DaHilg
                 bool active = id == actor.Id;
                 button.EnableInClassList("active", active);
                 button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.25f);
+                button.style.borderBottomColor = button.style.borderTopColor.value;
+                button.style.borderLeftColor = button.style.borderTopColor.value;
+                button.style.borderRightColor = button.style.borderTopColor.value;
+                button.style.borderTopWidth = active ? 2 : 1;
+                button.style.borderBottomWidth = button.style.borderTopWidth.value;
+                button.style.borderLeftWidth = button.style.borderTopWidth.value;
+                button.style.borderRightWidth = button.style.borderTopWidth.value;
+            }
+
+            for (int i = 0; i < m_CameraButtons.Count; i++)
+            {
+                Button button = m_CameraButtons[i];
+                bool active = m_Manager.CameraRig != null
+                    && button.userData is DaHilgCameraMode mode
+                    && mode == m_Manager.CameraRig.Mode;
+                button.style.backgroundColor = active ? new Color(0.16f, 0.46f, 0.92f, 0.88f) : new Color(1f, 1f, 1f, 0.12f);
+                button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.22f);
                 button.style.borderBottomColor = button.style.borderTopColor.value;
                 button.style.borderLeftColor = button.style.borderTopColor.value;
                 button.style.borderRightColor = button.style.borderTopColor.value;
@@ -242,6 +262,7 @@ namespace DaHilg
             BuildMinimap();
             BuildTouchControls();
             BuildEmoteBar();
+            BuildCameraBar();
         }
 
         void BuildMinimap()
@@ -408,22 +429,23 @@ namespace DaHilg
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 12, 12, StyleKeyword.Auto, 190, 132);
                 SetBarFrame(m_CharacterBar, StyleKeyword.Auto, 12, 152, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_EmoteBar, StyleKeyword.Auto, 12, 198, StyleKeyword.Auto, new Translate(0, 0));
+                SetBarFrame(m_CameraBar, StyleKeyword.Auto, 12, 244, StyleKeyword.Auto, new Translate(0, 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, 14, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0), 300, 12);
 
                 if (m_Joy != null)
                 {
                     m_Joy.style.left = 24;
-                    m_Joy.style.bottom = 104;
+                    m_Joy.style.bottom = 132;
                 }
                 if (m_RunButton != null)
                 {
                     m_RunButton.style.right = 24;
-                    m_RunButton.style.bottom = 176;
+                    m_RunButton.style.bottom = 204;
                 }
                 if (m_JumpButton != null)
                 {
                     m_JumpButton.style.right = 24;
-                    m_JumpButton.style.bottom = 104;
+                    m_JumpButton.style.bottom = 132;
                 }
             }
             else if (touch)
@@ -432,7 +454,8 @@ namespace DaHilg
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 154, StyleKeyword.Auto, 150, 136);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
-                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 170, new Translate(Length.Percent(-50), 0), 340, 13);
+                SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 118, new Translate(Length.Percent(-50), 0));
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 214, new Translate(Length.Percent(-50), 0), 340, 13);
 
                 if (m_Joy != null)
                 {
@@ -456,7 +479,8 @@ namespace DaHilg
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 220, 168);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
-                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 126, new Translate(Length.Percent(-50), 0), 680, 13);
+                SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 116, new Translate(Length.Percent(-50), 0));
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 164, new Translate(Length.Percent(-50), 0), 680, 13);
             }
         }
 
@@ -545,6 +569,62 @@ namespace DaHilg
             }
 
             m_Root.Add(m_EmoteBar);
+        }
+
+        void BuildCameraBar()
+        {
+            m_CameraBar = new VisualElement();
+            m_CameraBar.style.position = Position.Absolute;
+            m_CameraBar.style.left = Length.Percent(50);
+            m_CameraBar.style.bottom = 116;
+            m_CameraBar.style.translate = new Translate(Length.Percent(-50), 0);
+            m_CameraBar.style.flexDirection = FlexDirection.Row;
+            m_CameraBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.55f);
+            m_CameraBar.style.paddingLeft = 5;
+            m_CameraBar.style.paddingRight = 5;
+            m_CameraBar.style.paddingTop = 5;
+            m_CameraBar.style.paddingBottom = 5;
+            m_CameraBar.style.borderTopLeftRadius = 8;
+            m_CameraBar.style.borderTopRightRadius = 8;
+            m_CameraBar.style.borderBottomLeftRadius = 8;
+            m_CameraBar.style.borderBottomRightRadius = 8;
+
+            m_CameraButtons.Clear();
+            RemoveMenuEntriesForRow(2);
+            AddCameraButton(DaHilgCameraMode.ThirdPerson, "Follow", 0);
+            AddCameraButton(DaHilgCameraMode.Shoulder, "Close", 1);
+            AddCameraButton(DaHilgCameraMode.High, "High", 2);
+            AddCameraButton(DaHilgCameraMode.TopDown, "Top", 3);
+            AddCameraButton(DaHilgCameraMode.FirstPerson, "Eyes", 4);
+
+            m_Root.Add(m_CameraBar);
+        }
+
+        void AddCameraButton(DaHilgCameraMode mode, string label, int column)
+        {
+            Action activate = () => m_Manager.SetCameraMode(mode);
+            Button button = new Button(activate) { text = label };
+            button.userData = mode;
+            button.focusable = true;
+            button.tabIndex = 20 + column;
+            button.style.marginLeft = 3;
+            button.style.marginRight = 3;
+            button.style.height = 30;
+            button.style.minWidth = 58;
+            button.style.unityFontStyleAndWeight = FontStyle.Bold;
+            button.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+            button.style.color = Color.white;
+            button.style.borderTopWidth = 1;
+            button.style.borderBottomWidth = 1;
+            button.style.borderLeftWidth = 1;
+            button.style.borderRightWidth = 1;
+            button.style.borderTopLeftRadius = 6;
+            button.style.borderTopRightRadius = 6;
+            button.style.borderBottomLeftRadius = 6;
+            button.style.borderBottomRightRadius = 6;
+            m_CameraBar.Add(button);
+            m_CameraButtons.Add(button);
+            RegisterMenuButton(button, 2, column, activate);
         }
 
         void RegisterMenuButton(Button button, int row, int column, Action activate)
@@ -698,11 +778,16 @@ namespace DaHilg
                     && m_Manager != null
                     && m_Manager.ActiveActor != null
                     && (button.userData as string) == m_Manager.ActiveActor.Id;
+                bool activeCamera = entry.Row == 2
+                    && m_Manager != null
+                    && m_Manager.CameraRig != null
+                    && button.userData is DaHilgCameraMode mode
+                    && m_Manager.CameraRig.Mode == mode;
 
                 Color border = selected
                     ? new Color(1f, 0.78f, 0.22f, 1f)
-                    : (activeCharacter ? Color.white : new Color(1f, 1f, 1f, 0.24f));
-                float borderWidth = selected ? 3f : (activeCharacter ? 2f : 1f);
+                    : (activeCharacter || activeCamera ? Color.white : new Color(1f, 1f, 1f, 0.24f));
+                float borderWidth = selected ? 3f : (activeCharacter || activeCamera ? 2f : 1f);
 
                 button.style.borderTopColor = border;
                 button.style.borderBottomColor = border;

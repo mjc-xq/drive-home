@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace DaHilg
@@ -9,6 +10,9 @@ namespace DaHilg
         const float k_SpawnGroundSkin = 0.08f;
         static readonly int s_BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int s_ColorId = Shader.PropertyToID("_Color");
+        static readonly HashSet<Collider> s_LevelColliders = new HashSet<Collider>();
+        static readonly RaycastHit[] s_GroundHits = new RaycastHit[64];
+        static readonly RaycastHit[] s_SphereHits = new RaycastHit[32];
 
         public static void ApplyLevelOffset(GameObject level, DaHilgLevelProfile profile)
         {
@@ -19,6 +23,7 @@ namespace DaHilg
         public static void PrepareLevelColliders(GameObject level)
         {
             if (level == null) return;
+            s_LevelColliders.Clear();
 
             MeshFilter[] filters = level.GetComponentsInChildren<MeshFilter>(true);
             bool hasCollisionProxy = false;
@@ -48,11 +53,23 @@ namespace DaHilg
                     renderer.enabled = false;
                 }
 
+                Collider levelCollider = filter.GetComponent<Collider>();
                 if (useCollider && filter.GetComponent<Collider>() == null)
                 {
                     MeshCollider collider = filter.gameObject.AddComponent<MeshCollider>();
                     collider.sharedMesh = filter.sharedMesh;
                     collider.convex = false;
+                    levelCollider = collider;
+                }
+                else if (useCollider)
+                {
+                    levelCollider = filter.GetComponent<Collider>();
+                }
+
+                if (useCollider && levelCollider != null)
+                {
+                    levelCollider.isTrigger = false;
+                    s_LevelColliders.Add(levelCollider);
                 }
 
                 if (isWater && filter.GetComponent<DaHilgWaterAnimator>() == null)
@@ -79,8 +96,8 @@ namespace DaHilg
             MaterialPropertyBlock block = new MaterialPropertyBlock();
             renderer.GetPropertyBlock(block);
             Color tint = isWater
-                ? new Color(0.28f, 0.55f, 0.68f, 0.72f)
-                : (isRoad ? new Color(0.46f, 0.47f, 0.43f, 1f) : new Color(0.58f, 0.66f, 0.48f, 1f));
+                ? new Color(0.22f, 0.49f, 0.66f, 0.82f)
+                : (isRoad ? new Color(0.38f, 0.40f, 0.36f, 1f) : new Color(0.42f, 0.55f, 0.32f, 1f));
 
             if (renderer.sharedMaterial.HasProperty(s_BaseColorId)) block.SetColor(s_BaseColorId, tint);
             if (renderer.sharedMaterial.HasProperty(s_ColorId)) block.SetColor(s_ColorId, tint);
@@ -98,7 +115,7 @@ namespace DaHilg
 
         public static Vector3 GroundSpawn(Vector3 spawn)
         {
-            if (TryFindSpawnGround(spawn, out RaycastHit hit))
+            if (TryFindGround(spawn, out RaycastHit hit))
             {
                 return hit.point + Vector3.up * k_SpawnGroundSkin;
             }
@@ -108,15 +125,20 @@ namespace DaHilg
 
         public static bool TryFindSpawnGround(Vector3 spawn, out RaycastHit bestHit)
         {
-            Vector3 origin = spawn + Vector3.up * k_SpawnProbeHeight;
-            RaycastHit[] hits = Physics.RaycastAll(origin, Vector3.down, k_SpawnProbeDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            return TryFindGround(spawn, out bestHit);
+        }
+
+        public static bool TryFindGround(Vector3 point, out RaycastHit bestHit, float probeHeight = k_SpawnProbeHeight, float probeDistance = k_SpawnProbeDistance)
+        {
+            Vector3 origin = point + Vector3.up * Mathf.Max(0.01f, probeHeight);
+            int count = Physics.RaycastNonAlloc(origin, Vector3.down, s_GroundHits, Mathf.Max(0.01f, probeDistance), Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             bestHit = default;
             float bestDistance = float.MaxValue;
 
-            for (int i = 0; i < hits.Length; i++)
+            for (int i = 0; i < count; i++)
             {
-                RaycastHit hit = hits[i];
-                if (hit.collider is CharacterController) continue;
+                RaycastHit hit = s_GroundHits[i];
+                if (!IsLevelCollider(hit.collider)) continue;
 
                 if (hit.distance < bestDistance)
                 {
@@ -126,6 +148,33 @@ namespace DaHilg
             }
 
             return bestDistance < float.MaxValue;
+        }
+
+        public static bool SphereCastLevel(Vector3 origin, float radius, Vector3 direction, out RaycastHit bestHit, float distance)
+        {
+            int count = Physics.SphereCastNonAlloc(origin, radius, direction, s_SphereHits, distance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            bestHit = default;
+            float bestDistance = float.MaxValue;
+            for (int i = 0; i < count; i++)
+            {
+                RaycastHit hit = s_SphereHits[i];
+                if (!IsLevelCollider(hit.collider)) continue;
+                if (hit.distance < bestDistance)
+                {
+                    bestDistance = hit.distance;
+                    bestHit = hit;
+                }
+            }
+
+            return bestDistance < float.MaxValue;
+        }
+
+        public static bool IsLevelCollider(Collider collider)
+        {
+            if (collider == null || collider.isTrigger) return false;
+            if (collider is CharacterController || collider.GetComponentInParent<CharacterController>() != null) return false;
+            if (s_LevelColliders.Count > 0) return s_LevelColliders.Contains(collider);
+            return collider.gameObject.isStatic;
         }
     }
 }

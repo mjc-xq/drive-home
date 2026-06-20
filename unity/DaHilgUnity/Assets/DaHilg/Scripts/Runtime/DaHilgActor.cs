@@ -24,8 +24,7 @@ namespace DaHilg
     {
         const float k_FaceLerp = 12f;
         const float k_GroundNormalLerp = 18f;
-        const float k_GroundProbeHeight = 0.45f;
-        const float k_GroundProbeDistance = 1.25f;
+        const float k_GroundedTolerance = 0.14f;
 
         CharacterController m_Controller;
         Transform m_VisualRoot;
@@ -77,6 +76,8 @@ namespace DaHilg
             m_Controller.stepOffset = settings.StepOffset;
             m_Controller.slopeLimit = settings.SlopeLimit;
             m_Controller.minMoveDistance = 0f;
+            m_Controller.skinWidth = Mathf.Max(0.035f, settings.ControllerSkinWidth, settings.PlayerRadius * 0.12f);
+            m_Controller.enableOverlapRecovery = true;
 
             if (slot.Prefab != null)
             {
@@ -175,7 +176,7 @@ namespace DaHilg
         {
             if (m_Controller == null) return;
 
-            Grounded = m_Controller.isGrounded;
+            Grounded = m_Controller.isGrounded || IsCloseToLevelGround(settings);
             if (Grounded) m_LastGroundedTime = now;
 
             desiredDirection.y = 0f;
@@ -212,11 +213,15 @@ namespace DaHilg
                 Grounded = true;
                 m_LastGroundedTime = now;
             }
+            else if (!WasJumpStartedThisFrame && m_VerticalVelocity <= 0f && SnapToLevelGround(settings, now))
+            {
+                Grounded = true;
+            }
 
             Vector3 delta = transform.position - before;
             Vector3 planar = new Vector3(delta.x, 0f, delta.z);
             Speed = planar.magnitude / Mathf.Max(dt, 0.0001f);
-            UpdateGroundNormal(dt);
+            UpdateGroundNormal(settings, dt);
 
             Vector3 faceVelocity = planar.sqrMagnitude > 0.0004f ? planar / Mathf.Max(dt, 0.0001f) : m_HorizontalVelocity;
             if (faceVelocity.sqrMagnitude > 0.02f)
@@ -268,10 +273,50 @@ namespace DaHilg
             }
         }
 
-        void UpdateGroundNormal(float dt)
+        bool IsCloseToLevelGround(DaHilgGameSettings settings)
         {
-            Vector3 origin = transform.position + Vector3.up * k_GroundProbeHeight;
-            if (Physics.SphereCast(origin, Mathf.Max(0.05f, m_BodyRadius * 0.75f), Vector3.down, out RaycastHit hit, k_GroundProbeDistance, ~0, QueryTriggerInteraction.Ignore))
+            if (m_VerticalVelocity > 0.1f) return false;
+            if (!TryFindLevelGround(settings, out RaycastHit hit)) return false;
+
+            float targetY = hit.point.y + Mathf.Max(0.01f, settings.GroundSkin);
+            float deltaY = targetY - transform.position.y;
+            return deltaY >= -Mathf.Max(k_GroundedTolerance, settings.StepOffset)
+                && deltaY <= Mathf.Max(settings.GroundSnapDistance, settings.StepOffset);
+        }
+
+        bool SnapToLevelGround(DaHilgGameSettings settings, float now)
+        {
+            if (m_Controller == null || !m_Controller.enabled) return false;
+            if (!TryFindLevelGround(settings, out RaycastHit hit)) return false;
+
+            float targetY = hit.point.y + Mathf.Max(0.01f, settings.GroundSkin);
+            float deltaY = targetY - transform.position.y;
+            float maxLift = Mathf.Max(settings.GroundSnapDistance * 1.8f, settings.StepOffset + settings.ControllerSkinWidth);
+            float maxDrop = Mathf.Max(settings.StepOffset + settings.ControllerSkinWidth, 0.55f);
+            if (deltaY > maxLift || deltaY < -maxDrop) return false;
+
+            if (Mathf.Abs(deltaY) > 0.012f)
+            {
+                CollisionFlags flags = m_Controller.Move(Vector3.up * deltaY);
+                if (deltaY < 0f && (flags & CollisionFlags.Below) == 0) return false;
+            }
+
+            if (m_VerticalVelocity < 0f) m_VerticalVelocity = 0f;
+            Grounded = true;
+            m_LastGroundedTime = now;
+            return true;
+        }
+
+        bool TryFindLevelGround(DaHilgGameSettings settings, out RaycastHit hit)
+        {
+            float probeHeight = Mathf.Max(settings.GroundProbeHeight, m_BodyHeight * 1.5f);
+            float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, settings.StepOffset + settings.ControllerSkinWidth);
+            return DaHilgLevelRuntime.TryFindGround(transform.position, out hit, probeHeight, probeDistance);
+        }
+
+        void UpdateGroundNormal(DaHilgGameSettings settings, float dt)
+        {
+            if (TryFindLevelGround(settings, out RaycastHit hit))
             {
                 m_GroundNormal = Vector3.Slerp(m_GroundNormal, hit.normal, 1f - Mathf.Exp(-k_GroundNormalLerp * dt));
             }

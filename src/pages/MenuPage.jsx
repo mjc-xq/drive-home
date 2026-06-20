@@ -37,7 +37,7 @@ export default function MenuPage() {
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 8 2 16 12 22 22 16 22 8 12 2" /><path d="M12 22V12M2 8l10 4 10-4" /></svg>
             <span className="mcTitle">Da Hilg</span><span className="mcSub">First-person · explore</span>
           </button>
-          <a className="modeCard unity" href="/unity/da-hilg/" aria-label="Open Da Hilg Unity WebGL port">
+          <a className="modeCard unity" href="/unity/da-hilg/index.html" aria-label="Open Da Hilg Unity WebGL port">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z" /><path d="M12 12 4 7.5M12 12l8-4.5M12 12v9" /></svg>
             <span className="mcTitle">Da Hilg Unity</span><span className="mcSub">WebGL port</span>
           </a>

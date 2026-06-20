@@ -89,7 +89,7 @@ namespace DaHilg
 
             CameraRig?.AddLook(Input.LookDelta, Settings);
 
-            if (Input.CameraPressed) CameraRig?.ToggleMode();
+            if (Input.CameraPressed) CameraRig?.CycleMode();
             if (Input.ToggleModePressed) ToggleMode();
             if (Input.SwitchPressed) CycleActor(1);
             if (Input.PreviousSwitchPressed) CycleActor(-1);
@@ -158,6 +158,11 @@ namespace DaHilg
             for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].Despawn();
         }
 
+        public void SetCameraMode(DaHilgCameraMode mode)
+        {
+            CameraRig?.SetMode(mode);
+        }
+
         public void RequestGreet()
         {
             if (m_NearbyGreetable == null || m_ActiveActor == null) return;
@@ -187,6 +192,17 @@ namespace DaHilg
             for (int i = 0; i < zones.Length; i++)
             {
                 if (zones[i].Contains(p)) return true;
+            }
+            return false;
+        }
+
+        public bool PlayerInDangerZone()
+        {
+            if (m_ActiveActor == null || m_CurrentLevel == null || m_CurrentLevel.DangerZones == null) return false;
+            Vector3 p = m_ActiveActor.FeetPosition;
+            for (int i = 0; i < m_CurrentLevel.DangerZones.Length; i++)
+            {
+                if (m_CurrentLevel.DangerZones[i].Contains(p)) return true;
             }
             return false;
         }
@@ -418,6 +434,7 @@ namespace DaHilg
         void TickNibblers(float dt)
         {
             bool safe = PlayerInSafeZone();
+            bool danger = !safe && PlayerInDangerZone();
             if (m_ActiveActor == null) return;
 
             if (safe)
@@ -426,9 +443,16 @@ namespace DaHilg
             }
             else if (Time.time >= m_NextNibblerSpawn)
             {
-                int target = Mathf.Clamp(2 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 8f), 2, Settings.NibblerPoolSize);
-                if (ActiveNibblerCount() < target) SpawnNibbler();
-                m_NextNibblerSpawn = Time.time + 0.35f;
+                int baseTarget = Mathf.Clamp(2 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 8f), 2, Settings.NibblerPoolSize);
+                int target = Mathf.Clamp(baseTarget + (danger ? Settings.DangerNibblerBonus : 0), 2, Settings.NibblerPoolSize);
+                int active = ActiveNibblerCount();
+                int spawnBudget = danger ? Mathf.Min(3, target - active) : 1;
+                for (int i = 0; i < spawnBudget; i++)
+                {
+                    if (ActiveNibblerCount() >= target) break;
+                    SpawnNibbler();
+                }
+                m_NextNibblerSpawn = Time.time + (danger ? Settings.DangerSpawnInterval : Settings.NormalSpawnInterval);
             }
 
             if (Input.JumpPressed || m_ActiveActor.WasJumpStartedThisFrame)
@@ -475,11 +499,7 @@ namespace DaHilg
             float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
             float radius = UnityEngine.Random.Range(Settings.NibblerSpawnMinRadius, Settings.NibblerSpawnMaxRadius);
             Vector3 pos = m_ActiveActor.FeetPosition + new Vector3(Mathf.Cos(angle) * radius, 0.8f, Mathf.Sin(angle) * radius);
-            if (Physics.Raycast(pos + Vector3.up * 20f, Vector3.down, out RaycastHit hit, 80f, ~0, QueryTriggerInteraction.Ignore))
-            {
-                pos = hit.point + Vector3.up * 0.05f;
-            }
-            agent.Spawn(pos);
+            agent.Spawn(DaHilgLevelRuntime.GroundSpawn(pos));
         }
 
         int ActiveNibblerCount()
@@ -496,23 +516,24 @@ namespace DaHilg
         {
             Vector2 r = UnityEngine.Random.insideUnitCircle * Settings.WanderRadius;
             Vector3 p = home + new Vector3(r.x, 0f, r.y);
-            if (Physics.Raycast(p + Vector3.up * 30f, Vector3.down, out RaycastHit hit, 80f, ~0, QueryTriggerInteraction.Ignore))
-            {
-                p.y = hit.point.y + 0.05f;
-            }
-            return p;
+            return DaHilgLevelRuntime.GroundSpawn(p);
         }
 
         void ClampToLevelBounds()
         {
             if (m_CurrentLevel == null || m_ActiveActor == null) return;
             Bounds b = m_CurrentLevel.PlayBounds;
-            Vector3 p = m_ActiveActor.FeetPosition;
-            if (b.Contains(p)) return;
+            for (int i = 0; i < m_Actors.Count; i++)
+            {
+                DaHilgActor actor = m_Actors[i];
+                if (actor == null) continue;
+                Vector3 p = actor.FeetPosition;
+                if (b.Contains(p)) continue;
 
-            Vector3 clamped = b.ClosestPoint(p);
-            clamped.y = Mathf.Max(clamped.y, 0.05f);
-            m_ActiveActor.Teleport(DaHilgLevelRuntime.GroundSpawn(clamped));
+                Vector3 clamped = b.ClosestPoint(p);
+                clamped.y = Mathf.Max(clamped.y, 0.05f);
+                actor.Teleport(DaHilgLevelRuntime.GroundSpawn(clamped));
+            }
         }
 
         string ResolveLevelSlug()

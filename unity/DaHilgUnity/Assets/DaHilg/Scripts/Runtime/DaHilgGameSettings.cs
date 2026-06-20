@@ -12,6 +12,9 @@ namespace DaHilg
     public enum DaHilgCameraMode
     {
         ThirdPerson,
+        Shoulder,
+        High,
+        TopDown,
         FirstPerson
     }
 
@@ -73,6 +76,10 @@ namespace DaHilg
         public float PlayerRadius = 0.3f;
         public float StepOffset = 0.5f;
         public float SlopeLimit = 50f;
+        public float ControllerSkinWidth = 0.06f;
+        public float GroundProbeHeight = 1.8f;
+        public float GroundSnapDistance = 1.25f;
+        public float GroundSkin = 0.05f;
 
         [Header("Camera")]
         public float CameraSensitivity = 0.12f;
@@ -107,6 +114,9 @@ namespace DaHilg
         public int OverwhelmStagger = 5;
         public int OverwhelmDown = 11;
         public int OverwhelmStop = 18;
+        public int DangerNibblerBonus = 8;
+        public float DangerSpawnInterval = 0.12f;
+        public float NormalSpawnInterval = 0.35f;
 
         public DaHilgLevelProfile FindLevel(string slug)
         {
