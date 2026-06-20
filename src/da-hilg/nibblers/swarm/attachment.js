@@ -23,8 +23,10 @@ import {
   EJECT_OUT,
   EJECT_UP,
   EJECT_VELY_TRIGGER,
+  PRONE_HEAP_FWD,
 } from '../constants.js';
 import { CAPSULE_RADIUS } from '../../constants.js';
+import { nibblerPenalty } from '../mode.js';
 import { emit } from '../../hud/hudEvents.js';
 import {
   px,
@@ -128,6 +130,14 @@ export function updateAttachment(ctx) {
     if (ejectEnv < 0) ejectEnv = 0;
   }
 
+  // Player down (overwhelm tier ≥ 2)? Collapse the upright orbit shell into a low
+  // dogpile heaped ON the prone body, and suppress the jump-eject (you can't jump when
+  // you're pinned). World-forward bias centers the heap over the torso, not the feet.
+  const prone = nibblerPenalty.overwhelm >= 2;
+  if (prone) ejectEnv = 0;
+  const fwdX = -sinF; // world-forward (matches stepMotion's facing convention)
+  const fwdZ = -cosF;
+
   const bandSpan = CLING_Y_TOP - CLING_Y_BOTTOM;
 
   let attached = 0;
@@ -155,9 +165,19 @@ export function updateAttachment(ctx) {
     // Local cling offset on the body surface (pre-facing), in body space.
     const ca = Math.cos(ang);
     const sa = Math.sin(ang);
-    let ox = ca * bodyR;
-    let oz = sa * bodyR;
-    let oy = anchorY;
+    let ox, oy, oz;
+    if (prone) {
+      // Down: flatten the column into a low mound — a wide ground disc stacked a few
+      // bodies high so the pile reads as ON TOP of the fallen player, not orbiting one.
+      const ringR = 0.22 + layer * 0.18 + (col / CLING_ANGULAR_SLOTS) * 0.12;
+      ox = ca * ringR;
+      oz = sa * ringR;
+      oy = 0.1 + (s % 3) * 0.16 + hash01(seed[i]) * 0.1;
+    } else {
+      ox = ca * bodyR;
+      oz = sa * bodyR;
+      oy = anchorY;
+    }
 
     // Jump-eject: shove this clinger radially OUTWARD (+ a little up) by the envelope,
     // phase-staggered by seed so they don't all peel at the exact same instant.
@@ -173,9 +193,12 @@ export function updateAttachment(ctx) {
     const rx = ox * cosF - oz * sinF;
     const rz = ox * sinF + oz * cosF;
 
-    px[i] = P.x + rx;
+    // When down, slide the heap forward over the torso (the body lies ahead of the feet).
+    const heapX = prone ? fwdX * PRONE_HEAP_FWD : 0;
+    const heapZ = prone ? fwdZ * PRONE_HEAP_FWD : 0;
+    px[i] = P.x + rx + heapX;
     py[i] = P.y + oy;             // anchor's body height, NOT the ground plane
-    pz[i] = P.z + rz;
+    pz[i] = P.z + rz + heapZ;
     // Face the body center (inward) — attacking the body, not facing away.
     heading[i] = Math.atan2(-rx, -rz);
     clip[i] = attachedClip(i);

@@ -131,6 +131,20 @@ export const OVERWHELM_STOP_T = 5.6;    // ...→ fully pinned, can't move (tier
 export const OVERWHELM_RECOVER = 1.8;   // load bleed-off per second when light
 export const OVERWHELM_CRAWL_SPEED = 1.3; // m/s movement cap while downed (crawling)
 
+// Struggle / get-up: once downed (tier ≥ 2) the player throws nibblers off so they
+// ALWAYS recover — never a hard soft-lock. Auto-struggle is the safety net; mashing
+// jump shakes them off faster. Each shed flings a batch into a FALL and relieves the
+// buried timer, so a pinned player breaks free, crawls, then stands.
+export const STRUGGLE_AUTO = 0.85;       // passive struggle/sec while down (guarantees recovery)
+export const STRUGGLE_PRESS = 0.5;       // bonus struggle per fresh jump press (mash to escape)
+export const STRUGGLE_SHED_T = 0.9;      // struggle needed to fling off one batch
+export const STRUGGLE_SHED_N = 5;        // attached nibblers flung off per batch
+export const STRUGGLE_LOAD_RELIEF = 1.1; // buried-seconds knocked off per shed (visible recovery)
+
+// Prone pile-on: while downed, the cling shell collapses into a low dogpile heaped ON
+// the prone body (instead of orbiting an upright capsule).
+export const PRONE_HEAP_FWD = 0.35;      // heap center bias forward of the feet (over the torso)
+
 // ── Health drain ────────────────────────────────────────────────────────────
 export const HEALTH_DRAIN_PER_ATTACH = 0.09; // HP/s per attached, capped
 export const HEALTH_DRAIN_CAP = 3.2;         // HP/s max
