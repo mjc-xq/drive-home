@@ -11,12 +11,25 @@ import './styles.css';
 //
 // No StrictMode: each world builds in its mount effect and must not double-construct.
 const root = createRoot(document.getElementById('root'));
+// A failed dynamic import (chunk fails to load on a flaky connection, or throws while
+// evaluating on an old browser) would otherwise reject silently and leave a blank page.
+// Re-throw so the index.html recovery surface ("Clear cache & reload") can show.
+const onChunkError = (err) => {
+  console.error('App failed to load:', err);
+  setTimeout(() => {
+    throw err;
+  }, 0);
+};
 if (window.location.pathname.startsWith('/da-hilg')) {
-  import('./da-hilg/index.js').then(({ default: DaHilgApp }) => {
-    root.render(<DaHilgApp />);
-  });
+  import('./da-hilg/index.js')
+    .then(({ default: DaHilgApp }) => {
+      root.render(<DaHilgApp />);
+    })
+    .catch(onChunkError);
 } else {
-  import('./App.jsx').then(({ default: App }) => {
-    root.render(<App />);
-  });
+  import('./App.jsx')
+    .then(({ default: App }) => {
+      root.render(<App />);
+    })
+    .catch(onChunkError);
 }
