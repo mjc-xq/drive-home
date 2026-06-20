@@ -154,7 +154,15 @@ export default function DaHilgApp() {
           <Canvas
             shadows={{ type: THREE.PCFShadowMap }}
             dpr={[1, deviceTier.dprMax]}
-            gl={{ powerPreference: 'high-performance', stencil: false }}
+            gl={{
+              powerPreference: 'high-performance',
+              stencil: false,
+              // ?capture keeps the drawing buffer so automated screenshots (Playwright/
+              // CDP) can read the WebGL frame; off in normal play (it has a small GPU cost).
+              preserveDrawingBuffer:
+                typeof window !== 'undefined' &&
+                new URLSearchParams(window.location.search).has('capture'),
+            }}
             onCreated={onCanvasCreated}
             camera={{ fov: CAM_FOV, near: FP_NEAR, far: CAM_FAR, position: [0, 1.6, 6] }}
           >

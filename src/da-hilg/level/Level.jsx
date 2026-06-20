@@ -29,10 +29,22 @@ const LEVEL_SOURCE = LEVEL_URL;
 const ANISO_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
 
 /** Tune one mesh's material(s) so the neighborhood reads crisp + sunlit, not pale. */
+// Paved ground ribbons drape directly on the terrain and z-fight with it on slopes. A
+// negative polygon offset makes them consistently WIN the depth test, so they never flicker
+// or let the landscape poke through — and it does so without a big geometric lift (which
+// floats the ribbons off the ground and leaves gaps under their edges).
+const isPavedGround = (name) =>
+  /^(Roads|Driveways|Sidewalks|Crosswalks|RoadCurbs|RoadLines)/.test(name);
+// Terrain rendered single-sided shows the sky/black through any back-facing slope triangle;
+// double-siding fills those without a re-export.
+const isTerrain = (name) => name === 'Terrain' || name.startsWith('Terrain') || name === 'Satellite Ground';
+
 function tuneMaterial(o, maxAniso) {
   const name = o.name || '';
   const isWindow = name.toLowerCase().includes('window');
   const isGlass = name.includes('windows') || isWindow;
+  const paved = isPavedGround(name);
+  const terrain = isTerrain(name);
   const mats = Array.isArray(o.material) ? o.material : [o.material];
   for (const m of mats) {
     if (!m) continue;
@@ -48,6 +60,12 @@ function tuneMaterial(o, maxAniso) {
     if ('roughness' in m) m.roughness = isGlass ? 0.2 : 0.92;
     if ('metalness' in m) m.metalness = isGlass ? 0.45 : 0.0;
     if (m.emissive) m.emissive.setScalar(0); // kill any baked-in glow that washes it out
+    if (paved) {
+      m.polygonOffset = true;
+      m.polygonOffsetFactor = -4;
+      m.polygonOffsetUnits = -8;
+    }
+    if (terrain) m.side = THREE.DoubleSide;
     m.needsUpdate = true;
   }
 }
