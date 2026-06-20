@@ -21,7 +21,6 @@ import HealthBar from './HealthBar.jsx';
 import ObjectiveHint from './ObjectiveHint.jsx';
 import Minimap from './Minimap.jsx';
 import SafeBanner from './SafeBanner.jsx';
-import ControlsHint from './ControlsHint.jsx';
 import NibblerFeedback from './NibblerFeedback.jsx';
 
 export default function NibblersHud() {
@@ -39,7 +38,6 @@ export default function NibblersHud() {
       <HealthBar />
       <ObjectiveHint />
       <Minimap />
-      <ControlsHint />
       <NibblerFeedback />
 
       {/* relief wash, above everything */}

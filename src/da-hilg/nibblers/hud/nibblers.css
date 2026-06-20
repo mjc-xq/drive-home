@@ -576,6 +576,46 @@
   }
 }
 
+/* ── Landscape phones (wide + short) ───────────────────────────────────────── */
+/* The portrait reflow above keys on width and never fires here; tighten the readouts
+ * to the corners and shrink the minimap so the centre stays clear to play in. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .nb-swarm {
+    top: calc(42px + var(--safe-t));
+    min-width: 124px;
+    gap: 5px;
+    padding: 5px 9px 6px;
+  }
+  .nb-swarm-val {
+    font-size: 14px;
+  }
+  .nb-health {
+    top: calc(88px + var(--safe-t));
+    width: 124px;
+  }
+  .nb-marked {
+    top: calc(8px + var(--safe-t));
+    padding: 6px 12px 8px;
+  }
+  .nb-marked-word {
+    font-size: 13px;
+    letter-spacing: 0.12em;
+  }
+  /* objective hint hugs the very bottom-centre (char bar is hidden on touch, so the
+     bottom-centre lane is free) instead of floating up over the action */
+  .nb-hint {
+    bottom: calc(12px + var(--safe-b));
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+  /* minimap: smaller and lifted clear of the bottom-right button cluster */
+  .nb-minimap {
+    transform: scale(0.74);
+    transform-origin: bottom right;
+    bottom: calc(84px + var(--safe-b));
+  }
+}
+
 /* ── Reduced motion ────────────────────────────────────────────────────────── */
 /* The framework hud.css already neutralizes animations/transitions inside
  * .dahilg-hud; this block hardens the Nibblers-specific decorative motion so the

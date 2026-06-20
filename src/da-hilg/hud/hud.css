@@ -635,3 +635,32 @@
     display: none;
   }
 }
+
+/* ── Touch layout ──────────────────────────────────────────────────────────── */
+/* On touch, the round SWITCH disc cycles characters, so the bottom-center roster
+ * tiles are redundant — and they sit right on top of the movement stick. Drop them. */
+@media (pointer: coarse) {
+  .dh-charbar {
+    display: none;
+  }
+}
+
+/* ── Landscape phones ──────────────────────────────────────────────────────── */
+/* Landscape is wide but SHORT, so the portrait reflow (max-width:760px) never fires
+ * and the chrome crowds the tiny height. Pull it to the edges and shrink it so the
+ * middle of the screen stays clear to play in. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .dh-statestrip {
+    height: 28px;
+  }
+  .dh-state-word {
+    font-size: 11px;
+  }
+  .dh-objstrip {
+    padding: 6px 10px 7px;
+  }
+  .dh-prompt {
+    top: auto;
+    bottom: calc(12px + var(--safe-b));
+  }
+}
