@@ -287,7 +287,8 @@ export function Level({ onReady }) {
       if (b) hideCreekClutter(scene, b);
       // Hide the authored creek SOURCE meshes — Creek_FlowLines reads as road-marker
       // lines and Creek_Banks/Creek_SanLorenzo as brown sidewalk / hill-climbing water.
-      // The flat CreekWater plane replaces them; keep Rocks + Reeds as decoration.
+      // CreekWater re-skins Creek_SanLorenzo as flowing water; keep Rocks + Reeds as
+      // decoration. SanLorenzo starts hidden here so it's invisible when water is OFF.
       setMeshVisible(scene, 'Creek_FlowLines', false);
       setMeshVisible(scene, 'Creek_Banks', false);
       setMeshVisible(scene, 'Creek_SanLorenzo', false);
@@ -322,7 +323,7 @@ export function Level({ onReady }) {
       <group position={recenter}>
         <primitive object={scene} />
         {/* Flat flowing water at the low creek elevation (toggleable "fancy water"). */}
-        {showWater && <CreekWater scene={scene} bounds={creekBounds} />}
+        {showWater && creekBounds && <CreekWater scene={scene} />}
       </group>
       {/* Wind-swept grass — WORLD space, follows the player's feet (toggleable).
           Dense disc of tapered curved blades; innerRadius tiny so it reaches the player.

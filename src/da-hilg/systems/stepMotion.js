@@ -143,7 +143,11 @@ export function stepMotion(actor, intent, ctx) {
   if (actor.role === 'player') {
     m.facing = ctx.cameraRig.yaw;
   } else if (Math.hypot(m.velX, m.velZ) > 0.1) {
-    const travel = Math.atan2(m.velX, m.velZ);
+    // Face the travel direction. The model's forward (via MODEL_FACING_OFFSET) maps a
+    // facing angle F to the world dir (-sin F, -cos F) — the same convention the player's
+    // camera-yaw facing uses — so the travel angle must be atan2(-vx, -vz), NOT
+    // atan2(vx, vz), or the NPC runs backwards.
+    const travel = Math.atan2(-m.velX, -m.velZ);
     m.facing = angleLerp(m.facing, travel, 1 - Math.exp(-12 * dt));
   }
 

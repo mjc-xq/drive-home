@@ -269,61 +269,50 @@ function makeWaterMaterial({ shallow, deep, flowDir, flowSpeed }) {
  */
 export function CreekWater({
   scene,
-  bounds,
-  yOffset = 0.06,
-  flowDir,
+  flowDir = [1, 0],
   flowSpeed = 0.06,
   shallow = '#7fd6c4',
   deep = '#1b6e7a',
 }) {
-  // Resolve the footprint once (explicit bounds win; else derive from the scene).
-  const fit = useMemo(
-    () => bounds || computeCreekBounds(scene),
-    [bounds, scene],
-  );
-
-  // Flow defaults to the longer footprint axis so it reads as "down the creek".
-  const dir = useMemo(() => {
-    if (flowDir) return flowDir;
-    if (!fit) return [1, 0];
-    return fit.width >= fit.depth ? [1, 0] : [0, 1];
-  }, [flowDir, fit]);
-
   const material = useMemo(
-    () => makeWaterMaterial({ shallow, deep, flowDir: dir, flowSpeed }),
-    [shallow, deep, dir, flowSpeed],
+    () => makeWaterMaterial({ shallow, deep, flowDir, flowSpeed }),
+    [shallow, deep, flowDir, flowSpeed],
   );
-
   const matRef = useRef(material);
   matRef.current = material;
+
+  // Apply the flowing-water material to the ACTUAL creek-surface mesh. The San Lorenzo
+  // creek winds across the whole block at varying elevations (0.5 → ~10 m, it climbs the
+  // hill) — a single flat plane at the min-Y is a giant sheet buried under the terrain
+  // (the old bug: no water visible). The authored Creek_SanLorenzo surface already
+  // follows the channel, so we just re-skin it as water + reveal it (Level hides the
+  // FlowLines/Banks clutter). Restore on unmount so toggling water off reverts cleanly.
+  useEffect(() => {
+    if (!scene) return undefined;
+    const restore = [];
+    scene.traverse((o) => {
+      if (o.isMesh && o.name === 'Creek_SanLorenzo') {
+        restore.push([o, o.material, o.visible, o.renderOrder]);
+        o.material = material;
+        o.visible = true;
+        o.renderOrder = 1;
+      }
+    });
+    return () => {
+      for (const [o, mat, vis, ro] of restore) {
+        o.material = mat;
+        o.visible = vis;
+        o.renderOrder = ro;
+      }
+    };
+  }, [scene, material]);
+
   useFrame((_, dt) => {
     // Render-only clock — never touches the sim.
     matRef.current.uniforms.uTime.value += dt;
   });
 
-  // Robust: nothing to render if the creek meshes weren't found.
-  if (!fit) return null;
-
-  // A flat plane (XZ) at the MIN creek Y. Pad slightly so the water tucks under
-  // the banks rather than ending in a hard seam.
-  const padX = Math.max(0.5, fit.width * 0.04);
-  const padZ = Math.max(0.5, fit.depth * 0.04);
-  const w = fit.width + padX * 2;
-  const d = fit.depth + padZ * 2;
-  const y = fit.minY + yOffset;
-
-  return (
-    <mesh
-      position={[fit.centerX, y, fit.centerZ]}
-      rotation={[-Math.PI / 2, 0, 0]}
-      material={material}
-      renderOrder={1}
-      frustumCulled={false}
-    >
-      {/* segmented so the perturbed-normal shading has vertices to work with */}
-      <planeGeometry args={[w, d, 48, 48]} />
-    </mesh>
-  );
+  return null;
 }
 
 export default CreekWater;
