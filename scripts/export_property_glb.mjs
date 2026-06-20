@@ -86,22 +86,37 @@ async function loadTreeTemplates() {
     const f = path.join(libDir, entry.file);
     if (!existsSync(f)) continue;
     const doc = await tio.read(f);
-    const pos = [], nor = [], uv = [], col = [], idx = [];
+    const pos = [], nor = [], uv = [], idx = [];
+    const groups = [];                 // { start, count, materialIndex } per source prim
+    const mats = [];                   // de-duped solid materials (bark brown / leaf green)
+    const matIndexByColor = new Map();
     let vbase = 0;
     for (const mesh of doc.getRoot().listMeshes()) {
       for (const prim of mesh.listPrimitives()) {
         const P = prim.getAttribute('POSITION'); if (!P) continue;
         const N = prim.getAttribute('NORMAL'), U = prim.getAttribute('TEXCOORD_0'), I = prim.getIndices();
-        const c = (await texColor(prim.getMaterial())) || nameColor(prim.getMaterial()?.getName() || '');
+        // A SOLID per-primitive material (bark brown / leaf green) keyed off the template's
+        // material name. We deliberately do NOT bake a per-vertex COLOR_0 — that attribute
+        // round-trips through the meshopt build as an un-normalized ubyte (raw ~9..173
+        // instead of 0..1), which multiplies the base colour past 1 and renders the trees
+        // WHITE. A flat material per prim is robust and reads as a stylized tree.
+        const c = nameColor(prim.getMaterial()?.getName() || '');
+        const key = c.getHexString();
+        let mi = matIndexByColor.get(key);
+        if (mi === undefined) {
+          mi = mats.length; matIndexByColor.set(key, mi);
+          mats.push(new THREE.MeshStandardMaterial({ name: `Tree_${entry.id}_${mi}`, color: c, roughness: 0.92, metalness: 0, side: THREE.DoubleSide }));
+        }
         const n = P.getCount(), e = [];
+        const gStart = idx.length;
         for (let k = 0; k < n; k++) {
           P.getElement(k, e); pos.push(e[0], e[1], e[2]);
           if (N) { N.getElement(k, e); nor.push(e[0], e[1], e[2]); }
           if (U) { U.getElement(k, e); uv.push(e[0], e[1]); }
-          col.push(c.r, c.g, c.b);
         }
         if (I) { const ia = I.getArray(); for (let k = 0; k < ia.length; k++) idx.push(vbase + ia[k]); }
         else { for (let k = 0; k < n; k++) idx.push(vbase + k); }
+        groups.push({ start: gStart, count: idx.length - gStart, materialIndex: mi });
         vbase += n;
       }
     }
@@ -110,11 +125,11 @@ async function loadTreeTemplates() {
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     if (nor.length === pos.length) g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     if (uv.length === (pos.length / 3) * 2) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     g.setIndex(idx);
     if (nor.length !== pos.length) g.computeVertexNormals();
-    const m = new THREE.MeshStandardMaterial({ name: `Tree_${entry.id}_mat`, vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
-    templates.push({ id: entry.id, geom: g, mat: m, height_m: entry.height_m || 6, feature: !!entry.feature });
+    for (const gr of groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
+    // mat is the per-prim material ARRAY (Mesh + geometry groups picks per group).
+    templates.push({ id: entry.id, geom: g, mat: mats, height_m: entry.height_m || 6, feature: !!entry.feature });
   }
   return templates.length ? templates : null;
 }
@@ -804,9 +819,12 @@ const swPos = [], swIdx = [], swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalk
 // fall at u=0.25,0.75 within each tile (half-tile spacing), so a 2.5 m tile → ~1.25 m cells.
 const swUv = [], cuUv = [], swSrcUv = [];
 const CONCRETE_TILE = 2.5;
-// layer stack (m above terrain). These are still low enough to read as ground-hugging,
-// but high enough that the DEM/aerial terrain cannot poke through paved overlays.
-const LIFT_ASPHALT = 0.22, LIFT_DRIVEWAY = 0.24, LIFT_SIDEWALK = 0.26, LIFT_CURB = 0.34, LIFT_DASH = 0.31;
+// Layer stack (m above terrain). Kept SMALL so the ribbons hug the ground (no floating
+// gap at their edges). The runtime gives every paved ribbon a negative polygon offset
+// (Level.jsx tuneMaterial) so it wins the depth test over the terrain regardless of slope,
+// so we no longer need a big geometric lift to stop the terrain poking through — these
+// just preserve the relative order where ribbons overlap (dash on road, curb highest).
+const LIFT_ASPHALT = 0.025, LIFT_DRIVEWAY = 0.03, LIFT_SIDEWALK = 0.05, LIFT_CURB = 0.08, LIFT_DASH = 0.045;
 // Skirt = vertical edge wall dropped from a raised slab's outer edges down to the lawn so the
 // slab MEETS the ground instead of hovering. Sidewalks/curbs sit 26-34 cm up; without a skirt
 // you see a floating gap at eye level. Drop the wall the full lift (minus a hair so its foot
