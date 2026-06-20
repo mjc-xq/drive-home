@@ -64,8 +64,12 @@ MonoBehaviour:
   PlayerRadius: 0.3
   StepOffset: 0.5
   SlopeLimit: 50
-  CameraSensitivity: 0.12
-  TouchSensitivity: 0.18
+  ControllerSkinWidth: 0.06
+  GroundProbeHeight: 3.4
+  GroundSnapDistance: 1.55
+  GroundSkin: 0.05
+  CameraSensitivity: 0.09
+  TouchSensitivity: 0.11
   PitchLimit: 68
   EyeHeight: 1.62
   ThirdPersonDistance: 3.8
@@ -92,3 +96,6 @@ MonoBehaviour:
   OverwhelmStagger: 5
   OverwhelmDown: 11
   OverwhelmStop: 18
+  DangerNibblerBonus: 8
+  DangerSpawnInterval: 0.12
+  NormalSpawnInterval: 0.35

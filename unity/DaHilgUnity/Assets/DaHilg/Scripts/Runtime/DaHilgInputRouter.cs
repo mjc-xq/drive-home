@@ -61,7 +61,7 @@ namespace DaHilg
                 InteractPressed = keyboard.eKey.wasPressedThisFrame;
                 SwitchPressed = keyboard.tabKey.wasPressedThisFrame;
                 PreviousSwitchPressed = keyboard.backquoteKey.wasPressedThisFrame;
-                CameraPressed = keyboard.vKey.wasPressedThisFrame;
+                CameraPressed = keyboard.vKey.wasPressedThisFrame || keyboard.cKey.wasPressedThisFrame;
                 PausePressed = keyboard.escapeKey.wasPressedThisFrame;
                 ToggleModePressed = keyboard.nKey.wasPressedThisFrame;
                 MenuLeftPressed = keyboard.leftArrowKey.wasPressedThisFrame;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using DaHilg;
+using Unity.Cinemachine;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Animations;
@@ -85,7 +86,7 @@ namespace DaHilg.Editor
             PlayerSettings.productName = "Da Hilg Unity";
             PlayerSettings.companyName = "Da Hilg";
             PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.WebGL, "com.dahilg.unity");
-            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
+            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
             PlayerSettings.WebGL.dataCaching = true;
             PlayerSettings.WebGL.decompressionFallback = true;
             PlayerSettings.WebGL.threadsSupport = false;
@@ -818,10 +819,11 @@ body {
             };
             profile.DangerZones = new[]
             {
-                new DaHilgBoxZone { Id = "danger_drive", Label = "Driveway Swarm", Center = new Vector3(26f, 5f, 24f), Size = new Vector3(30f, 10f, 30f) },
-                new DaHilgBoxZone { Id = "danger_south", Label = "South Ambush", Center = new Vector3(-20f, 5f, -70f), Size = new Vector3(44f, 12f, 44f) },
-                new DaHilgBoxZone { Id = "danger_east", Label = "East Road Swarm", Center = new Vector3(80f, 6f, 0f), Size = new Vector3(50f, 12f, 40f) },
-                new DaHilgBoxZone { Id = "danger_west", Label = "West Road Swarm", Center = new Vector3(-80f, 6f, 40f), Size = new Vector3(50f, 12f, 44f) }
+                new DaHilgBoxZone { Id = "danger_drive", Label = "Driveway Swarm", Center = new Vector3(24f, 6f, 24f), Size = new Vector3(78f, 18f, 76f) },
+                new DaHilgBoxZone { Id = "danger_front", Label = "Front Lawn Swarm", Center = new Vector3(0f, 6f, 62f), Size = new Vector3(88f, 18f, 64f) },
+                new DaHilgBoxZone { Id = "danger_south", Label = "South Ambush", Center = new Vector3(-20f, 6f, -70f), Size = new Vector3(92f, 18f, 92f) },
+                new DaHilgBoxZone { Id = "danger_east", Label = "East Road Swarm", Center = new Vector3(80f, 6f, 0f), Size = new Vector3(104f, 18f, 82f) },
+                new DaHilgBoxZone { Id = "danger_west", Label = "West Road Swarm", Center = new Vector3(-80f, 6f, 40f), Size = new Vector3(104f, 18f, 92f) }
             };
             profile.PlayBounds = new Bounds(Vector3.zero, slug == "dahill" ? new Vector3(230f, 120f, 230f) : new Vector3(420f, 160f, 420f));
             EditorUtility.SetDirty(profile);
@@ -841,6 +843,16 @@ body {
             settings.CharacterAnimator = controllers.TryGetValue("cece", out AnimatorController defaultController) ? defaultController : null;
             settings.DefaultCharacterId = "cece";
             settings.DefaultLevelSlug = "dahill";
+            settings.DefaultCameraMode = DaHilgCameraMode.ThirdPerson;
+            settings.CameraSensitivity = 0.09f;
+            settings.TouchSensitivity = 0.11f;
+            settings.ControllerSkinWidth = 0.06f;
+            settings.GroundProbeHeight = 3.4f;
+            settings.GroundSnapDistance = 1.55f;
+            settings.GroundSkin = 0.05f;
+            settings.DangerNibblerBonus = 8;
+            settings.DangerSpawnInterval = 0.12f;
+            settings.NormalSpawnInterval = 0.35f;
             settings.Characters = new[]
             {
                 Character("mike", "Mike", "Dad", new Color(0.36f, 0.68f, 1f), 0f, controllers),
@@ -891,6 +903,10 @@ body {
             camera.nearClipPlane = 0.1f;
             camera.farClipPlane = 600f;
             cameraObject.AddComponent<AudioListener>();
+            CinemachineBrain brain = cameraObject.AddComponent<CinemachineBrain>();
+            brain.UpdateMethod = CinemachineBrain.UpdateMethods.SmartUpdate;
+            brain.BlendUpdateMethod = CinemachineBrain.BrainUpdateMethods.LateUpdate;
+            brain.DefaultBlend = new CinemachineBlendDefinition(CinemachineBlendDefinition.Styles.EaseInOut, 0.18f);
             DaHilgCameraRig rig = cameraObject.AddComponent<DaHilgCameraRig>();
 
             GameObject managerObject = new GameObject("DaHilgGame");

@@ -67,6 +67,8 @@ namespace DaHilg
             m_Controller.stepOffset = 0.15f;
             m_Controller.slopeLimit = 55f;
             m_Controller.minMoveDistance = 0f;
+            m_Controller.skinWidth = Mathf.Max(0.01f, m_Controller.radius * 0.2f);
+            m_Controller.enableOverlapRecovery = true;
 
             Transform animatorRoot = ResolveAnimatorRoot(Root.transform);
             m_Animator = animatorRoot.GetComponent<Animator>();
@@ -194,6 +196,7 @@ namespace DaHilg
 
             CollisionFlags flags = m_Controller.Move(m_Velocity * dt);
             if ((flags & CollisionFlags.Below) != 0 && m_Velocity.y < 0f) m_Velocity.y = -1f;
+            else if (m_Velocity.y <= 0f && SnapToLevelGround(settings)) flags |= CollisionFlags.Below;
 
             Vector3 facing = new Vector3(m_Velocity.x, 0f, m_Velocity.z);
             if (facing.sqrMagnitude > 0.02f)
@@ -291,6 +294,10 @@ namespace DaHilg
                     Play(m_RunClip, 0.12f);
                 }
             }
+            else if (m_Velocity.y <= 0f)
+            {
+                SnapToLevelGround(settings);
+            }
 
             Vector3 flat = new Vector3(m_Velocity.x, 0f, m_Velocity.z);
             if (flat.sqrMagnitude > 0.02f)
@@ -318,6 +325,26 @@ namespace DaHilg
             away.Normalize();
             m_Velocity = away * 8f + Vector3.up * (3.2f + m_Seed * 1.2f);
             Play("Jump", 0.05f);
+        }
+
+        bool SnapToLevelGround(DaHilgGameSettings settings)
+        {
+            if (m_Controller == null || !m_Controller.enabled) return false;
+
+            float probeHeight = Mathf.Max(settings.GroundProbeHeight, m_Controller.height * 4f);
+            float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, settings.StepOffset);
+            if (!DaHilgLevelRuntime.TryFindGround(Root.transform.position, out RaycastHit hit, probeHeight, probeDistance)) return false;
+
+            float targetY = hit.point.y + Mathf.Max(0.018f, settings.GroundSkin * 0.5f);
+            float deltaY = targetY - Root.transform.position.y;
+            float maxLift = Mathf.Max(settings.GroundSnapDistance * 1.8f, settings.StepOffset);
+            float maxDrop = Mathf.Max(settings.StepOffset, 0.45f);
+            if (deltaY > maxLift || deltaY < -maxDrop) return false;
+            if (Mathf.Abs(deltaY) <= 0.01f) return true;
+
+            m_Controller.Move(Vector3.up * deltaY);
+            if (m_Velocity.y < 0f) m_Velocity.y = -1f;
+            return true;
         }
 
         void ChooseAttachAnchor(DaHilgActor player, DaHilgGameSettings settings)
