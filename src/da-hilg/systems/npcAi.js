@@ -131,6 +131,51 @@ function enterWander(actor, ctx) {
   actor.fsm = 'wander';
 }
 
+// ── Nibblers-mode "pester" behavior ──────────────────────────────────────────
+const PESTER_NOTICE = 55;   // run up to the player from within this (m)
+const DREW_NOTICE = 90;     // Drew is the eager one — notices from much farther
+const DREW_DANCES = ['dance', 'cheer', 'wave']; // vary Drew's moves so he's not a loop
+
+/** Pick this NPC's pester emote — Drew rotates several; others mostly dance. */
+function pickPesterEmote(actor) {
+  if (actor.character === 'drew') return DREW_DANCES[Math.floor(Math.random() * DREW_DANCES.length)];
+  return Math.random() < 0.5 ? 'dance' : 'cheer';
+}
+
+/**
+ * Nibblers-mode family behavior: the un-controlled family RUN UP to the player and
+ * DANCE in their way (Drew most eagerly + with varied moves), following when the player
+ * moves on. A playful obstacle, distinct from the nibbler swarm threat.
+ * @returns {object} the shared _intent
+ */
+function nibblerPesterStep(actor, ctx, dt, dist, pos, ppos) {
+  const ai = actor.ai;
+  const now = ctx.now;
+  const isDrew = actor.character === 'drew';
+  const notice = isDrew ? DREW_NOTICE : PESTER_NOTICE;
+  const danceDist = isDrew ? 3.6 : 2.8;
+
+  if (dist > notice) {
+    // Too far to bother — amble toward the player's area so they drift into range.
+    ai._npcRun = false;
+    seek(actor, ppos.x, ppos.z, 1, 0.55, dt);
+    return _intent;
+  }
+  if (dist <= danceDist) {
+    // In the player's face — plant + dance, re-picking a varied move each beat.
+    if (!ai._pesterUntil || now >= ai._pesterUntil) {
+      requestEmote(actor, pickPesterEmote(actor), { faceTarget: ppos });
+      ai._pesterUntil = now + (isDrew ? 2200 : 2600) + Math.random() * 800;
+    }
+    return _intent; // move stays 0 — that's the "getting in the way"
+  }
+  // Noticed but not yet blocking — RUN up to the player.
+  ai._npcRun = true;
+  _intent.run = true;
+  seek(actor, ppos.x, ppos.z, 1, 1, dt);
+  return _intent;
+}
+
 /**
  * One frame of NPC behavior. Returns the Intent stepMotion will apply.
  * @param {any} actor
@@ -156,6 +201,11 @@ export function npcStep(actor, ctx, dt) {
   const ppos = player.motion.pos;
   const dist = planarDist(pos, ppos);
   const ai = actor.ai;
+
+  // Nibblers mode: the un-controlled family don't run the greet FSM — they run up
+  // and DANCE in your way (Drew most eagerly + with varied moves), a playful
+  // obstacle that's separate from the nibbler swarm threat.
+  if (isNibblersMode()) return nibblerPesterStep(actor, ctx, dt, dist, pos, ppos);
 
   // SafeZone override — checked FIRST. If the player ducked into the house, any
   // aggressive state collapses straight to retreat (and cooldown→idle), so the
