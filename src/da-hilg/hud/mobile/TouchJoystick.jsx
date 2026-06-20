@@ -1,90 +1,58 @@
-// TouchJoystick — floating left-screen movement stick. The base appears wherever
-// the thumb lands inside the left zone (forgiving dynamic origin); the knob
-// follows, clamped to the base radius. The normalized vector is written to the
-// shared mutable touch ref exported by input/useInput.js (NOT a Jotai atom) so it
-// is read in useFrame without ever re-rendering React per touch-move. The knob is
-// positioned via direct DOM writes inside the pointer handlers — no React state in
-// the hot path.
+// TouchJoystick — a VISIBLE movement stick anchored in the lower-left. The base is
+// always shown (faint) so the control is discoverable; touching anywhere in the left
+// zone grabs it and the knob deflects from the base centre. The normalized vector is
+// written to the shared mutable touch ref exported by input/useInput.js (NOT a Jotai
+// atom) so it is read in useFrame without re-rendering React per touch-move.
+//
+// CRITICAL: we set touchActive.on while a touch is down — updateInput() only folds the
+// joystick into refs.input when that flag is true, so without it movement is dead.
 
 import { useEffect, useRef } from 'react';
-import { touchMove, touchRun } from '../../input/useInput.js';
+import { touchMove, touchRun, touchActive } from '../../input/useInput.js';
 
-const DEAD_ZONE = 0.12; // ignore tiny thumb tremor
-const RUN_THRESHOLD = 0.85; // past this magnitude → push-to-run
+const DEAD_ZONE = 0.14; // ignore tiny thumb tremor
+const RUN_THRESHOLD = 0.9; // past this magnitude → push-to-run
 
 export default function TouchJoystick() {
   const baseRef = useRef(null);
   const knobRef = useRef(null);
-  // Per-gesture state kept in a ref so handlers don't trigger renders.
-  const g = useRef({
-    active: false,
-    pointerId: null,
-    originX: 0,
-    originY: 0,
-    radius: 35, // half of base size; recomputed on touchstart
-  });
+  const g = useRef({ active: false, pointerId: null, originX: 0, originY: 0, radius: 44 });
 
   useEffect(() => {
     const base = baseRef.current;
     if (!base) return undefined;
-
-    // The interactive capture surface is the whole left half; we attach to a
-    // dedicated zone element rendered below.
     const zone = base.parentElement;
     if (!zone) return undefined;
 
-    function show(x, y) {
-      g.current.radius = base.offsetWidth ? base.offsetWidth / 2 : 35;
-      g.current.originX = x;
-      g.current.originY = y;
-      base.style.left = `${x - g.current.radius}px`;
-      base.style.top = `${y - g.current.radius}px`;
-      base.style.opacity = '1';
-      moveKnob(0, 0);
-    }
-
     function moveKnob(dx, dy) {
-      if (knobRef.current) {
-        knobRef.current.style.transform = `translate(${dx}px, ${dy}px)`;
-      }
+      if (knobRef.current) knobRef.current.style.transform = `translate(${dx}px, ${dy}px)`;
     }
 
-    function clearOut() {
+    function reset() {
       g.current.active = false;
       g.current.pointerId = null;
-      if (base) base.style.opacity = '0';
+      base.style.opacity = '0.5';
       moveKnob(0, 0);
       touchMove.x = 0;
       touchMove.y = 0;
       touchRun.on = false;
+      touchActive.on = false;
     }
 
-    function onDown(e) {
-      // only react to the primary touch in the left zone
-      if (g.current.active) return;
-      g.current.active = true;
-      g.current.pointerId = e.pointerId;
-      zone.setPointerCapture?.(e.pointerId);
-      show(e.clientX, e.clientY);
-      e.preventDefault();
-    }
-
-    function onMove(e) {
-      if (!g.current.active || e.pointerId !== g.current.pointerId) return;
-      const radius = g.current.radius || 35;
-      let dx = e.clientX - g.current.originX;
-      let dy = e.clientY - g.current.originY;
+    function apply(e) {
+      const r = g.current.radius || 44;
+      const dx = e.clientX - g.current.originX;
+      const dy = e.clientY - g.current.originY;
       const dist = Math.hypot(dx, dy);
-      const clamped = Math.min(dist, radius);
+      const clamped = Math.min(dist, r);
       const ang = Math.atan2(dy, dx);
       const kx = Math.cos(ang) * clamped;
       const ky = Math.sin(ang) * clamped;
       moveKnob(kx, ky);
 
-      // normalize to [-1..1]; screen-down (+y) is "backward", so invert for
-      // forward intent (moveY: forward +).
-      let nx = kx / radius;
-      let ny = -(ky / radius);
+      // normalize to [-1..1]; screen-down (+y) is "backward", invert for forward intent.
+      let nx = kx / r;
+      let ny = -(ky / r);
       const mag = Math.hypot(nx, ny);
       if (mag < DEAD_ZONE) {
         nx = 0;
@@ -93,12 +61,32 @@ export default function TouchJoystick() {
       touchMove.x = nx;
       touchMove.y = ny;
       touchRun.on = mag > RUN_THRESHOLD;
+    }
+
+    function onDown(e) {
+      if (g.current.active) return;
+      g.current.active = true;
+      g.current.pointerId = e.pointerId;
+      zone.setPointerCapture?.(e.pointerId);
+      const rect = base.getBoundingClientRect();
+      g.current.originX = rect.left + rect.width / 2;
+      g.current.originY = rect.top + rect.height / 2;
+      g.current.radius = rect.width / 2 || 44;
+      base.style.opacity = '1';
+      touchActive.on = true;
+      apply(e); // respond to the initial touch immediately
+      e.preventDefault();
+    }
+
+    function onMove(e) {
+      if (!g.current.active || e.pointerId !== g.current.pointerId) return;
+      apply(e);
       e.preventDefault();
     }
 
     function onUp(e) {
       if (e.pointerId !== g.current.pointerId) return;
-      clearOut();
+      reset();
       e.preventDefault();
     }
 
@@ -106,13 +94,14 @@ export default function TouchJoystick() {
     zone.addEventListener('pointermove', onMove, { passive: false });
     zone.addEventListener('pointerup', onUp, { passive: false });
     zone.addEventListener('pointercancel', onUp, { passive: false });
+    reset(); // start at rest (faint, centred)
 
     return () => {
       zone.removeEventListener('pointerdown', onDown);
       zone.removeEventListener('pointermove', onMove);
       zone.removeEventListener('pointerup', onUp);
       zone.removeEventListener('pointercancel', onUp);
-      clearOut();
+      reset();
     };
   }, []);
 
@@ -127,30 +116,32 @@ export default function TouchJoystick() {
 
 const NAV = '#2D8CFF';
 
-// The capture zone is the lower-left quarter of the screen; the base floats to
-// the touch point inside it.
+// The capture zone is the lower-left of the screen; a touch anywhere in it grabs the
+// stick (forgiving). The visible base is anchored within it (lower-left, above insets).
 const zoneStyle = {
   position: 'absolute',
   left: 0,
   bottom: 0,
   width: '50vw',
-  height: '55vh',
+  height: '60vh',
   pointerEvents: 'auto',
   touchAction: 'none',
   zIndex: 4,
 };
 
+// Always-visible fixed base so the control is discoverable (faint at rest, bright when
+// grabbed). position:fixed → clientX/Y map straight to screen coords.
 const baseStyle = {
-  position: 'absolute',
-  left: 0,
-  top: 0,
-  width: 'min(16vw, 70px)',
-  height: 'min(16vw, 70px)',
+  position: 'fixed',
+  left: 'calc(env(safe-area-inset-left, 0px) + 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + 92px)',
+  width: 'min(24vw, 104px)',
+  height: 'min(24vw, 104px)',
   borderRadius: '50%',
-  background: 'rgba(8,10,14,.45)',
-  border: '1px solid rgba(255,255,255,.18)',
+  background: 'rgba(8,10,14,.4)',
+  border: '2px solid rgba(255,255,255,.3)',
   boxShadow: '0 8px 24px rgba(0,0,0,.4)',
-  opacity: 0,
+  opacity: 0.5,
   transition: 'opacity .12s ease',
   display: 'flex',
   alignItems: 'center',
@@ -159,8 +150,8 @@ const baseStyle = {
 };
 
 const knobStyle = {
-  width: '46%',
-  height: '46%',
+  width: '44%',
+  height: '44%',
   borderRadius: '50%',
   background: `radial-gradient(circle at 35% 30%, #5fa8ff, ${NAV})`,
   boxShadow: `0 0 14px rgba(45,140,255,.6)`,
