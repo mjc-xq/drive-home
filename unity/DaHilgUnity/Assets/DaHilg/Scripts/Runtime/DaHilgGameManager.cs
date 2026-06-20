@@ -27,6 +27,7 @@ namespace DaHilg
         public DaHilgGameMode Mode { get; private set; }
         public int Score { get; private set; }
         public IReadOnlyList<DaHilgActor> Actors => m_Actors;
+        public IReadOnlyList<DaHilgNibblerAgent> Nibblers => m_Nibblers;
         public DaHilgActor ActiveActor => m_ActiveActor;
         public DaHilgLevelProfile CurrentLevel => m_CurrentLevel;
         public DaHilgActor NearbyGreetable => m_NearbyGreetable;
@@ -128,6 +129,7 @@ namespace DaHilg
                 CameraRig.Target = m_ActiveActor;
                 CameraRig.Yaw = m_ActiveActor.FacingYaw;
             }
+            for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].SetPlayer(m_ActiveActor.transform);
         }
 
         public void CycleActor(int direction)
@@ -221,7 +223,7 @@ namespace DaHilg
                 GameObject root = new GameObject("Actor_" + slot.Label);
                 root.transform.SetParent(transform);
                 DaHilgActor actor = root.AddComponent<DaHilgActor>();
-                actor.Initialize(slot, Settings.CharacterAnimator, Settings);
+                actor.Initialize(slot, ResolveAnimator(slot), Settings);
 
                 Vector3 spawn = slot.Id == Settings.DefaultCharacterId
                     ? playerSpawns[0]
@@ -394,8 +396,13 @@ namespace DaHilg
             {
                 DaHilgCharacterSlot slot = Settings.Characters[i % Settings.Characters.Length];
                 if (slot.Prefab == null) continue;
-                m_Nibblers.Add(new DaHilgNibblerAgent(slot.Prefab, m_NibblerRoot, m_ActiveActor.transform, Settings.CharacterAnimator, Settings.NibblerScale, i));
+                m_Nibblers.Add(new DaHilgNibblerAgent(slot.Prefab, m_NibblerRoot, m_ActiveActor.transform, ResolveAnimator(slot), Settings.NibblerScale, i));
             }
+        }
+
+        RuntimeAnimatorController ResolveAnimator(DaHilgCharacterSlot slot)
+        {
+            return slot.AnimatorController != null ? slot.AnimatorController : Settings.CharacterAnimator;
         }
 
         void TickNibblers(float dt)

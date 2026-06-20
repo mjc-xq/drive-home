@@ -17,6 +17,8 @@ namespace DaHilg
         Label m_Mode;
         Label m_Attached;
         VisualElement m_HealthFill;
+        VisualElement m_TopPanel;
+        DaHilgMinimapElement m_Minimap;
         VisualElement m_CharacterBar;
         VisualElement m_EmoteBar;
         VisualElement m_Joy;
@@ -73,6 +75,7 @@ namespace DaHilg
             }
 
             RefreshResponsiveControls();
+            m_Minimap?.SetManager(m_Manager);
         }
 
         void Build()
@@ -88,23 +91,23 @@ namespace DaHilg
             m_Root.style.color = Color.white;
             m_Root.pickingMode = PickingMode.Position;
 
-            VisualElement top = Panel();
-            top.style.left = 18;
-            top.style.top = 18;
-            top.style.width = 270;
-            m_Root.Add(top);
+            m_TopPanel = Panel();
+            m_TopPanel.style.left = 18;
+            m_TopPanel.style.top = 18;
+            m_TopPanel.style.width = 270;
+            m_Root.Add(m_TopPanel);
 
             m_Title = Label("Da Hilg", 20, FontStyle.Bold);
-            top.Add(m_Title);
+            m_TopPanel.Add(m_Title);
             VisualElement row = new VisualElement { style = { flexDirection = FlexDirection.Row, marginTop = 8 } };
-            top.Add(row);
+            m_TopPanel.Add(row);
             m_Mode = Chip("GREET");
             m_Score = Chip("000");
             row.Add(m_Mode);
             row.Add(m_Score);
             m_State = Label("", 13, FontStyle.Normal);
             m_State.style.marginTop = 8;
-            top.Add(m_State);
+            m_TopPanel.Add(m_State);
 
             VisualElement health = new VisualElement();
             health.style.height = 8;
@@ -114,7 +117,7 @@ namespace DaHilg
             health.style.borderTopRightRadius = 4;
             health.style.borderBottomLeftRadius = 4;
             health.style.borderBottomRightRadius = 4;
-            top.Add(health);
+            m_TopPanel.Add(health);
             m_HealthFill = new VisualElement();
             m_HealthFill.style.height = Length.Percent(100);
             m_HealthFill.style.width = Length.Percent(100);
@@ -127,7 +130,7 @@ namespace DaHilg
 
             m_Attached = Label("", 12, FontStyle.Normal);
             m_Attached.style.marginTop = 8;
-            top.Add(m_Attached);
+            m_TopPanel.Add(m_Attached);
 
             m_Prompt = Label("", 13, FontStyle.Bold);
             m_Prompt.style.position = Position.Absolute;
@@ -167,8 +170,19 @@ namespace DaHilg
             m_Root.Add(cross);
 
             BuildCharacterBar();
+            BuildMinimap();
             BuildTouchControls();
             BuildEmoteBar();
+        }
+
+        void BuildMinimap()
+        {
+            m_Minimap = new DaHilgMinimapElement();
+            m_Minimap.style.right = 18;
+            m_Minimap.style.top = 18;
+            m_Minimap.style.width = 220;
+            m_Minimap.style.height = 168;
+            m_Root.Add(m_Minimap);
         }
 
         void BuildCharacterBar()
@@ -306,11 +320,104 @@ namespace DaHilg
 
         void RefreshResponsiveControls()
         {
-            DisplayStyle display = ShouldShowTouchControls() ? DisplayStyle.Flex : DisplayStyle.None;
+            bool touch = ShouldShowTouchControls();
+            bool landscape = touch && Screen.width > Screen.height;
+            DisplayStyle display = touch ? DisplayStyle.Flex : DisplayStyle.None;
             if (m_Joy != null) m_Joy.style.display = display;
             if (m_RunButton != null) m_RunButton.style.display = display;
             if (m_JumpButton != null) m_JumpButton.style.display = display;
-            if (m_Prompt != null) m_Prompt.style.bottom = display == DisplayStyle.Flex ? 170 : 126;
+
+            if (landscape)
+            {
+                SetPanelFrame(m_TopPanel, 12, StyleKeyword.Auto, 12, StyleKeyword.Auto, 224, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 12, 12, StyleKeyword.Auto, 190, 132);
+                SetBarFrame(m_CharacterBar, StyleKeyword.Auto, 12, 152, StyleKeyword.Auto, new Translate(0, 0));
+                SetBarFrame(m_EmoteBar, StyleKeyword.Auto, 12, 198, StyleKeyword.Auto, new Translate(0, 0));
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, 14, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0), 300, 12);
+
+                if (m_Joy != null)
+                {
+                    m_Joy.style.left = 24;
+                    m_Joy.style.bottom = 104;
+                }
+                if (m_RunButton != null)
+                {
+                    m_RunButton.style.right = 24;
+                    m_RunButton.style.bottom = 176;
+                }
+                if (m_JumpButton != null)
+                {
+                    m_JumpButton.style.right = 24;
+                    m_JumpButton.style.bottom = 104;
+                }
+            }
+            else if (touch)
+            {
+                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 252, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 154, StyleKeyword.Auto, 150, 136);
+                SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
+                SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 170, new Translate(Length.Percent(-50), 0), 340, 13);
+
+                if (m_Joy != null)
+                {
+                    m_Joy.style.left = 32;
+                    m_Joy.style.bottom = 34;
+                }
+                if (m_RunButton != null)
+                {
+                    m_RunButton.style.right = 34;
+                    m_RunButton.style.bottom = 98;
+                }
+                if (m_JumpButton != null)
+                {
+                    m_JumpButton.style.right = 34;
+                    m_JumpButton.style.bottom = 34;
+                }
+            }
+            else
+            {
+                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 270, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 220, 168);
+                SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
+                SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 126, new Translate(Length.Percent(-50), 0), 680, 13);
+            }
+        }
+
+        static void SetPanelFrame(VisualElement element, StyleLength left, StyleLength right, StyleLength top, StyleLength bottom, StyleLength width, StyleLength height)
+        {
+            if (element == null) return;
+            element.style.left = left;
+            element.style.right = right;
+            element.style.top = top;
+            element.style.bottom = bottom;
+            element.style.width = width;
+            element.style.height = height;
+        }
+
+        static void SetBarFrame(VisualElement element, StyleLength left, StyleLength right, StyleLength top, StyleLength bottom, Translate translate)
+        {
+            if (element == null) return;
+            element.style.left = left;
+            element.style.right = right;
+            element.style.top = top;
+            element.style.bottom = bottom;
+            element.style.translate = translate;
+        }
+
+        void SetPromptFrame(StyleLength left, StyleLength right, StyleLength top, StyleLength bottom, Translate translate, StyleLength maxWidth, StyleLength fontSize)
+        {
+            if (m_Prompt == null) return;
+            m_Prompt.style.left = left;
+            m_Prompt.style.right = right;
+            m_Prompt.style.top = top;
+            m_Prompt.style.bottom = bottom;
+            m_Prompt.style.translate = translate;
+            m_Prompt.style.maxWidth = maxWidth;
+            m_Prompt.style.fontSize = fontSize;
+            m_Prompt.style.whiteSpace = WhiteSpace.Normal;
+            m_Prompt.style.unityTextAlign = TextAnchor.MiddleCenter;
         }
 
         static bool ShouldShowTouchControls()

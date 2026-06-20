@@ -49,28 +49,6 @@ body {
   background: #9fc2ff;
 }
 
-#unity-footer {
-  position: absolute;
-  right: 14px;
-  bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  color: rgba(255, 255, 255, 0.82);
-  font-family: Arial, sans-serif;
-  font-size: 13px;
-  background: rgba(4, 6, 10, 0.48);
-  backdrop-filter: blur(10px);
-}
-
-#unity-fullscreen-button {
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  background: url('fullscreen-button.png') no-repeat center / contain;
-}
-
 #unity-warning {
   position: absolute;
   left: 50%;
@@ -92,10 +70,4 @@ body {
 #unity-warning > .unity-error {
   color: #fff;
   background: #b00020;
-}
-
-@media (max-width: 720px) {
-  #unity-footer {
-    display: none;
-  }
 }

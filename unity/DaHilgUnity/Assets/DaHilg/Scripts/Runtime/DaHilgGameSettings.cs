@@ -24,6 +24,7 @@ namespace DaHilg
         public GameObject Prefab;
         public Color Accent;
         public float VisualYawOffset;
+        public RuntimeAnimatorController AnimatorController;
     }
 
     [Serializable]

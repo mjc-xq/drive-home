@@ -20,6 +20,7 @@ namespace DaHilg.Editor
         const string k_ScenePath = k_Root + "/Scenes/DaHilg.unity";
         const string k_SettingsPath = k_SettingsDir + "/DaHilgGameSettings.asset";
         const string k_ControllerPath = k_SettingsDir + "/DaHilgCharacter.controller";
+        const string k_CharacterControllerDir = k_SettingsDir + "/CharacterControllers";
         const string k_PanelSettingsPath = k_Root + "/UI/DaHilgPanelSettings.asset";
         const string k_GeneratedAnimationDir = k_SettingsDir + "/GeneratedAnimations";
         static readonly string[] s_CharacterAnimationStates =
@@ -38,14 +39,26 @@ namespace DaHilg.Editor
             "Stumble",
             "Climb"
         };
+        static readonly HashSet<string> s_GroundedHipClips = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Idle",
+            "Walk",
+            "Run",
+            "Dance",
+            "Wave",
+            "Cheer",
+            "Attack",
+            "Hit",
+            "Stumble"
+        };
 
         [MenuItem("Da Hilg/Rebuild Unity Scene")]
         public static void RebuildUnityScene()
         {
             EnsureFolders();
-            AnimatorController controller = BuildAnimatorController();
+            Dictionary<string, AnimatorController> controllers = BuildAnimatorControllers();
             DaHilgLevelProfile[] levels = BuildLevelProfiles();
-            DaHilgGameSettings settings = BuildSettings(levels, controller);
+            DaHilgGameSettings settings = BuildSettings(levels, controllers);
             BuildScene(settings);
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -169,10 +182,6 @@ namespace DaHilg.Editor
         </div>
       </div>
       <div id=""unity-warning""></div>
-      <div id=""unity-footer"">
-        <div id=""unity-fullscreen-button"" title=""Fullscreen""></div>
-        <div id=""unity-build-title"">Da Hilg Unity</div>
-      </div>
     </div>
     <script>
       const canvas = document.querySelector('#unity-canvas');
@@ -214,9 +223,6 @@ namespace DaHilg.Editor
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
           document.querySelector('#unity-loading-bar').style.display = 'none';
-          document.querySelector('#unity-fullscreen-button').onclick = () => {
-            unityInstance.SetFullscreen(1);
-          };
         }).catch((message) => {
           alert(message);
         });
@@ -287,28 +293,6 @@ body {
   background: #9fc2ff;
 }
 
-#unity-footer {
-  position: absolute;
-  right: 14px;
-  bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  color: rgba(255, 255, 255, 0.82);
-  font-family: Arial, sans-serif;
-  font-size: 13px;
-  background: rgba(4, 6, 10, 0.48);
-  backdrop-filter: blur(10px);
-}
-
-#unity-fullscreen-button {
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  background: url('fullscreen-button.png') no-repeat center / contain;
-}
-
 #unity-warning {
   position: absolute;
   left: 50%;
@@ -332,11 +316,6 @@ body {
   background: #b00020;
 }
 
-@media (max-width: 720px) {
-  #unity-footer {
-    display: none;
-  }
-}
 ");
         }
 
@@ -392,6 +371,7 @@ body {
                 k_Root + "/Scripts",
                 k_Root + "/UI",
                 k_SettingsDir,
+                k_CharacterControllerDir,
                 k_GeneratedAnimationDir
             };
 
@@ -406,18 +386,46 @@ body {
             }
         }
 
-        static AnimatorController BuildAnimatorController()
+        static Dictionary<string, AnimatorController> BuildAnimatorControllers()
         {
-            AnimatorController controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(k_ControllerPath);
+            Dictionary<string, AnimationClip> clips = LoadAnimationClips();
+            Dictionary<string, AnimatorController> controllers = new Dictionary<string, AnimatorController>();
+            string[] characterIds = { "mike", "kelli", "cece", "drew" };
+
+            for (int i = 0; i < s_CharacterAnimationStates.Length; i++)
+            {
+                AssetDatabase.DeleteAsset(k_GeneratedAnimationDir + "/" + s_CharacterAnimationStates[i] + ".anim");
+            }
+
+            for (int i = 0; i < characterIds.Length; i++)
+            {
+                string id = characterIds[i];
+                GameObject targetPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Characters/" + id + ".glb");
+                if (targetPrefab == null)
+                {
+                    throw new InvalidOperationException("Missing Da Hilg character prefab for animation retargeting: " + id + ".");
+                }
+
+                string controllerPath = id == "cece"
+                    ? k_ControllerPath
+                    : k_CharacterControllerDir + "/" + id + ".controller";
+                controllers[id] = BuildAnimatorController(id, targetPrefab, clips, controllerPath);
+            }
+
+            return controllers;
+        }
+
+        static AnimatorController BuildAnimatorController(string characterId, GameObject targetPrefab, Dictionary<string, AnimationClip> clips, string controllerPath)
+        {
+            AnimatorController controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
             if (controller == null)
             {
-                controller = AnimatorController.CreateAnimatorControllerAtPath(k_ControllerPath);
+                controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
             }
 
             AnimatorStateMachine machine = controller.layers[0].stateMachine;
             ClearStates(machine);
 
-            Dictionary<string, AnimationClip> clips = LoadAnimationClips();
             AnimatorState idle = null;
             for (int i = 0; i < s_CharacterAnimationStates.Length; i++)
             {
@@ -425,7 +433,7 @@ body {
                 AnimatorState state = machine.AddState(stateName, new Vector3(260f, 60f + i * 48f, 0f));
                 if (clips.TryGetValue(stateName.ToLowerInvariant(), out AnimationClip clip))
                 {
-                    state.motion = RetargetAnimationClip(stateName, clip);
+                    state.motion = RetargetAnimationClip(characterId, stateName, clip, targetPrefab);
                 }
                 state.writeDefaultValues = true;
                 if (stateName == "Idle") idle = state;
@@ -469,9 +477,15 @@ body {
             return clips;
         }
 
-        static AnimationClip RetargetAnimationClip(string stateName, AnimationClip source)
+        static AnimationClip RetargetAnimationClip(string characterId, string stateName, AnimationClip source, GameObject targetPrefab)
         {
-            string assetPath = k_GeneratedAnimationDir + "/" + stateName + ".anim";
+            GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Animations/" + stateName.ToLowerInvariant() + ".glb");
+            if (sourcePrefab == null)
+            {
+                throw new InvalidOperationException("Missing source animation rig for " + stateName + ".");
+            }
+
+            string assetPath = k_GeneratedAnimationDir + "/" + characterId + "_" + stateName + ".anim";
             AnimationClip clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(assetPath);
             if (clip == null)
             {
@@ -479,7 +493,7 @@ body {
                 AssetDatabase.CreateAsset(clip, assetPath);
             }
 
-            clip.name = stateName;
+            clip.name = characterId + "_" + stateName;
             clip.ClearCurves();
             clip.frameRate = source.frameRate;
             clip.wrapMode = source.wrapMode;
@@ -488,22 +502,72 @@ body {
             AnimationClipSettings settings = AnimationUtility.GetAnimationClipSettings(source);
             AnimationUtility.SetAnimationClipSettings(clip, settings);
 
+            Dictionary<string, AnimationCurve[]> rotationCurves = new Dictionary<string, AnimationCurve[]>();
+            Dictionary<string, AnimationCurve[]> positionCurves = new Dictionary<string, AnimationCurve[]>();
             EditorCurveBinding[] bindings = AnimationUtility.GetCurveBindings(source);
             for (int i = 0; i < bindings.Length; i++)
             {
                 EditorCurveBinding binding = bindings[i];
                 AnimationCurve curve = AnimationUtility.GetEditorCurve(source, binding);
-                binding.path = RetargetBindingPath(binding.path);
-                AnimationUtility.SetEditorCurve(clip, binding, curve);
+                if (curve == null) continue;
+
+                if (binding.propertyName.StartsWith("m_LocalRotation.", StringComparison.Ordinal))
+                {
+                    int component = RotationComponent(binding.propertyName);
+                    if (component >= 0)
+                    {
+                        if (!rotationCurves.TryGetValue(binding.path, out AnimationCurve[] curves))
+                        {
+                            curves = new AnimationCurve[4];
+                            rotationCurves[binding.path] = curves;
+                        }
+                        curves[component] = curve;
+                    }
+                    continue;
+                }
+
+                if (binding.propertyName.StartsWith("m_LocalPosition.", StringComparison.Ordinal))
+                {
+                    int component = VectorComponent(binding.propertyName);
+                    if (component >= 0)
+                    {
+                        if (!positionCurves.TryGetValue(binding.path, out AnimationCurve[] curves))
+                        {
+                            curves = new AnimationCurve[3];
+                            positionCurves[binding.path] = curves;
+                        }
+                        curves[component] = curve;
+                    }
+                    continue;
+                }
+
+                if (binding.propertyName.StartsWith("m_LocalScale.", StringComparison.Ordinal))
+                {
+                    continue;
+                }
             }
 
-            EditorCurveBinding[] objectBindings = AnimationUtility.GetObjectReferenceCurveBindings(source);
-            for (int i = 0; i < objectBindings.Length; i++)
+            foreach (KeyValuePair<string, AnimationCurve[]> pair in rotationCurves)
             {
-                EditorCurveBinding binding = objectBindings[i];
-                ObjectReferenceKeyframe[] frames = AnimationUtility.GetObjectReferenceCurve(source, binding);
-                binding.path = RetargetBindingPath(binding.path);
-                AnimationUtility.SetObjectReferenceCurve(clip, binding, frames);
+                if (!TryFindRetargetBones(sourcePrefab.transform, targetPrefab.transform, pair.Key, out Transform sourceBone, out Transform targetBone)) continue;
+                AnimationCurve[] curves = pair.Value;
+                if (curves[0] == null || curves[1] == null || curves[2] == null || curves[3] == null) continue;
+
+                AnimationCurve[] retargeted = RetargetRotationCurves(curves, sourceBone.localRotation, targetBone.localRotation);
+                string path = RetargetBindingPath(pair.Key);
+                SetTransformCurves(clip, path, "m_LocalRotation.", retargeted);
+            }
+
+            foreach (KeyValuePair<string, AnimationCurve[]> pair in positionCurves)
+            {
+                if (!IsHipsPath(pair.Key)) continue;
+                if (!TryFindRetargetBones(sourcePrefab.transform, targetPrefab.transform, pair.Key, out Transform sourceBone, out Transform targetBone)) continue;
+                AnimationCurve[] curves = pair.Value;
+                if (curves[0] == null || curves[1] == null || curves[2] == null) continue;
+
+                AnimationCurve[] retargeted = RetargetHipPositionCurves(stateName, curves, sourceBone.localPosition, targetBone.localPosition);
+                string path = RetargetBindingPath(pair.Key);
+                SetTransformCurves(clip, path, "m_LocalPosition.", retargeted);
             }
 
             AnimationUtility.SetAnimationEvents(clip, AnimationUtility.GetAnimationEvents(source));
@@ -511,10 +575,147 @@ body {
             return clip;
         }
 
+        static bool TryFindRetargetBones(Transform sourceRoot, Transform targetRoot, string sourcePath, out Transform sourceBone, out Transform targetBone)
+        {
+            string boneName = LastPathSegment(sourcePath);
+            sourceBone = FindDeepChild(sourceRoot, boneName);
+            targetBone = FindDeepChild(targetRoot, boneName);
+            return sourceBone != null && targetBone != null;
+        }
+
+        static AnimationCurve[] RetargetRotationCurves(AnimationCurve[] sourceCurves, Quaternion sourceRest, Quaternion targetRest)
+        {
+            List<float> times = CollectKeyTimes(sourceCurves);
+            AnimationCurve[] result = NewCurveSet(4);
+            Quaternion previous = Quaternion.identity;
+            bool hasPrevious = false;
+
+            for (int i = 0; i < times.Count; i++)
+            {
+                float time = times[i];
+                Quaternion sourceAnimated = NormalizeQuaternion(new Quaternion(
+                    sourceCurves[0].Evaluate(time),
+                    sourceCurves[1].Evaluate(time),
+                    sourceCurves[2].Evaluate(time),
+                    sourceCurves[3].Evaluate(time)));
+                Quaternion delta = Quaternion.Inverse(sourceRest) * sourceAnimated;
+                Quaternion targetAnimated = NormalizeQuaternion(targetRest * delta);
+                if (hasPrevious && Quaternion.Dot(previous, targetAnimated) < 0f)
+                {
+                    targetAnimated = new Quaternion(-targetAnimated.x, -targetAnimated.y, -targetAnimated.z, -targetAnimated.w);
+                }
+
+                AddQuaternionKeys(result, time, targetAnimated);
+                previous = targetAnimated;
+                hasPrevious = true;
+            }
+
+            SmoothCurves(result);
+            return result;
+        }
+
+        static AnimationCurve[] RetargetHipPositionCurves(string stateName, AnimationCurve[] sourceCurves, Vector3 sourceRest, Vector3 targetRest)
+        {
+            List<float> times = CollectKeyTimes(sourceCurves);
+            AnimationCurve[] result = NewCurveSet(3);
+            bool flattenY = s_GroundedHipClips.Contains(stateName);
+
+            for (int i = 0; i < times.Count; i++)
+            {
+                float time = times[i];
+                Vector3 sourceAnimated = new Vector3(
+                    sourceCurves[0].Evaluate(time),
+                    sourceCurves[1].Evaluate(time),
+                    sourceCurves[2].Evaluate(time));
+                Vector3 targetAnimated = targetRest + (sourceAnimated - sourceRest);
+                if (flattenY) targetAnimated.y = targetRest.y;
+                else if (stateName.Equals("Knockdown", StringComparison.OrdinalIgnoreCase)) targetAnimated.y = Mathf.Min(targetAnimated.y, targetRest.y);
+
+                result[0].AddKey(time, targetAnimated.x);
+                result[1].AddKey(time, targetAnimated.y);
+                result[2].AddKey(time, targetAnimated.z);
+            }
+
+            SmoothCurves(result);
+            return result;
+        }
+
+        static AnimationCurve[] NewCurveSet(int count)
+        {
+            AnimationCurve[] curves = new AnimationCurve[count];
+            for (int i = 0; i < count; i++) curves[i] = new AnimationCurve();
+            return curves;
+        }
+
+        static void AddQuaternionKeys(AnimationCurve[] curves, float time, Quaternion q)
+        {
+            curves[0].AddKey(time, q.x);
+            curves[1].AddKey(time, q.y);
+            curves[2].AddKey(time, q.z);
+            curves[3].AddKey(time, q.w);
+        }
+
+        static void SmoothCurves(AnimationCurve[] curves)
+        {
+            for (int i = 0; i < curves.Length; i++)
+            {
+                for (int j = 0; j < curves[i].length; j++)
+                {
+                    curves[i].SmoothTangents(j, 0f);
+                }
+            }
+        }
+
+        static List<float> CollectKeyTimes(AnimationCurve[] curves)
+        {
+            List<float> times = new List<float>();
+            for (int i = 0; i < curves.Length; i++)
+            {
+                if (curves[i] == null) continue;
+                Keyframe[] keys = curves[i].keys;
+                for (int j = 0; j < keys.Length; j++)
+                {
+                    if (!times.Contains(keys[j].time)) times.Add(keys[j].time);
+                }
+            }
+            times.Sort();
+            if (times.Count == 0) times.Add(0f);
+            return times;
+        }
+
+        static Quaternion NormalizeQuaternion(Quaternion q)
+        {
+            float mag = Mathf.Sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+            if (mag <= 0.00001f) return Quaternion.identity;
+            float inv = 1f / mag;
+            return new Quaternion(q.x * inv, q.y * inv, q.z * inv, q.w * inv);
+        }
+
+        static void SetTransformCurves(AnimationClip clip, string path, string propertyPrefix, AnimationCurve[] curves)
+        {
+            string[] suffixes = curves.Length == 4 ? new[] { "x", "y", "z", "w" } : new[] { "x", "y", "z" };
+            for (int i = 0; i < curves.Length; i++)
+            {
+                EditorCurveBinding binding = EditorCurveBinding.FloatCurve(path, typeof(Transform), propertyPrefix + suffixes[i]);
+                AnimationUtility.SetEditorCurve(clip, binding, curves[i]);
+            }
+        }
+
         static string RetargetBindingPath(string path)
         {
             const string prefix = "Armature/";
             return path.StartsWith(prefix, StringComparison.Ordinal) ? path.Substring(prefix.Length) : path;
+        }
+
+        static bool IsHipsPath(string path)
+        {
+            return LastPathSegment(path) == "Hips";
+        }
+
+        static string LastPathSegment(string path)
+        {
+            int slash = path.LastIndexOf('/');
+            return slash >= 0 ? path.Substring(slash + 1) : path;
         }
 
         static DaHilgLevelProfile[] BuildLevelProfiles()
@@ -590,7 +791,7 @@ body {
             return profile;
         }
 
-        static DaHilgGameSettings BuildSettings(DaHilgLevelProfile[] levels, RuntimeAnimatorController controller)
+        static DaHilgGameSettings BuildSettings(DaHilgLevelProfile[] levels, Dictionary<string, AnimatorController> controllers)
         {
             DaHilgGameSettings settings = AssetDatabase.LoadAssetAtPath<DaHilgGameSettings>(k_SettingsPath);
             if (settings == null)
@@ -600,21 +801,21 @@ body {
             }
 
             settings.Levels = levels;
-            settings.CharacterAnimator = controller;
+            settings.CharacterAnimator = controllers.TryGetValue("cece", out AnimatorController defaultController) ? defaultController : null;
             settings.DefaultCharacterId = "cece";
             settings.DefaultLevelSlug = "dahill";
             settings.Characters = new[]
             {
-                Character("mike", "Mike", "Dad", new Color(0.36f, 0.68f, 1f), 180f),
-                Character("kelli", "Kelli", "Mom", new Color(1f, 0.67f, 0.35f), 180f),
-                Character("cece", "Cece", "Kid", new Color(1f, 0.45f, 0.76f), 180f),
-                Character("drew", "Drew", "Kid", new Color(0.42f, 1f, 0.58f), 180f)
+                Character("mike", "Mike", "Dad", new Color(0.36f, 0.68f, 1f), 0f, controllers),
+                Character("kelli", "Kelli", "Mom", new Color(1f, 0.67f, 0.35f), 0f, controllers),
+                Character("cece", "Cece", "Kid", new Color(1f, 0.45f, 0.76f), 0f, controllers),
+                Character("drew", "Drew", "Kid", new Color(0.42f, 1f, 0.58f), 0f, controllers)
             };
             EditorUtility.SetDirty(settings);
             return settings;
         }
 
-        static DaHilgCharacterSlot Character(string id, string label, string blurb, Color accent, float yawOffset)
+        static DaHilgCharacterSlot Character(string id, string label, string blurb, Color accent, float yawOffset, Dictionary<string, AnimatorController> controllers)
         {
             return new DaHilgCharacterSlot
             {
@@ -623,7 +824,8 @@ body {
                 Blurb = blurb,
                 Accent = accent,
                 VisualYawOffset = yawOffset,
-                Prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Characters/" + id + ".glb")
+                Prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Characters/" + id + ".glb"),
+                AnimatorController = controllers.TryGetValue(id, out AnimatorController controller) ? controller : null
             };
         }
 
@@ -633,14 +835,14 @@ body {
             scene.name = "DaHilg";
 
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.72f, 0.82f, 0.92f);
-            RenderSettings.ambientEquatorColor = new Color(0.42f, 0.48f, 0.50f);
-            RenderSettings.ambientGroundColor = new Color(0.28f, 0.30f, 0.25f);
+            RenderSettings.ambientSkyColor = new Color(0.54f, 0.62f, 0.68f);
+            RenderSettings.ambientEquatorColor = new Color(0.32f, 0.36f, 0.36f);
+            RenderSettings.ambientGroundColor = new Color(0.20f, 0.22f, 0.18f);
 
             GameObject sun = new GameObject("Sun");
             Light light = sun.AddComponent<Light>();
             light.type = LightType.Directional;
-            light.intensity = 1.25f;
+            light.intensity = 0.82f;
             light.shadows = LightShadows.Soft;
             sun.transform.rotation = Quaternion.Euler(48f, -38f, 0f);
 
@@ -749,17 +951,37 @@ body {
 
         static void ValidateCharacterAnimationAssets()
         {
-            AnimatorController controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(k_ControllerPath);
-            if (controller == null) throw new InvalidOperationException("Da Hilg animation controller was not built.");
-            if (controller.layers.Length == 0) throw new InvalidOperationException("Da Hilg animation controller has no layers.");
+            DaHilgGameSettings settings = AssetDatabase.LoadAssetAtPath<DaHilgGameSettings>(k_SettingsPath);
+            if (settings == null) throw new InvalidOperationException("Da Hilg settings asset was not built.");
+
+            int checkedControllers = 0;
+            for (int i = 0; i < settings.Characters.Length; i++)
+            {
+                DaHilgCharacterSlot slot = settings.Characters[i];
+                if (slot.Prefab == null) continue;
+                ValidateAnimatorController(slot.Id, slot.AnimatorController != null ? slot.AnimatorController : settings.CharacterAnimator);
+                checkedControllers++;
+            }
+
+            if (checkedControllers == 0) throw new InvalidOperationException("No Da Hilg character animation controllers were checked.");
+            ValidateCharacterPrefabAnimationBindings(settings);
+
+            Debug.Log("[DaHilg] Character animations validated for " + checkedControllers + " controllers and " + s_CharacterAnimationStates.Length + " states.");
+        }
+
+        static AnimatorStateMachine ValidateAnimatorController(string owner, RuntimeAnimatorController runtimeController)
+        {
+            AnimatorController controller = runtimeController as AnimatorController;
+            if (controller == null) throw new InvalidOperationException("Da Hilg animation controller was not built for " + owner + ".");
+            if (controller.layers.Length == 0) throw new InvalidOperationException("Da Hilg animation controller for " + owner + " has no layers.");
 
             AnimatorStateMachine machine = controller.layers[0].stateMachine;
             if (machine.defaultState == null || machine.defaultState.name != "Idle")
             {
-                throw new InvalidOperationException("Da Hilg animation controller must default to Idle.");
+                throw new InvalidOperationException("Da Hilg animation controller for " + owner + " must default to Idle.");
             }
 
-            GameObject probe = new GameObject("DaHilgAnimatorValidation");
+            GameObject probe = new GameObject("DaHilgAnimatorValidation_" + owner);
             Animator animator = probe.AddComponent<Animator>();
             animator.runtimeAnimatorController = controller;
             try
@@ -770,18 +992,18 @@ body {
                     AnimatorState state = FindAnimatorState(machine, stateName);
                     if (state == null)
                     {
-                        throw new InvalidOperationException("Da Hilg animation state is missing: " + stateName + ".");
+                        throw new InvalidOperationException("Da Hilg animation state is missing for " + owner + ": " + stateName + ".");
                     }
 
                     if (state.motion == null)
                     {
-                        throw new InvalidOperationException("Da Hilg animation state has no motion clip: " + stateName + ".");
+                        throw new InvalidOperationException("Da Hilg animation state has no motion clip for " + owner + ": " + stateName + ".");
                     }
 
                     int hash = Animator.StringToHash("Base Layer." + stateName);
                     if (!animator.HasState(0, hash))
                     {
-                        throw new InvalidOperationException("Da Hilg animation state cannot be resolved by runtime hash: Base Layer." + stateName + ".");
+                        throw new InvalidOperationException("Da Hilg animation state cannot be resolved by runtime hash for " + owner + ": Base Layer." + stateName + ".");
                     }
                 }
             }
@@ -790,26 +1012,25 @@ body {
                 UnityEngine.Object.DestroyImmediate(probe);
             }
 
-            DaHilgGameSettings settings = AssetDatabase.LoadAssetAtPath<DaHilgGameSettings>(k_SettingsPath);
-            if (settings == null) throw new InvalidOperationException("Da Hilg settings asset was not built.");
-            ValidateCharacterPrefabAnimationBindings(settings, controller, machine);
-
-            Debug.Log("[DaHilg] Character animations validated for " + s_CharacterAnimationStates.Length + " states.");
+            return machine;
         }
 
-        static void ValidateCharacterPrefabAnimationBindings(DaHilgGameSettings settings, AnimatorController controller, AnimatorStateMachine machine)
+        static void ValidateCharacterPrefabAnimationBindings(DaHilgGameSettings settings)
         {
-            AnimatorState run = FindAnimatorState(machine, "Run");
-            if (run == null || run.motion is not AnimationClip runClip)
-            {
-                throw new InvalidOperationException("Da Hilg Run animation clip is missing.");
-            }
-
             int checkedCharacters = 0;
             for (int i = 0; i < settings.Characters.Length; i++)
             {
                 DaHilgCharacterSlot slot = settings.Characters[i];
                 if (slot.Prefab == null) continue;
+
+                AnimatorController controller = (slot.AnimatorController != null ? slot.AnimatorController : settings.CharacterAnimator) as AnimatorController;
+                if (controller == null) throw new InvalidOperationException(slot.Id + " animation controller is missing.");
+                AnimatorStateMachine machine = controller.layers[0].stateMachine;
+                AnimatorState run = FindAnimatorState(machine, "Run");
+                if (run == null || run.motion is not AnimationClip runClip)
+                {
+                    throw new InvalidOperationException(slot.Id + " Run animation clip is missing.");
+                }
 
                 GameObject character = PrefabUtility.InstantiatePrefab(slot.Prefab) as GameObject;
                 if (character == null) character = UnityEngine.Object.Instantiate(slot.Prefab);
@@ -946,6 +1167,14 @@ body {
             if (propertyName.EndsWith(".y", StringComparison.Ordinal)) return 1;
             if (propertyName.EndsWith(".z", StringComparison.Ordinal)) return 2;
             if (propertyName.EndsWith(".w", StringComparison.Ordinal)) return 3;
+            return -1;
+        }
+
+        static int VectorComponent(string propertyName)
+        {
+            if (propertyName.EndsWith(".x", StringComparison.Ordinal)) return 0;
+            if (propertyName.EndsWith(".y", StringComparison.Ordinal)) return 1;
+            if (propertyName.EndsWith(".z", StringComparison.Ordinal)) return 2;
             return -1;
         }
 

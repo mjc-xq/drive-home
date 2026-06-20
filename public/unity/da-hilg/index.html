@@ -18,10 +18,6 @@
         </div>
       </div>
       <div id="unity-warning"></div>
-      <div id="unity-footer">
-        <div id="unity-fullscreen-button" title="Fullscreen"></div>
-        <div id="unity-build-title">Da Hilg Unity</div>
-      </div>
     </div>
     <script>
       const canvas = document.querySelector('#unity-canvas');
@@ -63,9 +59,6 @@
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
           document.querySelector('#unity-loading-bar').style.display = 'none';
-          document.querySelector('#unity-fullscreen-button').onclick = () => {
-            unityInstance.SetFullscreen(1);
-          };
         }).catch((message) => {
           alert(message);
         });
