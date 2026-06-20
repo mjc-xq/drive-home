@@ -23,17 +23,23 @@ namespace DaHilg
     public sealed class DaHilgActor : MonoBehaviour
     {
         const float k_FaceLerp = 12f;
+        const float k_GroundNormalLerp = 18f;
+        const float k_GroundProbeHeight = 0.45f;
+        const float k_GroundProbeDistance = 1.25f;
 
         CharacterController m_Controller;
         Transform m_VisualRoot;
         Animator m_Animator;
         RuntimeAnimatorController m_AnimatorController;
         Vector3 m_HorizontalVelocity;
+        Vector3 m_GroundNormal = Vector3.up;
         float m_VerticalVelocity;
         float m_LastGroundedTime;
         float m_JumpQueuedTime = -100f;
         float m_FacingYaw;
         float m_VisualYawOffset;
+        float m_BodyHeight = 1.7f;
+        float m_BodyRadius = 0.3f;
         string m_CurrentAnim;
         float m_EmoteUntil;
 
@@ -49,6 +55,8 @@ namespace DaHilg
         public int AttachedNibblers { get; set; }
         public Vector3 FeetPosition => transform.position;
         public float FacingYaw => m_FacingYaw;
+        public float BodyHeight => m_BodyHeight;
+        public float BodyRadius => m_BodyRadius;
         public bool Grounded { get; private set; } = true;
         public float Speed { get; private set; }
         public bool WasJumpStartedThisFrame { get; private set; }
@@ -59,6 +67,8 @@ namespace DaHilg
             Label = slot.Label;
             m_VisualYawOffset = slot.VisualYawOffset;
             m_AnimatorController = animatorController;
+            m_BodyHeight = settings.PlayerHeight;
+            m_BodyRadius = settings.PlayerRadius;
 
             m_Controller = GetComponent<CharacterController>();
             m_Controller.height = settings.PlayerHeight;
@@ -185,6 +195,7 @@ namespace DaHilg
                 m_JumpQueuedTime = -100f;
                 Grounded = false;
                 WasJumpStartedThisFrame = true;
+                SetAnimatorSpeed(1f, dt);
                 PlayAnim("Jump", 0.05f);
             }
 
@@ -205,20 +216,24 @@ namespace DaHilg
             Vector3 delta = transform.position - before;
             Vector3 planar = new Vector3(delta.x, 0f, delta.z);
             Speed = planar.magnitude / Mathf.Max(dt, 0.0001f);
+            UpdateGroundNormal(dt);
 
-            if (playerFacing)
+            Vector3 faceVelocity = planar.sqrMagnitude > 0.0004f ? planar / Mathf.Max(dt, 0.0001f) : m_HorizontalVelocity;
+            if (faceVelocity.sqrMagnitude > 0.02f)
             {
-                m_FacingYaw = playerYaw;
-            }
-            else if (m_HorizontalVelocity.sqrMagnitude > 0.02f)
-            {
-                float targetYaw = Quaternion.LookRotation(new Vector3(m_HorizontalVelocity.x, 0f, m_HorizontalVelocity.z)).eulerAngles.y;
+                float targetYaw = Quaternion.LookRotation(new Vector3(faceVelocity.x, 0f, faceVelocity.z)).eulerAngles.y;
                 m_FacingYaw = Mathf.LerpAngle(m_FacingYaw, targetYaw, 1f - Mathf.Exp(-k_FaceLerp * dt));
+            }
+            else if (playerFacing)
+            {
+                m_FacingYaw = Mathf.LerpAngle(m_FacingYaw, playerYaw, 1f - Mathf.Exp(-k_FaceLerp * dt));
             }
 
             if (m_VisualRoot != null)
             {
-                m_VisualRoot.rotation = Quaternion.Euler(0f, m_FacingYaw + m_VisualYawOffset, 0f);
+                Quaternion yaw = Quaternion.Euler(0f, m_FacingYaw + m_VisualYawOffset, 0f);
+                Quaternion groundTilt = Quaternion.FromToRotation(Vector3.up, m_GroundNormal);
+                m_VisualRoot.rotation = Quaternion.Slerp(m_VisualRoot.rotation, groundTilt * yaw, 1f - Mathf.Exp(18f * -dt));
             }
 
             if (Time.time < m_EmoteUntil && Grounded && Speed <= 0.2f)
@@ -231,12 +246,13 @@ namespace DaHilg
                 m_EmoteUntil = 0f;
             }
 
-            UpdateLocomotionAnimation();
+            UpdateLocomotionAnimation(settings, dt);
         }
 
         public void PlayEmote(string emote)
         {
             m_EmoteUntil = Time.time + EmoteDuration(emote);
+            SetAnimatorSpeed(1f, Time.deltaTime);
             PlayAnim(emote, 0.12f);
         }
 
@@ -252,17 +268,64 @@ namespace DaHilg
             }
         }
 
-        void UpdateLocomotionAnimation()
+        void UpdateGroundNormal(float dt)
+        {
+            Vector3 origin = transform.position + Vector3.up * k_GroundProbeHeight;
+            if (Physics.SphereCast(origin, Mathf.Max(0.05f, m_BodyRadius * 0.75f), Vector3.down, out RaycastHit hit, k_GroundProbeDistance, ~0, QueryTriggerInteraction.Ignore))
+            {
+                m_GroundNormal = Vector3.Slerp(m_GroundNormal, hit.normal, 1f - Mathf.Exp(-k_GroundNormalLerp * dt));
+            }
+            else
+            {
+                m_GroundNormal = Vector3.Slerp(m_GroundNormal, Vector3.up, 1f - Mathf.Exp(-k_GroundNormalLerp * dt));
+            }
+        }
+
+        void UpdateLocomotionAnimation(DaHilgGameSettings settings, float dt)
         {
             if (!Grounded && m_VerticalVelocity < -1f)
             {
+                SetAnimatorSpeed(1f, dt);
                 PlayAnim("Jump", 0.1f);
                 return;
             }
 
-            if (Speed > 4.5f) PlayAnim("Run", 0.16f);
-            else if (Speed > 0.15f) PlayAnim("Walk", 0.16f);
-            else PlayAnim("Idle", 0.18f);
+            if (AttachedNibblers >= settings.OverwhelmDown)
+            {
+                SetAnimatorSpeed(Speed > 0.15f ? 0.82f : 1f, dt);
+                PlayAnim(Speed > 0.15f ? "Crawl" : "Knockdown", 0.16f);
+                return;
+            }
+
+            if (AttachedNibblers >= settings.OverwhelmStagger && Speed > 0.15f)
+            {
+                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.WalkSpeed), 0.72f, 1.15f), dt);
+                PlayAnim("Stumble", 0.14f);
+                return;
+            }
+
+            if (Speed > 4.5f)
+            {
+                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.RunSpeed), 0.78f, 1.28f), dt);
+                PlayAnim("Run", 0.16f);
+            }
+            else if (Speed > 0.15f)
+            {
+                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.WalkSpeed), 0.72f, 1.22f), dt);
+                PlayAnim("Walk", 0.16f);
+            }
+            else
+            {
+                SetAnimatorSpeed(0.72f, dt);
+                PlayAnim("Idle", 0.18f);
+            }
+        }
+
+        void SetAnimatorSpeed(float speed, float dt)
+        {
+            if (m_Animator == null) return;
+            if (dt <= 0f) m_Animator.speed = speed;
+            else m_Animator.speed = Mathf.Lerp(m_Animator.speed, speed, 1f - Mathf.Exp(-10f * dt));
         }
 
         void PlayAnim(string stateName, float fade)

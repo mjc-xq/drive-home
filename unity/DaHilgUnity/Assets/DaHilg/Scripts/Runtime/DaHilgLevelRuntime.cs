@@ -7,6 +7,8 @@ namespace DaHilg
         const float k_SpawnProbeHeight = 80f;
         const float k_SpawnProbeDistance = 220f;
         const float k_SpawnGroundSkin = 0.08f;
+        static readonly int s_BaseColorId = Shader.PropertyToID("_BaseColor");
+        static readonly int s_ColorId = Shader.PropertyToID("_Color");
 
         public static void ApplyLevelOffset(GameObject level, DaHilgLevelProfile profile)
         {
@@ -58,8 +60,40 @@ namespace DaHilg
                     filter.gameObject.AddComponent<DaHilgWaterAnimator>();
                 }
 
+                TuneLevelSurface(filter, lower, isWater, isCollisionProxy);
                 filter.gameObject.isStatic = true;
             }
+        }
+
+        static void TuneLevelSurface(MeshFilter filter, string lowerName, bool isWater, bool isCollisionProxy)
+        {
+            if (isCollisionProxy) return;
+            if (!filter.TryGetComponent(out Renderer renderer) || renderer.sharedMaterial == null) return;
+
+            string materialName = renderer.sharedMaterial.name.ToLowerInvariant();
+            string key = lowerName + " " + materialName;
+            bool isRoad = ContainsAny(key, "road", "street", "drive", "asphalt", "curb");
+            bool isGround = isRoad || ContainsAny(key, "ground", "terrain", "grass", "yard", "walk", "sidewalk", "landscape", "dirt", "soil");
+            if (!isGround && !isWater) return;
+
+            MaterialPropertyBlock block = new MaterialPropertyBlock();
+            renderer.GetPropertyBlock(block);
+            Color tint = isWater
+                ? new Color(0.28f, 0.55f, 0.68f, 0.72f)
+                : (isRoad ? new Color(0.46f, 0.47f, 0.43f, 1f) : new Color(0.58f, 0.66f, 0.48f, 1f));
+
+            if (renderer.sharedMaterial.HasProperty(s_BaseColorId)) block.SetColor(s_BaseColorId, tint);
+            if (renderer.sharedMaterial.HasProperty(s_ColorId)) block.SetColor(s_ColorId, tint);
+            renderer.SetPropertyBlock(block);
+        }
+
+        static bool ContainsAny(string value, params string[] needles)
+        {
+            for (int i = 0; i < needles.Length; i++)
+            {
+                if (value.Contains(needles[i])) return true;
+            }
+            return false;
         }
 
         public static Vector3 GroundSpawn(Vector3 spawn)
