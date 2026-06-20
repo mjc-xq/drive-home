@@ -19,6 +19,7 @@ import { CHARACTERS } from '../constants.js';
 import { pushToast } from './hudEvents.js';
 import { gameModeAtom } from '../nibblers/state/nibblerAtoms.js';
 import { initNibblers } from '../nibblers/init.js';
+import { LEVELS, LEVEL_ORDER, CURRENT_LEVEL, setLevel } from '../level/levels.js';
 
 const charMap = (v) => Object.fromEntries(CHARACTERS.map((id) => [id, v]));
 
@@ -108,6 +109,31 @@ export default function HudMenu() {
           aria-label="Game menu"
           style={panelStyle}
         >
+          {/* LEVEL — picking one reloads the page so the current level fully unloads
+              (GPU + heap) before the next is fetched; levels never coexist in memory. */}
+          <div className="dhKick" style={kickStyle}>
+            LEVEL
+          </div>
+          <div style={levelListStyle}>
+            {LEVEL_ORDER.map((slug) => {
+              const lv = LEVELS[slug];
+              const active = slug === CURRENT_LEVEL;
+              return (
+                <button
+                  key={slug}
+                  type="button"
+                  onClick={() => setLevel(slug)}
+                  aria-pressed={active}
+                  disabled={active}
+                  style={{ ...levelBtnStyle, ...(active ? levelActiveStyle : null) }}
+                >
+                  <span style={levelLabelStyle}>{lv.label}</span>
+                  <span style={levelSubStyle}>{active ? '● Playing' : lv.sub}</span>
+                </button>
+              );
+            })}
+          </div>
+
           {/* CAMERA */}
           <div className="dhKick" style={kickStyle}>
             CAMERA
@@ -319,6 +345,39 @@ const segActiveStyle = {
   background: 'rgba(155,123,255,.22)',
   borderColor: JUMP,
   color: '#fff',
+};
+
+const levelListStyle = { display: 'flex', flexDirection: 'column', gap: '5px' };
+
+const levelBtnStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: '2px',
+  padding: '8px 10px',
+  background: 'transparent',
+  border: `1px solid ${LINE}`,
+  borderRadius: 0,
+  color: 'rgba(255,255,255,.85)',
+  fontFamily: FONT,
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+
+const levelActiveStyle = {
+  background: 'rgba(155,123,255,.22)',
+  borderColor: JUMP,
+  color: '#fff',
+  cursor: 'default',
+};
+
+const levelLabelStyle = { fontWeight: 700, fontSize: '12px', letterSpacing: '.02em' };
+
+const levelSubStyle = {
+  fontSize: '9px',
+  letterSpacing: '.06em',
+  textTransform: 'uppercase',
+  color: 'rgba(255,255,255,.5)',
 };
 
 const sliderRowStyle = { display: 'flex', alignItems: 'center', gap: '8px' };

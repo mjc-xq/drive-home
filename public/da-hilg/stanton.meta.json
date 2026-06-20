@@ -1,0 +1,76 @@
+{
+  "source": "stanton-elementary-property.glb",
+  "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
+  "offset": [
+    -26.245,
+    58.545,
+    50.17
+  ],
+  "groundY": 58.545,
+  "houseCenter": [
+    -26.245,
+    75.7,
+    50.17
+  ],
+  "houseBox": {
+    "min": [
+      -27.585,
+      14.745,
+      -21.17
+    ],
+    "max": [
+      27.585,
+      19.565,
+      21.17
+    ]
+  },
+  "spawns": [
+    [
+      0,
+      0.05,
+      24.17
+    ],
+    [
+      30.585,
+      0.05,
+      0
+    ],
+    [
+      -30.585,
+      0.05,
+      -2
+    ]
+  ],
+  "npcSpawns": [
+    [
+      33.585,
+      0.05,
+      27.17
+    ],
+    [
+      -33.585,
+      0.05,
+      27.17
+    ],
+    [
+      35.585,
+      0.05,
+      -25.17
+    ],
+    [
+      -35.585,
+      0.05,
+      -25.17
+    ],
+    [
+      0,
+      0.05,
+      35.17
+    ],
+    [
+      18,
+      0.05,
+      18
+    ]
+  ]
+}

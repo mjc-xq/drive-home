@@ -1,6 +1,9 @@
-// All tunables for Da Hilg in one place. Pure data, no imports — every module
-// reads from here so there are no magic numbers scattered across systems.
+// All tunables for Da Hilg in one place. Pure data — every module reads from here so
+// there are no magic numbers scattered across systems. (The one import is the
+// dependency-free level registry, which resolves the selected level's asset URLs.)
 // Units are meters / seconds / radians. The character rig is ~1.70 m tall.
+
+import { currentLevel } from './level/levels.js';
 
 // ── Characters ──────────────────────────────────────────────────────────────
 export const CHARACTERS = ['mike', 'kelli', 'cece', 'drew'];
@@ -32,8 +35,10 @@ export const ANIM_URL = {
   hit: '/da-hilg/anims/hit.glb',
   knockdown: '/da-hilg/anims/knockdown.glb',
 };
-export const LEVEL_URL = '/da-hilg/level.glb';
-export const LEVEL_META_URL = '/da-hilg/level.meta.json';
+// The SELECTED level's assets (see level/levels.js). Only this level's files are ever
+// fetched; switching levels reloads the page, so levels never coexist in memory.
+export const LEVEL_URL = currentLevel.glb;
+export const LEVEL_META_URL = currentLevel.meta;
 
 // Dev fast-path: load the raw uncompressed export instead of the built level.
 // Kept false in production; flip locally if the meshopt pipeline is mid-tune.

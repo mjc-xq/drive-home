@@ -20,10 +20,23 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, ...p);
-// Keep this in lockstep with build_dahilg_assets.mjs's LEVEL_SRC so the road line-art
-// shares the exact geometry (and recenter offset) of the level the game actually loads.
-const LEVEL_SRC = SRC('exports', '1840-dahill-property-trees.glb');
-const OUT = SRC('public', 'da-hilg', 'minimap.json');
+
+// Per-level config keyed by slug (process.argv[2], default 'dahill'). Each entry's `src`
+// stays in lockstep with build_dahilg_assets.mjs's LEVELS so the road line-art shares the
+// exact geometry (and recenter offset) of the level the game actually loads. dahill keeps
+// the legacy minimap.json name; canyon/stanton get slug-prefixed outputs.
+const LEVEL_CONFIG = {
+  dahill:  { src: '1840-dahill-property-trees.glb',         out: 'minimap.json' },
+  canyon:  { src: 'canyon-middle-school-property-trees.glb', out: 'canyon.minimap.json' },
+  stanton: { src: 'stanton-elementary-property-trees.glb',  out: 'stanton.minimap.json' },
+};
+const SLUG = process.argv[2] || 'dahill';
+const cfg = LEVEL_CONFIG[SLUG];
+if (!cfg) {
+  throw new Error(`minimap: unknown level slug "${SLUG}". Expected one of: ${Object.keys(LEVEL_CONFIG).join(', ')}.`);
+}
+const LEVEL_SRC = SRC('exports', cfg.src);
+const OUT = SRC('public', 'da-hilg', cfg.out);
 
 const io = new NodeIO()
   .setLogger(new Logger(Logger.Verbosity.ERROR))
@@ -34,7 +47,7 @@ const io = new NodeIO()
     'meshopt.encoder': MeshoptEncoder,
   });
 
-console.log('\n=== Da Hilg minimap build ===');
+console.log(`\n=== Da Hilg minimap build (${SLUG}) ===`);
 const doc = await io.read(LEVEL_SRC);
 const root = doc.getRoot();
 const nodeByName = (nm) => root.listNodes().find((n) => n.getName() === nm);
@@ -183,7 +196,7 @@ const half = Math.max(Math.abs(bounds.minX), Math.abs(bounds.maxX), Math.abs(bou
 const worldHalfExtent = Math.ceil(half);
 
 const minimap = {
-  source: '1840-dahill-property-trees.glb',
+  source: cfg.src,
   note: 'Recentered XZ line-art for the minimap. Coords = world XZ minus offset[0]/offset[2]. ' +
         'Boundary-edge outlines (edges used by exactly one triangle). Segments are [x1,z1,x2,z2].',
   worldHalfExtent,
