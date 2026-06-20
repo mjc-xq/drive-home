@@ -22,6 +22,12 @@ namespace DaHilg
         public bool CameraPressed { get; private set; }
         public bool PausePressed { get; private set; }
         public bool ToggleModePressed { get; private set; }
+        public bool MenuLeftPressed { get; private set; }
+        public bool MenuRightPressed { get; private set; }
+        public bool MenuUpPressed { get; private set; }
+        public bool MenuDownPressed { get; private set; }
+        public bool MenuActivatePressed { get; private set; }
+        public bool MenuCancelPressed { get; private set; }
         public int EmotePressed { get; private set; } = -1;
 
         public void Tick(DaHilgGameSettings settings)
@@ -33,6 +39,12 @@ namespace DaHilg
             CameraPressed = false;
             PausePressed = false;
             ToggleModePressed = false;
+            MenuLeftPressed = false;
+            MenuRightPressed = false;
+            MenuUpPressed = false;
+            MenuDownPressed = false;
+            MenuActivatePressed = false;
+            MenuCancelPressed = false;
             EmotePressed = -1;
             LookDelta = Vector2.zero;
             RunHeld = false;
@@ -41,10 +53,8 @@ namespace DaHilg
             Keyboard keyboard = Keyboard.current;
             if (keyboard != null)
             {
-                keyboardMove.x = (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed ? 1f : 0f)
-                    - (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed ? 1f : 0f);
-                keyboardMove.y = (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed ? 1f : 0f)
-                    - (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed ? 1f : 0f);
+                keyboardMove.x = (keyboard.dKey.isPressed ? 1f : 0f) - (keyboard.aKey.isPressed ? 1f : 0f);
+                keyboardMove.y = (keyboard.wKey.isPressed ? 1f : 0f) - (keyboard.sKey.isPressed ? 1f : 0f);
 
                 RunHeld = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
                 JumpPressed = keyboard.spaceKey.wasPressedThisFrame;
@@ -54,6 +64,12 @@ namespace DaHilg
                 CameraPressed = keyboard.vKey.wasPressedThisFrame;
                 PausePressed = keyboard.escapeKey.wasPressedThisFrame;
                 ToggleModePressed = keyboard.nKey.wasPressedThisFrame;
+                MenuLeftPressed = keyboard.leftArrowKey.wasPressedThisFrame;
+                MenuRightPressed = keyboard.rightArrowKey.wasPressedThisFrame;
+                MenuUpPressed = keyboard.upArrowKey.wasPressedThisFrame;
+                MenuDownPressed = keyboard.downArrowKey.wasPressedThisFrame;
+                MenuActivatePressed = keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame;
+                MenuCancelPressed = keyboard.backspaceKey.wasPressedThisFrame;
 
                 if (keyboard.digit1Key.wasPressedThisFrame) EmotePressed = 0;
                 else if (keyboard.digit2Key.wasPressedThisFrame) EmotePressed = 1;
@@ -64,16 +80,44 @@ namespace DaHilg
             Mouse mouse = Mouse.current;
             if (mouse != null)
             {
-                if (mouse.leftButton.wasPressedThisFrame && Cursor.lockState != CursorLockMode.Locked)
+                if (Cursor.lockState != CursorLockMode.None)
                 {
-                    Cursor.lockState = CursorLockMode.Locked;
-                    Cursor.visible = false;
+                    Cursor.lockState = CursorLockMode.None;
                 }
+                Cursor.visible = true;
 
-                if (Cursor.lockState == CursorLockMode.Locked || mouse.rightButton.isPressed || mouse.leftButton.isPressed)
+                if (mouse.rightButton.isPressed)
                 {
                     LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
                 }
+            }
+
+            Gamepad gamepad = Gamepad.current;
+            if (gamepad != null)
+            {
+                Vector2 stickMove = gamepad.leftStick.ReadValue();
+                if (stickMove.sqrMagnitude > keyboardMove.sqrMagnitude) keyboardMove = stickMove;
+
+                Vector2 stickLook = gamepad.rightStick.ReadValue();
+                if (stickLook.sqrMagnitude > 0.0004f)
+                {
+                    LookDelta += stickLook * settings.CameraSensitivity * 24f;
+                }
+
+                RunHeld = RunHeld || gamepad.leftStickButton.isPressed || gamepad.leftTrigger.ReadValue() > 0.45f;
+                JumpPressed = JumpPressed || gamepad.buttonSouth.wasPressedThisFrame;
+                InteractPressed = InteractPressed || gamepad.buttonWest.wasPressedThisFrame;
+                SwitchPressed = SwitchPressed || gamepad.rightShoulder.wasPressedThisFrame;
+                PreviousSwitchPressed = PreviousSwitchPressed || gamepad.leftShoulder.wasPressedThisFrame;
+                CameraPressed = CameraPressed || gamepad.rightStickButton.wasPressedThisFrame;
+                PausePressed = PausePressed || gamepad.startButton.wasPressedThisFrame;
+                ToggleModePressed = ToggleModePressed || gamepad.selectButton.wasPressedThisFrame;
+                MenuLeftPressed = MenuLeftPressed || gamepad.dpad.left.wasPressedThisFrame;
+                MenuRightPressed = MenuRightPressed || gamepad.dpad.right.wasPressedThisFrame;
+                MenuUpPressed = MenuUpPressed || gamepad.dpad.up.wasPressedThisFrame;
+                MenuDownPressed = MenuDownPressed || gamepad.dpad.down.wasPressedThisFrame;
+                MenuActivatePressed = MenuActivatePressed || gamepad.buttonSouth.wasPressedThisFrame;
+                MenuCancelPressed = MenuCancelPressed || gamepad.buttonEast.wasPressedThisFrame;
             }
 
             if (m_TouchMoveActive)

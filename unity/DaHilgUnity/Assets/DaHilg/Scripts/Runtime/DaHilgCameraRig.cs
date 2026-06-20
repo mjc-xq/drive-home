@@ -22,6 +22,8 @@ namespace DaHilg
             m_CurrentDistance = settings.ThirdPersonDistance;
             if (m_Camera != null)
             {
+                m_Camera.clearFlags = CameraClearFlags.SolidColor;
+                m_Camera.backgroundColor = new Color(0.47f, 0.66f, 0.84f, 1f);
                 m_Camera.fieldOfView = 68f;
                 m_Camera.nearClipPlane = 0.1f;
                 m_Camera.farClipPlane = 600f;

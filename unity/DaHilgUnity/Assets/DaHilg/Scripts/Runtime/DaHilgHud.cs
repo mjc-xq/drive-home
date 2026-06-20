@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -30,6 +31,18 @@ namespace DaHilg
         Vector2 m_JoyCenter;
         Vector2 m_LookLast;
         readonly List<Button> m_CharacterButtons = new List<Button>(4);
+        readonly List<Button> m_EmoteButtons = new List<Button>(4);
+        readonly List<MenuEntry> m_MenuEntries = new List<MenuEntry>(8);
+        int m_SelectedMenuIndex = -1;
+        bool m_MenuFocused;
+
+        struct MenuEntry
+        {
+            public Button Button;
+            public int Row;
+            public int Column;
+            public Action Activate;
+        }
 
         public void Initialize(DaHilgGameManager manager, DaHilgInputRouter input)
         {
@@ -72,10 +85,66 @@ namespace DaHilg
                 button.style.borderBottomColor = button.style.borderTopColor.value;
                 button.style.borderLeftColor = button.style.borderTopColor.value;
                 button.style.borderRightColor = button.style.borderTopColor.value;
+                button.style.borderTopWidth = active ? 2 : 1;
+                button.style.borderBottomWidth = button.style.borderTopWidth.value;
+                button.style.borderLeftWidth = button.style.borderTopWidth.value;
+                button.style.borderRightWidth = button.style.borderTopWidth.value;
             }
 
             RefreshResponsiveControls();
+            EnsureMenuSelection();
+            ApplyMenuSelectionStyles();
             m_Minimap?.SetManager(m_Manager);
+        }
+
+        public bool TickMenuInput(DaHilgInputRouter input)
+        {
+            if (input == null || m_MenuEntries.Count == 0) return false;
+
+            bool moved = false;
+            if (input.MenuLeftPressed)
+            {
+                MoveMenuSelection(-1, 0);
+                moved = true;
+            }
+            if (input.MenuRightPressed)
+            {
+                MoveMenuSelection(1, 0);
+                moved = true;
+            }
+            if (input.MenuUpPressed)
+            {
+                MoveMenuSelection(0, 1);
+                moved = true;
+            }
+            if (input.MenuDownPressed)
+            {
+                MoveMenuSelection(0, -1);
+                moved = true;
+            }
+
+            if (moved)
+            {
+                m_MenuFocused = true;
+                FocusSelectedMenuButton();
+                ApplyMenuSelectionStyles();
+                return false;
+            }
+
+            if (input.MenuCancelPressed && m_MenuFocused)
+            {
+                m_MenuFocused = false;
+                ApplyMenuSelectionStyles();
+                return true;
+            }
+
+            if (input.MenuActivatePressed && m_MenuFocused)
+            {
+                ActivateSelectedMenuEntry();
+                return true;
+            }
+
+            return false;
         }
 
         void Build()
@@ -205,11 +274,16 @@ namespace DaHilg
             m_Root.Add(m_CharacterBar);
 
             m_CharacterButtons.Clear();
+            RemoveMenuEntriesForRow(0);
             for (int i = 0; i < m_Manager.Settings.Characters.Length; i++)
             {
                 DaHilgCharacterSlot slot = m_Manager.Settings.Characters[i];
-                Button button = new Button(() => m_Manager.SwitchTo(slot.Id)) { text = slot.Label };
+                string slotId = slot.Id;
+                Action activate = () => m_Manager.SwitchTo(slotId);
+                Button button = new Button(activate) { text = slot.Label };
                 button.userData = slot.Id;
+                button.focusable = true;
+                button.tabIndex = i;
                 button.style.marginLeft = 4;
                 button.style.marginRight = 4;
                 button.style.height = 34;
@@ -227,6 +301,7 @@ namespace DaHilg
                 button.style.borderBottomRightRadius = 6;
                 m_CharacterBar.Add(button);
                 m_CharacterButtons.Add(button);
+                RegisterMenuButton(button, 0, i, activate);
             }
         }
 
@@ -443,11 +518,16 @@ namespace DaHilg
             m_EmoteBar.style.borderBottomLeftRadius = 8;
             m_EmoteBar.style.borderBottomRightRadius = 8;
 
+            m_EmoteButtons.Clear();
+            RemoveMenuEntriesForRow(1);
             string[] labels = { "Dance", "Wave", "Cheer", "Tag" };
             for (int i = 0; i < labels.Length; i++)
             {
                 int index = i;
-                Button button = new Button(() => m_Input.QueueTouchEmote(index)) { text = labels[i] };
+                Action activate = () => m_Input.QueueTouchEmote(index);
+                Button button = new Button(activate) { text = labels[i] };
+                button.focusable = true;
+                button.tabIndex = 10 + i;
                 button.style.marginLeft = 3;
                 button.style.marginRight = 3;
                 button.style.height = 30;
@@ -460,9 +540,179 @@ namespace DaHilg
                 button.style.borderBottomLeftRadius = 6;
                 button.style.borderBottomRightRadius = 6;
                 m_EmoteBar.Add(button);
+                m_EmoteButtons.Add(button);
+                RegisterMenuButton(button, 1, i, activate);
             }
 
             m_Root.Add(m_EmoteBar);
+        }
+
+        void RegisterMenuButton(Button button, int row, int column, Action activate)
+        {
+            MenuEntry entry = new MenuEntry
+            {
+                Button = button,
+                Row = row,
+                Column = column,
+                Activate = activate
+            };
+            m_MenuEntries.Add(entry);
+
+            button.RegisterCallback<PointerDownEvent>(_ => SelectMenuButton(button, true));
+            button.RegisterCallback<PointerEnterEvent>(_ => SelectMenuButton(button, true));
+            button.RegisterCallback<FocusInEvent>(_ => SelectMenuButton(button, true));
+        }
+
+        void RemoveMenuEntriesForRow(int row)
+        {
+            for (int i = m_MenuEntries.Count - 1; i >= 0; i--)
+            {
+                if (m_MenuEntries[i].Row == row) m_MenuEntries.RemoveAt(i);
+            }
+            m_SelectedMenuIndex = Mathf.Clamp(m_SelectedMenuIndex, -1, m_MenuEntries.Count - 1);
+        }
+
+        void EnsureMenuSelection()
+        {
+            if (m_SelectedMenuIndex >= 0 && m_SelectedMenuIndex < m_MenuEntries.Count) return;
+
+            int activeCharacter = -1;
+            if (m_Manager != null && m_Manager.ActiveActor != null)
+            {
+                for (int i = 0; i < m_MenuEntries.Count; i++)
+                {
+                    if (m_MenuEntries[i].Row == 0 && (m_MenuEntries[i].Button.userData as string) == m_Manager.ActiveActor.Id)
+                    {
+                        activeCharacter = i;
+                        break;
+                    }
+                }
+            }
+
+            m_SelectedMenuIndex = activeCharacter >= 0 ? activeCharacter : (m_MenuEntries.Count > 0 ? 0 : -1);
+        }
+
+        void SelectMenuButton(Button button, bool focused)
+        {
+            for (int i = 0; i < m_MenuEntries.Count; i++)
+            {
+                if (m_MenuEntries[i].Button != button) continue;
+                m_SelectedMenuIndex = i;
+                m_MenuFocused = focused;
+                ApplyMenuSelectionStyles();
+                return;
+            }
+        }
+
+        void MoveMenuSelection(int columnDelta, int rowDelta)
+        {
+            EnsureMenuSelection();
+            if (m_SelectedMenuIndex < 0 || m_SelectedMenuIndex >= m_MenuEntries.Count) return;
+
+            MenuEntry current = m_MenuEntries[m_SelectedMenuIndex];
+            int targetRow = current.Row + rowDelta;
+            if (!HasMenuRow(targetRow))
+            {
+                targetRow = rowDelta > 0 ? LowestMenuRow() : HighestMenuRow();
+            }
+
+            int targetColumn = current.Column + columnDelta;
+            m_SelectedMenuIndex = FindClosestMenuEntry(targetRow, targetColumn, columnDelta);
+        }
+
+        bool HasMenuRow(int row)
+        {
+            for (int i = 0; i < m_MenuEntries.Count; i++)
+            {
+                if (m_MenuEntries[i].Row == row) return true;
+            }
+            return false;
+        }
+
+        int LowestMenuRow()
+        {
+            int row = int.MaxValue;
+            for (int i = 0; i < m_MenuEntries.Count; i++) row = Mathf.Min(row, m_MenuEntries[i].Row);
+            return row == int.MaxValue ? 0 : row;
+        }
+
+        int HighestMenuRow()
+        {
+            int row = int.MinValue;
+            for (int i = 0; i < m_MenuEntries.Count; i++) row = Mathf.Max(row, m_MenuEntries[i].Row);
+            return row == int.MinValue ? 0 : row;
+        }
+
+        int FindClosestMenuEntry(int row, int column, int columnDelta)
+        {
+            int first = -1;
+            int last = -1;
+            int closest = -1;
+            int closestDistance = int.MaxValue;
+
+            for (int i = 0; i < m_MenuEntries.Count; i++)
+            {
+                MenuEntry entry = m_MenuEntries[i];
+                if (entry.Row != row) continue;
+                if (first < 0 || entry.Column < m_MenuEntries[first].Column) first = i;
+                if (last < 0 || entry.Column > m_MenuEntries[last].Column) last = i;
+
+                int distance = Mathf.Abs(entry.Column - column);
+                if (distance < closestDistance)
+                {
+                    closest = i;
+                    closestDistance = distance;
+                }
+            }
+
+            if (closest >= 0 && columnDelta == 0) return closest;
+            if (closest >= 0 && m_MenuEntries[closest].Column == column) return closest;
+            if (columnDelta > 0 && last >= 0 && column > m_MenuEntries[last].Column) return first;
+            if (columnDelta < 0 && first >= 0 && column < m_MenuEntries[first].Column) return last;
+            return closest >= 0 ? closest : m_SelectedMenuIndex;
+        }
+
+        void FocusSelectedMenuButton()
+        {
+            if (m_SelectedMenuIndex < 0 || m_SelectedMenuIndex >= m_MenuEntries.Count) return;
+            m_MenuEntries[m_SelectedMenuIndex].Button.Focus();
+        }
+
+        void ActivateSelectedMenuEntry()
+        {
+            if (m_SelectedMenuIndex < 0 || m_SelectedMenuIndex >= m_MenuEntries.Count) return;
+            MenuEntry entry = m_MenuEntries[m_SelectedMenuIndex];
+            entry.Button.Focus();
+            entry.Activate?.Invoke();
+            ApplyMenuSelectionStyles();
+        }
+
+        void ApplyMenuSelectionStyles()
+        {
+            for (int i = 0; i < m_MenuEntries.Count; i++)
+            {
+                MenuEntry entry = m_MenuEntries[i];
+                Button button = entry.Button;
+                bool selected = m_MenuFocused && i == m_SelectedMenuIndex;
+                bool activeCharacter = entry.Row == 0
+                    && m_Manager != null
+                    && m_Manager.ActiveActor != null
+                    && (button.userData as string) == m_Manager.ActiveActor.Id;
+
+                Color border = selected
+                    ? new Color(1f, 0.78f, 0.22f, 1f)
+                    : (activeCharacter ? Color.white : new Color(1f, 1f, 1f, 0.24f));
+                float borderWidth = selected ? 3f : (activeCharacter ? 2f : 1f);
+
+                button.style.borderTopColor = border;
+                button.style.borderBottomColor = border;
+                button.style.borderLeftColor = border;
+                button.style.borderRightColor = border;
+                button.style.borderTopWidth = borderWidth;
+                button.style.borderBottomWidth = borderWidth;
+                button.style.borderLeftWidth = borderWidth;
+                button.style.borderRightWidth = borderWidth;
+            }
         }
 
         void OnJoyDown(PointerDownEvent e)
