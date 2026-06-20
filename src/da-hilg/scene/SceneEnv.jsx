@@ -150,7 +150,7 @@ export default function SceneEnv() {
     const prevTone = gl.toneMapping;
     const prevExp = gl.toneMappingExposure;
     gl.toneMapping = THREE.ACESFilmicToneMapping;
-    gl.toneMappingExposure = 1.05;
+    gl.toneMappingExposure = 1.12;
     return () => {
       gl.toneMapping = prevTone;
       gl.toneMappingExposure = prevExp;
@@ -171,7 +171,10 @@ export default function SceneEnv() {
       {/* Sky/ground bounce — warm-blue sky over a sun-warmed ground. Lifted from 0.34
           so shadowed faces and the undersides of characters keep real fill (the AO
           pass re-darkens crevices, so this can be generous without going flat). */}
-      <hemisphereLight args={['#cfe1ff', '#6b6346', 0.55]} />
+      {/* Near-neutral sky bounce: the strongly-blue sky tint (#cfe1ff) was washing the
+          up-facing aerial terrain teal. A warmer-neutral sky lets the ground read as its
+          real satellite colour while still giving fill. */}
+      <hemisphereLight args={['#e8ece6', '#6b6346', 0.5]} />
 
       {/* The sun: strong warm key with crisp shadows — gives form to the neighborhood
           and the characters. Brighter (3.2) and a hair warmer for a midday-sun read.
@@ -199,7 +202,7 @@ export default function SceneEnv() {
       {/* Cool sky fill from the opposite side so shadowed faces keep shape and a
           believable cool bounce. Up from 0.55 → 0.8 so back/shadow faces of the
           characters read instead of going muddy. */}
-      <directionalLight position={[-70, 45, -40]} intensity={0.8} color="#b9ccff" />
+      <directionalLight position={[-70, 45, -40]} intensity={0.55} color="#c6d0dc" />
 
       {/* Character key-flatter: a gentle, low warm fill aimed roughly down the sunny
           side, kept soft so it lifts the skinned characters (who otherwise read
@@ -209,7 +212,7 @@ export default function SceneEnv() {
 
       {/* Minimal ambient so deep shadows aren't crushed to pure black. Slightly up
           (0.12 → 0.16) now that AO restores contact darkness in the composited pass. */}
-      <ambientLight intensity={0.16} />
+      <ambientLight intensity={0.22} />
     </>
   );
 }
