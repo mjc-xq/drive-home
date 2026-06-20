@@ -23,7 +23,7 @@
 //   useFrame. This is NOT the simulation — it never touches refs/physics — so it
 //   is fine to run independently of GameSystems' single sim loop.
 
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
