@@ -24,6 +24,13 @@ export const ANIM_URL = {
   wave: '/da-hilg/anims/wave.glb',
   cheer: '/da-hilg/anims/cheer.glb',
   attack: '/da-hilg/anims/attack.glb',
+  // Jack-Hartmann emote set (same 24-bone rig): climb = nibblers clinging on a body;
+  // crawl/stumble/hit/knockdown drive the player's overwhelm arc.
+  climb: '/da-hilg/anims/climb.glb',
+  crawl: '/da-hilg/anims/crawl.glb',
+  stumble: '/da-hilg/anims/stumble.glb',
+  hit: '/da-hilg/anims/hit.glb',
+  knockdown: '/da-hilg/anims/knockdown.glb',
 };
 export const LEVEL_URL = '/da-hilg/level.glb';
 export const LEVEL_META_URL = '/da-hilg/level.meta.json';

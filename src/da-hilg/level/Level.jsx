@@ -17,7 +17,7 @@ import { useDaHilgGLTF } from '../loaders.js';
 import { levelMeta } from '../state/refs.js';
 import { LEVEL_URL } from '../constants.js';
 import { showFacadesAtom, showWaterAtom, showGrassAtom } from '../state/settingsAtoms.js';
-import { CreekWater, computeCreekBounds, hideCreekClutter } from './CreekWater.jsx';
+import { CreekWater, computeCreekBounds, hideCreekClutter, setMeshVisible } from './CreekWater.jsx';
 import { WindGrass } from './WindGrass.jsx';
 import { InstanceCulling } from './InstanceCulling.jsx';
 
@@ -285,6 +285,12 @@ export function Level({ onReady }) {
       const b = computeCreekBounds(scene);
       setCreekBounds(b);
       if (b) hideCreekClutter(scene, b);
+      // Hide the authored creek SOURCE meshes — Creek_FlowLines reads as road-marker
+      // lines and Creek_Banks/Creek_SanLorenzo as brown sidewalk / hill-climbing water.
+      // The flat CreekWater plane replaces them; keep Rocks + Reeds as decoration.
+      setMeshVisible(scene, 'Creek_FlowLines', false);
+      setMeshVisible(scene, 'Creek_Banks', false);
+      setMeshVisible(scene, 'Creek_SanLorenzo', false);
       onReadyRef.current?.();
     });
     return () => cancelAnimationFrame(raf);

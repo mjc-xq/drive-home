@@ -40,9 +40,9 @@ const _basis = new THREE.Matrix4();
 /** @type {(NpcEntry|null)[]} */
 export const npcPool = new Array(MAX_NIBBLERS).fill(null);
 
-/** The fixed character (registry charIx) for SoA slot i — even=cece, odd=drew. */
+/** The fixed character (registry charIx) for SoA slot i — slots cycle the roster. */
 export function slotCharIx(i) {
-  return NIBBLER_NPC_CHAR_IX[i & 1];
+  return NIBBLER_NPC_CHAR_IX[i % NIBBLER_NPC_CHAR_IX.length];
 }
 
 /**

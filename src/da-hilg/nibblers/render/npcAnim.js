@@ -32,7 +32,7 @@ import { retargetSkinSafeClip } from '../../animation/clips.js';
 const BAND_TO_CLIP = {
   [CLIP_IDLE]: 'idle',
   [CLIP_RUN]: 'run',
-  [CLIP_ATTACK]: 'attack', // aggressive ground-slam while clinging (not the cheer)
+  [CLIP_ATTACK]: 'climb', // clinging/climbing on the player's body (Jack-Hartmann climb)
   [CLIP_DANCE]: 'dance',
 };
 
@@ -55,7 +55,7 @@ function fadeFor(key) {
 export function bindNpcActions(mixer, clipByKey, targetRoot, character) {
   /** @type {Record<string, THREE.AnimationAction>} */
   const actions = {};
-  for (const key of ['idle', 'walk', 'run', 'attack', 'dance']) {
+  for (const key of ['idle', 'walk', 'run', 'climb', 'attack', 'dance']) {
     const source = clipByKey[key];
     const sourceClip = source?.clip;
     if (!sourceClip) continue;
@@ -71,6 +71,9 @@ export function bindNpcActions(mixer, clipByKey, targetRoot, character) {
 
 function clipKeyFor(e, band) {
   if (band === CLIP_RUN && e.character === 'drew') return 'walk';
+  // Clinging band → this NPC's stable variant (mostly climb, a slice slam) for a
+  // varied pile instead of a uniform horde.
+  if (band === CLIP_ATTACK) return e.clingClip || 'climb';
   return BAND_TO_CLIP[band] || 'idle';
 }
 
