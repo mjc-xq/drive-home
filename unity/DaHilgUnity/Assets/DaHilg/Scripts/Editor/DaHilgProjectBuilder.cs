@@ -174,7 +174,7 @@ namespace DaHilg.Editor
   </head>
   <body>
     <div id=""unity-container"">
-      <canvas id=""unity-canvas"" width=""1280"" height=""720"" tabindex=""-1""></canvas>
+      <canvas id=""unity-canvas"" width=""1280"" height=""720"" tabindex=""0""></canvas>
       <div id=""unity-loading-bar"">
         <div id=""unity-logo""></div>
         <div id=""unity-progress-bar-empty"">
@@ -185,6 +185,37 @@ namespace DaHilg.Editor
     </div>
     <script>
       const canvas = document.querySelector('#unity-canvas');
+      const getCanvasContext = canvas.getContext.bind(canvas);
+      canvas.getContext = (contextType, attributes) => {
+        if (contextType === 'webgl' || contextType === 'webgl2') {
+          attributes = {
+            ...attributes,
+            alpha: false,
+            premultipliedAlpha: false,
+            preserveDrawingBuffer: true
+          };
+        }
+        return getCanvasContext(contextType, attributes);
+      };
+
+      function releasePointerLock() {
+        if (document.pointerLockElement && document.exitPointerLock) {
+          document.exitPointerLock();
+        }
+      }
+
+      document.addEventListener('pointerlockchange', () => window.setTimeout(releasePointerLock, 0));
+      document.addEventListener('webkitpointerlockchange', () => window.setTimeout(releasePointerLock, 0));
+
+      function focusCanvas() {
+        try {
+          canvas.focus({ preventScroll: true });
+        } catch (_) {
+          canvas.focus();
+        }
+      }
+
+      canvas.addEventListener('pointerdown', focusCanvas);
 
       function unityShowBanner(msg, type) {
         const warningBanner = document.querySelector('#unity-warning');
@@ -209,7 +240,8 @@ namespace DaHilg.Editor
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
-        productVersion: '1.0',
+        productVersion: '1.2',
+        webglContextAttributes: { alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 2 },
         showBanner: unityShowBanner
       };
 
@@ -223,6 +255,11 @@ namespace DaHilg.Editor
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
           document.querySelector('#unity-loading-bar').style.display = 'none';
+          if (unityInstance.Module && unityInstance.Module.WebGLInput) {
+            unityInstance.Module.WebGLInput._stickyCursorLock = false;
+          }
+          releasePointerLock();
+          focusCanvas();
         }).catch((message) => {
           alert(message);
         });
@@ -849,7 +886,8 @@ body {
             GameObject cameraObject = new GameObject("Main Camera");
             cameraObject.tag = "MainCamera";
             Camera camera = cameraObject.AddComponent<Camera>();
-            camera.clearFlags = CameraClearFlags.Skybox;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = new Color(0.47f, 0.66f, 0.84f, 1f);
             camera.nearClipPlane = 0.1f;
             camera.farClipPlane = 600f;
             cameraObject.AddComponent<AudioListener>();

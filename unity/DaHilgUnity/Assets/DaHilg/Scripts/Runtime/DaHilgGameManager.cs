@@ -53,24 +53,32 @@ namespace DaHilg
 
             Mode = Settings.DefaultMode;
             m_ModeStartedAt = Time.time;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Debug.Log("[DaHilg] Runtime start.");
             LoadLevel(ResolveLevelSlug());
             SpawnActors();
             SwitchTo(Settings.DefaultCharacterId);
             BuildNibblerPool();
 
             if (Hud != null) Hud.Initialize(this, Input);
+            Debug.Log("[DaHilg] Runtime ready: level=" + (m_CurrentLevel != null ? m_CurrentLevel.Slug : "none")
+                + ", actors=" + m_Actors.Count
+                + ", active=" + (m_ActiveActor != null ? m_ActiveActor.Id : "none")
+                + ", hud=" + (Hud != null));
         }
 
         void Update()
         {
             float dt = Mathf.Min(Time.deltaTime, 1f / 30f);
             Input.Tick(Settings);
+            bool menuConsumedInput = Hud != null && Hud.TickMenuInput(Input);
 
             if (Input.PausePressed)
             {
                 m_Paused = !m_Paused;
-                Cursor.lockState = m_Paused ? CursorLockMode.None : Cursor.lockState;
-                Cursor.visible = m_Paused;
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
             }
 
             if (m_Paused)
@@ -91,7 +99,7 @@ namespace DaHilg
             bool pinned = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmStop;
             if (m_ActiveActor != null)
             {
-                m_ActiveActor.StepPlayer(Input.Move, Input.RunHeld, Input.JumpPressed, CameraRig != null ? CameraRig.Yaw : 0f, Settings, dt, Time.time, crawlOnly, pinned);
+                m_ActiveActor.StepPlayer(Input.Move, Input.RunHeld, !menuConsumedInput && Input.JumpPressed, CameraRig != null ? CameraRig.Yaw : 0f, Settings, dt, Time.time, crawlOnly, pinned);
             }
 
             for (int i = 0; i < m_Actors.Count; i++)
@@ -104,7 +112,7 @@ namespace DaHilg
             ClampToLevelBounds();
 
             if (Mode == DaHilgGameMode.Nibblers) TickNibblers(dt);
-            else TickGreetMode();
+            else TickGreetMode(menuConsumedInput);
 
             Hud?.Refresh();
         }
@@ -201,6 +209,7 @@ namespace DaHilg
             DaHilgLevelRuntime.ApplyLevelOffset(level, m_CurrentLevel);
             m_LevelRoot = level.transform;
             DaHilgLevelRuntime.PrepareLevelColliders(level);
+            Debug.Log("[DaHilg] Level loaded: " + m_CurrentLevel.Slug + ".");
         }
 
         void SpawnActors()
@@ -232,6 +241,7 @@ namespace DaHilg
                 actor.SetRole(DaHilgActorRole.Npc, Time.time);
                 m_Actors.Add(actor);
             }
+            Debug.Log("[DaHilg] Actors spawned: " + m_Actors.Count + ".");
         }
 
         void TickNpc(DaHilgActor actor, float dt)
@@ -362,7 +372,7 @@ namespace DaHilg
             actor.StepNpc(toPlayer.normalized, true, Settings, dt, Time.time);
         }
 
-        void TickGreetMode()
+        void TickGreetMode(bool menuConsumedInput)
         {
             m_NearbyGreetable = null;
             if (m_ActiveActor == null) return;
@@ -381,7 +391,7 @@ namespace DaHilg
                 }
             }
 
-            if (Input.InteractPressed) RequestGreet();
+            if (!menuConsumedInput && Input.InteractPressed) RequestGreet();
         }
 
         void BuildNibblerPool()
