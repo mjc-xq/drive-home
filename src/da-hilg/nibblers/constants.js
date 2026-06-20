@@ -1,5 +1,8 @@
-// All Nibblers tunables in one place. Pure data, no imports. Units: meters /
-// seconds / radians. The swarm is a flat typed-array sim (see swarm/swarmState.js).
+// All Nibblers tunables in one place. Pure data (the one import is the dependency-free
+// level registry, for the selected level's minimap URL). Units: meters / seconds /
+// radians. The swarm is a flat typed-array sim (see swarm/swarmState.js).
+
+import { currentLevel } from '../level/levels.js';
 //
 // As of the NPC rework the horde is no longer a VAT InstancedMesh. The SoA sim is
 // unchanged (it stays the single source of truth for marked/active/attached counts,
@@ -175,7 +178,7 @@ export const NIBBLER_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 // (decimated 26k) are finally light enough to clone alongside cece (5.6k) + drew (13k).
 export const NIBBLER_NPC_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 export const NIBBLER_NPC_CHAR_IX = [0, 1, 2, 3]; // their indices in NIBBLER_CHARS
-export const MINIMAP_URL = '/da-hilg/minimap.json';
+export const MINIMAP_URL = currentLevel.minimap; // selected level's minimap (see level/levels.js)
 
 // Per-character tints — now a FAINT variety nudge layered on top of the REAL baseColor
 // texture (the dominant look). Kept near-white so each member reads as themselves; a

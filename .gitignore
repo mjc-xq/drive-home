@@ -19,3 +19,4 @@ drive-*.jpeg
 /*.jpeg
 /*.png
 /.playwright-mcp/
+.vercel

@@ -55,6 +55,20 @@ const mb = (bytes) => (bytes / 1e6).toFixed(2) + ' MB';
 const written = [];          // { path, bytes } for the final summary
 const DRACO_EXT = 'KHR_draco_mesh_compression';
 
+// ---- LEVELS: the three shippable levels, each built from its own raw export ----
+// All three exports share an IDENTICAL node structure (Collision_Terrain/Roads/Buildings/
+// Trees, House_walls, LOD_Buildings_Low) so the generic level + meta passes below run
+// unchanged per source. dahill keeps the legacy level.glb/level.meta.json names for
+// backward-compat; canyon/stanton get their own slug-named outputs.
+//   - src:        the raw export filename in exports/
+//   - out:        output basename → OUT(`${out}.glb`) + OUT(`${out}.meta.json`)
+//   - metaSource: the `source` string recorded in the .meta.json (the original property GLB)
+const LEVELS = [
+  { src: '1840-dahill-property-trees.glb',         out: 'level',   metaSource: '1840-dahill-property.glb' },
+  { src: 'canyon-middle-school-property-trees.glb', out: 'canyon',  metaSource: 'canyon-middle-school-property.glb' },
+  { src: 'stanton-elementary-property-trees.glb',  out: 'stanton', metaSource: 'stanton-elementary-property.glb' },
+];
+
 // ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----
 // textureCompress can throw if sharp can't decode an image; per the spec we WARN and
 // continue (skip texture compression) rather than failing the whole build.
@@ -316,86 +330,102 @@ function instanceStaticRepeats(doc, { min = 4 } = {}) {
 }
 
 // =====================================================================================
+// LEVEL builder: meshopt + webp for ONE level. Keep geometry as-is (no recenter of verts).
+// Preserve the named collision/helper nodes. Drop the hidden LOD_Buildings_Low duplicate.
+// Generic over `src` (raw export filename) and `out` (output basename) — every Da Hilg
+// level export shares the same node structure, so this runs unchanged per source.
+// Returns the source byte size (the dahill call stashes it for the summary).
+// -------------------------------------------------------------------------------------
+async function buildLevelGlb({ src, out }) {
+  console.log(`\n[1/4] ${out}.glb  <- exports/${src}`);
+  // The full, textured, tree+fence-rich neighborhood export (always grab the freshest
+  // from exports/ when re-importing — see docs/dahilg-neighborhood-export.md).
+  const levelSrc = SRC('exports', src);
+  const srcBytes = statSync(levelSrc).size;
+  const levelDoc = await io.read(levelSrc);
+  {
+    const root = levelDoc.getRoot();
+
+    // Drop LOD_Buildings_Low (don't ship a hidden duplicate LOD).
+    const lod = root.listNodes().find((n) => n.getName() === 'LOD_Buildings_Low');
+    if (lod) {
+      const mesh = lod.getMesh();
+      lod.dispose();
+      // Dispose the now-orphaned mesh too so prune doesn't keep it reachable.
+      if (mesh && mesh.listParents().filter((p) => p.propertyType === 'Node').length === 0) {
+        mesh.dispose();
+      }
+      console.log('  dropped node LOD_Buildings_Low');
+    } else {
+      console.log('  (LOD_Buildings_Low not present — nothing to drop)');
+    }
+
+    // Sanity: the collision/helper nodes the game relies on must still exist.
+    const KEEP = ['Collision_Terrain', 'Collision_Roads', 'Collision_Buildings', 'Collision_Trees'];
+    for (const nm of KEEP) {
+      if (!root.listNodes().some((n) => n.getName() === nm)) {
+        throw new Error(`${out}.glb: required collision node "${nm}" is missing before write.`);
+      }
+    }
+    console.log('  preserved collision nodes: ' + KEEP.join(', '));
+
+    // Visual/collision separation: the Collision_* meshes are physics-only (the runtime
+    // bakes a trimesh collider from them and hides them). Strip their materials so the
+    // shipped GLB carries no texture/material payload for geometry the player never sees.
+    let strippedPrims = 0;
+    for (const node of root.listNodes()) {
+      if (!node.getName().startsWith('Collision_')) continue;
+      const mesh = node.getMesh();
+      if (!mesh) continue;
+      for (const prim of mesh.listPrimitives()) {
+        if (prim.getMaterial()) { prim.setMaterial(null); strippedPrims++; }
+      }
+    }
+    console.log(`  stripped material from ${strippedPrims} collision primitive(s)`);
+
+    // GPU-instance the repeated trees/fences: the tree-lib is reused across hundreds of
+    // nodes. dedup() first collapses identical placed meshes to ONE shared mesh each, then
+    // our instanceStaticRepeats() emits EXT_mesh_gpu_instancing per reused mesh → three
+    // renders each as an InstancedMesh (a handful of draw calls instead of ~900). We can't
+    // use gltf-transform's instance() here because it aborts on the GrassWind animation;
+    // our pass folds only the non-animated tree/fence nodes and leaves the grass alone.
+    await levelDoc.transform(dedup());
+    instanceStaticRepeats(levelDoc, { min: 4 });
+
+    // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
+    // their mesh is disposed) collision helpers survive even if their mesh were dropped —
+    // but here the collision meshes are real geometry and stay intact.
+    await meshoptPipeline(levelDoc, `${out}.glb`, { quantizationVolume: 'scene' }, 1024);
+  }
+  await writeAndVerify(levelDoc, OUT(`${out}.glb`), { label: out });
+
+  // Round-trip / render check: re-read the written level + recompute bounds (proves the
+  // meshopt geometry decodes back cleanly with the registered MeshoptDecoder).
+  const levelOut = await io.read(OUT(`${out}.glb`));
+  {
+    const outRoot = levelOut.getRoot();
+    const scene = outRoot.listScenes()[0];
+    const b = getBounds(scene);
+    if (!b || b.min.some(Number.isNaN) || b.max.some(Number.isNaN)) {
+      throw new Error(`${out}.glb round-trip FAILED: scene bounds are NaN (geometry did not decode).`);
+    }
+    console.log(`  round-trip OK: ${outRoot.listMeshes().length} meshes, ` +
+      `bounds min=[${b.min.map((v) => v.toFixed(1))}] max=[${b.max.map((v) => v.toFixed(1))}]`);
+  }
+  return srcBytes;
+}
+
+// =====================================================================================
 console.log('\n=== Da Hilg asset build ===');
 
 // -------------------------------------------------------------------------------------
-// 1) LEVEL: meshopt + webp. Keep geometry as-is (no recenter of verts). Preserve the
-//    named collision/helper nodes. Drop the hidden LOD_Buildings_Low duplicate.
+// 1) LEVELS: build the meshopt level GLB for all three properties. dahill's source bytes
+//    feed the summary's "level + 4 chars" reduction figure.
 // -------------------------------------------------------------------------------------
-console.log('\n[1/4] level.glb');
-// The full, textured, tree+fence-rich neighborhood export (always grab the freshest
-// from exports/ when re-importing — see docs/dahilg-neighborhood-export.md).
-const LEVEL_SRC = SRC('exports', '1840-dahill-property-trees.glb');
-const levelSrcBytes = statSync(LEVEL_SRC).size;
-const levelDoc = await io.read(LEVEL_SRC);
-{
-  const root = levelDoc.getRoot();
-
-  // Drop LOD_Buildings_Low (don't ship a hidden duplicate LOD).
-  const lod = root.listNodes().find((n) => n.getName() === 'LOD_Buildings_Low');
-  if (lod) {
-    const mesh = lod.getMesh();
-    lod.dispose();
-    // Dispose the now-orphaned mesh too so prune doesn't keep it reachable.
-    if (mesh && mesh.listParents().filter((p) => p.propertyType === 'Node').length === 0) {
-      mesh.dispose();
-    }
-    console.log('  dropped node LOD_Buildings_Low');
-  } else {
-    console.log('  (LOD_Buildings_Low not present — nothing to drop)');
-  }
-
-  // Sanity: the collision/helper nodes the game relies on must still exist.
-  const KEEP = ['Collision_Terrain', 'Collision_Roads', 'Collision_Buildings', 'Collision_Trees'];
-  for (const nm of KEEP) {
-    if (!root.listNodes().some((n) => n.getName() === nm)) {
-      throw new Error(`level.glb: required collision node "${nm}" is missing before write.`);
-    }
-  }
-  console.log('  preserved collision nodes: ' + KEEP.join(', '));
-
-  // Visual/collision separation: the Collision_* meshes are physics-only (the runtime
-  // bakes a trimesh collider from them and hides them). Strip their materials so the
-  // shipped GLB carries no texture/material payload for geometry the player never sees.
-  let strippedPrims = 0;
-  for (const node of root.listNodes()) {
-    if (!node.getName().startsWith('Collision_')) continue;
-    const mesh = node.getMesh();
-    if (!mesh) continue;
-    for (const prim of mesh.listPrimitives()) {
-      if (prim.getMaterial()) { prim.setMaterial(null); strippedPrims++; }
-    }
-  }
-  console.log(`  stripped material from ${strippedPrims} collision primitive(s)`);
-
-  // GPU-instance the repeated trees/fences: the tree-lib is reused across hundreds of
-  // nodes. dedup() first collapses identical placed meshes to ONE shared mesh each, then
-  // our instanceStaticRepeats() emits EXT_mesh_gpu_instancing per reused mesh → three
-  // renders each as an InstancedMesh (a handful of draw calls instead of ~900). We can't
-  // use gltf-transform's instance() here because it aborts on the GrassWind animation;
-  // our pass folds only the non-animated tree/fence nodes and leaves the grass alone.
-  await levelDoc.transform(dedup());
-  instanceStaticRepeats(levelDoc, { min: 4 });
-
-  // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
-  // their mesh is disposed) collision helpers survive even if their mesh were dropped —
-  // but here the collision meshes are real geometry and stay intact.
-  await meshoptPipeline(levelDoc, 'level.glb', { quantizationVolume: 'scene' }, 1024);
-}
-await writeAndVerify(levelDoc, OUT('level.glb'), { label: 'level' });
-
-// Round-trip / render check: re-read the written level + recompute bounds (proves the
-// meshopt geometry decodes back cleanly with the registered MeshoptDecoder).
-const levelOut = await io.read(OUT('level.glb'));
-{
-  const outRoot = levelOut.getRoot();
-  const scene = outRoot.listScenes()[0];
-  const b = getBounds(scene);
-  if (!b || b.min.some(Number.isNaN) || b.max.some(Number.isNaN)) {
-    throw new Error('level.glb round-trip FAILED: scene bounds are NaN (geometry did not decode).');
-  }
-  console.log(`  round-trip OK: ${outRoot.listMeshes().length} meshes, ` +
-    `bounds min=[${b.min.map((v) => v.toFixed(1))}] max=[${b.max.map((v) => v.toFixed(1))}]`);
+let levelSrcBytes = 0;
+for (const lv of LEVELS) {
+  const bytes = await buildLevelGlb(lv);
+  if (lv.out === 'level') levelSrcBytes = bytes;   // dahill drives the summary comparison
 }
 
 // -------------------------------------------------------------------------------------
@@ -624,91 +654,104 @@ for (const { out, src } of CHARS) {
 
 // -------------------------------------------------------------------------------------
 // 4) META: compute recenter offset, ground, house bounds, spawns. From the ORIGINAL
-//    (uncompressed source) level geometry so the numbers are exact.
+//    (uncompressed source) level geometry so the numbers are exact. Generic over the
+//    level: reads the SOURCE export `src` (the output GLB has stripped node names, so the
+//    meta MUST come from the source), records `metaSource`, and writes OUT(`${out}.meta.json`).
 // -------------------------------------------------------------------------------------
-console.log('\n[4/4] level.meta.json');
-const metaDoc = await io.read(LEVEL_SRC);
-const metaRoot = metaDoc.getRoot();
-const nodeByName = (nm) => metaRoot.listNodes().find((n) => n.getName() === nm);
-
-const terrainNode = nodeByName('Collision_Terrain');
-const houseNode = nodeByName('House_walls');
-if (!terrainNode) throw new Error('meta: Collision_Terrain node missing — cannot compute groundY.');
-if (!houseNode) throw new Error('meta: House_walls node missing — cannot compute houseCenter.');
-
-const terrainBounds = getBounds(terrainNode);   // world-space AABB
-const houseBounds = getBounds(houseNode);
-
-// groundY: min Y of the walkable terrain (ORIGINAL coords).
-const groundY = terrainBounds.min[1];
-
-// houseCenter: center of House_walls bounds (ORIGINAL coords).
-const houseCenter = [
-  (houseBounds.min[0] + houseBounds.max[0]) / 2,
-  (houseBounds.min[1] + houseBounds.max[1]) / 2,
-  (houseBounds.min[2] + houseBounds.max[2]) / 2,
-];
-
-// offset = the translation to SUBTRACT so the property centers at XZ origin and ground
-// sits at y≈0. = [houseCenterX, groundY, houseCenterZ].
-const offset = [houseCenter[0], groundY, houseCenter[2]];
-const sub = (p) => [p[0] - offset[0], p[1] - offset[1], p[2] - offset[2]];
-const r3 = (n) => Math.round(n * 1000) / 1000;
-
-// houseBox in RECENTERED coords (subtract offset) — used to auto-fit the home SafeZone.
-const houseBox = {
-  min: sub(houseBounds.min).map(r3),
-  max: sub(houseBounds.max).map(r3),
-};
-
-// Recentered house footprint center (≈ origin in XZ) and a half-extent to scatter spawns.
-const hcR = sub(houseCenter);                 // recentered house center
-const hx = (houseBounds.max[0] - houseBounds.min[0]) / 2;
-const hz = (houseBounds.max[2] - houseBounds.min[2]) / 2;
-const groundYR = groundY - offset[1];         // ≈ 0 by construction
-const feetY = r3(groundYR + 0.05);            // feet just above ground
-
-// spawns: 2-3 player spawn points on the property near the house, feet ≈ groundY.
-// Placed just outside the house footprint on a few sides (front/side yard).
-const spawns = [
-  [r3(hcR[0]),               feetY, r3(hcR[2] + hz + 3)],   // front yard
-  [r3(hcR[0] + hx + 3),      feetY, r3(hcR[2])],            // side yard
-  [r3(hcR[0] - hx - 3),      feetY, r3(hcR[2] - 2)],        // other side
-];
-
-// npcSpawns: 4-6 NPC spawn points clustered within ~25 m of origin (near house/street,
-// NOT at the 220 m edges). Ring of points around the house at a modest radius.
-const npcSpawns = [
-  [r3(hcR[0] + hx + 6),  feetY, r3(hcR[2] + hz + 6)],
-  [r3(hcR[0] - hx - 6),  feetY, r3(hcR[2] + hz + 6)],
-  [r3(hcR[0] + hx + 8),  feetY, r3(hcR[2] - hz - 4)],
-  [r3(hcR[0] - hx - 8),  feetY, r3(hcR[2] - hz - 4)],
-  [r3(hcR[0]),           feetY, r3(hcR[2] + hz + 14)],
-  [r3(hcR[0] + 18),      feetY, r3(hcR[2] + 18)],
-];
-
-const meta = {
-  source: '1840-dahill-property.glb',
-  note: 'Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.',
-  offset: offset.map(r3),
-  groundY: r3(groundY),
-  houseCenter: houseCenter.map(r3),
-  houseBox,
-  spawns,
-  npcSpawns,
-};
-
 const { writeFileSync } = await import('node:fs');
-writeFileSync(OUT('level.meta.json'), JSON.stringify(meta, null, 2) + '\n');
-written.push({ path: OUT('level.meta.json'), bytes: statSync(OUT('level.meta.json')).size });
+async function buildLevelMeta({ src, out, metaSource }) {
+  console.log(`\n[4/4] ${out}.meta.json  <- exports/${src}`);
+  const metaDoc = await io.read(SRC('exports', src));
+  const metaRoot = metaDoc.getRoot();
+  const nodeByName = (nm) => metaRoot.listNodes().find((n) => n.getName() === nm);
 
-console.log('  computed meta:');
-console.log(`    offset      = [${meta.offset.join(', ')}]   (subtract from level world coords)`);
-console.log(`    groundY     = ${meta.groundY}   (Collision_Terrain min Y, original coords)`);
-console.log(`    houseCenter = [${meta.houseCenter.join(', ')}]   (House_walls center, original coords)`);
-console.log(`    houseBox    = min[${houseBox.min.join(', ')}] max[${houseBox.max.join(', ')}]   (recentered)`);
-console.log(`    spawns      = ${spawns.length} pts, e.g. [${spawns[0].join(', ')}]   (recentered)`);
-console.log(`    npcSpawns   = ${npcSpawns.length} pts within ~25 m of origin (recentered)`);
+  const terrainNode = nodeByName('Collision_Terrain');
+  const houseNode = nodeByName('House_walls');
+  if (!terrainNode) throw new Error(`meta(${out}): Collision_Terrain node missing — cannot compute groundY.`);
+  if (!houseNode) throw new Error(`meta(${out}): House_walls node missing — cannot compute houseCenter.`);
+
+  const terrainBounds = getBounds(terrainNode);   // world-space AABB
+  const houseBounds = getBounds(houseNode);
+
+  // groundY: min Y of the walkable terrain (ORIGINAL coords).
+  const groundY = terrainBounds.min[1];
+
+  // houseCenter: center of House_walls bounds (ORIGINAL coords).
+  const houseCenter = [
+    (houseBounds.min[0] + houseBounds.max[0]) / 2,
+    (houseBounds.min[1] + houseBounds.max[1]) / 2,
+    (houseBounds.min[2] + houseBounds.max[2]) / 2,
+  ];
+
+  // offset = the translation to SUBTRACT so the property centers at XZ origin and ground
+  // sits at y≈0. = [houseCenterX, groundY, houseCenterZ].
+  const offset = [houseCenter[0], groundY, houseCenter[2]];
+  const sub = (p) => [p[0] - offset[0], p[1] - offset[1], p[2] - offset[2]];
+  const r3 = (n) => Math.round(n * 1000) / 1000;
+
+  // houseBox in RECENTERED coords (subtract offset) — used to auto-fit the home SafeZone.
+  const houseBox = {
+    min: sub(houseBounds.min).map(r3),
+    max: sub(houseBounds.max).map(r3),
+  };
+
+  // Recentered house footprint center (≈ origin in XZ) and a half-extent to scatter spawns.
+  const hcR = sub(houseCenter);                 // recentered house center
+  const hx = (houseBounds.max[0] - houseBounds.min[0]) / 2;
+  const hz = (houseBounds.max[2] - houseBounds.min[2]) / 2;
+  const groundYR = groundY - offset[1];         // ≈ 0 by construction
+  const feetY = r3(groundYR + 0.05);            // feet just above ground
+
+  // spawns: 2-3 player spawn points on the property near the house, feet ≈ groundY.
+  // Placed just outside the house footprint on a few sides (front/side yard).
+  const spawns = [
+    [r3(hcR[0]),               feetY, r3(hcR[2] + hz + 3)],   // front yard
+    [r3(hcR[0] + hx + 3),      feetY, r3(hcR[2])],            // side yard
+    [r3(hcR[0] - hx - 3),      feetY, r3(hcR[2] - 2)],        // other side
+  ];
+
+  // npcSpawns: 4-6 NPC spawn points clustered within ~25 m of origin (near house/street,
+  // NOT at the 220 m edges). Ring of points around the house at a modest radius.
+  const npcSpawns = [
+    [r3(hcR[0] + hx + 6),  feetY, r3(hcR[2] + hz + 6)],
+    [r3(hcR[0] - hx - 6),  feetY, r3(hcR[2] + hz + 6)],
+    [r3(hcR[0] + hx + 8),  feetY, r3(hcR[2] - hz - 4)],
+    [r3(hcR[0] - hx - 8),  feetY, r3(hcR[2] - hz - 4)],
+    [r3(hcR[0]),           feetY, r3(hcR[2] + hz + 14)],
+    [r3(hcR[0] + 18),      feetY, r3(hcR[2] + 18)],
+  ];
+
+  const meta = {
+    source: metaSource,
+    note: 'Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.',
+    offset: offset.map(r3),
+    groundY: r3(groundY),
+    houseCenter: houseCenter.map(r3),
+    houseBox,
+    spawns,
+    npcSpawns,
+  };
+
+  const metaPath = OUT(`${out}.meta.json`);
+  writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
+  written.push({ path: metaPath, bytes: statSync(metaPath).size });
+
+  console.log('  computed meta:');
+  console.log(`    offset      = [${meta.offset.join(', ')}]   (subtract from level world coords)`);
+  console.log(`    groundY     = ${meta.groundY}   (Collision_Terrain min Y, original coords)`);
+  console.log(`    houseCenter = [${meta.houseCenter.join(', ')}]   (House_walls center, original coords)`);
+  console.log(`    houseBox    = min[${houseBox.min.join(', ')}] max[${houseBox.max.join(', ')}]   (recentered)`);
+  console.log(`    spawns      = ${spawns.length} pts, e.g. [${spawns[0].join(', ')}]   (recentered)`);
+  console.log(`    npcSpawns   = ${npcSpawns.length} pts within ~25 m of origin (recentered)`);
+  return meta;
+}
+
+// Build meta for all three levels; keep dahill's for the final summary line.
+let meta;
+for (const lv of LEVELS) {
+  const m = await buildLevelMeta(lv);
+  if (lv.out === 'level') meta = m;   // dahill drives the summary
+}
 
 // =====================================================================================
 // FINAL SUMMARY
