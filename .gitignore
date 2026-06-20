@@ -20,3 +20,23 @@ drive-*.jpeg
 /*.png
 /.playwright-mcp/
 .vercel
+
+# Unity project generated/cache folders
+/unity/DaHilgUnity/[Ll]ibrary/
+/unity/DaHilgUnity/[Tt]emp/
+/unity/DaHilgUnity/[Oo]bj/
+/unity/DaHilgUnity/[Bb]uild/
+/unity/DaHilgUnity/[Bb]uilds/
+/unity/DaHilgUnity/[Dd]ata/
+/unity/DaHilgUnity/[Ll]ogs/
+/unity/DaHilgUnity/[Uu]ser[Ss]ettings/
+/unity/DaHilgUnity/[Mm]emoryCaptures/
+/unity/DaHilgUnity/*.csproj
+/unity/DaHilgUnity/*.sln
+/unity/DaHilgUnity/*.sln.DotSettings.user
+unity-create.log
+unity-build.log
+unity-import.log
+
+# Unity WebGL generated debug sidecars
+/public/unity/**/*[Bb]urst[Dd]ebug[Ii]nformation*[Dd]o[Nn]ot[Ss]hip*/

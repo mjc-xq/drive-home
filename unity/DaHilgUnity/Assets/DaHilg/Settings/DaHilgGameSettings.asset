@@ -1,0 +1,90 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 329dddd92d21941d09e7f1a380c64ca5, type: 3}
+  m_Name: DaHilgGameSettings
+  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgGameSettings
+  Levels:
+  - {fileID: 11400000, guid: 4512fd9c86a3b4659bec174467427dc9, type: 2}
+  - {fileID: 11400000, guid: e26dfc6f257244484ba9445aad1298bf, type: 2}
+  - {fileID: 11400000, guid: 71866c7a06a9245c68fd3cbc16321d84, type: 2}
+  Characters:
+  - Id: mike
+    Label: Mike
+    Blurb: Dad
+    Prefab: {fileID: 6635245195314443262, guid: 09dbf31029fd54aa3888300b9842ac61, type: 3}
+    Accent: {r: 0.36, g: 0.68, b: 1, a: 1}
+    VisualYawOffset: 180
+  - Id: kelli
+    Label: Kelli
+    Blurb: Mom
+    Prefab: {fileID: 6635245195314443262, guid: 92edf880c2b29453e9970245247f4c71, type: 3}
+    Accent: {r: 1, g: 0.67, b: 0.35, a: 1}
+    VisualYawOffset: 180
+  - Id: cece
+    Label: Cece
+    Blurb: Kid
+    Prefab: {fileID: 6635245195314443262, guid: d489bcca463374fb69b3ee813974d303, type: 3}
+    Accent: {r: 1, g: 0.45, b: 0.76, a: 1}
+    VisualYawOffset: 180
+  - Id: drew
+    Label: Drew
+    Blurb: Kid
+    Prefab: {fileID: 6635245195314443262, guid: d272ee557b3d641be828a72806e202b9, type: 3}
+    Accent: {r: 0.42, g: 1, b: 0.58, a: 1}
+    VisualYawOffset: 180
+  CharacterAnimator: {fileID: 9100000, guid: 9e5cb70ce4eab4aa0a686eede89e7973, type: 2}
+  DefaultLevelSlug: dahill
+  DefaultCharacterId: cece
+  DefaultMode: 0
+  DefaultCameraMode: 0
+  WalkSpeed: 4.6
+  RunSpeed: 8.2
+  CrawlSpeed: 1.3
+  GroundAcceleration: 14
+  AirAcceleration: 3
+  JumpVelocity: 5.2
+  Gravity: -18
+  MaxFallSpeed: -40
+  CoyoteTime: 0.12
+  JumpBuffer: 0.1
+  PlayerHeight: 1.7
+  PlayerRadius: 0.3
+  StepOffset: 0.5
+  SlopeLimit: 50
+  CameraSensitivity: 0.12
+  TouchSensitivity: 0.18
+  PitchLimit: 68
+  EyeHeight: 1.62
+  ThirdPersonDistance: 3.8
+  ThirdPersonMinDistance: 0.7
+  ThirdPersonPivotHeight: 1.5
+  ShoulderOffset: {x: 0.55, y: 0.06}
+  CameraSmooth: 12
+  LookSmooth: 22
+  NoticeRadius: 20
+  TouchDistance: 1.4
+  GreetDistance: 2.5
+  RetreatSeconds: 3
+  CooldownSeconds: 2
+  WanderRadius: 12
+  NibblerPoolSize: 32
+  NibblerScale: 0.32
+  NibblerSpawnMinRadius: 8
+  NibblerSpawnMaxRadius: 16
+  NibblerRunSpeed: 4.5
+  NibblerAttachDistance: 0.65
+  NibblerHealthDrainPerAttached: 0.09
+  NibblerHealthDrainCap: 3.2
+  HealthRegen: 5
+  OverwhelmStagger: 5
+  OverwhelmDown: 11
+  OverwhelmStop: 18
