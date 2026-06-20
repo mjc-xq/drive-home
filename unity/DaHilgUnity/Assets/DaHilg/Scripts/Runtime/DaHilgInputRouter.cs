@@ -10,6 +10,7 @@ namespace DaHilg
         bool m_TouchMoveActive;
         bool m_TouchRun;
         bool m_TouchJumpQueued;
+        int m_TouchEmoteQueued = -1;
 
         public Vector2 Move { get; private set; }
         public Vector2 LookDelta { get; private set; }
@@ -34,6 +35,7 @@ namespace DaHilg
             ToggleModePressed = false;
             EmotePressed = -1;
             LookDelta = Vector2.zero;
+            RunHeld = false;
 
             Vector2 keyboardMove = Vector2.zero;
             Keyboard keyboard = Keyboard.current;
@@ -68,9 +70,9 @@ namespace DaHilg
                     Cursor.visible = false;
                 }
 
-                if (Cursor.lockState == CursorLockMode.Locked || mouse.rightButton.isPressed)
+                if (Cursor.lockState == CursorLockMode.Locked || mouse.rightButton.isPressed || mouse.leftButton.isPressed)
                 {
-                    LookDelta = mouse.delta.ReadValue() * settings.CameraSensitivity;
+                    LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
                 }
             }
 
@@ -88,6 +90,12 @@ namespace DaHilg
             {
                 JumpPressed = true;
                 m_TouchJumpQueued = false;
+            }
+
+            if (m_TouchEmoteQueued >= 0)
+            {
+                EmotePressed = m_TouchEmoteQueued;
+                m_TouchEmoteQueued = -1;
             }
 
             if (m_TouchLook.sqrMagnitude > 0f)
@@ -116,6 +124,11 @@ namespace DaHilg
         public void QueueTouchJump()
         {
             m_TouchJumpQueued = true;
+        }
+
+        public void QueueTouchEmote(int index)
+        {
+            m_TouchEmoteQueued = Mathf.Clamp(index, 0, 3);
         }
     }
 }

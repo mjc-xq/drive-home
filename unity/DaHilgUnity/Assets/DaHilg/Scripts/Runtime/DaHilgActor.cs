@@ -35,6 +35,7 @@ namespace DaHilg
         float m_FacingYaw;
         float m_VisualYawOffset;
         string m_CurrentAnim;
+        float m_EmoteUntil;
 
         public string Id { get; private set; }
         public string Label { get; private set; }
@@ -74,13 +75,35 @@ namespace DaHilg
                 visual.transform.localPosition = Vector3.zero;
                 visual.transform.localRotation = Quaternion.identity;
                 m_VisualRoot = visual.transform;
-                m_Animator = visual.GetComponentInChildren<Animator>();
-                if (m_Animator != null)
+                Transform animatorRoot = ResolveAnimatorRoot(visual.transform);
+                m_Animator = animatorRoot.GetComponent<Animator>();
+                if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
+                foreach (Animator childAnimator in visual.GetComponentsInChildren<Animator>(true))
                 {
-                    m_Animator.applyRootMotion = false;
-                    if (m_AnimatorController != null) m_Animator.runtimeAnimatorController = m_AnimatorController;
+                    if (childAnimator != m_Animator) childAnimator.enabled = false;
                 }
+                m_Animator.applyRootMotion = false;
+                m_Animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                if (m_AnimatorController != null) m_Animator.runtimeAnimatorController = m_AnimatorController;
             }
+        }
+
+        static Transform ResolveAnimatorRoot(Transform visualRoot)
+        {
+            if (visualRoot.Find("Armature") != null) return visualRoot;
+            Transform root = FindTransformWithDirectChild(visualRoot, "Armature");
+            return root != null ? root : visualRoot;
+        }
+
+        static Transform FindTransformWithDirectChild(Transform parent, string childName)
+        {
+            if (parent.Find(childName) != null) return parent;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform found = FindTransformWithDirectChild(parent.GetChild(i), childName);
+                if (found != null) return found;
+            }
+            return null;
         }
 
         public void SetRole(DaHilgActorRole role, float now)
@@ -91,6 +114,7 @@ namespace DaHilg
             if (role == DaHilgActorRole.Player)
             {
                 m_HorizontalVelocity = Vector3.zero;
+                m_EmoteUntil = 0f;
                 PlayAnim("Idle", 0.1f);
             }
         }
@@ -106,6 +130,7 @@ namespace DaHilg
             m_HorizontalVelocity = Vector3.zero;
             m_VerticalVelocity = 0f;
             Grounded = true;
+            m_EmoteUntil = 0f;
         }
 
         public void QueueJump(float now)
@@ -155,6 +180,7 @@ namespace DaHilg
             bool coyote = now - m_LastGroundedTime <= settings.CoyoteTime;
             if (bufferedJump && (Grounded || coyote))
             {
+                m_EmoteUntil = 0f;
                 m_VerticalVelocity = settings.JumpVelocity;
                 m_JumpQueuedTime = -100f;
                 Grounded = false;
@@ -195,12 +221,35 @@ namespace DaHilg
                 m_VisualRoot.rotation = Quaternion.Euler(0f, m_FacingYaw + m_VisualYawOffset, 0f);
             }
 
+            if (Time.time < m_EmoteUntil && Grounded && Speed <= 0.2f)
+            {
+                return;
+            }
+
+            if (Speed > 0.2f)
+            {
+                m_EmoteUntil = 0f;
+            }
+
             UpdateLocomotionAnimation();
         }
 
         public void PlayEmote(string emote)
         {
+            m_EmoteUntil = Time.time + EmoteDuration(emote);
             PlayAnim(emote, 0.12f);
+        }
+
+        static float EmoteDuration(string emote)
+        {
+            switch (emote)
+            {
+                case "Dance": return 2.4f;
+                case "Wave": return 1.45f;
+                case "Cheer": return 1.6f;
+                case "Attack": return 1.05f;
+                default: return 1.2f;
+            }
         }
 
         void UpdateLocomotionAnimation()
@@ -220,7 +269,7 @@ namespace DaHilg
         {
             if (m_Animator == null || string.IsNullOrEmpty(stateName) || m_CurrentAnim == stateName) return;
 
-            int hash = Animator.StringToHash(stateName);
+            int hash = Animator.StringToHash("Base Layer." + stateName);
             if (m_Animator.HasState(0, hash))
             {
                 m_Animator.CrossFade(hash, fade);

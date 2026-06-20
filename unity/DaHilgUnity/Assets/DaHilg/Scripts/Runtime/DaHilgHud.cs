@@ -18,8 +18,11 @@ namespace DaHilg
         Label m_Attached;
         VisualElement m_HealthFill;
         VisualElement m_CharacterBar;
+        VisualElement m_EmoteBar;
         VisualElement m_Joy;
         VisualElement m_Knob;
+        Button m_RunButton;
+        Button m_JumpButton;
         int m_JoyPointer = -1;
         int m_LookPointer = -1;
         Vector2 m_JoyCenter;
@@ -53,7 +56,9 @@ namespace DaHilg
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.PlayerInSafeZone()) m_Prompt.text = "Safe zone";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && actor.AttachedNibblers >= m_Manager.Settings.OverwhelmStop) m_Prompt.text = "Pinned · jump to shake loose";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && actor.AttachedNibblers >= m_Manager.Settings.OverwhelmDown) m_Prompt.text = "Downed · crawl and jump";
-            else m_Prompt.text = "WASD move · mouse look · Space jump · Tab switch · V camera · N mode";
+            else m_Prompt.text = ShouldShowTouchControls()
+                ? "Stick move · drag look · jump · emotes"
+                : "WASD move · mouse look · Space jump · Tab switch · V camera · N mode";
 
             for (int i = 0; i < m_CharacterButtons.Count; i++)
             {
@@ -66,6 +71,8 @@ namespace DaHilg
                 button.style.borderLeftColor = button.style.borderTopColor.value;
                 button.style.borderRightColor = button.style.borderTopColor.value;
             }
+
+            RefreshResponsiveControls();
         }
 
         void Build()
@@ -125,7 +132,7 @@ namespace DaHilg
             m_Prompt = Label("", 13, FontStyle.Bold);
             m_Prompt.style.position = Position.Absolute;
             m_Prompt.style.left = Length.Percent(50);
-            m_Prompt.style.bottom = 96;
+            m_Prompt.style.bottom = 126;
             m_Prompt.style.translate = new Translate(Length.Percent(-50), 0);
             m_Prompt.style.paddingLeft = 14;
             m_Prompt.style.paddingRight = 14;
@@ -161,6 +168,7 @@ namespace DaHilg
 
             BuildCharacterBar();
             BuildTouchControls();
+            BuildEmoteBar();
         }
 
         void BuildCharacterBar()
@@ -212,13 +220,14 @@ namespace DaHilg
         {
             VisualElement lookPad = new VisualElement();
             lookPad.style.position = Position.Absolute;
+            lookPad.style.left = 0;
             lookPad.style.right = 0;
             lookPad.style.top = 0;
             lookPad.style.bottom = 0;
-            lookPad.style.width = Length.Percent(52);
             lookPad.pickingMode = PickingMode.Position;
             lookPad.RegisterCallback<PointerDownEvent>(e =>
             {
+                if (m_LookPointer >= 0) return;
                 m_LookPointer = e.pointerId;
                 m_LookLast = e.position;
                 lookPad.CapturePointer(e.pointerId);
@@ -236,7 +245,13 @@ namespace DaHilg
                 m_LookPointer = -1;
                 lookPad.ReleasePointer(e.pointerId);
             });
+            lookPad.RegisterCallback<PointerCancelEvent>(e =>
+            {
+                if (m_LookPointer != e.pointerId) return;
+                m_LookPointer = -1;
+            });
             m_Root.Add(lookPad);
+            lookPad.SendToBack();
 
             m_Joy = new VisualElement();
             m_Joy.style.position = Position.Absolute;
@@ -269,17 +284,78 @@ namespace DaHilg
             m_Joy.RegisterCallback<PointerUpEvent>(OnJoyUp);
 
             Button jump = TouchButton("JUMP");
+            m_JumpButton = jump;
             jump.style.right = 34;
             jump.style.bottom = 34;
+            jump.RegisterCallback<PointerDownEvent>(_ => m_Input.QueueTouchJump());
             jump.clicked += () => m_Input.QueueTouchJump();
             m_Root.Add(jump);
 
             Button run = TouchButton("RUN");
+            m_RunButton = run;
             run.style.right = 34;
             run.style.bottom = 98;
             run.RegisterCallback<PointerDownEvent>(_ => m_Input.SetTouchRun(true));
             run.RegisterCallback<PointerUpEvent>(_ => m_Input.SetTouchRun(false));
+            run.RegisterCallback<PointerCancelEvent>(_ => m_Input.SetTouchRun(false));
+            run.RegisterCallback<PointerLeaveEvent>(_ => m_Input.SetTouchRun(false));
             m_Root.Add(run);
+
+            RefreshResponsiveControls();
+        }
+
+        void RefreshResponsiveControls()
+        {
+            DisplayStyle display = ShouldShowTouchControls() ? DisplayStyle.Flex : DisplayStyle.None;
+            if (m_Joy != null) m_Joy.style.display = display;
+            if (m_RunButton != null) m_RunButton.style.display = display;
+            if (m_JumpButton != null) m_JumpButton.style.display = display;
+            if (m_Prompt != null) m_Prompt.style.bottom = display == DisplayStyle.Flex ? 170 : 126;
+        }
+
+        static bool ShouldShowTouchControls()
+        {
+            return Application.isMobilePlatform || Mathf.Min(Screen.width, Screen.height) < 720;
+        }
+
+        void BuildEmoteBar()
+        {
+            m_EmoteBar = new VisualElement();
+            m_EmoteBar.style.position = Position.Absolute;
+            m_EmoteBar.style.left = Length.Percent(50);
+            m_EmoteBar.style.bottom = 72;
+            m_EmoteBar.style.translate = new Translate(Length.Percent(-50), 0);
+            m_EmoteBar.style.flexDirection = FlexDirection.Row;
+            m_EmoteBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.5f);
+            m_EmoteBar.style.paddingLeft = 5;
+            m_EmoteBar.style.paddingRight = 5;
+            m_EmoteBar.style.paddingTop = 5;
+            m_EmoteBar.style.paddingBottom = 5;
+            m_EmoteBar.style.borderTopLeftRadius = 8;
+            m_EmoteBar.style.borderTopRightRadius = 8;
+            m_EmoteBar.style.borderBottomLeftRadius = 8;
+            m_EmoteBar.style.borderBottomRightRadius = 8;
+
+            string[] labels = { "Dance", "Wave", "Cheer", "Tag" };
+            for (int i = 0; i < labels.Length; i++)
+            {
+                int index = i;
+                Button button = new Button(() => m_Input.QueueTouchEmote(index)) { text = labels[i] };
+                button.style.marginLeft = 3;
+                button.style.marginRight = 3;
+                button.style.height = 30;
+                button.style.minWidth = 58;
+                button.style.unityFontStyleAndWeight = FontStyle.Bold;
+                button.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+                button.style.color = Color.white;
+                button.style.borderTopLeftRadius = 6;
+                button.style.borderTopRightRadius = 6;
+                button.style.borderBottomLeftRadius = 6;
+                button.style.borderBottomRightRadius = 6;
+                m_EmoteBar.Add(button);
+            }
+
+            m_Root.Add(m_EmoteBar);
         }
 
         void OnJoyDown(PointerDownEvent e)
