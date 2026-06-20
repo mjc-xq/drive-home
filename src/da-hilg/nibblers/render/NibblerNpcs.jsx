@@ -29,7 +29,7 @@ import { bindNpcActions } from './npcAnim.js';
 // The animation clips this pool needs (subset of the shared clips — only the horde's
 // moods). Drew Nibblers use the flirty walk clip for movement, so keep `walk` loaded
 // alongside the normal run used by Cece.
-const NPC_CLIP_KEYS = ['idle', 'walk', 'run', 'attack', 'dance'];
+const NPC_CLIP_KEYS = ['idle', 'walk', 'run', 'climb', 'attack', 'dance'];
 const NPC_CLIP_URLS = NPC_CLIP_KEYS.map((k) => ANIM_URL[k]);
 
 // Warm drei's cache so the first NPC mount doesn't stall on clip / body fetches.
@@ -69,7 +69,10 @@ function PooledNpc({ slot, charScene, clipByKey }) {
     const group = groupRef.current;
     if (!group) return undefined;
     const character = NIBBLER_CHARS[slotCharIx(slot)];
-    const entry = { group, mixer, actions, current: null, character };
+    // Stable per-NPC clinging emote so the pile varies (mostly climbing, a slice
+    // slamming) instead of every rider doing the same move.
+    const clingClip = slot % 3 === 0 ? 'attack' : 'climb';
+    const entry = { group, mixer, actions, current: null, character, slot, clingClip };
     registerNpc(slot, entry);
     return () => {
       mixer.stopAllAction();
@@ -91,13 +94,14 @@ function CharPool({ character, clipByKey }) {
   const { scene } = useDaHilgGLTF(CHARACTER_URL[character]);
   const charScene = scene;
 
-  // Slots for this character: even slots → cece, odd → drew (NIBBLER_NPC_CHARS order).
-  const parity = NIBBLER_NPC_CHARS.indexOf(character); // 0 = even, 1 = odd
+  // Slots for this character: slots cycle the roster (slot i → roster[i % N]).
+  const parity = NIBBLER_NPC_CHARS.indexOf(character);
+  const n = NIBBLER_NPC_CHARS.length;
   const slots = useMemo(() => {
     const arr = [];
-    for (let i = 0; i < MAX_NIBBLERS; i++) if ((i & 1) === parity) arr.push(i);
+    for (let i = 0; i < MAX_NIBBLERS; i++) if (i % n === parity) arr.push(i);
     return arr;
-  }, [parity]);
+  }, [parity, n]);
 
   return (
     <>

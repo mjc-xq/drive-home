@@ -18,6 +18,7 @@ import {
 } from '../constants.js';
 import { CLIP_LOOP, EMOTE_HELD } from '../animation/clips.js';
 import { activePlayer } from '../state/refs.js';
+import { nibblerPenalty } from '../nibblers/mode.js';
 
 /**
  * Choose the target animState for an actor from its motion + active emote.
@@ -26,15 +27,19 @@ import { activePlayer } from '../state/refs.js';
  */
 function pickAnimState(actor) {
   const m = actor.motion;
-  // Only play 'jump' when genuinely airborne — rising, or ungrounded past the
-  // coyote window. This matches stepMotion's coyote grace and stops the jump clip
-  // from latching on the single-frame grounded=false flickers the KCC reports
-  // while walking the hill's slopes/steps.
+  const isPlayer = actor === activePlayer();
+  // An active emote (incl. the knockdown one-shot) plays first.
+  if (m.action) return m.action;
+  // Overwhelm: once buried (tier ≥ 2) the player is on the ground → crawl, overriding
+  // jump/locomotion. (The fall itself is the one-shot 'knockdown' emote above.)
+  if (isPlayer && nibblerPenalty.overwhelm >= 2) return 'crawl';
+  // Only play 'jump' when genuinely airborne — rising, or ungrounded past the coyote
+  // window. Matches stepMotion's coyote grace; ignores the KCC's single-frame flickers.
   const airborne =
     !m.grounded && (m.velY > 0.1 || performance.now() - m.lastGroundedT > COYOTE_TIME * 1000);
   if (airborne) return 'jump';
-  // An active emote overrides locomotion while it's held / playing.
-  if (m.action) return m.action;
+  // Staggering under the load (tier 1) → stumble in place of normal locomotion.
+  if (isPlayer && nibblerPenalty.overwhelm >= 1) return 'stumble';
   // Locomotion by realized horizontal speed.
   if (m.speed < IDLE_SPEED_EPS) return 'idle';
   // Drew's authored walk is the flirty strut. Keep it for every grounded movement
@@ -66,6 +71,14 @@ export function updateAnimation(actor, dt) {
   const { mixer, actions, current } = actor.ref;
   if (!mixer || !actions) return;
   const m = actor.motion;
+
+  // Fire the one-shot "fall" the moment the player is first overwhelmed (tier <2 → ≥2),
+  // then pickAnimState settles to crawl while still buried.
+  if (actor === activePlayer()) {
+    const ow = nibblerPenalty.overwhelm;
+    if (ow >= 2 && (actor.ref._ow || 0) < 2) requestEmote(actor, 'knockdown');
+    actor.ref._ow = ow;
+  }
 
   // --- Retire a finished/expired emote so we fall back to locomotion ---
   if (m.action) {

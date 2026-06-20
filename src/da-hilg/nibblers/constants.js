@@ -157,8 +157,10 @@ export const NIBBLER_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 // drew (~13k). mike/kelli are 128k-vert and far too heavy to clone × the pool size.
 // charIx values that the spawner assigns (indices into NIBBLER_CHARS / CHARACTER_URL):
 //   2 = cece, 3 = drew. Order is the spawn rotation.
-export const NIBBLER_NPC_CHARS = ['cece', 'drew'];
-export const NIBBLER_NPC_CHAR_IX = [2, 3]; // their indices in NIBBLER_CHARS
+// All four family members now ride as nibblers — mike (jack-hartmann, 11.6k) and kelli
+// (decimated 26k) are finally light enough to clone alongside cece (5.6k) + drew (13k).
+export const NIBBLER_NPC_CHARS = ['mike', 'kelli', 'cece', 'drew'];
+export const NIBBLER_NPC_CHAR_IX = [0, 1, 2, 3]; // their indices in NIBBLER_CHARS
 export const MINIMAP_URL = '/da-hilg/minimap.json';
 
 // Per-character tints — now a FAINT variety nudge layered on top of the REAL baseColor

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 
 // 'attack' is an aggressive looping clip used by the Nibblers swarm when clinging —
 // the family never triggers it as an emote, but every character can load/retarget it.
-export const CLIP_KEYS = ['idle', 'walk', 'run', 'jump', 'dance', 'wave', 'cheer', 'attack'];
+export const CLIP_KEYS = ['idle', 'walk', 'run', 'jump', 'dance', 'wave', 'cheer', 'attack', 'climb', 'crawl', 'stumble', 'hit', 'knockdown'];
 
 export const LOCOMOTION_KEYS = ['idle', 'walk', 'run', 'jump'];
 export const EMOTE_KEYS = ['dance', 'wave', 'cheer'];
@@ -23,6 +23,11 @@ export const CLIP_LOOP = {
   wave: 'once',
   cheer: 'once',
   attack: 'repeat', // nibblers flail/slam continuously while clinging
+  climb: 'repeat', // nibblers clinging/climbing on a body
+  crawl: 'repeat', // downed player dragging along the ground
+  stumble: 'repeat', // staggering under the swarm load
+  hit: 'once', // flinch
+  knockdown: 'once', // the fall when first overwhelmed
 };
 
 // Whether an emote holds until interrupted (dance) or plays once (wave/cheer).
