@@ -196,8 +196,9 @@ namespace DaHilg
             if (m_LevelRoot != null) Destroy(m_LevelRoot.gameObject);
             GameObject level = Instantiate(m_CurrentLevel.LevelPrefab);
             level.name = "Level_" + m_CurrentLevel.Slug;
+            DaHilgLevelRuntime.ApplyLevelOffset(level, m_CurrentLevel);
             m_LevelRoot = level.transform;
-            PrepareLevelColliders(level);
+            DaHilgLevelRuntime.PrepareLevelColliders(level);
         }
 
         void SpawnActors()
@@ -225,8 +226,7 @@ namespace DaHilg
                 Vector3 spawn = slot.Id == Settings.DefaultCharacterId
                     ? playerSpawns[0]
                     : (npcIndex < npcSpawns.Length ? npcSpawns[npcIndex++] : playerSpawns[0] + UnityEngine.Random.insideUnitSphere * 6f);
-                spawn.y = Mathf.Max(spawn.y, 0.05f);
-                actor.Teleport(spawn);
+                actor.Teleport(DaHilgLevelRuntime.GroundSpawn(spawn));
                 actor.SetRole(DaHilgActorRole.Npc, Time.time);
                 m_Actors.Add(actor);
             }
@@ -495,33 +495,7 @@ namespace DaHilg
 
             Vector3 clamped = b.ClosestPoint(p);
             clamped.y = Mathf.Max(clamped.y, 0.05f);
-            m_ActiveActor.Teleport(clamped);
-        }
-
-        void PrepareLevelColliders(GameObject level)
-        {
-            MeshFilter[] filters = level.GetComponentsInChildren<MeshFilter>(true);
-            for (int i = 0; i < filters.Length; i++)
-            {
-                MeshFilter filter = filters[i];
-                if (filter.sharedMesh == null) continue;
-
-                string lower = filter.name.ToLowerInvariant();
-                bool isWater = lower.Contains("water") || lower.Contains("creek") || lower.Contains("river");
-                if (!isWater && filter.GetComponent<Collider>() == null)
-                {
-                    MeshCollider collider = filter.gameObject.AddComponent<MeshCollider>();
-                    collider.sharedMesh = filter.sharedMesh;
-                    collider.convex = false;
-                }
-
-                if (isWater && filter.GetComponent<DaHilgWaterAnimator>() == null)
-                {
-                    filter.gameObject.AddComponent<DaHilgWaterAnimator>();
-                }
-
-                filter.gameObject.isStatic = true;
-            }
+            m_ActiveActor.Teleport(DaHilgLevelRuntime.GroundSpawn(clamped));
         }
 
         string ResolveLevelSlug()

@@ -12,6 +12,7 @@ namespace DaHilg
         public GameObject LevelPrefab;
         public TextAsset SourceMeta;
         public TextAsset Minimap;
+        public Vector3 LevelOffset;
         public Vector3[] PlayerSpawns = Array.Empty<Vector3>();
         public Vector3[] NpcSpawns = Array.Empty<Vector3>();
         public DaHilgBoxZone[] GreetSafeZones = Array.Empty<DaHilgBoxZone>();
