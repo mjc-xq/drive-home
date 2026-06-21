@@ -151,6 +151,53 @@ namespace DaHilg.Editor
             Debug.Log("[DaHilg] WebGL export built at " + output + (scriptsOnly ? " (scripts only)." : "."));
         }
 
+        // Secondary target: a local macOS .app for quick testing/playing. Web (WebGL) stays the
+        // primary, shipped target — this just mirrors the same scene + StreamingAssets + scripting
+        // defines (GLTFAST_BUILTIN_RP for the Built-in RP, GLTFAST_KEEP_MESH_DATA so streamed-level
+        // MeshColliders bake) so the game behaves locally the way it does on the web. Streamed
+        // levels resolve via DaHilgLevelRuntime.StreamGlbUrl's file:// branch on Standalone.
+        [MenuItem("Da Hilg/Build Mac Standalone (local)")]
+        public static void BuildMacStandalone()
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
+            string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
+            string output = Path.Combine(repoRoot, "build/DaHilg-Mac/DaHilg.app");
+            bool scriptsOnly = Environment.GetEnvironmentVariable("DAHILG_UNITY_BUILD_SCRIPTS_ONLY") == "1";
+
+            if (!scriptsOnly)
+            {
+                RebuildUnityScene();
+                ValidateSpawnGroundingAssets();
+                ValidateCharacterAnimationAssets();
+                ValidateAnimalAnimationAssets();
+            }
+
+            string outDir = Path.GetDirectoryName(output);
+            if (!string.IsNullOrEmpty(outDir)) Directory.CreateDirectory(outDir);
+
+            EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Standalone, BuildTarget.StandaloneOSX);
+            PlayerSettings.productName = "Da Hilg Unity";
+            PlayerSettings.companyName = "Da Hilg";
+            PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Standalone, "com.dahilg.unity");
+            PlayerSettings.SetScriptingDefineSymbols(NamedBuildTarget.Standalone, "GLTFAST_BUILTIN_RP;GLTFAST_KEEP_MESH_DATA");
+
+            BuildPlayerOptions options = new BuildPlayerOptions
+            {
+                scenes = new[] { k_ScenePath },
+                locationPathName = output,
+                target = BuildTarget.StandaloneOSX,
+                options = scriptsOnly ? BuildOptions.BuildScriptsOnly : BuildOptions.None
+            };
+
+            BuildReport report = BuildPipeline.BuildPlayer(options);
+            if (report.summary.result != BuildResult.Succeeded)
+            {
+                throw new InvalidOperationException("Mac standalone build failed: " + report.summary.result);
+            }
+
+            Debug.Log("[DaHilg] Mac standalone built at " + output + ".");
+        }
+
         [MenuItem("Da Hilg/Validate Spawn Grounding")]
         public static void ValidateSpawnGrounding()
         {

@@ -184,7 +184,10 @@ namespace DaHilg
             // surrounds rather than stacking on the identical center point.
             float ringAngle = m_Seed * Mathf.PI * 2f + m_Index * 2.39996f;
             float ringRadius = Mathf.Max(0.6f, settings.NibblerAttachDistance * 0.85f);
-            Vector3 ringTarget = player.FeetPosition + Vector3.up * 0.25f
+            // Aim at the player's torso (not the feet) so the swarm visibly climbs the body
+            // instead of orbiting a point on the ground (which reads as "off the player").
+            float aimY = player.BodyHeight * 0.5f;
+            Vector3 ringTarget = player.FeetPosition + Vector3.up * aimY
                 + new Vector3(Mathf.Cos(ringAngle), 0f, Mathf.Sin(ringAngle)) * ringRadius;
 
             Vector3 toPlayer = ringTarget - Root.transform.position;
@@ -192,7 +195,7 @@ namespace DaHilg
             float dist = planar.magnitude;
 
             // Use the true player distance for the lunge/despawn gates, not the ring target.
-            Vector3 toCenter = player.FeetPosition + Vector3.up * 0.25f - Root.transform.position;
+            Vector3 toCenter = player.FeetPosition + Vector3.up * aimY - Root.transform.position;
             float centerDist = new Vector3(toCenter.x, 0f, toCenter.z).magnitude;
 
             if (!safe && centerDist < Mathf.Max(k_JumpRadius, settings.NibblerAttachDistance + k_AttachPad) && m_JumpCooldown <= 0f)

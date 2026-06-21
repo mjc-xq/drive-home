@@ -36,7 +36,11 @@ drive-*.jpeg
 /unity/DaHilgUnity/*.sln.DotSettings.user
 unity-create.log
 unity-build.log
+unity-build-mac.log
 unity-import.log
+
+# Local macOS standalone build (secondary target, not deployed)
+/build/
 
 # Unity WebGL generated debug sidecars
 /public/unity/**/*[Bb]urst[Dd]ebug[Ii]nformation*[Dd]o[Nn]ot[Ss]hip*/

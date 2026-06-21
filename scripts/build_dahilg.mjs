@@ -66,6 +66,8 @@ if (flag('stages')) stages = String(flag('stages')).split(',').map(s => s.trim()
 if (flag('from')) { const i = STAGES.indexOf(String(flag('from'))); if (i < 0) die(`unknown --from stage`); stages = STAGES.slice(i); }
 if (flag('to')) { const i = STAGES.indexOf(String(flag('to'))); if (i < 0) die(`unknown --to stage`); stages = stages.filter(s => STAGES.indexOf(s) <= i); }
 if (flag('skip-unity')) stages = stages.filter(s => s !== 'unitybuild');
+// Secondary, local target: build a macOS .app instead of the WebGL bundle for the unitybuild stage.
+const macTarget = !!flag('mac');
 const levelFilter = flag('levels') ? String(flag('levels')).split(',').map(s => s.trim()) : null;
 const levels = levelFilter ? LEVELS.filter(l => levelFilter.includes(l.slug)) : LEVELS;
 
@@ -103,6 +105,23 @@ function stageExport() {
 function stageAssets() { banner('ASSETS — atlas + meshopt + KTX2'); sh('npm run build:dahilg-assets'); }
 function stageUnitySrc() { banner('UNITY SOURCE — decode meshopt for editor import'); sh('node scripts/build_dahilg_unity_assets.mjs'); }
 function stageUnityBuild() {
+  if (macTarget) {
+    banner('UNITY BUILD — macOS standalone (local, secondary)');
+    if (!existsSync(UNITY)) die(`Unity not found at ${UNITY}`);
+    try {
+      sh(`"${UNITY}" -batchmode -quit -projectPath unity/DaHilgUnity -executeMethod DaHilg.Editor.DaHilgProjectBuilder.BuildMacStandalone -logFile unity-build-mac.log`);
+    } catch {
+      console.log('  (Unity returned non-zero — verifying build output instead of trusting exit code)');
+    }
+    if (dryRun) return;
+    const macLog = existsSync(path.join(ROOT, 'unity-build-mac.log')) ? readFileSync(path.join(ROOT, 'unity-build-mac.log'), 'utf8') : '';
+    const app = path.join(ROOT, 'build/DaHilg-Mac/DaHilg.app');
+    if (!macLog.includes('Exiting batchmode successfully') || !existsSync(app)) {
+      die('Mac build failed (no success marker or missing DaHilg.app — see unity-build-mac.log)');
+    }
+    console.log('  Mac build verified at build/DaHilg-Mac/DaHilg.app');
+    return;
+  }
   banner('UNITY BUILD — WebGL (streaming + atlas + menus)');
   if (!existsSync(UNITY)) die(`Unity not found at ${UNITY}`);
   // Unity batchmode can exit non-zero over benign shutdown warnings (TagManager parse,
