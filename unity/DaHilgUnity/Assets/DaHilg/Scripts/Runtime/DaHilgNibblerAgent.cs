@@ -219,7 +219,11 @@ namespace DaHilg
             Vector3 side = Vector3.Cross(Vector3.up, dir);
             float weave = Mathf.Sin(Time.time * (2.8f + m_Seed * 1.8f) + m_Index * 0.73f) * 0.42f;
             Vector3 desired = (dir + side * weave).normalized;
-            float speed = settings.NibblerRunSpeed * (0.82f + m_Seed * 0.36f);
+            // Distance-scaled catch-up: reel in a kiting player from afar (up to 1.7x) but stay
+            // slow/dodgeable inside lunge range, so the swarm can actually overwhelm a runner
+            // (player RunSpeed outruns base nibbler speed — without this the buried/pin loop is unreachable).
+            float lead = Mathf.Lerp(1.0f, 1.7f, Mathf.InverseLerp(k_JumpRadius, 10f, centerDist));
+            float speed = settings.NibblerRunSpeed * (0.82f + m_Seed * 0.36f) * lead;
             // Separation is applied AFTER the seek (un-normalized) so a dense pile spreads into a
             // readable, aimable doughnut instead of collapsing onto one mushy point.
             Vector3 targetVelocity = desired * speed + ComputeSeparation() * 3.0f;
@@ -416,6 +420,7 @@ namespace DaHilg
         public void Scatter(Vector3 from)
         {
             if (!Active) return;
+            Root.transform.localScale = Vector3.one * m_Scale; // clear any Windup squash leak
             Attached = false;
             m_State = NibblerState.Scatter;
             m_StateTime = 0f;
