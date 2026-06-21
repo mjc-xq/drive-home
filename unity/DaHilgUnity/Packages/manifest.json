@@ -5,6 +5,7 @@
     "com.unity.cloud.draco": "5.4.3",
     "com.unity.cloud.gltfast": "6.14.1",
     "com.unity.cloud.ktx": "3.6.3",
+    "com.unity.meshopt.decompress": "0.2.0-exp.1",
     "com.unity.inputsystem": "1.19.0",
     "com.unity.multiplayer.center": "1.0.1",
     "com.unity.render-pipelines.universal": "17.5.0",

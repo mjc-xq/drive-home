@@ -22,6 +22,7 @@
 //   blender --background --python scripts/place_fences.py  # rewrites that same file
 import { readFileSync, mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 globalThis.self = globalThis;
@@ -78,8 +79,26 @@ async function loadTreeTemplates() {
       return new THREE.Color().setRGB(r / w / 255, g / w / 255, b / w / 255, THREE.SRGBColorSpace);
     } catch { return null; }
   };
-  const nameColor = (n) => /leaf|leaves|acacia|foliage/i.test(n) ? new THREE.Color(0.34, 0.55, 0.10)
-    : /bark|trunk|wood/i.test(n) ? new THREE.Color(0.32, 0.20, 0.13) : new THREE.Color(0.40, 0.40, 0.40);
+  // role of a template material by its name: 'leaf' (foliage) vs 'bark' (trunk). Used to
+  // pick the right per-instance palette (green hues for leaves, brown for bark) so every
+  // tree keeps bark BROWN + leaves GREEN, just varied in hue. 'acacia' is foliage here; the
+  // acacia trunk is split off geometrically below (its one material covers trunk + canopy).
+  const nameRole = (n) => /leaf|leaves|acacia|foliage|canopy/i.test(n) ? 'leaf'
+    : /bark|trunk|wood|stem/i.test(n) ? 'bark' : 'leaf';
+  // Per-instance VARIETY palettes (no per-vertex COLOR_0 — that round-trips as un-normalized
+  // ubyte and renders WHITE). ~4 leaf hues + ~3 bark hues; a tree picks one of each by index
+  // hash. Reused variant material-ARRAYS keep GPU instancing (folds by geom + material set).
+  const LEAF_HUES = [
+    new THREE.Color(0.20, 0.42, 0.12),   // deep green
+    new THREE.Color(0.42, 0.46, 0.16),   // olive
+    new THREE.Color(0.50, 0.58, 0.18),   // yellow-green
+    new THREE.Color(0.28, 0.50, 0.17),   // fresh mid-green (replaced a too-blue teal)
+  ];
+  const BARK_HUES = [
+    new THREE.Color(0.32, 0.20, 0.13),   // medium brown
+    new THREE.Color(0.42, 0.30, 0.20),   // warm tan-brown
+    new THREE.Color(0.24, 0.16, 0.11),   // dark brown
+  ];
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const templates = [];
   for (const entry of manifest.trees) {
@@ -87,49 +106,71 @@ async function loadTreeTemplates() {
     if (!existsSync(f)) continue;
     const doc = await tio.read(f);
     const pos = [], nor = [], uv = [], idx = [];
-    const groups = [];                 // { start, count, materialIndex } per source prim
-    const mats = [];                   // de-duped solid materials (bark brown / leaf green)
-    const matIndexByColor = new Map();
-    let vbase = 0;
+    const groups = [];                 // { start, count, role } per source prim
+    let vbase = 0, ymin = Infinity, ymax = -Infinity;
     for (const mesh of doc.getRoot().listMeshes()) {
       for (const prim of mesh.listPrimitives()) {
         const P = prim.getAttribute('POSITION'); if (!P) continue;
         const N = prim.getAttribute('NORMAL'), U = prim.getAttribute('TEXCOORD_0'), I = prim.getIndices();
-        // A SOLID per-primitive material (bark brown / leaf green) keyed off the template's
-        // material name. We deliberately do NOT bake a per-vertex COLOR_0 — that attribute
-        // round-trips through the meshopt build as an un-normalized ubyte (raw ~9..173
-        // instead of 0..1), which multiplies the base colour past 1 and renders the trees
-        // WHITE. A flat material per prim is robust and reads as a stylized tree.
-        const c = nameColor(prim.getMaterial()?.getName() || '');
-        const key = c.getHexString();
-        let mi = matIndexByColor.get(key);
-        if (mi === undefined) {
-          mi = mats.length; matIndexByColor.set(key, mi);
-          mats.push(new THREE.MeshStandardMaterial({ name: `Tree_${entry.id}_${mi}`, color: c, roughness: 0.92, metalness: 0, side: THREE.DoubleSide }));
-        }
+        const role = nameRole(prim.getMaterial()?.getName() || '');
         const n = P.getCount(), e = [];
         const gStart = idx.length;
         for (let k = 0; k < n; k++) {
           P.getElement(k, e); pos.push(e[0], e[1], e[2]);
+          if (e[1] < ymin) ymin = e[1]; if (e[1] > ymax) ymax = e[1];
           if (N) { N.getElement(k, e); nor.push(e[0], e[1], e[2]); }
           if (U) { U.getElement(k, e); uv.push(e[0], e[1]); }
         }
         if (I) { const ia = I.getArray(); for (let k = 0; k < ia.length; k++) idx.push(vbase + ia[k]); }
         else { for (let k = 0; k < n; k++) idx.push(vbase + k); }
-        groups.push({ start: gStart, count: idx.length - gStart, materialIndex: mi });
+        groups.push({ start: gStart, count: idx.length - gStart, role });
         vbase += n;
       }
     }
     if (!pos.length) continue;
+    // ACACIA SPLIT: tree_05's single 'Acacia_Mat' covers BOTH trunk and canopy and is tagged
+    // 'leaf', so it would render all-green incl the trunk. Re-tag the LOWEST ~20% of each
+    // leaf group's TRIANGLES (by centroid height) as 'bark' so the trunk reads brown. Done by
+    // splitting a group's index range into bark/leaf sub-ranges (a triangle is below the cut if
+    // its centroid Y is under ymin + 0.20*(ymax-ymin)).
+    const needsSplit = entry.id === 'tree_05' || /acacia/i.test(entry.file || '') || groups.every(g => g.role === 'leaf');
+    let finalGroups = groups;
+    if (needsSplit && ymax > ymin) {
+      const cut = ymin + 0.20 * (ymax - ymin);
+      const triY = (t) => (pos[idx[t] * 3 + 1] + pos[idx[t + 1] * 3 + 1] + pos[idx[t + 2] * 3 + 1]) / 3;
+      finalGroups = [];
+      for (const gr of groups) {
+        if (gr.role !== 'leaf') { finalGroups.push(gr); continue; }
+        // walk this group's triangles, emitting contiguous runs of same sub-role
+        let runStart = gr.start, runRole = null;
+        for (let t = gr.start; t < gr.start + gr.count; t += 3) {
+          const sub = triY(t) < cut ? 'bark' : 'leaf';
+          if (runRole === null) runRole = sub;
+          else if (sub !== runRole) { finalGroups.push({ start: runStart, count: t - runStart, role: runRole }); runStart = t; runRole = sub; }
+        }
+        if (runRole !== null) finalGroups.push({ start: runStart, count: gr.start + gr.count - runStart, role: runRole });
+      }
+    }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     if (nor.length === pos.length) g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     if (uv.length === (pos.length / 3) * 2) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx);
     if (nor.length !== pos.length) g.computeVertexNormals();
-    for (const gr of groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
-    // mat is the per-prim material ARRAY (Mesh + geometry groups picks per group).
-    templates.push({ id: entry.id, geom: g, mat: mats, height_m: entry.height_m || 6, feature: !!entry.feature });
+    // Geometry GROUPS map to material SLOTS by their per-group role: slot 0 = leaf, slot 1 = bark.
+    // A variant material-ARRAY is then [leafMat, barkMat]; group i uses slot 0 or 1 by role.
+    const SLOT = { leaf: 0, bark: 1 };
+    for (const gr of finalGroups) g.addGroup(gr.start, gr.count, SLOT[gr.role]);
+    // Build the variant material-ARRAYS up front: every (leaf hue x bark hue) combo, REUSED
+    // across instances so the build folds (geom, variantArray) into one instance batch each.
+    const variants = [];
+    for (let li = 0; li < LEAF_HUES.length; li++) for (let bi = 0; bi < BARK_HUES.length; bi++) {
+      variants.push([
+        new THREE.MeshStandardMaterial({ name: `Tree_${entry.id}_leaf_${li}`, color: LEAF_HUES[li].clone(), roughness: 0.92, metalness: 0, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ name: `Tree_${entry.id}_bark_${bi}`, color: BARK_HUES[bi].clone(), roughness: 0.95, metalness: 0, side: THREE.DoubleSide }),
+      ]);
+    }
+    templates.push({ id: entry.id, geom: g, variants, mat: variants[0], height_m: entry.height_m || 6, feature: !!entry.feature });
   }
   return templates.length ? templates : null;
 }
@@ -141,6 +182,28 @@ const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf
 // residential owner-house cues (front door/garage, bi===0 garage door) must NOT fire on
 // them. Dahill is the residential export (no meta) and keeps every cue.
 const IS_SCHOOL_EXPORT = S.meta?.kind === 'school-region-export';
+
+function sceneFingerprint(scene) {
+  const r2 = v => (Number(v) || 0).toFixed(2);
+  const r6 = v => (Number(v) || 0).toFixed(6);
+  const pt = p => [r2(p[0]), r2(p[1])];
+  const payload = {
+    origin: [r6(scene.origin?.lat), r6(scene.origin?.lon)],
+    center: Array.isArray(scene.center) ? pt(scene.center) : null,
+    buildings: (scene.buildings || []).map(b => ({
+      house: !!b.house,
+      h: r2(b.h),
+      p: (b.p || []).map(pt),
+    })),
+    roads: (scene.roads || []).map(r => ({
+      k: r.k || '',
+      w: r.w == null ? null : r2(r.w),
+      p: (r.p || []).map(pt),
+    })),
+  };
+  return createHash('sha1').update(JSON.stringify(payload)).digest('hex');
+}
+const SCENE_FINGERPRINT = sceneFingerprint(S);
 const C = S.center;                                        // house centroid (flat ENU)
 let A = S.aerial;                                          // aerial bounds (flat ENU)
 const GAERIAL = path.join(ROOT, 'exports/google_aerial.json');
@@ -181,14 +244,19 @@ function mkMesh(positions, indices, color, name, opts = {}) {
   if (indices) g.setIndex(indices);
   g.computeVertexNormals();
   const opacity = opts.opacity ?? 1;
-  const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: 0, name: name + '_mat', transparent: opacity < 1, opacity });
+  const m = new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.95, metalness: opts.metal ?? 0, name: name + '_mat', transparent: opacity < 1, opacity });
   if (opts.emissive) {
     const e = color instanceof THREE.Color ? color.clone() : new THREE.Color(color);
     m.emissive = e.multiplyScalar(opts.emissive);
   }
   if (opts.colors) m.vertexColors = true;
   if (opts.flat) m.flatShading = true;
-  if (opacity < 1) m.depthWrite = false;
+  // opacity 0 = an invisible collision/LOD PROXY. Export it as alpha-MASK (cutoff 0.5) with a
+  // zero base alpha, so EVERY glTF viewer DISCARDS its fragments (no blend, no depth write) and it
+  // can never z-fight the visual terrain/roads it shadows. The engines hide these by NAME and bake
+  // colliders straight from the geometry, so this material change is purely for raw-viewer fidelity.
+  if (opacity === 0) { m.transparent = false; m.alphaTest = 0.5; m.depthWrite = true; }
+  else if (opacity < 1) m.depthWrite = false;
   m.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
 }
@@ -205,14 +273,21 @@ if (existsSync(DEMPATH)) {
   const _za = -((D.latN - LAT0) * 110540 - C[1]), _zb = -((D.latS - LAT0) * 110540 - C[1]);
   tZmin = Math.min(_za, _zb); tZmax = Math.max(_za, _zb);
   terrSrc = D.source;
-  // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon (curvature-correct).
+  // DEM grid is linear in lat/lon (4326). Sample by world -> lat/lon in the same
+  // flat ENU frame used by scene.json, road/building geometry, and aerial UVs.
   terrainAt = (X, Z) => {
     const [lat, lon] = enToLL(X + C[0], C[1] - Z);
     let fi = (lon - D.lonW) / dLon * cols - 0.5, fj = (D.latN - lat) / dLat * rows - 0.5;
     fi = Math.max(0, Math.min(cols - 1.001, fi)); fj = Math.max(0, Math.min(rows - 1.001, fj));
     const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
     const a = h[j * cols + i], b = h[j * cols + i + 1], c = h[(j + 1) * cols + i], d = h[(j + 1) * cols + i + 1];
-    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+    // EXACT terrain-MESH height (not bilinear). The terrain mesh triangulates each grid cell as
+    // (a,c,b)+(b,c,d) [a=(i,j) b=(i+1,j) c=(i,j+1) d=(i+1,j+1)], so sampling the SAME triangle the
+    // point falls in (split by the c-b diagonal u+v=1) makes terrainAt return the identical surface
+    // the terrain renders. Every paved ribbon draped on terrainAt + a tiny lift then sits flush on
+    // the real full-res DEM surface -> no bilinear-vs-mesh mismatch, no z-fighting -> curbs/sidewalks
+    // can be thin (the lift is the only separation needed).
+    return (u + v <= 1) ? a * (1 - u - v) + b * u + c * v : d * (u + v - 1) + b * (1 - v) + c * (1 - u);
   };
   // aerial as a sharp TEXTURE (UVs); the USDZ is generated + verified separately.
   const pos = [], uv = [], idx = [];
@@ -320,28 +395,39 @@ const lighten = c => liftLuma(mix3(c, STUCCO, 0.52), 0.62);   // plausible wall 
 // stucco tan (luma collapsed to ~0.63, stddev ~0.03) so the whole block read flat tan with
 // facades off. This keeps the SV variation (luma spread ~0.09, range ~0.38-0.80).
 const remapLuma = L => {
-  if (L < 0.46) return 0.46 - (0.46 - L) * 0.42;   // gently lift shadows (keeps some spread)
+  if (L < 0.55) return 0.55 - (0.55 - L) * 0.25;   // lift the DARK half to believable paint
   if (L > 0.84) return 0.84 + (L - 0.84) * 0.60;   // soft ceiling on blown-out samples
   return L;                                         // mids untouched -> real per-house lightness
 };
-// Street-View facade crops bleed green from foreground foliage; pull an extreme green
-// cast back toward neutral so a house doesn't render olive, without touching real hues.
+// Street-View facade crops bleed green/olive from foreground foliage AND top-down aerial
+// sampling; pull any green OR olive cast back toward neutral paint without touching real hues.
 const deGreen = c => {
-  const [r, g, b] = c;
-  if (g > r + 0.05 && g > b + 0.05) { const avg = (r + b) / 2; return [r, (g + avg) / 2, b]; }
-  return c;
+  let [r, g, b] = c;
+  // green/olive cast = green co-dominant over blue (foliage bleed, olive aerial sample).
+  if (g > b + 0.035 && g >= r - 0.03) { const avg = (r + b) / 2; g = avg + (g - avg) * 0.30; }
+  return [r, g, b];
 };
-// WALL BASE COLOUR baked per building (set as the material's baseColorFactor -> shows in
-// EVERY viewer with the photo facades OFF). Source = the building's real Street-View facade
-// colour (exports/buildings_color.json); buildings SV missed fall back to a derived roof
-// tint or a deterministic VARIED paint so the block is never uniform tan.
+// A sampled colour is only believable house PAINT if it isn't vegetation-green and isn't a
+// near-black shadow void. Olive/green/too-dark samples (bad top-down aerial sampling, common
+// where Street View has no real wall crop) are rejected so a wall never renders green/olive.
+const isPlausiblePaint = c => {
+  const [r, g, b] = c;
+  if (luma(c) < 0.24) return false;                 // shadow void / too dark to be paint
+  if (g > r + 0.02 && g > b + 0.02) return false;   // green-dominant -> vegetation, not a wall
+  return true;
+};
+// WALL BASE COLOUR baked per building (material baseColorFactor -> shows in EVERY viewer with
+// the photo facades OFF). Source = the building's real Street-View facade colour
+// (exports/buildings_color.json) WHEN it reads as plausible paint; otherwise a derived roof
+// tint or a deterministic VARIED warm paint so the block is realistic and never green/olive.
 const wallColor = ib => {
-  const src = COL[ib] || (RCOL[ib] ? lighten(RCOL[ib]) : seededColor(WALL_PALETTE, ib));
+  let src = COL[ib];
+  if (!src || !isPlausiblePaint(src)) src = RCOL[ib] ? lighten(RCOL[ib]) : seededColor(WALL_PALETTE, ib);
   const L = Math.max(0.02, luma(src));
   let c = src.map(v => v * (remapLuma(L) / L));    // hue-preserving lightness remap
   c = deGreen(c);
   const m = luma(c);
-  c = c.map(v => m + (v - m) * 1.14);              // gentle chroma boost so it reads as paint
+  c = c.map(v => m + (v - m) * 1.12);              // gentle chroma boost so it reads as paint
   return c.map(clamp01);
 };
 // roofs: real sampled colour, but lift deep satellite shadows so they read as roof
@@ -409,7 +495,9 @@ function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
     const floors = Math.max(1, Math.min(3, Math.floor((wallH - 1.15) / 2.55)));
     // SCHOOL/commercial storefront: a long, tall, non-residential wall gets a CONTINUOUS
     // ground-floor glass band with vertical mullions instead of the punched window grid.
-    const commercial = !opts.house && L >= 9 && wallH >= 4;
+    // Storefront glass bands are for SCHOOLS/commercial only — on a residential block (dahill,
+    // meemaw) a large house wall would get a dark glass storefront that reads as a black panel.
+    const commercial = IS_SCHOOL_EXPORT && !opts.house && L >= 9 && wallH >= 4;
     if (commercial) {
       const gy0 = base + 0.85, gy1 = base + Math.min(3.2, wallH - 1.4);   // ground-floor band
       if (gy1 - gy0 > 0.6) {
@@ -520,12 +608,19 @@ function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, RfP, detail
   // overhanging eave instead of a wall-flush slab. Emitted into Rf (Buildings_roofs); the
   // collision proxy keeps the UN-offset ring so the overhang never blocks the player.
   {
-    const OVER = 0.35, FASCIA = 0.18, yf = yt - FASCIA;
+    const OVER_MAX = 0.35, FASCIA = 0.18, yf = yt - FASCIA;
     for (let i = 0; i < ring.length; i++) {
       const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
       const L = Math.hypot(xj - xi, zj - zi); if (L < 1e-4) continue;
       let nx = -(zj - zi) / L, nz = (xj - xi) / L;          // outward edge normal (away from centroid)
       if (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+      // PER-EDGE OVERHANG CLAMP: on tight footprints the 0.35 m lip pokes through an adjacent
+      // building. If the edge midpoint pushed out by OVER_MAX lands inside ANOTHER (already
+      // emitted) building ring, clamp this edge's overhang toward 0 so it can't poke through.
+      const mxe = (xi + xj) * 0.5, mze = (zi + zj) * 0.5;
+      let OVER = OVER_MAX;
+      if (buildingPolys.some(r => r !== ring && inPoly(mxe + nx * OVER_MAX, mze + nz * OVER_MAX, r))) OVER = 0;
+      if (OVER < 1e-4) continue;                            // no lip on this edge (would poke a neighbour)
       const oi = [xi + nx * OVER, zi + nz * OVER], oj = [xj + nx * OVER, zj + nz * OVER];
       // overhang lip (horizontal, faces up): inner edge -> outer edge at the eave
       pushUpTri(Rf, roofC, [xi, yt, zi], [xj, yt, zj], [oj[0], yt, oj[1]]);
@@ -537,7 +632,7 @@ function emitRing(ring, base, wallH, roofRects, wallC, roofC, W, Rf, RfP, detail
   }
   // satellite roof-photo cap: ONLY flat roofs (no gable), lifted just above the solid cap
   if (RfP && !(roofRects && roofRects.length)) {
-    const yp = yt + 0.06;
+    const yp = yt + 0.14;   // clearly ABOVE the solid cap so the photo roof never z-fights it
     for (const [a, c, d] of capTris)
       pushPhotoTri(RfP, [ring[a][0], yp, ring[a][1]], [ring[c][0], yp, ring[c][1]], [ring[d][0], yp, ring[d][1]]);
   }
@@ -558,14 +653,74 @@ scene.add(terrainMesh);
 
 // OSM/Overture height (or a sane default) — NOT LiDAR (the LiDAR heights were noisy)
 const wallHeight = b => { const H = b.h || 4.5; return ((b.r && b.r.length) ? Math.max(2.4, H * 0.8) : H) + 0.5; };
-// SHARED foundation level for one footprint: the LOWEST terrain under any of its world-space
-// ring corners, minus a 0.5 m embed. Using the min (not the centroid) means the eave-flat
-// wall top sits above grade everywhere and the per-corner wall bottoms (pushWallFace) drop to
-// real terrain, so a facade on a slope never floats at one corner / buries at another. Every
-// consumer of a building's base (walls, SV overlay, collision) MUST use this same groundMin so
-// the photo facades stay coplanar with the extruded walls.
-const buildingBase = ringW => Math.min(...ringW.map(([x, z]) => terrainAt(x, z))) - 0.5;
+// SHARED foundation level for one footprint. ANCHORED HIGH: the old MIN(terrain) - 0.5 m
+// pinned the flat eave wall-top to the LOWEST corner, so on a sloped footprint the wall
+// barely cleared grade on the HIGH side and buildings read as buried (the rest of the
+// floor sat below ground). Instead anchor to a HIGH percentile of densely-sampled footprint
+// terrain (corners + edge midpoints + a coarse interior grid), minus a small 0.15 m embed.
+// The 85th percentile is robust to a single noisy DEM spike (a lone tall sample can't drag
+// the base up), while still placing the floor near the high side so wall tops clear grade
+// everywhere. Per-corner wall bottoms (pushWallFace) still drop to real terrain - WALL_EMBED
+// so nothing floats; the graded apron (buildingApron) raises the low-side ground to meet the
+// floor. Every consumer of a building's base (walls, SV overlay, collision, apron) MUST use
+// this same value so the photo facades stay coplanar with the extruded walls.
+function footprintTerrainSamples(ringW) {
+  const ys = [];
+  const xs = ringW.map(p => p[0]), zs = ringW.map(p => p[1]);
+  for (const [x, z] of ringW) ys.push(terrainAt(x, z));                     // corners
+  for (let i = 0; i < ringW.length; i++) {                                  // edge midpoints
+    const [ax, az] = ringW[i], [bx, bz] = ringW[(i + 1) % ringW.length];
+    ys.push(terrainAt((ax + bx) / 2, (az + bz) / 2));
+  }
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
+  const N = 4;                                                              // 5x5 interior grid (point-in-poly tested)
+  for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+    const x = x0 + (x1 - x0) * i / N, z = z0 + (z1 - z0) * j / N;
+    if (inPoly(x, z, ringW)) ys.push(terrainAt(x, z));
+  }
+  return ys;
+}
+const buildingBase = ringW => {
+  const ys = footprintTerrainSamples(ringW).sort((a, b) => a - b);
+  const hi = ys[Math.min(ys.length - 1, Math.floor(0.85 * (ys.length - 1)))];  // 85th-percentile (spike-robust)
+  return hi - 0.15;                                                            // small embed below the high grade
+};
 const houseIdx = S.buildings.findIndex(b => b.house);
+// GRADED APRON / PAD around each footprint: a ring of quads from the footprint edge outward
+// ~2.5 m, height smoothstepping from the building floor (base) at the inner edge DOWN to
+// terrainAt at the outer edge. This raises the low-side ground up to meet the floor so a
+// building reads as sitting ON a graded pad instead of buried — and hides the now-taller
+// downhill wall. Emitted into its own 'Ground_Pads' mesh with aerial UVs so it textures like
+// ground. Robust on all levels (residential + flat-roofed school footprints). The outer ring
+// vertex height blends toward base near the inner edge so the pad never undercuts the wall
+// foot; the apron does NOT change collision (terrain + building colliders already cover it).
+const padPos = [], padIdx = [], padUv = [];
+const APRON_W = 2.5;                                          // metres of graded pad outward from the edge
+function buildingApron(ringW, base) {
+  if (!ringW || ringW.length < 3) return;
+  // centroid for outward-normal orientation
+  const cen = ringW.reduce((a, [x, z]) => [a[0] + x / ringW.length, a[1] + z / ringW.length], [0, 0]);
+  for (let i = 0; i < ringW.length; i++) {
+    const [ax, az] = ringW[i], [bx, bz] = ringW[(i + 1) % ringW.length];
+    const L = Math.hypot(bx - ax, bz - az); if (L < 1e-3) continue;
+    let nx = -(bz - az) / L, nz = (bx - ax) / L;            // outward edge normal (away from centroid)
+    if (((ax + bx) * 0.5 - cen[0]) * nx + ((az + bz) * 0.5 - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    // inner edge AT the building floor (base); outer edge APRON_W out, height smoothstepped
+    // from base toward the real terrain there so the low side rises to meet the floor.
+    const aoX = ax + nx * APRON_W, aoZ = az + nz * APRON_W;
+    const boX = bx + nx * APRON_W, boZ = bz + nz * APRON_W;
+    // outer ring meets real terrain; inner ring is the floor. The quad interpolates between
+    // them so the low side rises smoothly to the floor (a graded pad, not a cliff).
+    const yAo = terrainAt(aoX, aoZ), yBo = terrainAt(boX, boZ);
+    const o = padPos.length / 3;
+    // inner-A, inner-B at base (floor); outer-A, outer-B at graded terrain
+    padPos.push(ax, base, az, bx, base, bz, boX, yBo, boZ, aoX, yAo, aoZ);
+    for (const [px, pz] of [[ax, az], [bx, bz], [boX, boZ], [aoX, aoZ]]) {
+      const w = aerialUV(px, pz); padUv.push(w[0], w[1]);
+    }
+    padIdx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+  }
+}
 const buildingPolys = [];                       // world-space rings for tree avoidance
 const buildingCollision = [];
 const svFacadeTextures = new Map();
@@ -578,12 +733,17 @@ if (houseIdx >= 0) {
   const base = buildingBase(houseB.p.map(([e, n]) => w2(e, n)));   // min terrain under the footprint - 0.5 (slope-safe)
   houseWallH = wallHeight(houseB, houseIdx);
   houseRing = emitBuilding(houseB, houseIdx, base, houseWallH, hW, hRf, RfP, hD, { house: true, autoWindows: false });
+  // apron removed: per-corner wall bottoms already reach grade and the 85th-pct base keeps the
+  // top clear; a coplanar ground pad caused catastrophic z-fighting with the terrain on dense blocks.
   buildingPolys.push(houseRing);
   buildingCollision.push({ ring: houseRing, base, h: houseWallH });
   // base colour = the building's own SV (walls) / satellite (roof) colour, so it renders
   // in EVERY viewer (Quick Look + many glTF viewers ignore per-vertex COLOR_0).
-  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv, emissive: 0.42 }));
-  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { emissive: 0.36, planarUV: 1.6, rough: 0.85, colors: hRf.col.length === hRf.pos.length ? hRf.col : undefined }));
+  // NO baked emissive on walls/roofs: Unity does NOT zero exported emissive (the web runtime
+  // does), so a baked emissive = baseColor*0.4 makes Unity walls/roofs self-illuminate ~40%
+  // and read flat. Leave them lit only by the scene.
+  scene.add(mkMesh(hW.pos, null, new THREE.Color(...wallColor(houseIdx)), 'House_walls', { uvs: hW.uv }));
+  scene.add(mkMesh(hRf.pos, null, new THREE.Color(...roofColor(houseIdx)), 'House_roof', { planarUV: 1.6, rough: 0.85, colors: hRf.col.length === hRf.pos.length ? hRf.col : undefined }));
   if (hD.siding.length) scene.add(mkMesh(hD.siding, null, 0xbcb4a4, 'House_siding_lines', { emissive: 0.18 }));
   if (hD.trim.length) scene.add(mkMesh(hD.trim, null, 0xd8d0bd, 'House_window_trim'));
   if (hD.glass.length) scene.add(mkMesh(hD.glass, null, 0x223647, 'House_windows'));
@@ -600,12 +760,16 @@ const inMine = (x, z) => MINE.some(r => pip(x, z, r));
 let nBld = 0, nSkip = 0;
 S.buildings.forEach((b, ib) => {
   if (b.house) return;
-  const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]); if (!inPatch(cw[0], cw[1])) return;
+  const cen = centroidEN(b.p); const cw = w2(cen[0], cen[1]);
+  // whole footprint must sit on the terrain patch (a centroid-only test let edge buildings extrude
+  // ~20m past the DEM into the void). Skip any building with a corner off the terrain.
+  if (!b.p.map(([e, n]) => w2(e, n)).every(([x, z]) => inPatch(x, z))) return;
   if (inMine(cw[0], cw[1])) { nSkip++; return; }     // never put others' buildings on the owner's lots
   const base = buildingBase(b.p.map(([e, n]) => w2(e, n)));   // min terrain under the footprint - 0.5 (slope-safe)
   const h = wallHeight(b, ib);
   const ws = bW.pos.length / 3, rs = bRf.pos.length / 3;
   const ring = emitBuilding(b, ib, base, h, bW, bRf, RfP, bD, {});
+  // apron removed (see house note above): coplanar ground pad z-fought the terrain.
   buildingPolys.push(ring);
   buildingCollision.push({ ring, base, h });
   wallGroups.push([ws, bW.pos.length / 3 - ws, wallColor(ib)]);
@@ -641,8 +805,9 @@ function groupedMesh(buf, groups, name, withUV, planarUV) {
     const base = new THREE.Color(col[0], col[1], col[2]);
     // roofs get a slightly lower roughness (0.85) so the shingle texture reads;
     // walls keep 0.95. metalness stays 0.
-    const m = new THREE.MeshStandardMaterial({ color: base, roughness: isRoof ? 0.85 : 0.95, metalness: 0, name: `${name}_${i}` });
-    m.emissive = base.clone().multiplyScalar(/walls/i.test(name) ? 0.42 : 0.36);
+    const m = new THREE.MeshStandardMaterial({ color: base, roughness: isRoof ? 0.85 : 0.95, metalness: 0, name: `${name}_${i}`, side: THREE.DoubleSide });   // DoubleSide: some footprint windings invert the wall normal -> a FrontSide wall renders unlit/black; DoubleSide lights the visible face (matches mkMesh)
+    // NO baked emissive: Unity does NOT zero exported emissive (web does), so baking
+    // emissive = baseColor*0.4 made Unity walls/roofs self-illuminate ~40% and look flat.
     if (hasVColor) m.vertexColors = true;
     m.side = THREE.DoubleSide; return m;
   });
@@ -659,15 +824,33 @@ if (bW.pos.length) {
 // Satellite roof-photo layer (flat roofs): real aerial imagery, lifted just above the
 // solid roof. A separate node so it can be toggled on/off (hide it -> solid colours).
 if (RfP.pos.length) scene.add(mkMesh(RfP.pos, null, 0xffffff, 'Roofs_photo', { uvs: RfP.uv }));
+// Graded ground PADS around each building footprint (raise the low side up to the floor so
+// buildings sit ON a pad, not buried). White base + aerial UVs -> textured like the terrain
+// by the downstream aerial mapping (matches /ground_pads/ in the texturing loop).
+// Ground_Pads apron removed — it z-fought the terrain. (padPos/padIdx left unused/empty.)
 function addStreetViewFacadeOverlays() {
   const manifest = path.join(ROOT, 'exports/sv_facades.json');
   if (!existsSync(manifest)) return 0;
   const data = JSON.parse(readFileSync(manifest, 'utf8'));
+  const fp = data.scene_fingerprint || data.sceneFingerprint || '';
+  if (!fp) {
+    if (process.env.ALLOW_UNSTAMPED_SV_FACADES !== '1') {
+      console.warn('Skipping Street View facades: manifest has no scene fingerprint. Re-run scripts/fetch_sv_facades.py for this scene.');
+      return 0;
+    }
+  } else if (fp !== SCENE_FINGERPRINT) {
+    console.warn(`Skipping Street View facades: manifest scene fingerprint ${fp.slice(0, 12)} does not match current scene ${SCENE_FINGERPRINT.slice(0, 12)}.`);
+    return 0;
+  }
   let count = 0;
   for (const wall of data.walls || []) {
     const img = path.join(ROOT, 'exports', wall.image || '');
     const b = S.buildings[wall.building];
     if (!b || !existsSync(img) || !wall.A || !wall.B) continue;
+    // CLIP facades to the terrain patch. fetch_sv_facades targets buildings across the whole road
+    // network (many BEYOND the DEM); those buildings are skipped on emit, so a facade there would
+    // float in the void. Require the whole footprint on the terrain — same filter as the building emit.
+    if (!b.p.map(([e, n]) => w2(e, n)).every(([x, z]) => inPatch(x, z))) continue;
     const A0 = w2(...wall.A), B0 = w2(...wall.B);
     const L = Math.hypot(B0[0] - A0[0], B0[1] - A0[1]);
     if (L < 1.5) continue;
@@ -692,37 +875,11 @@ function addStreetViewFacadeOverlays() {
     // band from crop_v + fov + dist (inverse of vrow()), build the quad to span the
     // captured band, and clip the TOP to the wall eave (base+wallH) so the 0.6 m roof
     // pad is cropped off via the UV-V — leaving only the wall region of the photo.
-    const CAM_EYE = 2.5, PITCH = 6, IMG_W = 640, IMG_H = 512, RAD = Math.PI / 180;
-    const cv = wall.crop_v, fov = wall.fov, dist = wall.dist;
-    let bottomY = base, topY = base + wallH, vBottom = 1, vTop = 0;
-    // HORIZONTAL: the capture heading points at the wall midpoint, so the wall is CENTRED in
-    // the photo. The panel was sampling the whole 0..1 width, squashing a fov-degree frame onto
-    // the L-metre wall. Instead sample only the centred slice the wall actually subtends:
-    // trueFovH = angle the wall spans at the camera; uHalf = that as a fraction of the photo fov.
-    let u0 = 0, u1 = 1;
-    if (fov > 0 && dist > 0) {
-      const trueFovH = 2 * Math.atan((L / 2) / dist) / RAD;
-      const uHalf = Math.min(0.5, (trueFovH / fov) / 2);
-      u0 = 0.5 - uHalf; u1 = 0.5 + uHalf;
-    }
-    if (Array.isArray(cv) && cv.length === 2 && fov > 0 && dist > 0) {
-      const fovV = 2 * Math.atan(Math.tan(fov / 2 * RAD) * IMG_H / IMG_W) / RAD;
-      const yAtV = v => CAM_EYE + dist * Math.tan((PITCH + (0.5 - v) * fovV) * RAD); // world-Y of crop row v
-      const yPhotoTop = yAtV(cv[0]);   // eave + pad (~wallH + 0.6)
-      const yPhotoBot = yAtV(cv[1]);   // ground (or, if crop_v clamped, slightly above ground)
-      const span = yPhotoTop - yPhotoBot;
-      if (span > 0.5) {
-        // VERTICAL: DON'T extrapolate the photo past its captured band. The quad spans exactly
-        // the band that the camera saw — bottom = base + max(0, yPhotoBot) (the photo's real
-        // lowest row, V=1), top clipped to the wall eave (drops the eave+0.6 m roof pad). The
-        // thin base..yPhotoBot strip below is covered by the underlying Buildings_walls colour
-        // floor, so there's no stretched-down photo and no roof-on-wall.
-        bottomY = base + Math.max(0, yPhotoBot);
-        topY = base + Math.min(wallH, yPhotoTop);
-        vBottom = 1;                                             // photo's captured bottom row
-        vTop = Math.max(0, (yPhotoTop - Math.min(wallH, yPhotoTop)) / span);   // eave row (crops roof pad)
-      }
-    }
+    // The fetched crop (fetch_sv_facades.crop_to_wall) is now EXACTLY the wall rectangle —
+    // eave->ground vertically, wall-width horizontally, no roof/sky/neighbours — so map it 1:1
+    // onto the wall quad: quad spans the full wall (ground=base .. eave=base+wallH) and the whole
+    // crop (U 0..1 = wall left..right, V 0=eave .. 1=ground). No roof-pad recovery needed.
+    const bottomY = base, topY = base + wallH, vBottom = 1, vTop = 0, u0 = 0, u1 = 1;
     // Inset: the panel must sit JUST proud of the wall and all its surface details
     // (window trim/glass/garage push out to ~0.145 m), so 0.16 m keeps the photo in front
     // of them without a visible floating gap. Kept consistent across every facade.
@@ -758,16 +915,15 @@ const rPos = [], rIdx = [], drvPos = [], drvIdx = [], drvSrcPos = [], drvSrcIdx 
 function ribbon(lineW, width, lift, posArr, idxArr) {
   emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr);
 }
-// Flat water: real creeks don't climb hillsides. The centerline here rises ~8.7 m
-// end-to-end (it meanders up the valley), so draping the water on terrain made it run
-// UP the hill. Instead: (1) trim centerline points whose terrain sits well above the
-// local channel floor (drops the spots where snapping pulled the line onto a bank or the
-// creek genuinely climbs out of the valley), (2) split what remains into connected runs,
-// and (3) give each run ONE flat surface elevation (run's ~15th-percentile terrain minus
-// a small depth) so each pool of water is dead level. Emits one ribbon per run.
+// Flat water: real creeks don't climb hillsides. The centerline rises across the
+// neighborhood, so one giant flat plane is wrong, but draping every vertex on the
+// DEM makes "water" climb banks and streets. Densify the creek and split it into
+// short elevation-bounded runs; each run gets one flat water surface at its local
+// channel floor. Result: the whole creek path remains visible, but water reads as
+// level pools/steps instead of a road-like terrain ribbon.
 function flatWaterRibbon(lineW, width, lift, posArr, idxArr) {
   const hw = width / 2;
-  // densify so a flat run still hugs the channel laterally and trim resolution is fine
+  // densify so a flat run still hugs the channel laterally and step boundaries are fine
   const dense = [lineW[0]];
   for (let k = 1; k < lineW.length; k++) {
     const a = lineW[k - 1], b = lineW[k], seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -775,13 +931,22 @@ function flatWaterRibbon(lineW, width, lift, posArr, idxArr) {
     for (let s = 1; s <= steps; s++) dense.push([a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps]);
   }
   const elev = dense.map(([x, z]) => terrainAt(x, z));
-  const floor = [...elev].sort((a, b) => a - b)[Math.floor(0.10 * (elev.length - 1))]; // valley floor
-  const KEEP_MARGIN = 2.0;                    // m above the floor still counts as channel water
-  const keep = elev.map(y => y <= floor + KEEP_MARGIN);
-  // split kept points into connected runs (a small gap of dropped points breaks a run)
-  const runs = []; let cur = [];
-  for (let k = 0; k < dense.length; k++) {
-    if (keep[k]) cur.push(k); else if (cur.length) { runs.push(cur); cur = []; }
+  const MAX_RUN_ELEV_RANGE = 0.9;             // m, flatness budget per visible water run
+  const runs = [];
+  let cur = [0], lo = elev[0], hi = elev[0];
+  for (let k = 1; k < dense.length; k++) {
+    const nlo = Math.min(lo, elev[k]);
+    const nhi = Math.max(hi, elev[k]);
+    if (cur.length >= 2 && nhi - nlo > MAX_RUN_ELEV_RANGE) {
+      runs.push(cur);
+      cur = [k - 1, k];
+      lo = Math.min(elev[k - 1], elev[k]);
+      hi = Math.max(elev[k - 1], elev[k]);
+    } else {
+      cur.push(k);
+      lo = nlo;
+      hi = nhi;
+    }
   }
   if (cur.length) runs.push(cur);
   for (const run of runs) {
@@ -819,12 +984,23 @@ const swPos = [], swIdx = [], swSrcPos = [], swSrcIdx = [], xwalkPos = [], xwalk
 // fall at u=0.25,0.75 within each tile (half-tile spacing), so a 2.5 m tile → ~1.25 m cells.
 const swUv = [], cuUv = [], swSrcUv = [];
 const CONCRETE_TILE = 2.5;
-// Layer stack (m above terrain). Kept SMALL so the ribbons hug the ground (no floating
-// gap at their edges). The runtime gives every paved ribbon a negative polygon offset
-// (Level.jsx tuneMaterial) so it wins the depth test over the terrain regardless of slope,
-// so we no longer need a big geometric lift to stop the terrain poking through — these
-// just preserve the relative order where ribbons overlap (dash on road, curb highest).
-const LIFT_ASPHALT = 0.025, LIFT_DRIVEWAY = 0.03, LIFT_SIDEWALK = 0.05, LIFT_CURB = 0.08, LIFT_DASH = 0.045;
+// Layer stack (m above terrain). The GAME TARGET IS UNITY, which has NO runtime
+// polygonOffset (the web Level.jsx tuneMaterial bias does NOT exist there), so the
+// ORDERED GEOMETRIC LIFT is the primary z-fight defence: each paved layer must win the
+// depth test against the terrain (and against the layer below it) by GEOMETRY alone.
+// Kept cm-scale and terrain-draped so surfaces still hug the ground (never the old
+// 0.22-0.6 m floating values), but with each layer clearly separated by >=2 cm and
+// ORDERED bottom->top: asphalt < driveway < dash < sidewalk < curb (curb highest).
+// TINY realistic lifts. Now that terrainAt returns the EXACT terrain-mesh height (above), each paved
+// ribbon sits exactly `lift` above the real surface everywhere, so z-fighting is gone WITHOUT a big
+// geometric lift. These are real-world curb/slab thicknesses (curb ~9cm, sidewalk ~6cm) so the skirt
+// edges read correctly instead of as chunky slabs. Order: curb > dash > sidewalk > driveway > asphalt
+// where layers overlap.
+const LIFT_ASPHALT = 0.05, LIFT_DRIVEWAY = 0.06, LIFT_DASH = 0.07, LIFT_SIDEWALK = 0.08, LIFT_CURB = 0.11;
+// Asphalt PADS (cul-de-sac bulbs, junction blend fillets, dead-end caps) are coincident
+// with the road ribbon in the SAME 'Roads' mesh -> z-fight at the same Y. Lift them just
+// above the ribbon (still below the dash) so they win cleanly without floating.
+const LIFT_ASPHALT_PAD = LIFT_ASPHALT + 0.01;
 // Skirt = vertical edge wall dropped from a raised slab's outer edges down to the lawn so the
 // slab MEETS the ground instead of hovering. Sidewalks/curbs sit 26-34 cm up; without a skirt
 // you see a floating gap at eye level. Drop the wall the full lift (minus a hair so its foot
@@ -834,10 +1010,11 @@ const SKIRT_SIDEWALK = LIFT_SIDEWALK - 0.02, SKIRT_CURB = LIFT_CURB - 0.02;
 const SW_WIDTH = 1.8, SW_GAP = 2.2;         // road edge -> sidewalk centre spacing
 const CURB_WIDTH = 0.55;                     // curb ribbon width (top score lines tile across this)
 // Gap-fill DIRT strip between the curb's outer edge and the sidewalk's inner edge. Sits a
-// hair above the asphalt and BELOW both concrete tops; built wide enough (+0.3 m) to tuck
-// UNDER the curb + sidewalk edges so there is no open vertical trench to fall into. Matte
+// hair (5 mm) above the asphalt and clearly BELOW both concrete tops (sidewalk 0.12, curb
+// 0.16); built wide enough (+0.3 m) to tuck UNDER the curb + sidewalk edges so there is no
+// open vertical trench to fall into and no coincidence with the concrete layers. Matte
 // brown 'GapDirt' material; collider copies these buffers so collision stays consistent.
-const LIFT_GAPFILL = LIFT_ASPHALT + 0.02;
+const LIFT_GAPFILL = LIFT_ASPHALT + 0.005;
 const gfPos = [], gfIdx = [];
 const MAPSURFACES = path.join(ROOT, 'exports/map_surfaces_osm.json');
 const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
@@ -929,9 +1106,26 @@ const mappedLineSegs = (lines, width) => {
 const mappedWalkSegs = mappedLineSegs(mapSurfaces.sidewalks || [], SW_WIDTH);
 const mappedCrossingSegs = mappedLineSegs(mapSurfaces.crossings || [], 2.4);
 const nearSegs = (x, z, segs, margin) => segs.some(s => distPointSeg(x, z, s.a[0], s.a[1], s.b[0], s.b[1]).d < s.width / 2 + margin);
-const nearMappedWalk = (x, z) => nearSegs(x, z, mappedWalkSegs, 1.15) || nearSegs(x, z, mappedCrossingSegs, 0.9);
+// MUTUAL EXCLUSION (no two concrete sets at different lifts overlapping -> seam z-fight in
+// Unity): the GENERATED sidewalk skips wherever its OWN footprint would touch a MAPPED
+// ribbon's footprint. The mapped ribbon's real drawn half-width (s.width/2, the SINGLE
+// source of truth) plus the generated ribbon's own half-width plus a small seam guard is
+// exactly the band the generated walk must vacate so the two never double-cover.
+const SEAM_GUARD = 0.25;
+const GEN_SW_HALF = SW_WIDTH / 2;
+const nearMappedWalk = (x, z) => nearSegs(x, z, mappedWalkSegs, GEN_SW_HALF + SEAM_GUARD) || nearSegs(x, z, mappedCrossingSegs, GEN_SW_HALF + SEAM_GUARD);
 const insideStreetSurface = (x, z) => streetSegs.some(s => distPointSeg(x, z, s.a[0], s.a[1], s.b[0], s.b[1]).d < s.spec.width / 2 + 0.6);
-const skipMappedSidewalk = (x, z) => insideStreetSurface(x, z);
+// MAPPED sidewalk skips inside the street surface (where the asphalt ribbon already paves)
+// AND wherever a GENERATED road-edge sidewalk is drawn, so mapped vs generated stay mutually
+// exclusive. Generated road-edge sidewalk centre sits at road_half + SW_GAP from the
+// centreline; its footprint reaches road_half + SW_GAP ± GEN_SW_HALF. The mapped ribbon's
+// own half-width plus that band is where the two would double-cover -> skip the mapped there.
+const nearGeneratedSidewalk = (x, z) => streetSegs.some(s => {
+  const d = distPointSeg(x, z, s.a[0], s.a[1], s.b[0], s.b[1]).d;
+  const c = s.spec.width / 2 + SW_GAP;                       // generated walk centre offset
+  return Math.abs(d - c) < GEN_SW_HALF + GEN_SW_HALF + SEAM_GUARD;
+});
+const skipMappedSidewalk = (x, z) => insideStreetSurface(x, z) || nearGeneratedSidewalk(x, z);
 // cul-de-sac bulb centres (computed first so dashes can avoid them too)
 // bulbs / end-caps / junction pads only where they fully sit on terrain (use the
 // real patch bounds with a margin, not the symmetric ROAD_HALF box, so no disc
@@ -1006,6 +1200,8 @@ for (const r of S.roads || []) {
 // then meet through rounded connector arcs around intersection curb returns.
 for (const run of buildSidewalkConnectors(S.roads || [], w2, {
   sideGap: SW_GAP,
+  step: 1.2,
+  maxRunLen: 30,
   inPatch: (x, z) => inTerrain(x, z, 6),
   avoid: nearMappedWalk,
   junctions: roadJunctions,
@@ -1016,11 +1212,16 @@ for (const run of buildSidewalkEndCaps(S.roads || [], w2, {
   inPatch: (x, z) => inTerrain(x, z, 6),
   avoid: nearMappedWalk,
   isCourt,
+  roadSegments: streetSegs,
 })) curbRibbon(run, SW_WIDTH, LIFT_SIDEWALK, swPos, swIdx, null, SKIRT_SIDEWALK, swUv);
 // cul-de-sac bulbs / service end-caps at true dead-ends inside ROAD_HALF.
 // Court bulbs were precomputed above (reused here so dashes/curbs avoided them);
 // service stubs just get a small rounded end-cap (no fake roundabout).
-const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + LIFT_ASPHALT, z); return o; };
+// emitAsphalt feeds ONLY the cul-de-sac bulbs, junction blend pads and dead-end caps —
+// not the through-road ribbon (that uses ribbon() at LIFT_ASPHALT). These pads are
+// coincident with the ribbon in the same 'Roads' mesh, so lift them to LIFT_ASPHALT_PAD
+// (just above the ribbon, still below the dash) to kill the z-fight in Unity.
+const emitAsphalt = (x, z) => { const o = rPos.length / 3; rPos.push(x, terrainAt(x, z) + LIFT_ASPHALT_PAD, z); return o; };
 const emitDriveway = (x, z) => { const o = drvPos.length / 3; drvPos.push(x, terrainAt(x, z) + LIFT_DRIVEWAY, z); return o; };
 // Bulb rings are circular (no diagonal run), so a world-planar concrete UV reads fine here;
 // we still push a uv per vert so the merged mesh's uv attribute count matches its positions.
@@ -1129,14 +1330,30 @@ if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
 // creek ribbon
 let creekW = null;
+// Creek geometry constants — defined BEFORE the snap so the building-avoidance margin
+// can keep the centreline far enough out that the FULL ribbon (water + banks) clears
+// houses, not just the centreline (the old 1.2 m margin let the 6 m water cut through).
+const CREEK_WIDTH = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 7.5;
+const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.05;
+const CREEK_BUILDING_MARGIN = CREEK_WIDTH / 2 + 1.75;   // halfwidth + bank lip + slack
 if (S.creek && S.creek.p) {
   creekW = S.creek.p.map(([e, n]) => w2(e, n)).filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
-  creekW = snapCreekToChannel(creekW, terrainAt, { radius: 18, step: 1.5, strength: 0.9, smoothPasses: 2 });
+  creekW = snapCreekToChannel(creekW, terrainAt, {
+    radius: 18,
+    step: 1.5,
+    strength: 0.9,
+    smoothPasses: 2,
+    avoidSegments: roadSegmentsWorld(S.roads || [], w2, { includeService: true }),
+    avoidMargin: 2.0,
+    avoidPolygons: buildingPolys,
+    avoidPolygonMargin: CREEK_BUILDING_MARGIN,
+  });
   if (creekW.length >= 2) {
-    const CREEK_WIDTH = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 6.0;
-    const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.22;
     const cPos = [], cIdx = []; flatWaterRibbon(creekW, CREEK_WIDTH, CREEK_DEPTH, cPos, cIdx);
-    const cr = mkMesh(cPos, cIdx, 0x3a78c2, 'Creek_SanLorenzo'); cr.material.name = 'Creek_mat'; scene.add(cr);
+    // Bright, glossy, slightly reflective water so it reads as WET in Blender/USDZ/Unity
+    // (all honour metallic/roughness) — not a dark matte navy strip that looks like asphalt.
+    const cr = mkMesh(cPos, cIdx, 0x2f8fd8, 'Creek_SanLorenzo', { rough: 0.18, metal: 0.15 });
+    cr.material.name = 'Creek_mat'; scene.add(cr);
   }
 }
 
@@ -1345,28 +1562,13 @@ if (trees.length) {
 
 function addCreekArtAndShrubs() {
   if (creekW && creekW.length >= 2) {
-    const creekWidth = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 6.0;
-    const bankPos = [], bankIdx = [], flowPos = [], flowIdx = [], rockPos = [], rockIdx = [], reedPos = [];
-    ribbon(offsetLine(creekW, creekWidth / 2 + 0.75), 1.35, 0.18, bankPos, bankIdx);
-    ribbon(offsetLine(creekW, -(creekWidth / 2 + 0.75)), 1.35, 0.18, bankPos, bankIdx);
-    let phase = 0;
-    for (let k = 1; k < creekW.length; k++) {
-      const a = creekW[k - 1], b = creekW[k];
-      let dx = b[0] - a[0], dz = b[1] - a[1];
-      const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg;
-      const nx = -dz, nz = dx;
-      for (let s = (phase % 8); s < seg; s += 9) {
-        const len = Math.min(3.4, seg - s);
-        if (len < 1.2) continue;
-        const x0 = a[0] + dx * s + nx * 0.55, z0 = a[1] + dz * s + nz * 0.55;
-        const x1 = a[0] + dx * (s + len) + nx * 0.55, z1 = a[1] + dz * (s + len) + nz * 0.55;
-        const y0 = terrainAt(x0, z0) + 0.35, y1 = terrainAt(x1, z1) + 0.35, hw = 0.08;
-        const off = flowPos.length / 3;
-        flowPos.push(x0 + nx * hw, y0, z0 + nz * hw, x0 - nx * hw, y0, z0 - nz * hw, x1 + nx * hw, y1, z1 + nz * hw, x1 - nx * hw, y1, z1 - nz * hw);
-        flowIdx.push(off, off + 2, off + 1, off + 1, off + 2, off + 3);
-      }
-      phase += seg;
-    }
+    const creekWidth = CREEK_WIDTH;   // shared with the water emit so banks hug the water edge
+    const bankPos = [], bankIdx = [], rockPos = [], rockIdx = [], reedPos = [];
+    // Thin vegetated bank lip snug to the (wider) water edge — a narrow grassy/silty rim,
+    // not the old wide flat brown strip that read as a dirt road flanking the channel.
+    ribbon(offsetLine(creekW, creekWidth / 2 + 0.35), 0.45, 0.055, bankPos, bankIdx);
+    ribbon(offsetLine(creekW, -(creekWidth / 2 + 0.35)), 0.45, 0.055, bankPos, bankIdx);
+    // No authored flow-line strips: in the raw GLB they read as road/lane markings.
     const emitRock = (x, z) => { const o = rockPos.length / 3; rockPos.push(x, terrainAt(x, z) + 0.26, z); return o; };
     for (let k = 1; k < creekW.length; k++) {
       const a = creekW[k - 1], b = creekW[k];
@@ -1386,8 +1588,7 @@ function addCreekArtAndShrubs() {
         reedPos.push(x - nx * w, y, z - nz * w, x + nx * w, y, z + nz * w, x + dx * 0.08, y + h, z + dz * 0.08);
       }
     }
-    if (bankIdx.length) scene.add(mkMesh(bankPos, bankIdx, 0x756d58, 'Creek_Banks'));
-    if (flowIdx.length) scene.add(mkMesh(flowPos, flowIdx, 0x9fd6f1, 'Creek_FlowLines'));
+    if (bankIdx.length) scene.add(mkMesh(bankPos, bankIdx, 0x5a6b46, 'Creek_Banks', { rough: 1.0 }));
     if (rockIdx.length) scene.add(mkMesh(rockPos, rockIdx, 0x77786f, 'Creek_Rocks'));
     if (reedPos.length) scene.add(mkMesh(reedPos, null, 0x607a3d, 'Creek_Reeds'));
   }
@@ -1428,7 +1629,11 @@ function appendIndexed(srcPos, srcIdx, dstPos, dstIdx) {
 function pushExtrudedRing(pos, idx, ring, base, h) {
   if (!ring || ring.length < 3) return;
   const off = pos.length / 3;
-  for (const [x, z] of ring) pos.push(x, base, z);
+  // PER-CORNER bottoms drop to terrainAt(corner) - WALL_EMBED so the collision envelope
+  // matches the visible wall silhouette on slopes (the walls in pushWallFace bottom at the
+  // same per-corner terrain - WALL_EMBED). A single flat min-based base used to under/over-
+  // shoot the wall foot on a slope, leaving a collision lip or gap below the downhill wall.
+  for (const [x, z] of ring) pos.push(x, Math.min(base + h - 0.1, terrainAt(x, z) - WALL_EMBED), z);
   for (const [x, z] of ring) pos.push(x, base + h, z);
   const n = ring.length;
   for (let i = 0; i < n; i++) {
@@ -1517,25 +1722,40 @@ async function emitTreeLayers() {
     const templates = await loadTreeTemplates();
     if (templates && templates.length && placed.length) {
       const treesGroup = new THREE.Group(); treesGroup.name = 'Trees';
-      // deterministic per-index yaw (stable across runs; no Math.random)
-      const yawOf = (i) => { let h = Math.imul((i | 0) + 0x9e3779b9, 2654435761) >>> 0; return (h / 4294967296) * Math.PI * 2; };
-      // pick template whose native height_m is closest to the target tree height
-      const pickTemplate = (height) => {
-        let best = templates[0], bd = Infinity;
-        for (const t of templates) { const d = Math.abs((t.height_m || 6) - height); if (d < bd) { bd = d; best = t; } }
-        return best;
+      // deterministic per-index 32-bit hash (stable across runs; no Math.random)
+      const hashOf = (i) => Math.imul((i | 0) + 0x9e3779b9, 2654435761) >>> 0;
+      const yawOf = (i) => (hashOf(i) / 4294967296) * Math.PI * 2;
+      // NON-feature templates (Acacia kept as the rare feature tree only), sorted by height so
+      // the closest-height candidates are easy to pick. Feature templates are placed only on a
+      // rare hash bucket so neighbours don't all become acacias.
+      const normalTpls = templates.filter(t => !t.feature);
+      const featureTpls = templates.filter(t => t.feature);
+      const pool = normalTpls.length ? normalTpls : templates;
+      // Template selection: among the 2-3 templates CLOSEST in height to the target, pick one by
+      // an index hash so similar-height NEIGHBOURS get DIFFERENT templates (no rows of clones)
+      // while staying height-appropriate. ~1-in-9 trees becomes the rare Acacia feature tree.
+      const pickTemplate = (height, h) => {
+        if (featureTpls.length && (h % 9) === 0) return featureTpls[(h >>> 8) % featureTpls.length];
+        const ranked = [...pool].sort((a, b) => Math.abs((a.height_m || 6) - height) - Math.abs((b.height_m || 6) - height));
+        const k = Math.min(3, ranked.length);
+        return ranked[(h >>> 4) % k];
       };
       for (const t of placed) {
         const x = +t.x, z = +t.z, height = +t.height || 7;
         const base = Number.isFinite(+t.base) ? +t.base : terrainAt(x, z);
         if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(base)) continue;
-        const tmpl = pickTemplate(height);
+        const idxKey = t.i ?? nTreeInstances;
+        const h = hashOf(idxKey);
+        const tmpl = pickTemplate(height, h);
         const s = Math.max(0.1, height / (tmpl.height_m || 6));
-        const m = new THREE.Mesh(tmpl.geom, tmpl.mat);   // SHARE geom+mat by reference (-> GPU instancing)
+        // per-instance (leaf hue x bark hue) variant; REUSE the same variant array per template
+        // so the build folds (geom, variantArray) into one GPU-instanced batch per variant.
+        const variantArr = tmpl.variants[(h >>> 12) % tmpl.variants.length];
+        const m = new THREE.Mesh(tmpl.geom, variantArr);   // SHARE geom + variant array by reference
         m.position.set(x, base, z);
         m.scale.setScalar(s);
-        m.rotation.y = yawOf(t.i ?? nTreeInstances);
-        m.name = 'Tree_' + (t.i ?? nTreeInstances);
+        m.rotation.y = yawOf(idxKey);
+        m.name = 'Tree_' + idxKey;
         treesGroup.add(m);
         pushTrunkBox(x, z);
         nTreeInstances++;
@@ -1679,7 +1899,7 @@ for (const m of doc.getRoot().listMaterials()) {
   // never texture the invisible collision/LOD proxies (opacity 0) — e.g. Collision_Roads
   // matches /roads/i. Skip them so they stay untouched.
   const isProxy = /^(Collision_|LOD_)/i.test(n);
-  if (aerialTex && /terrain|roofs_photo/i.test(n)) {
+  if (aerialTex && !isProxy && /terrain|roofs_photo|ground_pads/i.test(n)) {   // !isProxy: never texture Collision_Terrain (it matches /terrain/) — it must stay an invisible alpha-MASK proxy
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(aerialTex);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP); textured++;
   } else if (facadeTex && /walls/i.test(n)) {

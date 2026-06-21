@@ -32,6 +32,25 @@ SESSION = requests.Session()
 SESSION.headers["User-Agent"] = "build-scene/1.0 (geo pipeline; contact: local dev)"
 
 
+def env_float(name, default):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError:
+        raise SystemExit(f"{name} must be a number, got {raw!r}")
+
+
+# Dahill is no longer a tiny house-only crop. Default to a neighborhood-scale
+# query that covers the Linden/Dahill loop and nearby context; individual layers
+# can still be widened/narrowed without editing the script.
+QUERY_RADIUS_M = env_float("DAHILL_QUERY_RADIUS_M", 560)
+ROAD_RADIUS_M = env_float("DAHILL_ROAD_RADIUS_M", QUERY_RADIUS_M)
+BUILDING_RADIUS_M = env_float("DAHILL_BUILDING_RADIUS_M", QUERY_RADIUS_M)
+CREEK_RADIUS_M = env_float("DAHILL_CREEK_RADIUS_M", max(650, QUERY_RADIUS_M))
+
+
 # ------------------------------------------------------------- coord frames
 def ll_to_en(lat, lon):
     e = (lon - LON0) * COSLAT * 111320.0
@@ -202,7 +221,7 @@ ROAD_WIDTHS = {"residential": 7.5, "tertiary": 9.0, "service": 3.6}
 
 def build_roads():
     print("== roads ==")
-    s, w, n, e = bbox_around_origin(360)
+    s, w, n, e = bbox_around_origin(ROAD_RADIUS_M)
     query = (
         '[out:json][timeout:90];'
         f'way[highway~"^(residential|tertiary|secondary|unclassified|living_street|service)$"]'
@@ -242,7 +261,7 @@ def build_roads():
 # -------------------------------------------------------------------- creek
 def build_creek():
     print("== creek ==")
-    s, w, n, e = bbox_around_origin(500)
+    s, w, n, e = bbox_around_origin(CREEK_RADIUS_M)
     query = (
         '[out:json][timeout:90];'
         f'way[waterway][name~"San Lorenzo"]({s},{w},{n},{e});out geom;'
@@ -298,7 +317,7 @@ def build_creek():
 
 # ---------------------------------------------------------------- buildings
 def osm_building_footprints():
-    s, w, n, e = bbox_around_origin(360)
+    s, w, n, e = bbox_around_origin(BUILDING_RADIUS_M)
     query = f'[out:json][timeout:120];way[building]({s},{w},{n},{e});out geom;'
     data = overpass(query)
     feats = []
@@ -315,11 +334,11 @@ def osm_building_footprints():
 
 
 def overture_building_footprints():
-    geojson_path = os.path.join(CACHE, "buildings.geojson")
+    geojson_path = os.path.join(CACHE, f"buildings_{int(round(BUILDING_RADIUS_M))}m.geojson")
     if not os.path.exists(geojson_path):
         pip = os.path.join(os.path.dirname(sys.executable), "pip")
         subprocess.run([pip, "install", "-q", "overturemaps"], check=True)
-        s, w, n, e = bbox_around_origin(360)
+        s, w, n, e = bbox_around_origin(BUILDING_RADIUS_M)
         cli = os.path.join(os.path.dirname(sys.executable), "overturemaps")
         subprocess.run(
             [cli, "download", f"--bbox={w},{s},{e},{n}", "-f", "geojson",
@@ -356,8 +375,10 @@ def build_buildings():
     feats = osm_building_footprints()
     source = "OSM"
     print(f"  OSM footprints: {len(feats)}")
-    if len(feats) < 140:
-        print("  OSM sparse (<140), falling back to Overture Maps")
+    prefer = os.environ.get("DAHILL_BUILDING_SOURCE", "overture").strip().lower()
+    if prefer == "overture" or len(feats) < 140:
+        reason = "requested by DAHILL_BUILDING_SOURCE/default" if prefer == "overture" else "OSM sparse (<140)"
+        print(f"  {reason}, falling back to Overture Maps")
         feats = overture_building_footprints()
         source = "Overture"
         print(f"  Overture footprints: {len(feats)}")
@@ -542,6 +563,11 @@ def main():
         out_buildings.append(ob)
 
     scene = {"center": center, "terrain": terrain, "aerial": aerial,
+             "meta": {"kind": "dahill-neighborhood-export",
+                      "queryRadiusM": round(QUERY_RADIUS_M, 1),
+                      "roadRadiusM": round(ROAD_RADIUS_M, 1),
+                      "buildingRadiusM": round(BUILDING_RADIUS_M, 1),
+                      "creekRadiusM": round(CREEK_RADIUS_M, 1)},
              "buildings": out_buildings, "roads": roads, "creek": creek}
     scene_path = os.path.join(ASSETS, "scene.json")
     with open(scene_path, "w") as f:
@@ -564,9 +590,9 @@ def main():
           f"terrain range [{terr_arr.min():.1f},{terr_arr.max():.1f}] within [0,300]")
     check(40 <= terr_arr.mean() <= 55, f"terrain mean {terr_arr.mean():.1f} in [40,55]")
 
-    check(150 <= len(out_buildings) <= 400,
-          f"buildings count {len(out_buildings)} in [150,400] (source={source}; "
-          f"Overture density here genuinely exceeds the spec's estimate)", hard=False)
+    check(150 <= len(out_buildings) <= 1800,
+          f"buildings count {len(out_buildings)} in [150,1800] (source={source}; "
+          f"neighborhood-scale export radius {BUILDING_RADIUS_M:.0f} m)", hard=False)
     check(len(out_buildings) >= 150, f"buildings count {len(out_buildings)} >= 150")
     n_house = sum(1 for b in out_buildings if b.get("house"))
     check(n_house == 1, f"exactly one house flag ({n_house})")
@@ -577,7 +603,7 @@ def main():
 
     check(any(r.get("n") == "Dahill Lane" for r in roads),
           f"'Dahill Lane' present in {len(roads)} roads")
-    check(40 <= len(roads) <= 80, f"road count {len(roads)} in [40,80]")
+    check(40 <= len(roads) <= 500, f"road count {len(roads)} in [40,500]")
 
     creek_line = LineString(creek["p"])
     d_line = creek_line.distance(Point(center))

@@ -25,6 +25,16 @@ namespace DaHilg.Editor
         const string k_AnimalControllerDir = k_SettingsDir + "/AnimalControllers";
         const string k_PanelSettingsPath = k_Root + "/UI/DaHilgPanelSettings.asset";
         const string k_GeneratedAnimationDir = k_SettingsDir + "/GeneratedAnimations";
+        // Heavy outdoor levels stream from StreamingAssets via glTFast at level-select instead
+        // of being baked into the single WebGL data file (drops the initial download from ~75MB).
+        // Keyed by slug; the runtime resolves "<slug>.glb" under Application.streamingAssetsPath.
+        static readonly HashSet<string> s_StreamedLevelSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "dahill",
+            "canyon",
+            "stanton",
+            "meemaw"
+        };
         static readonly string[] s_CharacterAnimationStates =
         {
             "Idle",
@@ -53,11 +63,29 @@ namespace DaHilg.Editor
             "Hit",
             "Stumble"
         };
+        static readonly HashSet<string> s_StationaryHipClips = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Idle",
+            "Dance",
+            "Wave",
+            "Cheer",
+            "Attack",
+            "Hit"
+        };
+        static readonly string[] s_FootPinnedClips =
+        {
+            "Idle",
+            "Dance",
+            "Wave",
+            "Cheer",
+            "Attack"
+        };
 
         [MenuItem("Da Hilg/Rebuild Unity Scene")]
         public static void RebuildUnityScene()
         {
             EnsureFolders();
+            SyncSourceAssets();
             SyncSupplementalSourceAssets();
             Dictionary<string, AnimatorController> controllers = BuildAnimatorControllers();
             Dictionary<string, AnimatorController> animalControllers = BuildAnimalControllers();
@@ -72,15 +100,24 @@ namespace DaHilg.Editor
         [MenuItem("Da Hilg/Build WebGL Export")]
         public static void BuildWebGLExport()
         {
-            RebuildUnityScene();
-            ValidateSpawnGroundingAssets();
-            ValidateCharacterAnimationAssets();
-            ValidateAnimalAnimationAssets();
-
             string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
             string output = Path.Combine(repoRoot, "public/unity/da-hilg");
-            if (Directory.Exists(output))
+            bool scriptsOnly = Environment.GetEnvironmentVariable("DAHILG_UNITY_BUILD_SCRIPTS_ONLY") == "1";
+
+            if (!scriptsOnly)
+            {
+                RebuildUnityScene();
+                ValidateSpawnGroundingAssets();
+                ValidateCharacterAnimationAssets();
+                ValidateAnimalAnimationAssets();
+            }
+            else if (!Directory.Exists(output))
+            {
+                throw new InvalidOperationException("Scripts-only WebGL build requires an existing full export at " + output);
+            }
+
+            if (!scriptsOnly && Directory.Exists(output))
             {
                 Directory.Delete(output, true);
             }
@@ -100,7 +137,7 @@ namespace DaHilg.Editor
                 scenes = new[] { k_ScenePath },
                 locationPathName = output,
                 target = BuildTarget.WebGL,
-                options = BuildOptions.None
+                options = scriptsOnly ? BuildOptions.BuildScriptsOnly : BuildOptions.None
             };
 
             BuildReport report = BuildPipeline.BuildPlayer(options);
@@ -111,7 +148,7 @@ namespace DaHilg.Editor
 
             CustomizeWebGLExport(output);
             CleanupGeneratedBuildSidecars(projectRoot, output);
-            Debug.Log("[DaHilg] WebGL export built at " + output);
+            Debug.Log("[DaHilg] WebGL export built at " + output + (scriptsOnly ? " (scripts only)." : "."));
         }
 
         [MenuItem("Da Hilg/Validate Spawn Grounding")]
@@ -137,9 +174,12 @@ namespace DaHilg.Editor
 
         static void CleanupGeneratedBuildSidecars(string projectRoot, string output)
         {
-            foreach (string dir in Directory.GetDirectories(output, "*BurstDebugInformation*DoNotShip*", SearchOption.TopDirectoryOnly))
+            foreach (string dir in Directory.GetDirectories(output, "*", SearchOption.TopDirectoryOnly))
             {
-                Directory.Delete(dir, true);
+                if (Path.GetFileName(dir).IndexOf("DoNotShip", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    Directory.Delete(dir, true);
+                }
             }
 
             string generatedPlugins = Path.Combine(projectRoot, "Data/Plugins");
@@ -179,7 +219,7 @@ namespace DaHilg.Editor
   <head>
     <meta charset=""utf-8"">
     <meta http-equiv=""Content-Type"" content=""text/html; charset=utf-8"">
-    <meta name=""viewport"" content=""width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes"">
+    <meta name=""viewport"" content=""width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"">
     <title>Da Hilg Unity</title>
     <link rel=""shortcut icon"" href=""TemplateData/favicon.ico"">
     <link rel=""stylesheet"" href=""TemplateData/style.css"">
@@ -227,7 +267,99 @@ namespace DaHilg.Editor
         }
       }
 
+      window.__dahilg = {
+        hudTapCount: 0,
+        hudCommandCount: 0,
+        hudErrors: [],
+        lastHudPayload: null,
+        lastHudCommand: null,
+        unityReady: false
+      };
+      let unityInstanceRef = null;
+      let lastHudTapKey = '';
+      let lastHudTapTime = 0;
+
+      function rememberHudError(error) {
+        window.__dahilg.hudErrors.push(String(error && error.message ? error.message : error));
+        if (window.__dahilg.hudErrors.length > 12) window.__dahilg.hudErrors.shift();
+      }
+
+      function compactCommandFromTap(x, y, width) {
+        if (y < 0 || y > 76 || width <= 1) return null;
+        const mobileScale = width < 900;
+        const scale = mobileScale ? 0.62 : 1;
+        const rightInset = mobileScale ? 8 : 18;
+        const fromRight = width - x - rightInset;
+        if (fromRight < 0) return null;
+        const action = 90 * scale;
+        const level = 96 * scale;
+        const player = 106 * scale;
+        const camera = 100 * scale;
+        if (fromRight > action + level + player + camera) return null;
+        if (fromRight <= action) return 'actions';
+        if (fromRight <= action + level) return 'level';
+        if (fromRight <= action + level + player) return 'player';
+        return 'camera';
+      }
+
+      function sendHudCommand(command) {
+        if (!unityInstanceRef || !command) return false;
+        try {
+          unityInstanceRef.SendMessage('DaHilgHUD', 'HandleWebHudCommand', command);
+          window.__dahilg.hudCommandCount += 1;
+          window.__dahilg.lastHudCommand = command;
+          return true;
+        } catch (error) {
+          rememberHudError(error);
+          return false;
+        }
+      }
+
+      function sendHudTap(clientX, clientY, source) {
+        if (!unityInstanceRef || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 1 || rect.height <= 1) return;
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+        const tapKey = `${Math.round(x)},${Math.round(y)}`;
+        const now = performance.now();
+        if (tapKey === lastHudTapKey && now - lastHudTapTime < 80) return;
+        lastHudTapKey = tapKey;
+        lastHudTapTime = now;
+
+        focusCanvas();
+        const command = compactCommandFromTap(x, y, rect.width);
+        if (command && sendHudCommand(command)) return;
+
+        const payload = [x, y, rect.width, rect.height]
+          .map((value) => Number(value).toFixed(2))
+          .join(',');
+        try {
+          unityInstanceRef.SendMessage('DaHilgHUD', 'HandleWebTouchTap', payload);
+          window.__dahilg.hudTapCount += 1;
+          window.__dahilg.lastHudPayload = `${source || 'touch'}:${payload}`;
+        } catch (error) {
+          rememberHudError(error);
+        }
+      }
+
       canvas.addEventListener('pointerdown', focusCanvas);
+      function handleHudTouchStart(event) {
+        if (event.changedTouches && event.changedTouches.length) {
+          const touch = event.changedTouches[0];
+          sendHudTap(touch.clientX, touch.clientY, 'touchstart');
+        }
+      }
+      function handleHudPointerDown(event) {
+        if (event.pointerType === 'touch') {
+          sendHudTap(event.clientX, event.clientY, 'pointerdown');
+        }
+      }
+      canvas.addEventListener('touchstart', handleHudTouchStart, { passive: true });
+      canvas.addEventListener('pointerdown', handleHudPointerDown, { passive: true });
+      document.addEventListener('touchstart', handleHudTouchStart, { capture: true, passive: true });
+      document.addEventListener('pointerdown', handleHudPointerDown, { capture: true, passive: true });
 
       function unityShowBanner(msg, type) {
         const warningBanner = document.querySelector('#unity-warning');
@@ -266,6 +398,9 @@ namespace DaHilg.Editor
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
+          unityInstanceRef = unityInstance;
+          window.__dahilg.unityInstance = unityInstance;
+          window.__dahilg.unityReady = true;
           document.querySelector('#unity-loading-bar').style.display = 'none';
           if (unityInstance.Module && unityInstance.Module.WebGLInput) {
             unityInstance.Module.WebGLInput._stickyCursorLock = false;
@@ -390,20 +525,63 @@ body {
         {
             string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
-            string source = Path.Combine(repoRoot, "public/da-hilg");
-            if (!Directory.Exists(source))
+            string webSource = Path.Combine(repoRoot, "public/da-hilg");
+            if (!Directory.Exists(webSource))
             {
-                Debug.LogWarning("[DaHilg] Source asset folder not found: " + source);
+                Debug.LogWarning("[DaHilg] Source asset folder not found: " + webSource);
                 return;
             }
 
+            BuildUnitySourceAssetBridge(repoRoot);
+            string source = Path.Combine(projectRoot, "Library/DaHilgUnitySource");
+            if (!Directory.Exists(source))
+            {
+                throw new DirectoryNotFoundException("Unity source asset bridge did not produce " + source);
+            }
+
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Characters"), "*.glb", "drew", "cece", "mike", "kelli");
-            CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Levels"), "*.glb", "level", "canyon", "stanton");
+            CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Levels"), "*.glb", "level", "canyon", "stanton", "meemaw");
+            CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art"), "*.glb", "sun3d");
             CopyFiles(Path.Combine(source, "anims"), Path.Combine(Application.dataPath, "DaHilg/Art/Animations"), "*.glb");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Data"), "*.json");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Textures"), "sun.png");
             AssetDatabase.Refresh();
             Debug.Log("[DaHilg] Source assets synced.");
+        }
+
+        static void BuildUnitySourceAssetBridge(string repoRoot)
+        {
+            string script = Path.Combine(repoRoot, "scripts/build_dahilg_unity_assets.mjs");
+            if (!File.Exists(script))
+            {
+                throw new FileNotFoundException("Missing Unity asset bridge script.", script);
+            }
+
+            System.Diagnostics.ProcessStartInfo startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "/usr/bin/env",
+                Arguments = "node " + QuoteArg(script),
+                WorkingDirectory = repoRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(startInfo);
+            string output = process!.StandardOutput.ReadToEnd();
+            string error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (!string.IsNullOrWhiteSpace(output)) Debug.Log("[DaHilg] Unity asset bridge:\n" + output.Trim());
+            if (!string.IsNullOrWhiteSpace(error)) Debug.LogWarning("[DaHilg] Unity asset bridge warnings:\n" + error.Trim());
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException("Unity asset bridge failed with exit code " + process.ExitCode);
+            }
+        }
+
+        static string QuoteArg(string value)
+        {
+            return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
         }
 
         [MenuItem("Da Hilg/Sync Supplemental Assets From Web")]
@@ -745,6 +923,7 @@ body {
             List<float> times = CollectKeyTimes(sourceCurves);
             AnimationCurve[] result = NewCurveSet(3);
             bool flattenY = s_GroundedHipClips.Contains(stateName);
+            bool lockPlanar = s_StationaryHipClips.Contains(stateName);
 
             for (int i = 0; i < times.Count; i++)
             {
@@ -754,6 +933,11 @@ body {
                     sourceCurves[1].Evaluate(time),
                     sourceCurves[2].Evaluate(time));
                 Vector3 targetAnimated = targetRest + (sourceAnimated - sourceRest);
+                if (lockPlanar)
+                {
+                    targetAnimated.x = targetRest.x;
+                    targetAnimated.z = targetRest.z;
+                }
                 if (flattenY) targetAnimated.y = targetRest.y;
                 else if (stateName.Equals("Knockdown", StringComparison.OrdinalIgnoreCase)) targetAnimated.y = Mathf.Min(targetAnimated.y, targetRest.y);
 
@@ -851,6 +1035,7 @@ body {
                 BuildLevel("dahill", "1840 Dahill", "Home neighborhood", "level", "level.meta", "minimap", animalControllers),
                 BuildLevel("canyon", "Canyon Middle", "Castro Valley", "canyon", "canyon.meta", "canyon.minimap", animalControllers),
                 BuildLevel("stanton", "Stanton Elementary", "Castro Valley", "stanton", "stanton.meta", "stanton.minimap", animalControllers),
+                BuildLevel("meemaw", "Meemaw's", "Castro Valley", "meemaw", "meemaw.meta", "meemaw.minimap", animalControllers),
                 BuildInteriorLevel()
             };
         }
@@ -868,7 +1053,24 @@ body {
             profile.Slug = slug;
             profile.Label = label;
             profile.SubLabel = subLabel;
-            profile.LevelPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Levels/" + glbName + ".glb");
+            string levelGlbPath = k_Root + "/Art/Levels/" + glbName + ".glb";
+            GameObject levelPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(levelGlbPath);
+            if (s_StreamedLevelSlugs.Contains(slug))
+            {
+                // Ship this level's GLB as a standalone StreamingAssets file (loaded at runtime
+                // via glTFast) and clear the baked prefab reference so Unity does NOT bake the
+                // mesh into the WebGL data file. Geometry validation falls back to the prefab.
+                StageStreamingLevelGlb(slug, levelGlbPath);
+                profile.LevelPrefab = null;
+            }
+            else
+            {
+                profile.LevelPrefab = levelPrefab;
+            }
+            if (levelPrefab == null)
+            {
+                Debug.LogWarning("Da Hilg level '" + slug + "' is missing its prefab at " + levelGlbPath + "; building profile without geometry.");
+            }
             profile.SourceMeta = AssetDatabase.LoadAssetAtPath<TextAsset>(k_Root + "/Data/" + metaName + ".json");
             profile.Minimap = AssetDatabase.LoadAssetAtPath<TextAsset>(k_Root + "/Data/" + minimapName + ".json");
 
@@ -877,6 +1079,15 @@ body {
             Vector3[] spawns = ExtractVectorArray(json, "spawns");
             Vector3[] npcSpawns = ExtractVectorArray(json, "npcSpawns");
             if (spawns.Length == 0) spawns = new[] { new Vector3(0f, 0.05f, 12f) };
+            if (slug == "dahill")
+            {
+                List<Vector3> dahillSpawns = new List<Vector3>(spawns.Length + 1)
+                {
+                    new Vector3(0f, 0.05f, 23.315f)
+                };
+                dahillSpawns.AddRange(spawns);
+                spawns = dahillSpawns.ToArray();
+            }
             if (npcSpawns.Length == 0)
             {
                 npcSpawns = new[]
@@ -902,7 +1113,8 @@ body {
             };
             profile.NibblerSafeZones = new[]
             {
-                new DaHilgBoxZone { Id = "safe_home", Label = "Home", Center = spawns[0] + Vector3.up * 4f, Size = new Vector3(40f, 400f, 40f) },
+                new DaHilgBoxZone { Id = "safe_start", Label = "Start", Center = new Vector3(spawns[0].x, 6f, spawns[0].z), Size = new Vector3(36f, 18f, 36f) },
+                new DaHilgBoxZone { Id = "safe_home", Label = "Home", Center = new Vector3(house.center.x, 4f, house.center.z), Size = new Vector3(44f, 400f, 44f) },
                 new DaHilgBoxZone { Id = "safe_creek", Label = "Creek Landing", Center = new Vector3(-60f, 6f, -120f), Size = new Vector3(22f, 12f, 22f) },
                 new DaHilgBoxZone { Id = "safe_overlook", Label = "East Overlook", Center = new Vector3(130f, 8f, 40f), Size = new Vector3(22f, 12f, 22f) }
             };
@@ -955,12 +1167,13 @@ body {
             };
             profile.NibblerSafeZones = new[]
             {
-                new DaHilgBoxZone { Id = "house_entry", Label = "Entry", Center = new Vector3(0f, 1.4f, -6.2f), Size = new Vector3(4.8f, 3f, 4.2f) }
+                new DaHilgBoxZone { Id = "house_entry", Label = "Entry", Center = new Vector3(0f, 1.4f, -6.2f), Size = new Vector3(4.8f, 3f, 3.8f) }
             };
             profile.DangerZones = new[]
             {
-                new DaHilgBoxZone { Id = "house_kitchen", Label = "Kitchen Swarm", Center = new Vector3(0f, 1.4f, 4.8f), Size = new Vector3(6.2f, 3.2f, 4.8f) },
-                new DaHilgBoxZone { Id = "house_hall", Label = "Hallway Swarm", Center = new Vector3(0f, 1.4f, -2.8f), Size = new Vector3(5.4f, 3.2f, 4.8f) }
+                new DaHilgBoxZone { Id = "house_kitchen", Label = "Kitchen Swarm", Center = new Vector3(0f, 1.4f, 4.6f), Size = new Vector3(8.8f, 3.2f, 7.4f) },
+                new DaHilgBoxZone { Id = "house_hall", Label = "Hallway Swarm", Center = new Vector3(0f, 1.4f, -1.9f), Size = new Vector3(7.6f, 3.2f, 7.6f) },
+                new DaHilgBoxZone { Id = "house_rooms", Label = "Room Swarm", Center = new Vector3(0f, 1.4f, 1.2f), Size = new Vector3(9.6f, 3.2f, 5.8f) }
             };
             profile.AnimalSpawns = Array.Empty<DaHilgAnimalSpawn>();
             profile.PlayBounds = new Bounds(new Vector3(0f, 2f, 0f), new Vector3(18f, 8f, 34f));
@@ -1016,16 +1229,33 @@ body {
             settings.CharacterAnimator = controllers.TryGetValue("cece", out AnimatorController defaultController) ? defaultController : null;
             settings.DefaultCharacterId = "cece";
             settings.DefaultLevelSlug = "dahill";
+            settings.DefaultMode = DaHilgGameMode.Nibblers;
             settings.DefaultCameraMode = DaHilgCameraMode.ThirdPerson;
             settings.CameraSensitivity = 0.09f;
             settings.TouchSensitivity = 0.11f;
+            settings.ThirdPersonDistance = 5.2f;
+            settings.ThirdPersonMinDistance = 1.25f;
+            settings.ThirdPersonPivotHeight = 1.62f;
+            settings.ShoulderOffset = new Vector2(0.38f, 0.08f);
             settings.ControllerSkinWidth = 0.06f;
             settings.GroundProbeHeight = 3.4f;
             settings.GroundSnapDistance = 1.55f;
             settings.GroundSkin = 0.05f;
-            settings.DangerNibblerBonus = 8;
-            settings.DangerSpawnInterval = 0.12f;
-            settings.NormalSpawnInterval = 0.35f;
+            settings.NibblerPoolSize = 36;
+            settings.OverwhelmStagger = 7;
+            settings.OverwhelmDown = 15;
+            settings.OverwhelmStop = 24;
+            settings.DangerNibblerBonus = 9;
+            settings.DangerSpawnInterval = 0.14f;
+            settings.NormalSpawnInterval = 0.48f;
+            settings.MarkedDuration = 3.1f;
+            settings.AttachmentFlashDuration = 0.58f;
+            settings.RollCooldown = 1.55f;
+            settings.RollDuration = 0.78f;
+            settings.RollSpeed = 5.7f;
+            settings.RollCrushRadius = 1.38f;
+            settings.RollCrushBodyHeight = 1.08f;
+            settings.RollCrushScore = 35;
             settings.Characters = new[]
             {
                 Character("mike", "Mike", "Dad", new Color(0.36f, 0.68f, 1f), 0f, controllers),
@@ -1056,25 +1286,77 @@ body {
             Scene scene = EditorSceneManagerShim.NewScene();
             scene.name = "DaHilg";
 
-            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.54f, 0.62f, 0.68f);
-            RenderSettings.ambientEquatorColor = new Color(0.32f, 0.36f, 0.36f);
-            RenderSettings.ambientGroundColor = new Color(0.20f, 0.22f, 0.18f);
+            Color skyTint = new Color(0.55f, 0.72f, 0.92f);
+            Material skybox = LoadOrCreateSkyboxMaterial(skyTint);
+            RenderSettings.skybox = skybox;
+
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
+            RenderSettings.ambientIntensity = 1.15f;
+            RenderSettings.ambientSkyColor = new Color(0.62f, 0.70f, 0.74f);
+            RenderSettings.ambientEquatorColor = new Color(0.42f, 0.46f, 0.44f);
+            RenderSettings.ambientGroundColor = new Color(0.24f, 0.26f, 0.20f);
+
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.Linear;
+            RenderSettings.fogColor = skyTint;
+            RenderSettings.fogStartDistance = 120f;
+            RenderSettings.fogEndDistance = 520f;
 
             GameObject sun = new GameObject("Sun");
             Light light = sun.AddComponent<Light>();
             light.type = LightType.Directional;
-            light.intensity = 0.82f;
+            light.intensity = 1.1f;
+            light.color = new Color(1f, 0.96f, 0.86f);
             light.shadows = LightShadows.Soft;
+            light.shadowStrength = 0.72f;
             sun.transform.rotation = Quaternion.Euler(48f, -38f, 0f);
+            // Drive the Skybox/Procedural sun disk from this light so the sky's sun and
+            // the directional lighting agree (otherwise Unity uses the brightest light).
+            RenderSettings.sun = light;
+            // Bake skybox-based ambient now that the sun (which positions the sky disk) is set.
+            DynamicGI.UpdateEnvironment();
+
+            // Custom 3D SUN model (sun3d.glb) hung far in the sky along the sun direction, so the
+            // real authored sun is visible (matches the web build) on top of the procedural disk.
+            // Auto-scaled to a consistent on-sky size regardless of the source model's units, and
+            // forced emissive + shadowless so it reads as a glowing sun rather than a lit object.
+            GameObject sunPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/sun3d.glb");
+            if (sunPrefab != null)
+            {
+                GameObject sunModel = (GameObject)UnityEngine.Object.Instantiate(sunPrefab);
+                sunModel.name = "Sun3D";
+                Renderer[] sunRenderers = sunModel.GetComponentsInChildren<Renderer>();
+                if (sunRenderers.Length > 0)
+                {
+                    Bounds b = sunRenderers[0].bounds;
+                    for (int i = 1; i < sunRenderers.Length; i++) b.Encapsulate(sunRenderers[i].bounds);
+                    float dia = Mathf.Max(0.01f, b.size.magnitude);
+                    sunModel.transform.localScale *= 46f / dia;   // ~46 m across at 480 m -> a believable sky sun
+                }
+                Vector3 sunDir = -light.transform.forward;        // up into the sky, opposite the light travel
+                sunModel.transform.position = sunDir * 480f;
+                sunModel.transform.rotation = Quaternion.LookRotation(-sunDir, Vector3.up);
+                foreach (Renderer r in sunRenderers)
+                {
+                    r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    r.receiveShadows = false;
+                    foreach (Material m in r.sharedMaterials)
+                    {
+                        if (m == null) continue;
+                        m.EnableKeyword("_EMISSION");
+                        m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+                        m.SetColor("_EmissionColor", new Color(1f, 0.94f, 0.72f) * 2.4f);
+                    }
+                }
+            }
 
             GameObject cameraObject = new GameObject("Main Camera");
             cameraObject.tag = "MainCamera";
             Camera camera = cameraObject.AddComponent<Camera>();
-            camera.clearFlags = CameraClearFlags.SolidColor;
-            camera.backgroundColor = new Color(0.47f, 0.66f, 0.84f, 1f);
+            camera.clearFlags = CameraClearFlags.Skybox;
+            camera.backgroundColor = skyTint;
             camera.nearClipPlane = 0.1f;
-            camera.farClipPlane = 600f;
+            camera.farClipPlane = RenderSettings.fogEndDistance + 40f;
             cameraObject.AddComponent<AudioListener>();
             CinemachineBrain brain = cameraObject.AddComponent<CinemachineBrain>();
             brain.UpdateMethod = CinemachineBrain.UpdateMethods.SmartUpdate;
@@ -1116,6 +1398,30 @@ body {
             return panel;
         }
 
+        static Material LoadOrCreateSkyboxMaterial(Color skyTint)
+        {
+            const string skyboxPath = k_Root + "/Settings/DaHilgSkybox.mat";
+            Material skybox = AssetDatabase.LoadAssetAtPath<Material>(skyboxPath);
+            if (skybox == null)
+            {
+                Shader shader = Shader.Find("Skybox/Procedural");
+                skybox = new Material(shader);
+                AssetDatabase.CreateAsset(skybox, skyboxPath);
+            }
+
+            // _SunDisk = 2 (high quality) renders an actual sun disk; without it _SunSize
+            // is ignored and no sun is drawn. The disk sits where RenderSettings.sun points.
+            skybox.SetFloat("_SunDisk", 2f);
+            skybox.SetFloat("_SunSize", 0.045f);
+            skybox.SetFloat("_SunSizeConvergence", 5f);
+            skybox.SetFloat("_AtmosphereThickness", 0.85f);
+            skybox.SetColor("_SkyTint", skyTint);
+            skybox.SetColor("_GroundColor", new Color(0.42f, 0.46f, 0.4f));
+            skybox.SetFloat("_Exposure", 1.25f);
+            EditorUtility.SetDirty(skybox);
+            return skybox;
+        }
+
         static Vector3[] ExtractVectorArray(string json, string key)
         {
             string block = ExtractArrayBlock(json, key);
@@ -1154,10 +1460,17 @@ body {
             for (int i = 0; i < settings.Levels.Length; i++)
             {
                 DaHilgLevelProfile profile = settings.Levels[i];
-                if (profile == null || profile.LevelPrefab == null) continue;
+                if (profile == null) continue;
 
-                GameObject level = PrefabUtility.InstantiatePrefab(profile.LevelPrefab) as GameObject;
-                if (level == null) level = UnityEngine.Object.Instantiate(profile.LevelPrefab);
+                // Streamed levels carry a null baked prefab (mesh ships in StreamingAssets), so
+                // load the source GLB straight from the asset path for editor-time validation.
+                GameObject validationPrefab = profile.LevelPrefab != null
+                    ? profile.LevelPrefab
+                    : LoadStreamingLevelPrefab(profile.Slug);
+                if (validationPrefab == null) continue;
+
+                GameObject level = PrefabUtility.InstantiatePrefab(validationPrefab) as GameObject;
+                if (level == null) level = UnityEngine.Object.Instantiate(validationPrefab);
                 level.name = "SpawnValidation_" + profile.Slug;
                 try
                 {
@@ -1341,6 +1654,7 @@ body {
                             + ". First binding path: " + firstBinding + ".");
                     }
 
+                    ValidateGroundedEmoteFooting(slot.Id, bindingRoot, animator, machine);
                     checkedCharacters++;
                 }
                 finally
@@ -1351,6 +1665,53 @@ body {
 
             if (checkedCharacters == 0) throw new InvalidOperationException("No Da Hilg character prefabs were checked for animation bindings.");
             Debug.Log("[DaHilg] Character prefab animation bindings validated for " + checkedCharacters + " characters.");
+        }
+
+        static void ValidateGroundedEmoteFooting(string owner, Transform bindingRoot, Animator animator, AnimatorStateMachine machine)
+        {
+            Transform leftFoot = FindDeepChild(bindingRoot, "LeftFoot");
+            Transform rightFoot = FindDeepChild(bindingRoot, "RightFoot");
+            if (leftFoot == null || rightFoot == null)
+            {
+                throw new InvalidOperationException(owner + " missing LeftFoot/RightFoot bones for grounded emote validation.");
+            }
+
+            float[] samples = { 0f, 0.16f, 0.33f, 0.5f, 0.66f, 0.84f };
+            for (int i = 0; i < s_FootPinnedClips.Length; i++)
+            {
+                string stateName = s_FootPinnedClips[i];
+                AnimatorState state = FindAnimatorState(machine, stateName);
+                if (state == null || state.motion is not AnimationClip) continue;
+
+                int hash = Animator.StringToHash("Base Layer." + stateName);
+                animator.Rebind();
+                animator.Update(0f);
+                animator.Play(hash, 0, 0f);
+                animator.Update(0f);
+                float rest = MinFootY(leftFoot, rightFoot);
+                float maxLift = 0f;
+                float maxSink = 0f;
+
+                for (int s = 0; s < samples.Length; s++)
+                {
+                    animator.Play(hash, 0, samples[s]);
+                    animator.Update(0f);
+                    float y = MinFootY(leftFoot, rightFoot);
+                    maxLift = Mathf.Max(maxLift, y - rest);
+                    maxSink = Mathf.Max(maxSink, rest - y);
+                }
+
+                if (maxLift > 0.52f || maxSink > 0.42f)
+                {
+                    throw new InvalidOperationException(owner + " " + stateName + " emote foot grounding drift is too high. Lift="
+                        + maxLift.ToString("0.###") + " sink=" + maxSink.ToString("0.###") + ".");
+                }
+            }
+        }
+
+        static float MinFootY(Transform leftFoot, Transform rightFoot)
+        {
+            return Mathf.Min(leftFoot.position.y, rightFoot.position.y);
         }
 
         static Transform FindAnimationBindingRoot(Transform characterRoot, AnimationClip clip)
@@ -1605,6 +1966,51 @@ body {
                 }
             }
             return string.Empty;
+        }
+
+        // Source GLB basename for a streamed level slug. Matches the slug-to-glbName mapping in
+        // BuildLevelProfiles (only "dahill" diverges, sourced from level.glb).
+        static string StreamingLevelGlbName(string slug)
+        {
+            return string.Equals(slug, "dahill", StringComparison.OrdinalIgnoreCase) ? "level" : slug;
+        }
+
+        // Copy a streamed level's source GLB into the project StreamingAssets folder as
+        // "<slug>.glb" so it ships as a standalone file under the WebGL build's StreamingAssets
+        // URL (resolved at runtime by DaHilgLevelRuntime), rather than baked into the data file.
+        static void StageStreamingLevelGlb(string slug, string sourceAssetPath)
+        {
+            // Ship the COMPRESSED web GLB (public/da-hilg: EXT_meshopt_compression + KTX2, ~tens of MB)
+            // rather than the decoded editor-import copy (raw geometry, ~4x larger): runtime glTFast
+            // decodes meshopt (needs com.unity.meshopt.decompress) + KTX (com.unity.cloud.ktx), so the
+            // streamed download stays small. Falls back to the decoded Asset copy if the compressed
+            // source is absent (keeps the build working even without the meshopt package).
+            string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
+            string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
+            string compressed = Path.Combine(repoRoot, "public", "da-hilg", StreamingLevelGlbName(slug) + ".glb");
+            string sourceFull = File.Exists(compressed)
+                ? compressed
+                : Path.Combine(projectRoot, sourceAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(sourceFull))
+            {
+                Debug.LogWarning("[DaHilg] Streamed level GLB missing for '" + slug + "'; skipping StreamingAssets stage.");
+                return;
+            }
+
+            // Filename = "<slug>.glb" at the StreamingAssets root; the runtime resolves it as
+            // Application.streamingAssetsPath + "/" + slug + ".glb" (see DaHilgLevelRuntime).
+            string streamingDir = Application.streamingAssetsPath;
+            Directory.CreateDirectory(streamingDir);
+            File.Copy(sourceFull, Path.Combine(streamingDir, slug + ".glb"), true);
+            Debug.Log("[DaHilg] Staged streamed level '" + slug + "' (" + (sourceFull == compressed ? "compressed web GLB" : "decoded asset") + ").");
+        }
+
+        // Load a streamed level's source GLB prefab straight from Assets (used for editor-time
+        // validation, since the baked LevelPrefab reference is intentionally null for streamed levels).
+        static GameObject LoadStreamingLevelPrefab(string slug)
+        {
+            if (!s_StreamedLevelSlugs.Contains(slug)) return null;
+            return AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Levels/" + StreamingLevelGlbName(slug) + ".glb");
         }
 
         static void CopyFiles(string source, string dest, string pattern, params string[] basenames)

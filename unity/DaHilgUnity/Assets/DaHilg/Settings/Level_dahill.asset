@@ -15,11 +15,12 @@ MonoBehaviour:
   Slug: dahill
   Label: 1840 Dahill
   SubLabel: Home neighborhood
-  LevelPrefab: {fileID: 8771091787928289351, guid: bc942a4e7f6fd45b48310fd29196ad50, type: 3}
+  LevelPrefab: {fileID: 0}
   SourceMeta: {fileID: 4900000, guid: 85520341f482946f99ac553d207f2580, type: 3}
   Minimap: {fileID: 4900000, guid: c087edc70f215466eb43be481e10f6f7, type: 3}
-  LevelOffset: {x: -0.095, y: 37.545, z: -0.695}
+  LevelOffset: {x: -0.095, y: 33.105, z: -0.695}
   PlayerSpawns:
+  - {x: 0, y: 0.05, z: 23.315}
   - {x: 0, y: 0.05, z: 12.315}
   - {x: 15.155, y: 0.05, z: 0}
   - {x: -15.155, y: 0.05, z: -2}
@@ -33,13 +34,17 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 11.998, z: 0}
-    Size: {x: 34.309998, y: 8.26, z: 28.63}
+    Center: {x: 0, y: 16.207, z: 0}
+    Size: {x: 34.309998, y: 9.514001, z: 28.63}
   NibblerSafeZones:
+  - Id: safe_start
+    Label: Start
+    Center: {x: 0, y: 6, z: 23.315}
+    Size: {x: 36, y: 18, z: 36}
   - Id: safe_home
     Label: Home
-    Center: {x: 0, y: 4.05, z: 12.315}
-    Size: {x: 40, y: 400, z: 40}
+    Center: {x: 0, y: 4, z: 0}
+    Size: {x: 44, y: 400, z: 44}
   - Id: safe_creek
     Label: Creek Landing
     Center: {x: -60, y: 6, z: -120}

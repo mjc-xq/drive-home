@@ -21,6 +21,7 @@ import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer
 import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
 import { ktx2CompressDoc } from './lib/ktx2_pass.mjs';
+import { atlasFacades } from './atlas_facades.mjs';
 import { mkdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +71,10 @@ const LEVELS = [
   { src: '1840-dahill-property.glb',          out: 'level',   metaSource: '1840-dahill-property.glb' },
   { src: 'canyon-middle-school-property.glb',  out: 'canyon',  metaSource: 'canyon-middle-school-property.glb' },
   { src: 'stanton-elementary-property.glb',   out: 'stanton', metaSource: 'stanton-elementary-property.glb' },
+  // meemaw (4311 Circle Ave): source GLB is generated in a later integration step, so it
+  // won't exist yet — the build loops below skip-with-warning any level whose source is
+  // missing, so this entry is harmless until exports/meemaw-property.glb lands.
+  { src: 'meemaw-property.glb',                out: 'meemaw',  metaSource: 'meemaw-property.glb' },
 ];
 
 // ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----
@@ -395,6 +400,18 @@ async function buildLevelGlb({ src, out }) {
     await levelDoc.transform(dedup());
     instanceStaticRepeats(levelDoc, { min: 4 });
 
+    // ATLAS the per-wall Street-View facade textures. The export emits one cropped JPEG +
+    // material per building wall (SVFacade_*), so a busy level hauls hundreds of separate
+    // facade textures/materials/draw calls. atlasFacades() bin-packs them into 1-few 4096px
+    // pages, remaps each facade's [0,1] UVs into its atlas sub-rect, and collapses them onto
+    // one shared material per page — must run BEFORE meshoptPipeline so KTX2 compresses the
+    // atlas pages (not the now-disposed per-wall crops).
+    {
+      const fa = await atlasFacades(levelDoc);
+      console.log(`  atlased facades: ${fa.facadesPacked} walls -> ${fa.pages} atlas page(s); ` +
+        `textures ${fa.texturesBefore} -> ${fa.texturesAfter}`);
+    }
+
     // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
     // their mesh is disposed) collision helpers survive even if their mesh were dropped —
     // but here the collision meshes are real geometry and stay intact.
@@ -427,6 +444,10 @@ console.log('\n=== Da Hilg asset build ===');
 // -------------------------------------------------------------------------------------
 let levelSrcBytes = 0;
 for (const lv of LEVELS) {
+  if (!existsSync(SRC('exports', lv.src))) {
+    console.warn(`  ! skip missing level source: ${lv.src}`);
+    continue;
+  }
   const bytes = await buildLevelGlb(lv);
   if (lv.out === 'level') levelSrcBytes = bytes;   // dahill drives the summary comparison
 }
@@ -752,6 +773,10 @@ async function buildLevelMeta({ src, out, metaSource }) {
 // Build meta for all three levels; keep dahill's for the final summary line.
 let meta;
 for (const lv of LEVELS) {
+  if (!existsSync(SRC('exports', lv.src))) {
+    console.warn(`  ! skip missing level source: ${lv.src}`);
+    continue;
+  }
   const m = await buildLevelMeta(lv);
   if (lv.out === 'level') meta = m;   // dahill drives the summary
 }

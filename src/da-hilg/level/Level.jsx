@@ -34,7 +34,7 @@ const ANISO_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissi
 // or let the landscape poke through — and it does so without a big geometric lift (which
 // floats the ribbons off the ground and leaves gaps under their edges).
 const isPavedGround = (name) =>
-  /^(Roads|Driveways|Sidewalks|Crosswalks|RoadCurbs|RoadLines)/.test(name);
+  /^(Roads|Driveways|Sidewalks|Crosswalks|RoadCurbs|RoadLines|ParkingAreas|GapDirt)/.test(name);
 // Terrain rendered single-sided shows the sky/black through any back-facing slope triangle;
 // double-siding fills those without a re-export.
 const isTerrain = (name) => name === 'Terrain' || name.startsWith('Terrain') || name === 'Satellite Ground';

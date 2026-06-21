@@ -7,5 +7,31 @@
     { "source": "/scoop/", "destination": "/index.html" },
     { "source": "/da-hilg", "destination": "/index.html" },
     { "source": "/da-hilg/", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/unity/da-hilg/Build/(.*)\\.data\\.unityweb",
+      "headers": [
+        { "key": "Content-Encoding", "value": "br" },
+        { "key": "Content-Type", "value": "application/octet-stream" },
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/unity/da-hilg/Build/(.*)\\.wasm\\.unityweb",
+      "headers": [
+        { "key": "Content-Encoding", "value": "br" },
+        { "key": "Content-Type", "value": "application/wasm" },
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/unity/da-hilg/Build/(.*)\\.framework\\.js\\.unityweb",
+      "headers": [
+        { "key": "Content-Encoding", "value": "br" },
+        { "key": "Content-Type", "value": "application/javascript" },
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    }
   ]
 }

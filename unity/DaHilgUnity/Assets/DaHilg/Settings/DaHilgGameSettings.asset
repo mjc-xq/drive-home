@@ -16,6 +16,7 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 4512fd9c86a3b4659bec174467427dc9, type: 2}
   - {fileID: 11400000, guid: e26dfc6f257244484ba9445aad1298bf, type: 2}
   - {fileID: 11400000, guid: 71866c7a06a9245c68fd3cbc16321d84, type: 2}
+  - {fileID: 11400000, guid: f870e1d468a8045ec8b15a14d08ee7eb, type: 2}
   - {fileID: 11400000, guid: 42d373b7e570b4baead063d26f7cb388, type: 2}
   Characters:
   - Id: mike
@@ -49,7 +50,7 @@ MonoBehaviour:
   CharacterAnimator: {fileID: 9100000, guid: 9e5cb70ce4eab4aa0a686eede89e7973, type: 2}
   DefaultLevelSlug: dahill
   DefaultCharacterId: cece
-  DefaultMode: 0
+  DefaultMode: 1
   DefaultCameraMode: 0
   WalkSpeed: 4.6
   RunSpeed: 8.2
@@ -73,10 +74,10 @@ MonoBehaviour:
   TouchSensitivity: 0.11
   PitchLimit: 68
   EyeHeight: 1.62
-  ThirdPersonDistance: 3.8
-  ThirdPersonMinDistance: 0.7
-  ThirdPersonPivotHeight: 1.5
-  ShoulderOffset: {x: 0.55, y: 0.06}
+  ThirdPersonDistance: 5.2
+  ThirdPersonMinDistance: 1.25
+  ThirdPersonPivotHeight: 1.62
+  ShoulderOffset: {x: 0.38, y: 0.08}
   CameraSmooth: 12
   LookSmooth: 22
   NoticeRadius: 20
@@ -85,7 +86,7 @@ MonoBehaviour:
   RetreatSeconds: 3
   CooldownSeconds: 2
   WanderRadius: 12
-  NibblerPoolSize: 32
+  NibblerPoolSize: 36
   NibblerScale: 0.32
   NibblerSpawnMinRadius: 8
   NibblerSpawnMaxRadius: 16
@@ -94,9 +95,17 @@ MonoBehaviour:
   NibblerHealthDrainPerAttached: 0.09
   NibblerHealthDrainCap: 3.2
   HealthRegen: 5
-  OverwhelmStagger: 5
-  OverwhelmDown: 11
-  OverwhelmStop: 18
-  DangerNibblerBonus: 8
-  DangerSpawnInterval: 0.12
-  NormalSpawnInterval: 0.35
+  OverwhelmStagger: 7
+  OverwhelmDown: 15
+  OverwhelmStop: 24
+  DangerNibblerBonus: 9
+  DangerSpawnInterval: 0.14
+  NormalSpawnInterval: 0.48
+  MarkedDuration: 3.1
+  AttachmentFlashDuration: 0.58
+  RollCooldown: 1.55
+  RollDuration: 0.78
+  RollSpeed: 5.7
+  RollCrushRadius: 1.38
+  RollCrushBodyHeight: 1.08
+  RollCrushScore: 35

@@ -1,0 +1,18 @@
+1/4 rebuild all levels
+  wrote exports/canyon-middle-school-property.glb (80.3 MB)
+  wrote exports/stanton-elementary-property.glb (59.5 MB)
+  wrote exports/meemaw-property.glb (39.2 MB)
+ALL LEVELS REBUILT WITH FACADES.
+2/4 assets
+  total output (incl. anims + meta): 61.18 MB
+ALL ASSERTIONS PASSED
+3/4 minimaps
+  minimap dahill ok
+  minimap canyon ok
+  minimap stanton ok
+  minimap meemaw ok
+4/4 unity build
+DONE
+public/unity/da-hilg/Build/da-hilg.data.unityweb 75174749
+public/unity/da-hilg/Build/da-hilg.framework.js.unityweb 65570
+public/unity/da-hilg/Build/da-hilg.wasm.unityweb 6180014

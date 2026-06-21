@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "dahilg:build": "node scripts/build_dahilg.mjs",
     "build:dahilg-assets": "node scripts/build_dahilg_assets.mjs",
+    "build:dahilg-unity-assets": "node scripts/build_dahilg_unity_assets.mjs",
     "build:minimap": "node scripts/build_minimap.mjs"
   },
   "dependencies": {

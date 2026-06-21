@@ -1,16 +1,21 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace DaHilg
 {
     public sealed class DaHilgNibblerAgent
     {
+        static readonly List<DaHilgNibblerAgent> s_Active = new List<DaHilgNibblerAgent>(32);
+        static readonly string[] s_IdleEmotes = { "Dance", "Wave", "Cheer" };
+
         enum NibblerState
         {
             Chase,
             Lunge,
             Climb,
             Attached,
-            Scatter
+            Scatter,
+            Crushed
         }
 
         const int k_ClingAngularSlots = 7;
@@ -30,6 +35,7 @@ namespace DaHilg
         readonly float m_Seed;
         readonly string m_RunClip;
         readonly string m_ClingClip;
+        readonly string m_EmoteClip;
         NibblerState m_State;
         Vector3 m_Velocity;
         Vector3 m_LungeStart;
@@ -54,7 +60,8 @@ namespace DaHilg
             m_Index = index;
             m_Seed = Mathf.Repeat(Mathf.Sin((index + 1) * 12.9898f) * 43758.5453f, 1f);
             m_RunClip = index % 4 == 3 ? "Walk" : "Run";
-            m_ClingClip = index % 3 == 0 ? "Attack" : "Climb";
+            m_ClingClip = index % 3 == 0 ? "Attack" : "Hit";
+            m_EmoteClip = s_IdleEmotes[index % s_IdleEmotes.Length];
 
             Root = Object.Instantiate(prefab, parent);
             Root.name = "Nibbler_" + index.ToString("00");
@@ -112,8 +119,10 @@ namespace DaHilg
         {
             Active = true;
             Attached = false;
+            if (!s_Active.Contains(this)) s_Active.Add(this);
             m_State = NibblerState.Chase;
             Root.SetActive(true);
+            Root.transform.localScale = Vector3.one * m_Scale;
             Root.transform.position = position;
             Root.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
             m_Controller.enabled = true;
@@ -127,6 +136,7 @@ namespace DaHilg
         {
             Active = false;
             Attached = false;
+            s_Active.Remove(this);
             Root.SetActive(false);
         }
 
@@ -159,6 +169,9 @@ namespace DaHilg
                 case NibblerState.Scatter:
                     TickScatter(player, settings, dt);
                     return false;
+                case NibblerState.Crushed:
+                    TickCrushed(settings, dt);
+                    return false;
                 default:
                     TickChase(player, settings, dt, safe);
                     return false;
@@ -167,17 +180,28 @@ namespace DaHilg
 
         void TickChase(DaHilgActor player, DaHilgGameSettings settings, float dt, bool safe)
         {
-            Vector3 toPlayer = player.FeetPosition + Vector3.up * 0.25f - Root.transform.position;
+            // Aim for a point on a ring around the player (per-seed angle) so the swarm
+            // surrounds rather than stacking on the identical center point.
+            float ringAngle = m_Seed * Mathf.PI * 2f + m_Index * 2.39996f;
+            float ringRadius = Mathf.Max(0.6f, settings.NibblerAttachDistance * 0.85f);
+            Vector3 ringTarget = player.FeetPosition + Vector3.up * 0.25f
+                + new Vector3(Mathf.Cos(ringAngle), 0f, Mathf.Sin(ringAngle)) * ringRadius;
+
+            Vector3 toPlayer = ringTarget - Root.transform.position;
             Vector3 planar = new Vector3(toPlayer.x, 0f, toPlayer.z);
             float dist = planar.magnitude;
 
-            if (!safe && dist < Mathf.Max(k_JumpRadius, settings.NibblerAttachDistance + k_AttachPad) && m_JumpCooldown <= 0f)
+            // Use the true player distance for the lunge/despawn gates, not the ring target.
+            Vector3 toCenter = player.FeetPosition + Vector3.up * 0.25f - Root.transform.position;
+            float centerDist = new Vector3(toCenter.x, 0f, toCenter.z).magnitude;
+
+            if (!safe && centerDist < Mathf.Max(k_JumpRadius, settings.NibblerAttachDistance + k_AttachPad) && m_JumpCooldown <= 0f)
             {
                 StartLunge(player, settings);
                 return;
             }
 
-            if (dist > 45f)
+            if (centerDist > 45f)
             {
                 Despawn();
                 return;
@@ -186,7 +210,8 @@ namespace DaHilg
             Vector3 dir = dist > 0.001f ? planar / dist : Vector3.zero;
             Vector3 side = Vector3.Cross(Vector3.up, dir);
             float weave = Mathf.Sin(Time.time * (2.8f + m_Seed * 1.8f) + m_Index * 0.73f) * 0.42f;
-            Vector3 desired = (dir + side * weave).normalized;
+            Vector3 separation = ComputeSeparation();
+            Vector3 desired = (dir + side * weave + separation * 0.6f).normalized;
             float speed = settings.NibblerRunSpeed * (0.82f + m_Seed * 0.36f);
             Vector3 targetVelocity = desired * speed;
             m_Velocity.x = Mathf.Lerp(m_Velocity.x, targetVelocity.x, 1f - Mathf.Exp(-10f * dt));
@@ -205,6 +230,25 @@ namespace DaHilg
             }
 
             Play((flags & CollisionFlags.Below) == 0 && m_Velocity.y > 0.3f ? "Jump" : m_RunClip, 0.1f);
+        }
+
+        Vector3 ComputeSeparation()
+        {
+            float neighborRadius = Mathf.Max(0.3f, m_Controller.radius) * 1.2f;
+            float sqrRadius = neighborRadius * neighborRadius;
+            Vector3 selfPos = Root.transform.position;
+            Vector3 push = Vector3.zero;
+            for (int i = 0; i < s_Active.Count; i++)
+            {
+                DaHilgNibblerAgent other = s_Active[i];
+                if (other == this || !other.Active || other.Attached) continue;
+                Vector3 offset = selfPos - other.Root.transform.position;
+                offset.y = 0f;
+                float sqr = offset.sqrMagnitude;
+                if (sqr < 0.0001f || sqr > sqrRadius) continue;
+                push += offset / Mathf.Sqrt(sqr);
+            }
+            return push.sqrMagnitude > 0.0001f ? push.normalized : Vector3.zero;
         }
 
         void StartLunge(DaHilgActor player, DaHilgGameSettings settings)
@@ -270,8 +314,8 @@ namespace DaHilg
             }
             else
             {
-                float pulse = Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index) * 0.025f;
-                local = new Vector3(local.x * (1f + pulse), m_AttachY + pulse * 0.7f, local.z * (1f + pulse));
+                float bob = Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index) * 0.008f;
+                local = new Vector3(local.x, m_AttachY + bob, local.z);
             }
 
             Root.transform.position = m_Player.TransformPoint(local);
@@ -283,10 +327,17 @@ namespace DaHilg
             m_Velocity.y += settings.Gravity * dt;
             if (m_Velocity.y < settings.MaxFallSpeed) m_Velocity.y = settings.MaxFallSpeed;
             CollisionFlags flags = m_Controller.Move(m_Velocity * dt);
-            if ((flags & CollisionFlags.Below) != 0 && m_Velocity.y < 0f)
+            bool grounded = (flags & CollisionFlags.Below) != 0 && m_Velocity.y < 0f;
+            if (grounded)
             {
                 m_Velocity.y = -1f;
-                if (m_StateTime > 0.28f)
+                // Brake the launch so the nibbler can settle and play a per-seed idle emote.
+                m_Velocity.x = Mathf.Lerp(m_Velocity.x, 0f, 1f - Mathf.Exp(-9f * dt));
+                m_Velocity.z = Mathf.Lerp(m_Velocity.z, 0f, 1f - Mathf.Exp(-9f * dt));
+                // Hold a varied emote (Dance/Wave/Cheer) for a moment before resuming the chase.
+                float emoteHold = 0.6f + m_Seed * 0.7f;
+                if (m_StateTime > 0.28f) Play(m_EmoteClip, 0.18f);
+                if (m_StateTime > 0.28f + emoteHold)
                 {
                     m_State = NibblerState.Chase;
                     m_StateTime = 0f;
@@ -300,7 +351,7 @@ namespace DaHilg
             }
 
             Vector3 flat = new Vector3(m_Velocity.x, 0f, m_Velocity.z);
-            if (flat.sqrMagnitude > 0.02f)
+            if (!grounded && flat.sqrMagnitude > 0.02f)
             {
                 Root.transform.rotation = Quaternion.Slerp(Root.transform.rotation, Quaternion.LookRotation(flat, Vector3.up), 1f - Mathf.Exp(-16f * dt));
             }
@@ -327,6 +378,68 @@ namespace DaHilg
             Play("Jump", 0.05f);
         }
 
+        public bool TryCrushByRoll(DaHilgActor player, Vector3 crushCenter, float sideSign, DaHilgGameSettings settings)
+        {
+            if (!Active || player == null || settings == null) return false;
+
+            float side = sideSign >= 0f ? 1f : -1f;
+            bool bodySideHit = false;
+            if (Attached || m_State == NibblerState.Climb || m_State == NibblerState.Lunge)
+            {
+                float anchorSide = m_AttachBaseLocal.x >= 0f ? 1f : -1f;
+                float maxCrushY = Mathf.Min(player.BodyHeight, settings.RollCrushBodyHeight);
+                bodySideHit = Mathf.Approximately(anchorSide, side) && m_AttachY <= maxCrushY;
+            }
+
+            Vector3 toCenter = Root.transform.position - crushCenter;
+            float planarDistance = new Vector2(toCenter.x, toCenter.z).magnitude;
+            bool groundHit = planarDistance <= settings.RollCrushRadius
+                && Root.transform.position.y <= crushCenter.y + Mathf.Max(0.45f, settings.RollCrushBodyHeight);
+
+            if (!bodySideHit && !groundHit) return false;
+
+            Crush(crushCenter);
+            return true;
+        }
+
+        void Crush(Vector3 from)
+        {
+            Attached = false;
+            m_State = NibblerState.Crushed;
+            m_StateTime = 0f;
+            if (!m_Controller.enabled) m_Controller.enabled = true;
+            Vector3 away = Root.transform.position - from;
+            away.y = 0f;
+            if (away.sqrMagnitude < 0.1f)
+            {
+                away = Random.insideUnitSphere;
+                away.y = 0f;
+            }
+            away.Normalize();
+            m_Velocity = away * (4.8f + m_Seed * 1.8f) + Vector3.up * (1.8f + m_Seed * 0.8f);
+            Play("Knockdown", 0.04f);
+        }
+
+        void TickCrushed(DaHilgGameSettings settings, float dt)
+        {
+            m_Velocity.y += settings.Gravity * dt;
+            if (m_Velocity.y < settings.MaxFallSpeed) m_Velocity.y = settings.MaxFallSpeed;
+            CollisionFlags flags = m_Controller.Move(m_Velocity * dt);
+            if ((flags & CollisionFlags.Below) != 0 && m_Velocity.y < 0f)
+            {
+                m_Velocity.y = -1f;
+                m_Velocity.x = Mathf.Lerp(m_Velocity.x, 0f, 1f - Mathf.Exp(-12f * dt));
+                m_Velocity.z = Mathf.Lerp(m_Velocity.z, 0f, 1f - Mathf.Exp(-12f * dt));
+            }
+            else if (m_Velocity.y <= 0f)
+            {
+                SnapToLevelGround(settings);
+            }
+
+            Root.transform.localScale = Vector3.one * m_Scale * Mathf.Lerp(1f, 0.58f, Mathf.Clamp01(m_StateTime / 0.38f));
+            if (m_StateTime > 0.46f) Despawn();
+        }
+
         bool SnapToLevelGround(DaHilgGameSettings settings)
         {
             if (m_Controller == null || !m_Controller.enabled) return false;
@@ -350,7 +463,9 @@ namespace DaHilg
 
         void ChooseAttachAnchor(DaHilgActor player, DaHilgGameSettings settings)
         {
-            int slot = m_Index;
+            // Distribute by a live count of nibblers already on the body so simultaneous
+            // lunges claim distinct consecutive slots instead of reusing pooled indices.
+            int slot = CountAttachedSlots();
             int col = slot % k_ClingAngularSlots;
             int layer = slot / k_ClingAngularSlots;
             float angle = (col / (float)k_ClingAngularSlots) * Mathf.PI * 2f + layer * 2.39996f + (m_Seed - 0.5f) * 0.6f;
@@ -359,6 +474,23 @@ namespace DaHilg
             m_AttachBaseLocal = new Vector3(Mathf.Cos(angle) * radius, k_ClingBottom, Mathf.Sin(angle) * radius);
             m_AttachTargetY = Mathf.Lerp(k_ClingBottom, Mathf.Min(k_ClingTop, player.BodyHeight), heightFrac);
             m_ClimbSpeed = 0.62f + m_Seed * 0.38f;
+        }
+
+        int CountAttachedSlots()
+        {
+            int count = 0;
+            for (int i = 0; i < s_Active.Count; i++)
+            {
+                DaHilgNibblerAgent other = s_Active[i];
+                if (other == this || !other.Active) continue;
+                if (other.Attached
+                    || other.m_State == NibblerState.Climb
+                    || other.m_State == NibblerState.Lunge)
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         void FaceBody(DaHilgActor player, float dt)

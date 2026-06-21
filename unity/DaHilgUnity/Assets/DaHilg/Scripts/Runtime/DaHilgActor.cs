@@ -28,8 +28,11 @@ namespace DaHilg
 
         CharacterController m_Controller;
         Transform m_VisualRoot;
+        Transform m_LeftFoot;
+        Transform m_RightFoot;
         Animator m_Animator;
         RuntimeAnimatorController m_AnimatorController;
+        DaHilgGameSettings m_Settings;
         Vector3 m_HorizontalVelocity;
         Vector3 m_GroundNormal = Vector3.up;
         float m_VerticalVelocity;
@@ -39,8 +42,14 @@ namespace DaHilg
         float m_VisualYawOffset;
         float m_BodyHeight = 1.7f;
         float m_BodyRadius = 0.3f;
+        float m_VisualGroundOffset;
         string m_CurrentAnim;
         float m_EmoteUntil;
+        float m_RollUntil;
+        float m_RollStartedAt;
+        float m_NextRollAt;
+        float m_RollSide = 1f;
+        Vector3 m_RollDirection;
 
         public string Id { get; private set; }
         public string Label { get; private set; }
@@ -59,6 +68,8 @@ namespace DaHilg
         public bool Grounded { get; private set; } = true;
         public float Speed { get; private set; }
         public bool WasJumpStartedThisFrame { get; private set; }
+        public bool Rolling => Time.time < m_RollUntil;
+        public float RollSideSign => m_RollSide >= 0f ? 1f : -1f;
 
         public void Initialize(DaHilgCharacterSlot slot, RuntimeAnimatorController animatorController, DaHilgGameSettings settings)
         {
@@ -66,6 +77,7 @@ namespace DaHilg
             Label = slot.Label;
             m_VisualYawOffset = slot.VisualYawOffset;
             m_AnimatorController = animatorController;
+            m_Settings = settings;
             m_BodyHeight = settings.PlayerHeight;
             m_BodyRadius = settings.PlayerRadius;
 
@@ -88,6 +100,8 @@ namespace DaHilg
                 m_VisualRoot = visual.transform;
                 Transform animatorRoot = ResolveAnimatorRoot(visual.transform);
                 m_Animator = animatorRoot.GetComponent<Animator>();
+                m_LeftFoot = FindDeepChild(visual.transform, "LeftFoot");
+                m_RightFoot = FindDeepChild(visual.transform, "RightFoot");
                 if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
                 foreach (Animator childAnimator in visual.GetComponentsInChildren<Animator>(true))
                 {
@@ -117,6 +131,18 @@ namespace DaHilg
             return null;
         }
 
+        static Transform FindDeepChild(Transform parent, string childName)
+        {
+            if (parent == null) return null;
+            if (parent.name == childName) return parent;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform found = FindDeepChild(parent.GetChild(i), childName);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
         public void SetRole(DaHilgActorRole role, float now)
         {
             Role = role;
@@ -126,6 +152,7 @@ namespace DaHilg
             {
                 m_HorizontalVelocity = Vector3.zero;
                 m_EmoteUntil = 0f;
+                m_RollUntil = 0f;
                 PlayAnim("Idle", 0.1f);
             }
         }
@@ -142,11 +169,68 @@ namespace DaHilg
             m_VerticalVelocity = 0f;
             Grounded = true;
             m_EmoteUntil = 0f;
+            m_RollUntil = 0f;
+            m_VisualGroundOffset = 0f;
+            if (m_VisualRoot != null) m_VisualRoot.localPosition = Vector3.zero;
+        }
+
+        void LateUpdate()
+        {
+            StabilizeVisualGrounding(Time.deltaTime);
         }
 
         public void QueueJump(float now)
         {
             m_JumpQueuedTime = now;
+        }
+
+        public bool RollReady(float now)
+        {
+            return now >= m_NextRollAt;
+        }
+
+        public float RollCooldownRemaining(float now)
+        {
+            return Mathf.Max(0f, m_NextRollAt - now);
+        }
+
+        public bool StartFallRoll(Vector2 inputMove, float cameraYaw, DaHilgGameSettings settings, float now)
+        {
+            if (settings == null || now < m_NextRollAt || Health <= 0f) return false;
+
+            Quaternion cameraRot = Quaternion.Euler(0f, cameraYaw, 0f);
+            Vector3 forward = cameraRot * Vector3.forward;
+            Vector3 right = cameraRot * Vector3.right;
+            m_RollSide = inputMove.x < -0.12f ? -1f : 1f;
+            Vector3 side = right * m_RollSide;
+            Vector3 push = side + forward * Mathf.Clamp(inputMove.y * 0.35f, -0.2f, 0.45f);
+            if (inputMove.sqrMagnitude > 0.16f)
+            {
+                Vector3 desired = forward * inputMove.y + right * inputMove.x;
+                desired.y = 0f;
+                if (desired.sqrMagnitude > 0.04f) push = Vector3.Lerp(side, desired.normalized, 0.35f);
+            }
+
+            push.y = 0f;
+            m_RollDirection = push.sqrMagnitude > 0.001f ? push.normalized : side;
+            m_RollStartedAt = now;
+            m_RollUntil = now + Mathf.Max(0.2f, settings.RollDuration);
+            m_NextRollAt = now + Mathf.Max(settings.RollCooldown, settings.RollDuration + 0.15f);
+            m_JumpQueuedTime = -100f;
+            m_EmoteUntil = 0f;
+            if (m_VerticalVelocity < 0f) m_VerticalVelocity = -2f;
+            SetAnimatorSpeed(1.18f, Time.deltaTime);
+            PlayAnim("Stumble", 0.05f);
+            return true;
+        }
+
+        public Vector3 RollCrushCenter(DaHilgGameSettings settings)
+        {
+            float radius = settings != null ? settings.RollCrushRadius : 1.1f;
+            Vector3 right = Quaternion.Euler(0f, m_FacingYaw, 0f) * Vector3.right;
+            return FeetPosition
+                + right * RollSideSign * Mathf.Max(m_BodyRadius + radius * 0.32f, 0.62f)
+                + Vector3.up * 0.26f;
         }
 
         public void StepPlayer(Vector2 inputMove, bool run, bool jumpPressed, float cameraYaw, DaHilgGameSettings settings, float dt, float now, bool crawlOnly, bool pinned)
@@ -160,7 +244,7 @@ namespace DaHilg
             if (desired.sqrMagnitude > 1f) desired.Normalize();
 
             float cap = crawlOnly ? settings.CrawlSpeed : (run ? settings.RunSpeed : settings.WalkSpeed);
-            if (pinned) cap = 0f;
+            if (pinned && !Rolling) cap = 0f;
 
             StepMotion(desired, cap, true, cameraYaw, settings, dt, now);
         }
@@ -181,6 +265,14 @@ namespace DaHilg
 
             desiredDirection.y = 0f;
             if (desiredDirection.sqrMagnitude > 1f) desiredDirection.Normalize();
+
+            bool rolling = now < m_RollUntil;
+            if (rolling)
+            {
+                desiredDirection = m_RollDirection.sqrMagnitude > 0.001f ? m_RollDirection : desiredDirection;
+                speedCap = Mathf.Max(speedCap, settings.RollSpeed);
+                m_EmoteUntil = 0f;
+            }
 
             Vector3 targetVelocity = desiredDirection * speedCap;
             float accel = Grounded ? settings.GroundAcceleration : settings.AirAcceleration;
@@ -238,7 +330,16 @@ namespace DaHilg
             {
                 Quaternion yaw = Quaternion.Euler(0f, m_FacingYaw + m_VisualYawOffset, 0f);
                 Quaternion groundTilt = Quaternion.FromToRotation(Vector3.up, m_GroundNormal);
-                m_VisualRoot.rotation = Quaternion.Slerp(m_VisualRoot.rotation, groundTilt * yaw, 1f - Mathf.Exp(18f * -dt));
+                Quaternion rollTilt = Quaternion.identity;
+                if (rolling)
+                {
+                    float u = Mathf.InverseLerp(m_RollStartedAt, Mathf.Max(m_RollStartedAt + 0.01f, m_RollUntil), now);
+                    float recover = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.62f, 1f, u));
+                    float sideAngle = Mathf.Lerp(76f, 18f, recover);
+                    float tumbleAngle = Mathf.Sin(u * Mathf.PI * 2f) * 16f;
+                    rollTilt = Quaternion.Euler(0f, 0f, -(sideAngle + tumbleAngle) * RollSideSign);
+                }
+                m_VisualRoot.rotation = Quaternion.Slerp(m_VisualRoot.rotation, groundTilt * yaw * rollTilt, 1f - Mathf.Exp(18f * -dt));
             }
 
             if (Time.time < m_EmoteUntil && Grounded && Speed <= 0.2f)
@@ -256,9 +357,54 @@ namespace DaHilg
 
         public void PlayEmote(string emote)
         {
+            if (Rolling) return;
+            if (!Grounded && (m_Settings == null || !IsCloseToLevelGround(m_Settings))) return;
             m_EmoteUntil = Time.time + EmoteDuration(emote);
             SetAnimatorSpeed(1f, Time.deltaTime);
             PlayAnim(emote, 0.12f);
+        }
+
+        void StabilizeVisualGrounding(float dt)
+        {
+            if (m_VisualRoot == null || m_Settings == null) return;
+
+            bool canPin = Grounded && !Rolling && !WasJumpStartedThisFrame && m_VerticalVelocity <= 0.1f;
+            if (!canPin)
+            {
+                m_VisualGroundOffset = Mathf.Lerp(m_VisualGroundOffset, 0f, 1f - Mathf.Exp(-16f * Mathf.Max(0f, dt)));
+                Vector3 local = m_VisualRoot.localPosition;
+                local.x = 0f;
+                local.y = m_VisualGroundOffset;
+                local.z = 0f;
+                m_VisualRoot.localPosition = local;
+                return;
+            }
+
+            bool hasFoot = false;
+            float minFootY = float.PositiveInfinity;
+            if (m_LeftFoot != null)
+            {
+                minFootY = Mathf.Min(minFootY, m_LeftFoot.position.y);
+                hasFoot = true;
+            }
+            if (m_RightFoot != null)
+            {
+                minFootY = Mathf.Min(minFootY, m_RightFoot.position.y);
+                hasFoot = true;
+            }
+            if (!hasFoot) return;
+
+            float targetY = FeetPosition.y + Mathf.Max(0.012f, m_Settings.GroundSkin * 0.35f);
+            float correction = targetY - minFootY;
+            float desiredOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -0.34f, 0.34f);
+            float k = 1f - Mathf.Exp(-24f * Mathf.Max(0f, dt));
+            m_VisualGroundOffset = Mathf.Lerp(m_VisualGroundOffset, desiredOffset, k);
+
+            Vector3 adjusted = m_VisualRoot.localPosition;
+            adjusted.x = 0f;
+            adjusted.y = m_VisualGroundOffset;
+            adjusted.z = 0f;
+            m_VisualRoot.localPosition = adjusted;
         }
 
         static float EmoteDuration(string emote)
@@ -329,6 +475,13 @@ namespace DaHilg
 
         void UpdateLocomotionAnimation(DaHilgGameSettings settings, float dt)
         {
+            if (Rolling)
+            {
+                SetAnimatorSpeed(1.12f, dt);
+                PlayAnim(Speed > 0.1f ? "Stumble" : "Knockdown", 0.08f);
+                return;
+            }
+
             if (!Grounded && m_VerticalVelocity < -1f)
             {
                 SetAnimatorSpeed(1f, dt);

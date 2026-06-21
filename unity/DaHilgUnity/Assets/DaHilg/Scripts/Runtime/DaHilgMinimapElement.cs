@@ -156,6 +156,11 @@ namespace DaHilg
                 if (actor == null) continue;
                 bool active = actor == m_Manager.ActiveActor;
                 Vector2 p = WorldToMap(actor.FeetPosition.x, actor.FeetPosition.z, rect);
+                if (active && m_Manager.PlayerMarked)
+                {
+                    float pulse = 8.5f + Mathf.PingPong(Time.time * 8f, 4f);
+                    DrawDisk(painter, p, pulse, new Color(1f, 0.05f, 0f, 0.30f));
+                }
                 DrawDisk(painter, p, active ? 5.2f : 3.6f, active ? Color.white : new Color(0.35f, 0.68f, 1f, 0.92f));
                 if (active)
                 {

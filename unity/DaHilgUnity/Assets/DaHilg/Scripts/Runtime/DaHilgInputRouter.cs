@@ -10,12 +10,14 @@ namespace DaHilg
         bool m_TouchMoveActive;
         bool m_TouchRun;
         bool m_TouchJumpQueued;
+        bool m_TouchRollQueued;
         int m_TouchEmoteQueued = -1;
 
         public Vector2 Move { get; private set; }
         public Vector2 LookDelta { get; private set; }
         public bool RunHeld { get; private set; }
         public bool JumpPressed { get; private set; }
+        public bool RollPressed { get; private set; }
         public bool InteractPressed { get; private set; }
         public bool SwitchPressed { get; private set; }
         public bool PreviousSwitchPressed { get; private set; }
@@ -33,6 +35,7 @@ namespace DaHilg
         public void Tick(DaHilgGameSettings settings)
         {
             JumpPressed = false;
+            RollPressed = false;
             InteractPressed = false;
             SwitchPressed = false;
             PreviousSwitchPressed = false;
@@ -58,6 +61,7 @@ namespace DaHilg
 
                 RunHeld = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
                 JumpPressed = keyboard.spaceKey.wasPressedThisFrame;
+                RollPressed = keyboard.fKey.wasPressedThisFrame || keyboard.rKey.wasPressedThisFrame;
                 InteractPressed = keyboard.eKey.wasPressedThisFrame;
                 SwitchPressed = keyboard.tabKey.wasPressedThisFrame;
                 PreviousSwitchPressed = keyboard.backquoteKey.wasPressedThisFrame;
@@ -80,15 +84,25 @@ namespace DaHilg
             Mouse mouse = Mouse.current;
             if (mouse != null)
             {
-                if (Cursor.lockState != CursorLockMode.None)
+                if (mouse.rightButton.wasPressedThisFrame)
+                {
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                }
+                else if (mouse.rightButton.wasReleasedThisFrame)
                 {
                     Cursor.lockState = CursorLockMode.None;
+                    Cursor.visible = true;
                 }
-                Cursor.visible = true;
 
-                if (mouse.rightButton.isPressed)
+                if (mouse.rightButton.isPressed && Cursor.lockState == CursorLockMode.Locked)
                 {
                     LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
+                }
+                else if (!mouse.rightButton.isPressed && Cursor.lockState != CursorLockMode.None)
+                {
+                    Cursor.lockState = CursorLockMode.None;
+                    Cursor.visible = true;
                 }
             }
 
@@ -106,6 +120,7 @@ namespace DaHilg
 
                 RunHeld = RunHeld || gamepad.leftStickButton.isPressed || gamepad.leftTrigger.ReadValue() > 0.45f;
                 JumpPressed = JumpPressed || gamepad.buttonSouth.wasPressedThisFrame;
+                RollPressed = RollPressed || gamepad.buttonEast.wasPressedThisFrame || gamepad.rightTrigger.wasPressedThisFrame;
                 InteractPressed = InteractPressed || gamepad.buttonWest.wasPressedThisFrame;
                 SwitchPressed = SwitchPressed || gamepad.rightShoulder.wasPressedThisFrame;
                 PreviousSwitchPressed = PreviousSwitchPressed || gamepad.leftShoulder.wasPressedThisFrame;
@@ -134,6 +149,12 @@ namespace DaHilg
             {
                 JumpPressed = true;
                 m_TouchJumpQueued = false;
+            }
+
+            if (m_TouchRollQueued)
+            {
+                RollPressed = true;
+                m_TouchRollQueued = false;
             }
 
             if (m_TouchEmoteQueued >= 0)
@@ -168,6 +189,11 @@ namespace DaHilg
         public void QueueTouchJump()
         {
             m_TouchJumpQueued = true;
+        }
+
+        public void QueueTouchRoll()
+        {
+            m_TouchRollQueued = true;
         }
 
         public void QueueTouchEmote(int index)

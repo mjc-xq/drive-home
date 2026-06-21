@@ -1,0 +1,76 @@
+{
+  "source": "meemaw-property.glb",
+  "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
+  "offset": [
+    35.35,
+    59.24,
+    6.125
+  ],
+  "groundY": 59.24,
+  "houseCenter": [
+    35.35,
+    69.447,
+    6.125
+  ],
+  "houseBox": {
+    "min": [
+      -8.46,
+      7.165,
+      -9.645
+    ],
+    "max": [
+      8.46,
+      13.248,
+      9.645
+    ]
+  },
+  "spawns": [
+    [
+      0,
+      0.05,
+      12.645
+    ],
+    [
+      11.46,
+      0.05,
+      0
+    ],
+    [
+      -11.46,
+      0.05,
+      -2
+    ]
+  ],
+  "npcSpawns": [
+    [
+      14.46,
+      0.05,
+      15.645
+    ],
+    [
+      -14.46,
+      0.05,
+      15.645
+    ],
+    [
+      16.46,
+      0.05,
+      -13.645
+    ],
+    [
+      -16.46,
+      0.05,
+      -13.645
+    ],
+    [
+      0,
+      0.05,
+      23.645
+    ],
+    [
+      18,
+      0.05,
+      18
+    ]
+  ]
+}

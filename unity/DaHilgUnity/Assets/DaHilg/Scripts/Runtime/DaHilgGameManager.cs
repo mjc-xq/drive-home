@@ -6,12 +6,17 @@ namespace DaHilg
 {
     public sealed class DaHilgGameManager : MonoBehaviour
     {
+        const float k_StartShieldSeconds = 11f;
+        const float k_StuckTime = 0.6f;
+
         readonly List<DaHilgActor> m_Actors = new List<DaHilgActor>(4);
         readonly List<DaHilgNibblerAgent> m_Nibblers = new List<DaHilgNibblerAgent>(32);
         readonly List<DaHilgAnimalAgent> m_Animals = new List<DaHilgAnimalAgent>(8);
         readonly string[] m_Emotes = { "Dance", "Wave", "Cheer", "Attack" };
+        readonly Dictionary<DaHilgActor, NpcStuckState> m_StuckStates = new Dictionary<DaHilgActor, NpcStuckState>();
 
         Transform m_LevelRoot;
+        bool m_LevelLoading;
         Transform m_NibblerRoot;
         Transform m_AnimalRoot;
         DaHilgActor m_ActiveActor;
@@ -19,6 +24,12 @@ namespace DaHilg
         DaHilgLevelProfile m_CurrentLevel;
         float m_ModeStartedAt;
         float m_NextNibblerSpawn;
+        float m_MarkedUntil;
+        float m_AttachFlashUntil;
+        float m_LastRollAt = -999f;
+        int m_LastAttachedCount;
+        int m_LastRollCrushCount;
+        int m_CrushedNibblerTotal;
         bool m_Paused;
         bool m_Won;
 
@@ -35,6 +46,15 @@ namespace DaHilg
         public DaHilgLevelProfile CurrentLevel => m_CurrentLevel;
         public DaHilgActor NearbyGreetable => m_NearbyGreetable;
         public int AttachedNibblerCount { get; private set; }
+        public bool PlayerMarked => Mode == DaHilgGameMode.Nibblers && Time.time < m_MarkedUntil;
+        public float Marked01 => Settings != null ? Mathf.Clamp01((m_MarkedUntil - Time.time) / Mathf.Max(0.1f, Settings.MarkedDuration)) : 0f;
+        public float AttachmentFlash01 => Settings != null ? Mathf.Clamp01((m_AttachFlashUntil - Time.time) / Mathf.Max(0.1f, Settings.AttachmentFlashDuration)) : 0f;
+        public bool RollReady => m_ActiveActor == null || m_ActiveActor.RollReady(Time.time);
+        public float RollCooldownRemaining => m_ActiveActor != null ? m_ActiveActor.RollCooldownRemaining(Time.time) : 0f;
+        public float RollCooldown01 => Settings != null ? Mathf.Clamp01(1f - RollCooldownRemaining / Mathf.Max(0.1f, Settings.RollCooldown)) : 1f;
+        public int LastRollCrushCount => Time.time - m_LastRollAt <= 1.25f ? m_LastRollCrushCount : 0;
+        public int CrushedNibblerTotal => m_CrushedNibblerTotal;
+        bool StartShieldActive => Mode == DaHilgGameMode.Nibblers && Time.time - m_ModeStartedAt < k_StartShieldSeconds;
 
         void Awake()
         {
@@ -59,21 +79,31 @@ namespace DaHilg
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
             Debug.Log("[DaHilg] Runtime start.");
-            LoadLevel(ResolveLevelSlug());
-            SpawnActors();
-            SwitchTo(Settings.DefaultCharacterId);
-            BuildNibblerPool();
-            SpawnAnimals();
+            BeginLoadLevel(ResolveLevelSlug(), () =>
+            {
+                SpawnActors();
+                SwitchTo(Settings.DefaultCharacterId);
+                BuildNibblerPool();
+                SpawnAnimals();
+                Debug.Log("[DaHilg] Runtime ready: level=" + (m_CurrentLevel != null ? m_CurrentLevel.Slug : "none")
+                    + ", actors=" + m_Actors.Count
+                    + ", active=" + (m_ActiveActor != null ? m_ActiveActor.Id : "none")
+                    + ", hud=" + (Hud != null));
+            });
 
             if (Hud != null) Hud.Initialize(this, Input);
-            Debug.Log("[DaHilg] Runtime ready: level=" + (m_CurrentLevel != null ? m_CurrentLevel.Slug : "none")
-                + ", actors=" + m_Actors.Count
-                + ", active=" + (m_ActiveActor != null ? m_ActiveActor.Id : "none")
-                + ", hud=" + (Hud != null));
         }
 
         void Update()
         {
+            // A streamed (outdoor) level loads asynchronously via glTFast; hold gameplay until the
+            // level root + actors exist so nothing falls through a not-yet-loaded ground.
+            if (m_LevelLoading)
+            {
+                Hud?.Refresh();
+                return;
+            }
+
             float dt = Mathf.Min(Time.deltaTime, 1f / 30f);
             Input.Tick(Settings);
             bool menuConsumedInput = Hud != null && Hud.TickMenuInput(Input);
@@ -98,6 +128,7 @@ namespace DaHilg
             if (Input.SwitchPressed) CycleActor(1);
             if (Input.PreviousSwitchPressed) CycleActor(-1);
             if (Input.EmotePressed >= 0 && Input.EmotePressed < m_Emotes.Length) m_ActiveActor?.PlayEmote(m_Emotes[Input.EmotePressed]);
+            if (!menuConsumedInput && Input.RollPressed) TryFallRoll();
 
             bool crawlOnly = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmDown;
             bool pinned = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmStop;
@@ -160,6 +191,9 @@ namespace DaHilg
             m_ModeStartedAt = Time.time;
             m_NextNibblerSpawn = 0f;
             AttachedNibblerCount = 0;
+            m_LastAttachedCount = 0;
+            m_MarkedUntil = 0f;
+            m_AttachFlashUntil = 0f;
             for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].Despawn();
         }
 
@@ -181,14 +215,20 @@ namespace DaHilg
             AttachedNibblerCount = 0;
             m_ModeStartedAt = Time.time;
             m_NextNibblerSpawn = 0f;
+            m_LastAttachedCount = 0;
+            m_MarkedUntil = 0f;
+            m_AttachFlashUntil = 0f;
+            m_CrushedNibblerTotal = 0;
             for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].Despawn();
 
-            LoadLevel(slug);
-            SpawnActors();
-            SwitchTo(Settings.DefaultCharacterId);
-            BuildNibblerPool();
-            SpawnAnimals();
-            Hud?.Refresh();
+            BeginLoadLevel(slug, () =>
+            {
+                SpawnActors();
+                SwitchTo(Settings.DefaultCharacterId);
+                BuildNibblerPool();
+                SpawnAnimals();
+                Hud?.Refresh();
+            });
         }
 
         public void RequestGreet()
@@ -238,22 +278,50 @@ namespace DaHilg
         public bool IsPaused() => m_Paused;
         public bool HasWon() => m_Won;
 
-        void LoadLevel(string slug)
+        // Loads a level then runs onComplete once its root + colliders exist. Outdoor levels are
+        // streamed from StreamingAssets via glTFast (LevelPrefab is null for them, so they are NOT
+        // baked into the WebGL data file) and resolve asynchronously; the small interior ('house')
+        // stays baked and resolves synchronously. The post-load spawn sequence must run from
+        // onComplete so it never executes before the ground colliders are ready.
+        void BeginLoadLevel(string slug, Action onComplete)
         {
             m_CurrentLevel = Settings.FindLevel(slug);
-            if (m_CurrentLevel == null || m_CurrentLevel.LevelPrefab == null)
+            if (m_CurrentLevel == null)
             {
-                Debug.LogError("[DaHilg] No level prefab available.");
+                Debug.LogError("[DaHilg] No level profile for '" + slug + "'.");
+                onComplete?.Invoke();
                 return;
             }
 
-            if (m_LevelRoot != null) Destroy(m_LevelRoot.gameObject);
+            if (m_LevelRoot != null) { Destroy(m_LevelRoot.gameObject); m_LevelRoot = null; }
+
+            if (DaHilgLevelRuntime.IsStreamedLevel(slug))
+            {
+                m_LevelLoading = true;
+                StartCoroutine(DaHilgLevelRuntime.LoadStreamedLevel(m_CurrentLevel, root =>
+                {
+                    m_LevelRoot = root != null ? root.transform : null;
+                    m_LevelLoading = false;
+                    Debug.Log("[DaHilg] Streamed level ready: " + m_CurrentLevel.Slug + " (root=" + (root != null) + ").");
+                    onComplete?.Invoke();
+                }));
+                return;
+            }
+
+            // Baked interior level — synchronous instantiate.
+            if (m_CurrentLevel.LevelPrefab == null)
+            {
+                Debug.LogError("[DaHilg] No baked level prefab available for '" + slug + "'.");
+                onComplete?.Invoke();
+                return;
+            }
             GameObject level = Instantiate(m_CurrentLevel.LevelPrefab);
             level.name = "Level_" + m_CurrentLevel.Slug;
             DaHilgLevelRuntime.ApplyLevelOffset(level, m_CurrentLevel);
             m_LevelRoot = level.transform;
             DaHilgLevelRuntime.PrepareLevelColliders(level);
             Debug.Log("[DaHilg] Level loaded: " + m_CurrentLevel.Slug + ".");
+            onComplete?.Invoke();
         }
 
         void SpawnActors()
@@ -274,6 +342,14 @@ namespace DaHilg
                 if (slot.Prefab == null) continue;
 
                 GameObject root = new GameObject("Actor_" + slot.Label);
+                try
+                {
+                    root.tag = "Player";
+                }
+                catch (UnityException)
+                {
+                    Debug.LogWarning("[DaHilg] Player tag is missing; camera obstacle ignores will fall back to layer filtering.");
+                }
                 root.transform.SetParent(transform);
                 DaHilgActor actor = root.AddComponent<DaHilgActor>();
                 actor.Initialize(slot, ResolveAnimator(slot), Settings);
@@ -300,6 +376,11 @@ namespace DaHilg
 
             if (Mode == DaHilgGameMode.Nibblers)
             {
+                if (safe)
+                {
+                    actor.StepNpc(Vector3.zero, false, Settings, dt, now);
+                    return;
+                }
                 TickPesterNpc(actor, toPlayer, dist, dt);
                 return;
             }
@@ -358,7 +439,7 @@ namespace DaHilg
                         actor.PlayEmote("Cheer");
                         break;
                     }
-                    actor.StepNpc(toPlayer.normalized, true, Settings, dt, now);
+                    actor.StepNpc(SeekDirection(actor, toPlayer, true, 1f, dt), true, Settings, dt, now);
                     break;
 
                 case DaHilgNpcState.Touch:
@@ -398,7 +479,7 @@ namespace DaHilg
             float danceDist = actor.Id == "drew" ? 3.6f : 2.8f;
             if (dist > notice)
             {
-                actor.StepNpc(toPlayer.normalized * 0.45f, false, Settings, dt, Time.time);
+                actor.StepNpc(SeekDirection(actor, toPlayer, false, 0.45f, dt), false, Settings, dt, Time.time);
                 return;
             }
 
@@ -413,7 +494,57 @@ namespace DaHilg
                 return;
             }
 
-            actor.StepNpc(toPlayer.normalized, true, Settings, dt, Time.time);
+            actor.StepNpc(SeekDirection(actor, toPlayer, true, 1f, dt), true, Settings, dt, Time.time);
+        }
+
+        sealed class NpcStuckState
+        {
+            public float StuckTimer;
+            public float StuckSign;
+        }
+
+        // Stuck-escape: when an NPC wants to move but its realized speed has stalled
+        // below desired for a while, it's wedged on a corner — rotate the heading 90°
+        // for a brief burst to slide around it, then decay and re-aim at the real goal.
+        // Ported from the web seek() in src/da-hilg/systems/npcAi.js.
+        Vector3 SeekDirection(DaHilgActor actor, Vector3 desiredDirection, bool run, float frac, float dt)
+        {
+            desiredDirection.y = 0f;
+            Vector3 dir = desiredDirection.sqrMagnitude > 1e-8f ? desiredDirection.normalized : Vector3.zero;
+
+            if (!m_StuckStates.TryGetValue(actor, out NpcStuckState state))
+            {
+                state = new NpcStuckState();
+                m_StuckStates[actor] = state;
+            }
+
+            bool wantsToMove = dir.sqrMagnitude > 1e-8f && frac > 0f;
+            if (wantsToMove)
+            {
+                float cap = run ? Settings.RunSpeed : Settings.WalkSpeed;
+                float desiredSpeed = cap * frac;
+                if (actor.Speed < 0.3f * desiredSpeed) state.StuckTimer += dt;
+                else state.StuckTimer = 0f;
+
+                if (state.StuckTimer > k_StuckTime)
+                {
+                    if (state.StuckSign == 0f) state.StuckSign = UnityEngine.Random.value < 0.5f ? 1f : -1f;
+                    Vector3 nudged = new Vector3(dir.z * state.StuckSign, 0f, -dir.x * state.StuckSign);
+                    dir = nudged;
+                    state.StuckTimer -= dt * 2f; // burst, then re-seek
+                    if (state.StuckTimer <= 0f)
+                    {
+                        state.StuckTimer = 0f;
+                        state.StuckSign = 0f; // pick a fresh side next time we wedge
+                    }
+                }
+            }
+            else
+            {
+                state.StuckTimer = 0f;
+            }
+
+            return dir * frac;
         }
 
         void TickGreetMode(bool menuConsumedInput)
@@ -487,31 +618,36 @@ namespace DaHilg
 
         void TickNibblers(float dt)
         {
-            bool safe = PlayerInSafeZone();
+            bool safe = PlayerInSafeZone() || StartShieldActive;
             bool danger = !safe && PlayerInDangerZone();
             if (m_ActiveActor == null) return;
 
+            if (danger) MarkPlayer();
+
             if (safe)
             {
+                if (StartShieldActive) m_MarkedUntil = 0f;
+                m_NextNibblerSpawn = Mathf.Max(m_NextNibblerSpawn, Time.time + Settings.NormalSpawnInterval);
                 m_ActiveActor.Health = Mathf.Min(100f, m_ActiveActor.Health + Settings.HealthRegen * dt);
             }
             else if (Time.time >= m_NextNibblerSpawn)
             {
                 int baseTarget = Mathf.Clamp(2 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 8f), 2, Settings.NibblerPoolSize);
-                int target = Mathf.Clamp(baseTarget + (danger ? Settings.DangerNibblerBonus : 0), 2, Settings.NibblerPoolSize);
+                bool marked = danger || PlayerMarked;
+                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), 2, Settings.NibblerPoolSize);
                 int active = ActiveNibblerCount();
-                int spawnBudget = danger ? Mathf.Min(3, target - active) : 1;
+                int spawnBudget = marked ? Mathf.Min(3, target - active) : 1;
                 for (int i = 0; i < spawnBudget; i++)
                 {
                     if (ActiveNibblerCount() >= target) break;
                     SpawnNibbler();
                 }
-                m_NextNibblerSpawn = Time.time + (danger ? Settings.DangerSpawnInterval : Settings.NormalSpawnInterval);
+                m_NextNibblerSpawn = Time.time + (marked ? Settings.DangerSpawnInterval : Settings.NormalSpawnInterval);
             }
 
-            if (Input.JumpPressed || m_ActiveActor.WasJumpStartedThisFrame)
+            if ((Input.JumpPressed || m_ActiveActor.WasJumpStartedThisFrame) && AttachedNibblerCount > 0)
             {
-                int shed = Mathf.Max(2, AttachedNibblerCount / 3);
+                int shed = Mathf.Clamp(AttachedNibblerCount / 3, 1, AttachedNibblerCount);
                 for (int i = 0; i < m_Nibblers.Count && shed > 0; i++)
                 {
                     if (m_Nibblers[i].Active && m_Nibblers[i].Attached)
@@ -529,12 +665,64 @@ namespace DaHilg
             }
             AttachedNibblerCount = attached;
             m_ActiveActor.AttachedNibblers = attached;
+            if (attached > m_LastAttachedCount)
+            {
+                m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
+                MarkPlayer();
+            }
+            m_LastAttachedCount = attached;
 
             if (!safe && attached > 0)
             {
                 float drain = Mathf.Min(Settings.NibblerHealthDrainCap, attached * Settings.NibblerHealthDrainPerAttached);
                 m_ActiveActor.Health = Mathf.Max(0f, m_ActiveActor.Health - drain * dt);
             }
+        }
+
+        void TryFallRoll()
+        {
+            if (m_ActiveActor == null) return;
+            if (!m_ActiveActor.StartFallRoll(Input.Move, CameraRig != null ? CameraRig.Yaw : 0f, Settings, Time.time)) return;
+
+            m_LastRollAt = Time.time;
+            m_LastRollCrushCount = Mode == DaHilgGameMode.Nibblers ? CrushNibblersByRoll() : 0;
+            if (m_LastRollCrushCount > 0)
+            {
+                Score += m_LastRollCrushCount * Mathf.Max(1, Settings.RollCrushScore);
+                m_CrushedNibblerTotal += m_LastRollCrushCount;
+                m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
+                AttachedNibblerCount = CountAttachedNibblers();
+                m_ActiveActor.AttachedNibblers = AttachedNibblerCount;
+                m_LastAttachedCount = AttachedNibblerCount;
+            }
+        }
+
+        int CrushNibblersByRoll()
+        {
+            if (m_ActiveActor == null) return 0;
+            Vector3 center = m_ActiveActor.RollCrushCenter(Settings);
+            float side = m_ActiveActor.RollSideSign;
+            int crushed = 0;
+            for (int i = 0; i < m_Nibblers.Count; i++)
+            {
+                if (m_Nibblers[i].TryCrushByRoll(m_ActiveActor, center, side, Settings)) crushed++;
+            }
+            return crushed;
+        }
+
+        int CountAttachedNibblers()
+        {
+            int count = 0;
+            for (int i = 0; i < m_Nibblers.Count; i++)
+            {
+                if (m_Nibblers[i].Active && m_Nibblers[i].Attached) count++;
+            }
+            return count;
+        }
+
+        void MarkPlayer()
+        {
+            m_MarkedUntil = Mathf.Max(m_MarkedUntil, Time.time + Settings.MarkedDuration);
         }
 
         void SpawnNibbler()

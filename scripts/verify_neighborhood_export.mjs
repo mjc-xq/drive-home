@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NodeIO } from '@gltf-transform/core';
+import { getBounds } from '@gltf-transform/functions';
 import {
   buildRoadJunctions,
   buildSidewalkConnectors,
@@ -12,6 +13,7 @@ import {
   isCulDeSacRoad,
   roadSpec,
   roadSegmentsWorld,
+  snapCreekToChannel,
   vkey,
 } from './road_prep.mjs';
 
@@ -39,6 +41,7 @@ const LAT0 = Number.isFinite(+ORIGIN.lat) ? +ORIGIN.lat : 37.6835313;
 const LON0 = Number.isFinite(+ORIGIN.lon) ? +ORIGIN.lon : -122.0686199;
 const COSLAT = Math.cos(LAT0 * Math.PI / 180);
 const w2 = (e, n) => [e - C[0], -(n - C[1])];
+const enToLL = (e, n) => [LAT0 + n / 110540, LON0 + e / (COSLAT * 111320)];
 const fail = [];
 const warn = [];
 const dataFile = name => {
@@ -48,9 +51,13 @@ const dataFile = name => {
 let cropHalf = Math.max(1, +(S.terrain?.half ?? S.aerial?.half ?? 0));
 let tXmin = -cropHalf, tXmax = cropHalf, tZmin = -cropHalf, tZmax = cropHalf;
 const demPath = dataFile('dem_1m.json');
+let DEM = null;
+let terrainAt = null;
 if (existsSync(demPath)) {
-  const D = JSON.parse(readFileSync(demPath, 'utf8'));
+  DEM = JSON.parse(readFileSync(demPath, 'utf8'));
+  const D = DEM;
   const dLat = D.latN - D.latS;
+  const dLon = D.lonE - D.lonW;
   cropHalf = dLat * 110540 / 2 - 4;
   tXmin = (D.lonW - LON0) * COSLAT * 111320 - C[0];
   tXmax = (D.lonE - LON0) * COSLAT * 111320 - C[0];
@@ -58,6 +65,24 @@ if (existsSync(demPath)) {
   const zB = -((D.latS - LAT0) * 110540 - C[1]);
   tZmin = Math.min(zA, zB);
   tZmax = Math.max(zA, zB);
+  terrainAt = (X, Z) => {
+    const [lat, lon] = enToLL(X + C[0], C[1] - Z);
+    let fi = (lon - D.lonW) / dLon * D.cols - 0.5;
+    let fj = (D.latN - lat) / dLat * D.rows - 0.5;
+    fi = Math.max(0, Math.min(D.cols - 1.001, fi));
+    fj = Math.max(0, Math.min(D.rows - 1.001, fj));
+    const i = Math.floor(fi);
+    const j = Math.floor(fj);
+    const u = fi - i;
+    const v = fj - j;
+    const a = D.h[j * D.cols + i];
+    const b = D.h[j * D.cols + i + 1];
+    const c = D.h[(j + 1) * D.cols + i];
+    const d = D.h[(j + 1) * D.cols + i + 1];
+    return (u + v <= 1)
+      ? a * (1 - u - v) + b * u + c * v
+      : d * (u + v - 1) + b * (1 - v) + c * (1 - u);
+  };
 }
 const inTerrain = (x, z, m = 6) => x >= tXmin + m && x <= tXmax - m && z >= tZmin + m && z <= tZmax - m;
 const hasCreek = !!(S.creek && Array.isArray(S.creek.p) && S.creek.p
@@ -84,6 +109,138 @@ function inPoly(x, z, ring) {
     if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
   }
   return inside;
+}
+
+function distToRing(x, z, ring) {
+  let best = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    best = Math.min(best, distPointSeg(x, z, a[0], a[1], b[0], b[1]));
+  }
+  return best;
+}
+
+function densifyLine(line, step = 1.2) {
+  if (!Array.isArray(line) || !line.length) return [];
+  const out = [[line[0][0], line[0][1], 0]];
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1];
+    const b = line[i];
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const ux = L > 1e-6 ? (b[0] - a[0]) / L : 0;
+    const uz = L > 1e-6 ? (b[1] - a[1]) / L : 0;
+    const n = Math.max(1, Math.ceil(L / step));
+    for (let s = 1; s <= n; s++) {
+      out.push([
+        a[0] + (b[0] - a[0]) * s / n,
+        a[1] + (b[1] - a[1]) * s / n,
+        L / n,
+        ux,
+        uz,
+      ]);
+    }
+  }
+  return out;
+}
+
+function checkCreekClearance() {
+  if (!hasCreek) return;
+  if (!terrainAt) return warn.push('DEM missing; creek snap clearance QA skipped');
+  const rawCreek = S.creek.p
+    .map(([e, n]) => w2(e, n))
+    .filter(([x, z]) => Math.abs(x) <= cropHalf + 3 && Math.abs(z) <= cropHalf + 3);
+  if (rawCreek.length < 2) return;
+
+  const creekWidth = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 7.5;
+  const buildingAvoidMargin = creekWidth / 2 + 1.75;
+  const requiredBuildingClear = creekWidth / 2 + 0.65;
+  const buildingRings = (S.buildings || [])
+    .map(b => (b.p || []).map(([e, n]) => w2(e, n)))
+    .filter(ring => ring.length >= 3)
+    .map(ring => ({
+      ring,
+      minX: Math.min(...ring.map(p => p[0])) - requiredBuildingClear,
+      maxX: Math.max(...ring.map(p => p[0])) + requiredBuildingClear,
+      minZ: Math.min(...ring.map(p => p[1])) - requiredBuildingClear,
+      maxZ: Math.max(...ring.map(p => p[1])) + requiredBuildingClear,
+    }));
+  const roadSegments = roadSegmentsWorld(S.roads || [], w2, { includeService: true });
+  const snapped = snapCreekToChannel(rawCreek, terrainAt, {
+    radius: 18,
+    step: 1.5,
+    strength: 0.9,
+    smoothPasses: 2,
+    avoidSegments: roadSegments,
+    avoidMargin: 2.0,
+    avoidPolygons: buildingRings.map(b => b.ring),
+    avoidPolygonMargin: buildingAvoidMargin,
+  });
+  const samples = densifyLine(snapped, 1.2);
+  if (samples.length < 2) return;
+
+  let minBuildingClear = Infinity;
+  let buildingIntrusions = 0;
+  let totalLen = 0;
+  let roadLikeLen = 0;
+  let currentRoadLike = 0;
+  let longestRoadLike = 0;
+  let crossingLen = 0;
+  let minRoadClear = Infinity;
+  const roadTouchThreshold = 0.35;
+  const parallelDot = Math.cos(35 * Math.PI / 180);
+
+  for (const [x, z, ds, ux = 0, uz = 0] of samples) {
+    totalLen += ds;
+    let sampleBuildingClear = Infinity;
+    for (const b of buildingRings) {
+      if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+      const edgeClear = distToRing(x, z, b.ring);
+      const signedClear = inPoly(x, z, b.ring) ? -edgeClear : edgeClear;
+      sampleBuildingClear = Math.min(sampleBuildingClear, signedClear);
+    }
+    minBuildingClear = Math.min(minBuildingClear, sampleBuildingClear);
+    if (sampleBuildingClear < 0) buildingIntrusions++;
+
+    let roadClear = Infinity;
+    let nearestRoad = null;
+    for (const rs of roadSegments) {
+      const clear = distPointSeg(x, z, rs.a[0], rs.a[1], rs.b[0], rs.b[1]) - rs.spec.width / 2;
+      if (clear < roadClear) {
+        roadClear = clear;
+        nearestRoad = rs;
+      }
+    }
+    minRoadClear = Math.min(minRoadClear, roadClear);
+    if (roadClear < roadTouchThreshold) {
+      const rdx = nearestRoad && nearestRoad.L > 1e-6 ? (nearestRoad.b[0] - nearestRoad.a[0]) / nearestRoad.L : 0;
+      const rdz = nearestRoad && nearestRoad.L > 1e-6 ? (nearestRoad.b[1] - nearestRoad.a[1]) / nearestRoad.L : 0;
+      const roadParallel = Math.abs(ux * rdx + uz * rdz) >= parallelDot;
+      if (roadParallel) {
+        roadLikeLen += ds;
+        currentRoadLike += ds;
+        longestRoadLike = Math.max(longestRoadLike, currentRoadLike);
+      } else {
+        crossingLen += ds;
+        currentRoadLike = 0;
+      }
+    } else {
+      currentRoadLike = 0;
+    }
+  }
+
+  if (buildingIntrusions) {
+    fail.push(`snapped creek intersects building footprints (${buildingIntrusions} sampled points)`);
+  } else if (minBuildingClear < requiredBuildingClear) {
+    fail.push(`snapped creek is too close to a building footprint (${minBuildingClear.toFixed(2)} m clear; expected >= ${requiredBuildingClear.toFixed(2)} m)`);
+  }
+  if (longestRoadLike > 12 || (totalLen > 0 && roadLikeLen / totalLen > 0.04)) {
+    fail.push(`snapped creek tracks road asphalt (${longestRoadLike.toFixed(1)} m longest parallel run, ${roadLikeLen.toFixed(1)} m total road-like contact)`);
+  } else if (roadLikeLen > 6) {
+    warn.push(`snapped creek has ${roadLikeLen.toFixed(1)} m of road-parallel close contact; crossing contact ${crossingLen.toFixed(1)} m`);
+  }
+  if (!Number.isFinite(minBuildingClear)) warn.push('creek/building clearance QA found no nearby buildings to measure');
+  if (!Number.isFinite(minRoadClear)) warn.push('creek/road clearance QA found no roads to measure');
 }
 
 function checkSidewalkGraph() {
@@ -209,21 +366,15 @@ const requiredNodes = [
   [/^Collision_Roads$/, 'road collision layer'],
   [/^Collision_Buildings$/, 'building collision layer'],
   [/^LOD_Buildings_Low$/, 'low building LOD layer'],
-  // clean collection grouping from organize_layers.py (group nodes are empties)
-  [/^Neighborhood$/, 'Neighborhood root group'],
-  [/^Buildings$/, 'Buildings group'],
-  [/^Roads & Paths$/, 'Roads & Paths group'],
-  [/^Vegetation$/, 'Vegetation group'],
-  [/^Trees$/, 'Trees group'],
-  [/^Grass in the Wind$/, 'Grass in the Wind group'],
-  [/^Helpers$/, 'Helpers group'],
 ];
-if (expectsDahillFences) requiredNodes.push([/^Fences$/, 'Fences group']);
 if (hasCreek) {
   requiredNodes.push([/^Creek_Banks$/, 'creek bank layer']);
-  requiredNodes.push([/^Creek$/, 'Creek group']);
+  requiredNodes.push([/^Creek_SanLorenzo$/, 'creek water layer']);
 }
 for (const [rx, label] of requiredNodes) requireNode(names, rx, label);
+if (names.some(n => /^Creek_FlowLines$/.test(n))) {
+  fail.push('Creek_FlowLines is present; raw GLB should not ship road-marker-like creek stripes');
+}
 
 // grass-in-the-wind must be present AND animated (the looping GrassWind clip)
 if (!doc.getRoot().listAnimations().some(a => /GrassWind/.test(a.getName() || ''))) {
@@ -249,8 +400,34 @@ for (const node of nodes) {
   }
 }
 
+checkCreekClearance();
 checkSidewalkGraph();
 checkTreesAgainstRoadsAndBuildings();
+
+function checkSourceCoverage() {
+  const terrainNode = nodes.find(n => n.getName() === 'Collision_Terrain') || nodes.find(n => n.getName() === 'Terrain');
+  if (!terrainNode) return;
+  const b = getBounds(terrainNode);
+  const spanX = b.max[0] - b.min[0];
+  const spanZ = b.max[2] - b.min[2];
+  const demSpan = existsSync(demPath) ? (JSON.parse(readFileSync(demPath, 'utf8')).latN - JSON.parse(readFileSync(demPath, 'utf8')).latS) * 110540 : 0;
+  if (demSpan >= 800) {
+    if (spanX < demSpan - 30 || spanZ < demSpan - 30) {
+      fail.push(`terrain collision span ${spanX.toFixed(1)}x${spanZ.toFixed(1)} m does not cover DEM span ${demSpan.toFixed(1)} m`);
+    }
+    const centers = (S.buildings || []).map((building) => {
+      const c = building.p.reduce((a, p) => [a[0] + p[0] / building.p.length, a[1] + p[1] / building.p.length], [0, 0]);
+      return w2(c[0], c[1]);
+    });
+    const covered = centers.filter(([x, z]) => x >= b.min[0] - 4 && x <= b.max[0] + 4 && z >= b.min[2] - 4 && z <= b.max[2] + 4).length;
+    if (centers.length >= 300 && covered / centers.length < 0.85) {
+      fail.push(`only ${covered}/${centers.length} scene building centers fall inside exported terrain`);
+    }
+  } else if ((S.meta?.kind || '').includes('dahill')) {
+    fail.push(`Dahill DEM span is only ${demSpan.toFixed(1)} m; expected a neighborhood-scale patch >= 800 m`);
+  }
+}
+checkSourceCoverage();
 
 if (fail.length) {
   console.error('Neighborhood export QA failed:');

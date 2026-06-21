@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract REAL tree positions for 1840 Dahill Lane from the 2021 Alameda County
-LiDAR (USGS LPC tiles in scripts/_cache/lpc_*.laz), in the curvature-correct ENU
-frame shared with the exporter/app (scripts/geo.py).
+LiDAR (USGS LPC tiles in scripts/_cache/lpc_*.laz), in the same flat ENU frame
+used by scene.json and export_property_glb.mjs.
 
 Trees via a canopy-height model: LiDAR top surface (max Z per 1 m cell, noise
 removed) minus the bare-earth 3DEP DTM; building footprints masked out; the
@@ -11,6 +11,7 @@ Writes exports/trees.json: {trees: [[worldX, worldZ, canopyR_m, height_m], ...]}
 Usage:  scripts/.venv/bin/python scripts/fetch_trees.py
 """
 import json
+import math
 import os
 import sys
 
@@ -20,9 +21,6 @@ from pyproj import Transformer
 from shapely.geometry import LineString, Point, Polygon
 from shapely.strtree import STRtree
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import geo
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "scripts", "_cache")
 EXPORTS = os.path.join(ROOT, "exports")
@@ -30,12 +28,29 @@ FT = 0.3048
 HMIN, HMAX, NMS_M = 3.0, 35.0, 4.0
 
 SCENE = json.load(open(os.path.join(ROOT, "src", "assets", "scene.json")))
+ORIGIN = SCENE.get("origin") or {}
+LAT0 = float(ORIGIN.get("lat", 37.6835313))
+LON0 = float(ORIGIN.get("lon", -122.0686199))
+COSLAT = math.cos(math.radians(LAT0))
+CX, CY = SCENE["center"]
 DEM = json.load(open(os.path.join(EXPORTS, "dem_1m.json")))
 latN, latS, lonW, lonE = DEM["latN"], DEM["latS"], DEM["lonW"], DEM["lonE"]
 cols, rows, H = DEM["cols"], DEM["rows"], np.asarray(DEM["h"], dtype=np.float32)
 HALF = (latN - latS) * 110540.0 / 2.0
 CELL = 1.0
 G = int(round(2 * HALF / CELL))
+
+
+def ll_to_world(lat, lon):
+    e = (np.asarray(lon, dtype=float) - LON0) * COSLAT * 111320.0
+    n = (np.asarray(lat, dtype=float) - LAT0) * 110540.0
+    return e - CX, -(n - CY)
+
+
+def world_to_ll(x, z):
+    e = np.asarray(x, dtype=float) + CX
+    n = CY - np.asarray(z, dtype=float)
+    return LAT0 + n / 110540.0, LON0 + e / (COSLAT * 111320.0)
 
 
 def dtm_ll(lat, lon):
@@ -49,10 +64,9 @@ def dtm_ll(lat, lon):
 
 to_ft = Transformer.from_crs(4326, 2227, always_xy=True)   # lon/lat -> CA zone 3 ftUS
 to_ll = Transformer.from_crs(2227, 4326, always_xy=True)
-# patch bbox in feet from the world corners (curvature-correct)
-cx = [x for x in (-HALF, HALF) for _ in (0, 1)]
-cz = [z for _ in (0, 1) for z in (-HALF, HALF)]
-clat, clon = geo.world_to_ll(np.array(cx), np.array(cz))
+# patch bbox in feet from the DEM lat/lon corners.
+clon = np.array([lonW, lonE, lonW, lonE], dtype=float)
+clat = np.array([latS, latS, latN, latN], dtype=float)
 fx, fy = to_ft.transform(clon, clat)
 FXMIN, FXMAX, FYMIN, FYMAX = min(fx) - 30, max(fx) + 30, min(fy) - 30, max(fy) + 30
 
@@ -81,7 +95,7 @@ def main():
     X, Y, Z = np.concatenate(X), np.concatenate(Y), np.concatenate(Z)
 
     lon, lat = to_ll.transform(X, Y)
-    wX, wZ = geo.to_world(np.asarray(lat), np.asarray(lon))    # curvature-correct world
+    wX, wZ = ll_to_world(np.asarray(lat), np.asarray(lon))
     zm = Z * FT
 
     gi = np.floor((wX + HALF) / CELL).astype(int); gj = np.floor((wZ + HALF) / CELL).astype(int)
@@ -92,7 +106,7 @@ def main():
 
     cellX = (np.arange(G) + 0.5) * CELL - HALF
     XX, ZZ = np.meshgrid(cellX, cellX)
-    glat, glon = geo.world_to_ll(XX.ravel(), ZZ.ravel())
+    glat, glon = world_to_ll(XX.ravel(), ZZ.ravel())
     ground = dtm_ll(glat, glon)
     chm = np.where(dsm > -1e8, dsm - ground, 0.0).reshape(G, G)
     print(f"  CHM grid {G}x{G}; cells >= {HMIN} m: {(chm >= HMIN).sum():,}  max {chm.max():.1f} m")
@@ -107,8 +121,7 @@ def main():
     labelimg = Image.new("I", (G, G), 0); ld = ImageDraw.Draw(labelimg)  # per-building id (for LiDAR height)
     polys = []
     for ib, b in enumerate(SCENE["buildings"]):
-        llat, llon = geo.flat_to_ll(np.array([e for e, n in b["p"]]), np.array([n for e, n in b["p"]]))
-        ring = list(zip(*geo.to_world(llat, llon)))
+        ring = [(e - CX, -(n - CY)) for e, n in b["p"]]
         cxv = sum(p[0] for p in ring) / len(ring); czv = sum(p[1] for p in ring) / len(ring)
         if abs(cxv) <= HALF + 30 and abs(czv) <= HALF + 30:
             polys.append(Polygon(ring).buffer(1.0))
@@ -118,8 +131,7 @@ def main():
         pl = r.get("p") if isinstance(r, dict) else r
         if not isinstance(pl, list) or len(pl) < 2:
             continue
-        llat, llon = geo.flat_to_ll(np.array([e for e, n in pl]), np.array([n for e, n in pl]))
-        line = list(zip(*geo.to_world(llat, llon)))
+        line = [(e - CX, -(n - CY)) for e, n in pl]
         if any(abs(x) <= HALF + 30 and abs(z) <= HALF + 30 for x, z in line):
             polys.append(LineString(line).buffer(4.5))
             md.line([g2w(x, z) for x, z in line], fill=255, width=max(1, int(9 / CELL)))
@@ -199,7 +211,7 @@ def main():
         trees.append([round(x, 2), round(z, 2), round(cr, 2), round(h, 2)])
         taken[max(0, j - R):j + R + 1, max(0, i - R):i + R + 1] = True
 
-    json.dump({"source": "USGS 3DEP LiDAR 2021 CHM (curvature-correct ENU)", "count": len(trees), "trees": trees},
+    json.dump({"source": "USGS 3DEP LiDAR 2021 CHM (flat ENU, scene/export frame)", "count": len(trees), "trees": trees},
               open(os.path.join(EXPORTS, "trees.json"), "w"), separators=(",", ":"))
     hs = np.array([t[3] for t in trees]) if trees else np.array([0])
     print(f"  {len(trees)} trees  (height {hs.min():.1f}..{hs.max():.1f} m, median {np.median(hs):.1f})")
