@@ -433,6 +433,19 @@ namespace DaHilg.Editor
         }
       }
 
+      // Reliable browser touch verdict (mobile web). Used to pick a lightweight default level so
+      // phones don't OOM on the streamed ~81MB neighborhood, and to drive the on-screen controls.
+      var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+        && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+      window.__dahilg.touchMode = __dahilgTouch;
+      try {
+        if (__dahilgTouch && !/[?&]level=/.test(location.search)) {
+          var lvlUrl = new URL(location.href);
+          lvlUrl.searchParams.set('level', 'house');
+          history.replaceState(null, '', lvlUrl.toString());
+        }
+      } catch (lvlErr) { rememberHudError(lvlErr); }
+
       const config = {
         arguments: [],
         dataUrl: '__DATA_URL__',

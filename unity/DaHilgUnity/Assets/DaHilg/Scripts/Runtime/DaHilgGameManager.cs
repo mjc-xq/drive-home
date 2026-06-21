@@ -244,7 +244,19 @@ namespace DaHilg
             PlayerPrefs.SetString("dahilg:level", slug);
             PlayerPrefs.Save();
 
+            // Bank any unbanked at-risk score before switching levels — don't destroy a run.
+            if (Score > 0)
+            {
+                m_Banked += Score;
+                if (m_Banked > m_HighScore)
+                {
+                    m_HighScore = m_Banked;
+                    PlayerPrefs.SetInt("DaHilgHighScore", m_HighScore);
+                    PlayerPrefs.Save();
+                }
+            }
             Score = 0;
+            m_Combo = 1f; m_ComboUntil = 0f; m_WasInSafe = false;
             m_Won = false;
             AttachedNibblerCount = 0;
             m_ModeStartedAt = Time.time;

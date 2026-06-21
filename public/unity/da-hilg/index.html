@@ -160,11 +160,24 @@
         }
       }
 
+      // Reliable browser touch verdict (mobile web). Used to pick a lightweight default level so
+      // phones don't OOM on the streamed ~81MB neighborhood, and to drive the on-screen controls.
+      var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+        && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+      window.__dahilg.touchMode = __dahilgTouch;
+      try {
+        if (__dahilgTouch && !/[?&]level=/.test(location.search)) {
+          var lvlUrl = new URL(location.href);
+          lvlUrl.searchParams.set('level', 'house');
+          history.replaceState(null, '', lvlUrl.toString());
+        }
+      } catch (lvlErr) { rememberHudError(lvlErr); }
+
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb?v=8decfd1e823b376',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decfd1e823b376',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decfd1e823b376',
+        dataUrl: 'Build/da-hilg.data.unityweb?v=8decfd35f7dd3d8',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decfd35f7dd3d8',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decfd35f7dd3d8',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -177,7 +190,7 @@
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8decfd1e823b376';
+      script.src = 'Build/da-hilg.loader.js?v=8decfd35f7dd3d8';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
