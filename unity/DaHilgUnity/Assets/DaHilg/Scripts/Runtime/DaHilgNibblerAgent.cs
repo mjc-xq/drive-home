@@ -88,7 +88,7 @@ namespace DaHilg
                 if (childAnimator != m_Animator) childAnimator.enabled = false;
             }
             m_Animator.applyRootMotion = false;
-            m_Animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            m_Animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms; // don't animate the off-screen swarm
             m_Animator.speed = 0.86f + m_Seed * 0.46f;
             if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
 
@@ -219,10 +219,9 @@ namespace DaHilg
             Vector3 side = Vector3.Cross(Vector3.up, dir);
             float weave = Mathf.Sin(Time.time * (2.8f + m_Seed * 1.8f) + m_Index * 0.73f) * 0.42f;
             Vector3 desired = (dir + side * weave).normalized;
-            // Distance-scaled catch-up: reel in a kiting player from afar (up to 1.7x) but stay
-            // slow/dodgeable inside lunge range, so the swarm can actually overwhelm a runner
-            // (player RunSpeed outruns base nibbler speed — without this the buried/pin loop is unreachable).
-            float lead = Mathf.Lerp(1.0f, 1.7f, Mathf.InverseLerp(k_JumpRadius, 10f, centerDist));
+            // Gentle catch-up only: a small lead from far away so a runner isn't immortal, but
+            // nowhere near the old 1.7x that made the swarm sprint through the camera and pin instantly.
+            float lead = Mathf.Lerp(1.0f, 1.12f, Mathf.InverseLerp(k_JumpRadius, 14f, centerDist));
             float speed = settings.NibblerRunSpeed * (0.82f + m_Seed * 0.36f) * lead;
             // Separation is applied AFTER the seek (un-normalized) so a dense pile spreads into a
             // readable, aimable doughnut instead of collapsing onto one mushy point.

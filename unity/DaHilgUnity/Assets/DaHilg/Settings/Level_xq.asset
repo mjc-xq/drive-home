@@ -1,0 +1,74 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 39525536a00ea4f5a9129560e691ab09, type: 3}
+  m_Name: Level_xq
+  m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgLevelProfile
+  Slug: xq
+  Label: XQ
+  SubLabel: 807 Broadway, Oakland
+  LevelPrefab: {fileID: 0}
+  SourceMeta: {fileID: 0}
+  Minimap: {fileID: 0}
+  LevelOffset: {x: 0, y: 0, z: 0}
+  PlayerSpawns:
+  - {x: 0, y: 0.05, z: 12}
+  NpcSpawns:
+  - {x: 6, y: 0.05, z: 18}
+  - {x: -6, y: 0.05, z: 18}
+  - {x: 6, y: 0.05, z: 6}
+  GreetSafeZones:
+  - Id: home_safe
+    Label: Home
+    Center: {x: 0, y: 3, z: 0}
+    Size: {x: 36, y: 10, z: 36}
+  NibblerSafeZones:
+  - Id: safe_start
+    Label: Start
+    Center: {x: 0, y: 6, z: 12}
+    Size: {x: 36, y: 18, z: 36}
+  - Id: safe_home
+    Label: Home
+    Center: {x: 0, y: 4, z: 0}
+    Size: {x: 44, y: 400, z: 44}
+  - Id: safe_creek
+    Label: Creek Landing
+    Center: {x: -60, y: 6, z: -120}
+    Size: {x: 22, y: 12, z: 22}
+  - Id: safe_overlook
+    Label: East Overlook
+    Center: {x: 130, y: 8, z: 40}
+    Size: {x: 22, y: 12, z: 22}
+  DangerZones:
+  - Id: danger_drive
+    Label: Driveway Swarm
+    Center: {x: 24, y: 6, z: 24}
+    Size: {x: 78, y: 18, z: 76}
+  - Id: danger_front
+    Label: Front Lawn Swarm
+    Center: {x: 0, y: 6, z: 62}
+    Size: {x: 88, y: 18, z: 64}
+  - Id: danger_south
+    Label: South Ambush
+    Center: {x: -20, y: 6, z: -70}
+    Size: {x: 92, y: 18, z: 92}
+  - Id: danger_east
+    Label: East Road Swarm
+    Center: {x: 80, y: 6, z: 0}
+    Size: {x: 104, y: 18, z: 82}
+  - Id: danger_west
+    Label: West Road Swarm
+    Center: {x: -80, y: 6, z: 40}
+    Size: {x: 104, y: 18, z: 92}
+  AnimalSpawns: []
+  PlayBounds:
+    m_Center: {x: 0, y: 0, z: 0}
+    m_Extent: {x: 210, y: 80, z: 210}

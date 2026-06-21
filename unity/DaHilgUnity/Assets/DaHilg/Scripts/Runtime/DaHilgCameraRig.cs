@@ -64,6 +64,12 @@ namespace DaHilg
                 m_Camera.fieldOfView = 68f;
                 m_Camera.nearClipPlane = 0.06f;
                 m_Camera.farClipPlane = 650f;
+                if (DaHilgGameManager.MobileWeb)
+                {
+                    // No FP16 HDR full-screen RT + no MSAA on phones — the single biggest iOS GPU saving.
+                    m_Camera.allowHDR = false;
+                    m_Camera.allowMSAA = false;
+                }
             }
 
             EnsureCinemachine();

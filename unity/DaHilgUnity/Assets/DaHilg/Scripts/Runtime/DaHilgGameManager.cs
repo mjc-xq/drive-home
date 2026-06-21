@@ -18,6 +18,10 @@ namespace DaHilg
         float m_BuriedLoad;
         float m_Struggle;
 
+        // True when the page loaded the mobile path (touch device -> forced ?level=house). Available
+        // eagerly (before SetWebTouchMode arrives) so graphics downgrades apply before the first frame.
+        public static bool MobileWeb => Application.absoluteURL != null && Application.absoluteURL.Contains("level=house");
+
         readonly List<DaHilgActor> m_Actors = new List<DaHilgActor>(4);
         readonly List<DaHilgNibblerAgent> m_Nibblers = new List<DaHilgNibblerAgent>(32);
         readonly List<DaHilgAnimalAgent> m_Animals = new List<DaHilgAnimalAgent>(8);
@@ -89,6 +93,7 @@ namespace DaHilg
         void Start()
         {
             m_HighScore = PlayerPrefs.GetInt("DaHilgHighScore", 0);
+            if (MobileWeb) QualitySettings.globalTextureMipmapLimit = 1; // half texture VRAM on phones
             if (Settings == null)
             {
                 Debug.LogError("[DaHilg] Missing game settings.");
@@ -627,7 +632,10 @@ namespace DaHilg
             m_Nibblers.Clear();
 
             if (Settings.Characters.Length == 0 || m_ActiveActor == null) return;
-            for (int i = 0; i < Settings.NibblerPoolSize; i++)
+            // On mobile cap the pool hard so phones don't instantiate 36 skinned-character clones
+            // upfront and OOM iOS Safari. Desktop neighborhoods keep the full pool.
+            int poolSize = MobileWeb ? Mathf.Min(Settings.NibblerPoolSize, 10) : Settings.NibblerPoolSize;
+            for (int i = 0; i < poolSize; i++)
             {
                 DaHilgCharacterSlot slot = Settings.Characters[i % Settings.Characters.Length];
                 if (slot.Prefab == null) continue;
@@ -946,17 +954,19 @@ namespace DaHilg
             }
             if (agent == null || m_ActiveActor == null) return;
 
+            // Bias spawns AWAY from the camera line (the camera sits behind the player in 3rd-person):
+            // prefer angles toward the player's front/sides so nibblers don't sprint THROUGH the
+            // camera to reach the player (that read as a giant nibbler filling the lens).
             float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
-            // Spawn from the player's BLIND SPOTS (behind the camera) so nibblers fade in from the
-            // shadows instead of popping into view. Only in camera modes where "behind" is meaningful.
             if (CameraRig != null && (CameraRig.Mode == DaHilgCameraMode.ThirdPerson
                 || CameraRig.Mode == DaHilgCameraMode.Shoulder || CameraRig.Mode == DaHilgCameraMode.High))
             {
                 Vector3 camForward = Quaternion.Euler(0f, CameraRig.Yaw, 0f) * Vector3.forward;
-                for (int attempt = 0; attempt < 3; attempt++)
+                for (int attempt = 0; attempt < 4; attempt++)
                 {
                     Vector3 dir = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
-                    if (Vector3.Dot(dir, camForward) <= 0.6f) break;
+                    // Reject the rear cone (toward the camera); keep front/side spawns.
+                    if (Vector3.Dot(dir, camForward) >= -0.35f) break;
                     angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 }
             }
