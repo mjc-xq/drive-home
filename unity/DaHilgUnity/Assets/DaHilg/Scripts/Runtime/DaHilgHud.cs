@@ -126,9 +126,18 @@ namespace DaHilg
             m_Title.text = m_Manager.CurrentLevel != null ? m_Manager.CurrentLevel.Label : "Da Hilg";
             m_Mode.text = m_Manager.Mode == DaHilgGameMode.Nibblers ? "NIBBLERS" : "GREET";
             m_Score.text = m_Manager.Score.ToString("000");
-            m_Attached.text = m_Manager.Mode == DaHilgGameMode.Nibblers
-                ? "Nibblers " + actor.AttachedNibblers.ToString("00") + " / " + m_Manager.Settings.NibblerPoolSize.ToString("00")
-                : (m_Manager.HasWon() ? "all greeted" : "family nearby");
+            if (m_Manager.Mode == DaHilgGameMode.Nibblers)
+            {
+                int riders = actor.AttachedNibblers;
+                if (riders > 0)
+                {
+                    // Cause ticker: explain the health drain so it never feels mysterious.
+                    float drain = Mathf.Min(m_Manager.Settings.NibblerHealthDrainCap, riders * m_Manager.Settings.NibblerHealthDrainPerAttached);
+                    m_Attached.text = riders + " riders  ·  -" + drain.ToString("0.0") + " HP/s";
+                }
+                else m_Attached.text = "clear";
+            }
+            else m_Attached.text = m_Manager.HasWon() ? "all greeted" : "family nearby";
             m_State.text = actor.Label + " · " + Mathf.RoundToInt(actor.Health) + "%";
 
             // Horizontal health bar — go (>60) → coin (30..60) → reverse (<30), matching
@@ -238,10 +247,11 @@ namespace DaHilg
                 return;
             }
 
-            float attached01 = Mathf.Clamp01(actor.AttachedNibblers / Mathf.Max(1f, m_Manager.Settings.OverwhelmStop));
-            m_NibblerFill.style.width = Length.Percent(attached01 * 100f);
-            // calm (go) → hot (reverse) as the pile climbs, matching the swarm tint ramp.
-            m_NibblerFill.style.backgroundColor = Color.Lerp(k_Go, k_Reverse, Mathf.Clamp01(attached01 * 1.3f));
+            // Headline BURIED gauge: how close you are to a pin (0..1), not raw count — this is
+            // the real threat the keystone overwhelm system tracks.
+            float buried01 = m_Manager.BuriedLoad01;
+            m_NibblerFill.style.width = Length.Percent(buried01 * 100f);
+            m_NibblerFill.style.backgroundColor = buried01 > 0.66f ? k_Reverse : (buried01 > 0.33f ? k_Coin : k_Go);
 
             bool rollReady = m_Manager.RollReady;
             m_RollState.text = rollReady
@@ -721,7 +731,7 @@ namespace DaHilg
             nibRow.style.marginTop = 6;
             m_TopPanelBody.Add(nibRow);
 
-            Label nibKick = Label("NIB", 8, FontStyle.Bold);
+            Label nibKick = Label("SWARM", 8, FontStyle.Bold);
             nibKick.style.color = k_TextDim;
             nibKick.style.letterSpacing = 1.5f;
             nibKick.style.marginRight = 7;
