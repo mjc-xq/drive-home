@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Da Hilg Unity</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="stylesheet" href="TemplateData/style.css">
+  </head>
+  <body>
+    <div id="unity-container">
+      <canvas id="unity-canvas" width="1280" height="720" tabindex="0"></canvas>
+      <div id="unity-loading-bar">
+        <div id="unity-logo"></div>
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+      </div>
+      <div id="unity-warning"></div>
+    </div>
+    <script>
+      const canvas = document.querySelector('#unity-canvas');
+      const getCanvasContext = canvas.getContext.bind(canvas);
+      canvas.getContext = (contextType, attributes) => {
+        if (contextType === 'webgl' || contextType === 'webgl2') {
+          attributes = {
+            ...attributes,
+            alpha: false,
+            premultipliedAlpha: false,
+            preserveDrawingBuffer: false
+          };
+        }
+        return getCanvasContext(contextType, attributes);
+      };
+
+      function releasePointerLock() {
+        if (document.pointerLockElement && document.exitPointerLock) {
+          document.exitPointerLock();
+        }
+      }
+
+      // NOTE: do NOT auto-release pointer lock on pointerlockchange — that cancelled the
+      // right-drag mouse-look on desktop the instant Unity acquired the lock. The input router
+      // locks on right-hold and releases on right-up; the browser frees the lock on Esc.
+
+      function focusCanvas() {
+        try {
+          canvas.focus({ preventScroll: true });
+        } catch (_) {
+          canvas.focus();
+        }
+      }
+
+      window.__dahilg = {
+        hudTapCount: 0,
+        hudCommandCount: 0,
+        hudErrors: [],
+        lastHudPayload: null,
+        lastHudCommand: null,
+        unityReady: false
+      };
+      let unityInstanceRef = null;
+      let lastHudTapKey = '';
+      let lastHudTapTime = 0;
+
+      function rememberHudError(error) {
+        window.__dahilg.hudErrors.push(String(error && error.message ? error.message : error));
+        if (window.__dahilg.hudErrors.length > 12) window.__dahilg.hudErrors.shift();
+      }
+
+      function compactCommandFromTap(x, y, width) {
+        if (y < 0 || y > 76 || width <= 1) return null;
+        const mobileScale = width < 900;
+        const scale = mobileScale ? 0.62 : 1;
+        const rightInset = mobileScale ? 8 : 18;
+        const fromRight = width - x - rightInset;
+        if (fromRight < 0) return null;
+        const action = 90 * scale;
+        const level = 96 * scale;
+        const player = 106 * scale;
+        const camera = 100 * scale;
+        if (fromRight > action + level + player + camera) return null;
+        if (fromRight <= action) return 'actions';
+        if (fromRight <= action + level) return 'level';
+        if (fromRight <= action + level + player) return 'player';
+        return 'camera';
+      }
+
+      function sendHudCommand(command) {
+        if (!unityInstanceRef || !command) return false;
+        try {
+          unityInstanceRef.SendMessage('DaHilgHUD', 'HandleWebHudCommand', command);
+          window.__dahilg.hudCommandCount += 1;
+          window.__dahilg.lastHudCommand = command;
+          return true;
+        } catch (error) {
+          rememberHudError(error);
+          return false;
+        }
+      }
+
+      function sendHudTap(clientX, clientY, source) {
+        if (!unityInstanceRef || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 1 || rect.height <= 1) return;
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+        const tapKey = `${Math.round(x)},${Math.round(y)}`;
+        const now = performance.now();
+        if (tapKey === lastHudTapKey && now - lastHudTapTime < 80) return;
+        lastHudTapKey = tapKey;
+        lastHudTapTime = now;
+
+        focusCanvas();
+        const command = compactCommandFromTap(x, y, rect.width);
+        if (command && sendHudCommand(command)) return;
+
+        const payload = [x, y, rect.width, rect.height]
+          .map((value) => Number(value).toFixed(2))
+          .join(',');
+        try {
+          unityInstanceRef.SendMessage('DaHilgHUD', 'HandleWebTouchTap', payload);
+          window.__dahilg.hudTapCount += 1;
+          window.__dahilg.lastHudPayload = `${source || 'touch'}:${payload}`;
+        } catch (error) {
+          rememberHudError(error);
+        }
+      }
+
+      canvas.addEventListener('pointerdown', focusCanvas);
+      function handleHudTouchStart(event) {
+        if (event.changedTouches && event.changedTouches.length) {
+          const touch = event.changedTouches[0];
+          sendHudTap(touch.clientX, touch.clientY, 'touchstart');
+        }
+      }
+      function handleHudPointerDown(event) {
+        if (event.pointerType === 'touch') {
+          sendHudTap(event.clientX, event.clientY, 'pointerdown');
+        }
+      }
+      canvas.addEventListener('touchstart', handleHudTouchStart, { passive: true });
+      canvas.addEventListener('pointerdown', handleHudPointerDown, { passive: true });
+      document.addEventListener('touchstart', handleHudTouchStart, { capture: true, passive: true });
+      document.addEventListener('pointerdown', handleHudPointerDown, { capture: true, passive: true });
+
+      function unityShowBanner(msg, type) {
+        const warningBanner = document.querySelector('#unity-warning');
+        const div = document.createElement('div');
+        div.textContent = msg;
+        div.className = type === 'error' ? 'unity-error' : type === 'warning' ? 'unity-warning-line' : 'unity-message';
+        warningBanner.appendChild(div);
+        warningBanner.style.display = 'block';
+        if (type !== 'error') {
+          setTimeout(() => {
+            warningBanner.removeChild(div);
+            warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+          }, 5000);
+        }
+      }
+
+      // Reliable browser touch verdict (mobile web). Used to pick a lightweight default level so
+      // phones don't OOM on the streamed ~81MB neighborhood, and to drive the on-screen controls.
+      var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+        && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+      window.__dahilg.touchMode = __dahilgTouch;
+      try {
+        if (__dahilgTouch && !/[?&]level=/.test(location.search)) {
+          var lvlUrl = new URL(location.href);
+          lvlUrl.searchParams.set('level', 'house');
+          history.replaceState(null, '', lvlUrl.toString());
+        }
+      } catch (lvlErr) { rememberHudError(lvlErr); }
+
+      const config = {
+        arguments: [],
+        dataUrl: 'Build/da-hilg.data.unityweb?v=8decff0aab3a6ee',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decff0aab3a6ee',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decff0aab3a6ee',
+        streamingAssetsUrl: 'StreamingAssets',
+        companyName: 'Da Hilg',
+        productName: 'Da Hilg Unity',
+        productVersion: '1.2',
+        webglContextAttributes: { alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 2 },
+        showBanner: unityShowBanner
+      };
+
+      // Cap the framebuffer hard on mobile: a 3x retina iPhone at DPR 1.75 renders ~3x the pixels
+      // and OOM-crashes Safari. DPR 1 on touch devices is a large memory saving; desktop keeps 1.75.
+      config.devicePixelRatio = __dahilgTouch ? 1 : Math.min(window.devicePixelRatio || 1, 1.75);
+      document.querySelector('#unity-loading-bar').style.display = 'grid';
+
+      const script = document.createElement('script');
+      script.src = 'Build/da-hilg.loader.js?v=8decff0aab3a6ee';
+      script.onload = () => {
+        createUnityInstance(canvas, config, (progress) => {
+          document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
+        }).then((unityInstance) => {
+          unityInstanceRef = unityInstance;
+          window.__dahilg.unityInstance = unityInstance;
+          window.__dahilg.unityReady = true;
+          document.querySelector('#unity-loading-bar').style.display = 'none';
+          try {
+            // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike
+            // Unity's WebGL device detection which can't tell a phone from a desktop). A touch
+            // device has touch points and no fine pointer (mouse/trackpad). Drives the on-screen
+            // joystick/look/buttons so the game is playable on a phone.
+            var touchDevice = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+              && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+            window.__dahilg.touchMode = touchDevice;
+            unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
+          } catch (touchErr) { rememberHudError(touchErr); }
+          if (unityInstance.Module && unityInstance.Module.WebGLInput) {
+            unityInstance.Module.WebGLInput._stickyCursorLock = false;
+          }
+          releasePointerLock();
+          focusCanvas();
+        }).catch((message) => {
+          alert(message);
+        });
+      };
+
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
