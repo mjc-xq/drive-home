@@ -296,3 +296,52 @@ they terminate exactly at corners; GREEN/RED tile whole panels plus a fractional
 The `Fence.glb` template runs along native Y, so it is rotated −90° about Z (baked into
 mesh data) to share the common +X length convention. Colours stay in each GLB's own
 material base colour (Quick Look/usdrecord ignore `COLOR_0`).
+
+## 11. Single-surface pipeline alignment (2026-06; `export_property_single_surface.mjs`)
+
+The rethought exporter paints roads/sidewalks/curbs onto ONE welded terrain (no stacked
+ribbons). It uses **flat-ENU end-to-end** exactly as §8.2 prescribes:
+`world = [e - C[0], -(n - C[1])]`, `u = (e-E0)/(E1-E0)`, `v = (Nt-n)/(Nt-Nb)`. Terrain
+(`terrain_mesh.makeGeo`), footprints (`w2`), and the aerial bake (`ground_atlas.aerialRect`)
+**all** use the same constants (`110540`, `COSLAT·111320`) — and `fetch_aerial_google.py`
+(`ll_to_en`, line 103) uses the *same* `110540`, so the aerial bounds and the geometry share
+one frame. The 0.4 % equatorial-constant error (§1) is therefore global and invisible
+internally; it is NOT a relative misalignment.
+
+### Placement-verification toolkit (run these before claiming an alignment bug)
+
+These four checks, all scriptable against `exports/`, distinguish a real frame bug from the
+expected cadastral residual. On the 1415-building Dahill scene they gave:
+
+1. **Footprint-on-aerial overlay** — rasterise `scene.buildings` footprints over the aerial
+   (ENU→aerial-px). Result: **91 %** of footprints land on roof/structure pixels.
+2. **Terrain-texture roof sample** — sample the BAKED terrain texture (via the terrain UV +
+   `aerialRect`) at each footprint centroid, vs sampling the raw aerial (via `aerialUV`).
+   Result: **90.8 % vs 92.6 %** — they match, so the photo IS textured onto the terrain
+   correctly (the UV chain `world→coreUV→texel→aerialRect→ENU` is algebraically the identity).
+3. **Match binned by distance from centre** — 0-100/100-200/200-350/350-600 m all ≈ **93 %**,
+   FLAT. A scale or rotation drift would degrade outward; it doesn't.
+4. **Per-building offset VECTORS, decomposed radial/tangential** — best local shift of each
+   footprint vs the aerial structure mask, binned by distance. Result: **radial ≈ 0.2 m and
+   tangential ≈ 0.2 m, both flat**; mean |shift| ≈ 1.8 m (centre) → 2.2 m (edge), barely
+   growing. **radial-grows ⇒ scale bug; tangential-grows ⇒ rotation; uniform E/S ⇒ translation;
+   all-flat-small ⇒ aligned.** Here it is the last case: a ~1-2 m near-uniform residual =
+   the OSM/Overture-footprint-vs-Google-roof-overhang offset (§8), NOT a frame error.
+
+### "Buildings going into the creekbed" is a SEATING bug, not a frame bug
+
+Verified above: footprints are correctly placed and the photo is correctly textured. What reads
+as "buildings in the creek / placed wrong / rotated" is two local effects, both now fixed:
+- **Wall-foot plunge** (`building_layer.pushWallFace`): a footprint that reaches over the steep
+  incised ravine sent its wall straight down to the channel-bottom terrain. Fixed with
+  `MAX_FOUNDATION = 3.0 m` — the wall foot never sinks more than a realistic foundation below the
+  floor, so a ravine-edge building sits on a foundation at the rim instead of in the creekbed.
+  (Complements the earlier `buildingBase` edge-median floor clamp, `BASE_CLAMP = 1.0 m`.)
+- **Creek-channel exclusion** (exporter): drop any footprint whose centroid is within
+  `CREEK_KEEPOUT = 6 m` of the snapped creek centreline (removes stray OSM footprints and
+  over-eager aerial-inferred lots from the channel). Near-creek buildings that are on their lots
+  (under tree canopy, >6 m from the channel) are real and kept — they land on aerial roofs.
+
+**Lesson:** before chasing a "frame drift," run checks 1-4. A real frame bug shows as a
+distance-dependent radial (scale) or tangential (rotation) signal; a flat ~1-2 m residual is
+cadastral and is fixed at the building-seating layer, not the coordinate transform.

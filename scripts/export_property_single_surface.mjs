@@ -35,6 +35,8 @@ import { bakeFacadeAtlas } from './lib/facade_atlas.mjs';
 import { makeBuildingColor } from './lib/building_color.mjs';
 import { buildBuildingLayer } from './lib/building_layer.mjs';
 import { buildTreeLayer } from './lib/tree_layer.mjs';
+import { fillMissingBuildings } from './lib/fill_missing.mjs';
+import sharp from 'sharp';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const R = (...p) => path.join(ROOT, ...p);
@@ -68,7 +70,10 @@ console.log(`scene: ${SET.scene}  buildings=${(S.buildings || []).length} roads=
 // ---- 1) terrain (the ONE welded surface) -------------------------------------------
 const D = loadDEM(pick('dem_1m.json'));
 const geo = makeGeo(D, { C, LAT0, LON0, COSLAT });
-const terrain = buildTerrainMesh({ D, geo, opts: { coreHalf: 200, farStep: 4, texCoreHalf: 300 } });
+// ONE ground texture region over the whole DEM rect (texCoreHalf covers the full patch) so there
+// is NO core/far texture boundary — the visible white seam at ±300 m is gone by construction.
+// The mesh stays adaptive (1 m core + 4 m far) but samples a single texture/material.
+const terrain = buildTerrainMesh({ D, geo, opts: { uniformStep: 2, texCoreHalf: 600 } });
 const terrainAt = terrain.terrainAt;
 console.log(`terrain: ${terrain.stats.verts} verts, ${terrain.stats.tris} tris ` +
   `(core ${terrain.stats.coreTris}, far ${terrain.stats.farTris}), Y[${terrain.stats.minY.toFixed(1)}..${terrain.stats.maxY.toFixed(1)}]`);
@@ -82,7 +87,7 @@ console.log(`network: ${network.surfaces.length} surfaces, ${network.paint.lengt
 const groundDir = R(SET.dir === 'exports' ? 'exports/_ground' : path.join(SET.dir, '_ground'));
 const ground = await bakeGroundAtlas({
   aerialPath, aerialBounds: AB, C, demRect: terrain.demRect, texCoreHalf: terrain.texCoreHalf,
-  network, curbLines, outDir: groundDir, coreSize: 4096, farSize: 2048,
+  network, curbLines, outDir: groundDir, coreSize: 6144, farSize: 2048,
 });
 console.log(`ground: core=${path.basename(ground.core.albedo)} far=${path.basename(ground.far.albedo)} pavedPolys=${ground.pavedPolys.length}`);
 
@@ -103,7 +108,9 @@ function meshFromPrim(prim, name, matName) {
 // Terrain: core (crisp painted ground) + far (coarse aerial backdrop). Both start with 'Terrain'
 // so the runtime classifies them; disjoint opaque triangle sets -> one surface, no z-fight.
 scene.add(meshFromPrim(terrain.corePrim, 'Terrain', 'TerrainCore_mat'));
-scene.add(meshFromPrim(terrain.farPrim, 'Terrain_far', 'TerrainFar_mat'));
+// far prim is empty when texCoreHalf covers the whole patch (single texture region) — only add it
+// if it actually has triangles, so there is one terrain material and no ±300 m seam.
+if (terrain.farPrim.idx.length) scene.add(meshFromPrim(terrain.farPrim, 'Terrain_far', 'TerrainFar_mat'));
 
 // ---- 4b) houses + trees + creek (the eye-level vertical structure) ------------------
 const houseIndex = (S.buildings || []).findIndex((b) => b.house);
@@ -114,6 +121,47 @@ const facade = svWalls.length
   ? await bakeFacadeAtlas({ buildings: S.buildings, svWalls, svDir: R(SET.dir), houseIndex, demRect: terrain.demRect, w2, outDir: facadeDir })
   : { pages: [], rectByWall: {}, heroBuildings: [], stuccoTile: R('exports/facade.png') };
 console.log(`facade: ${facade.pages.length} atlas page(s), ${Object.keys(facade.rectByWall).length} hero walls (rest stucco)`);
+
+// ---- 4a-bis) FILL MISSING BUILDINGS: lots that have a real house in the aerial (and/or Mapbox)
+// but none in our OSM/Overture scene.buildings. Inferred footprints flow through the existing
+// massing/seating/collision path below unchanged (they are scene-building shaped). ------------
+const fillParcels = existsSync(pick('parcels.json')) ? (JSON.parse(readFileSync(pick('parcels.json'), 'utf8')).parcels || []) : [];
+const fillEnv = (() => {                                  // read .env.local (Vite-style) for the Mapbox token
+  const f = R('.env.local'); const o = {};
+  if (existsSync(f)) for (const ln of readFileSync(f, 'utf8').split('\n')) {
+    const m = ln.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m) o[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return o;
+})();
+const filled = await fillMissingBuildings({
+  S, parcels: fillParcels, aerialPath, aerialBounds: AB, C, demRect: terrain.demRect, w2, env: fillEnv,
+}).catch(e => { console.warn('  ! fill-missing skipped:', e.message); return null; });
+if (filled) { S.buildings = filled.buildings; console.log(`fill-missing: +${filled.added} buildings (${filled.notes})`); }
+
+// CREEK-CHANNEL EXCLUSION: no building belongs in the creekbed. Drop any footprint whose centroid
+// sits within the creek channel (CREEK_KEEPOUT m of the snapped centreline) — removes both stray
+// OSM footprints and over-eager aerial-inferred lots that landed in the ravine/vegetation.
+if (S.creek && Array.isArray(S.creek.p) && S.creek.p.length > 1) {
+  const cw = S.creek.p.map(([e, n]) => w2(e, n));
+  const segD = (X, Z) => {
+    let best = Infinity;
+    for (let i = 1; i < cw.length; i++) {
+      const a = cw[i - 1], b = cw[i]; let dx = b[0] - a[0], dz = b[1] - a[1]; const l2 = dx * dx + dz * dz || 1;
+      let t = ((X - a[0]) * dx + (Z - a[1]) * dz) / l2; t = Math.max(0, Math.min(1, t));
+      best = Math.min(best, Math.hypot(X - (a[0] + t * dx), Z - (a[1] + t * dz)));
+    }
+    return best;
+  };
+  const CREEK_KEEPOUT = 6.0;   // ~ creek half-width (3.75 m) + bank margin
+  const before = S.buildings.length;
+  S.buildings = S.buildings.filter((b) => {
+    if (!b.p || b.p.length < 3) return true;
+    const cen = b.p.reduce((a, p) => [a[0] + p[0] / b.p.length, a[1] + p[1] / b.p.length], [0, 0]);
+    const [X, Z] = w2(cen[0], cen[1]);
+    return segD(X, Z) > CREEK_KEEPOUT;
+  });
+  if (before - S.buildings.length) console.log(`creek exclusion: dropped ${before - S.buildings.length} building(s) in the creek channel`);
+}
 
 const { wallColor, roofColor } = makeBuildingColor(pick);
 const isSchool = S.meta?.kind === 'school-region-export';
@@ -146,10 +194,16 @@ const doc = await io.readBinary(new Uint8Array(glb));
 
 const texOf = (p, mime) => doc.createTexture(path.basename(p)).setImage(new Uint8Array(readFileSync(p)))
   .setMimeType(mime || (p.endsWith('.jpg') ? 'image/jpeg' : 'image/png'));
-const coreAlb = texOf(ground.core.albedo), coreOrm = texOf(ground.core.orm);
-const farAlb = texOf(ground.far.albedo);
-const facadeTexes = facade.pages.map((p) => texOf(p));
-const stuccoTex = existsSync(facade.stuccoTile) ? texOf(facade.stuccoTile) : null;
+// Photographic textures (aerial ground + Street-View facades) are stored as JPEG, not PNG — a
+// 6144² ground PNG is ~50 MB and the facade atlas PNGs ~120 MB; JPEG cuts the inspectable GLB ~5×.
+// ORM stays PNG (it is DATA — JPEG blocking would corrupt roughness/AO).
+const jbytes = async (p, q = 85) => new Uint8Array(await sharp(p).jpeg({ quality: q, mozjpeg: true }).toBuffer());
+const jtex = async (p, q) => doc.createTexture(path.basename(p)).setImage(await jbytes(p, q)).setMimeType('image/jpeg');
+const coreAlb = await jtex(ground.core.albedo, 86);
+const coreOrm = texOf(ground.core.orm);
+const farAlb = await jtex(ground.far.albedo, 84);
+const facadeTexes = await Promise.all(facade.pages.map((p) => jtex(p, 85)));
+const stuccoTex = existsSync(facade.stuccoTile) ? await jtex(facade.stuccoTile, 88) : null;
 const CLAMP = 33071, REPEAT = 10497;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';

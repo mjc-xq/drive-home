@@ -30,6 +30,7 @@ const STOP_BAR_THICK = 0.30;    // stop bar depth (along leg)
 const XWALK_GAP = 0.5;          // crosswalk inboard gap past the stop bar
 const XWALK_DEPTH = 2.4;        // crosswalk band depth (along leg)
 const STITCH_EPS = 0.6;         // weld sidewalk endpoints within this distance
+const CW_MARGIN = 0.35;         // keep concrete this far OUTSIDE the carriageway edge (curb gutter)
 const R_TRIM = 9;               // suppress lane/edge paint within this of a junction
 const DASH_HALF = 0.05;         // half-width of painted lane/edge lines (0.10 m wide)
 const COL_YELLOW = '#f2c81e';
@@ -294,6 +295,87 @@ export function buildCurbReturns(junctions) {
 }
 
 // =====================================================================================
+// C2. carriageway keep-out — concrete (sidewalk/fillet/cap/ring) must NEVER cross the
+//     asphalt. Build a set of {a,b,half} road segments + cul-de-sac bulb discs, then push
+//     any concrete vertex that lands inside (within half+CW_MARGIN of a centreline, or inside
+//     a bulb radius) OUT to that keep-out boundary along the outward normal/radial.
+// =====================================================================================
+export function buildCarriageway(scene, env) {
+  const roads = scene.roads || [];
+  const w2 = env.w2, half = env.clipHalf;
+  const segs = [];   // { a:[x,z], b:[x,z], half }  carriageway half-width per centreline segment
+  const bulbs = [];  // { c:[x,z], r }              cul-de-sac asphalt bulb discs
+  for (const r of roads) {
+    const spec = roadSpec(r);
+    if (spec.isService) continue;                  // driveways have no curb to protect
+    const pl = r.p || r;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    const lw = pl.map(([e, n]) => w2(e, n));
+    const pieces = Number.isFinite(half) ? clipPolylineToBox(lw, half) : [lw];
+    for (let piece of pieces) {
+      piece = smoothLine(piece, { lo: 6, hi: 135 });
+      for (let i = 1; i < piece.length; i++) segs.push({ a: piece[i - 1], b: piece[i], half: spec.width / 2 });
+    }
+    if (isCulDeSacRoad(r)) {
+      const hit = new Map();
+      for (const rr of roads) { const p = rr.p || rr; if (!Array.isArray(p)) continue; for (const [e, n] of p) { const [x, z] = w2(e, n); const k = vkey(x, z); hit.set(k, (hit.get(k) || 0) + 1); } }
+      for (const end of [0, pl.length - 1]) {
+        const tip = w2(...pl[end]);
+        if ((hit.get(vkey(tip[0], tip[1])) || 0) > 1) continue;
+        bulbs.push({ c: tip, r: spec.width / 2 + 4 });
+      }
+    }
+  }
+  return { segs, bulbs };
+}
+
+// Push a single point OUT of the carriageway keep-out (centreline band + bulb discs), if it
+// lies inside. Returns a (possibly moved) point that sits on/outside the curb gutter line.
+// Pushing out of one segment can nudge a vertex inside a NEIGHBOURING segment (sharp corners,
+// court mouths), so iterate to convergence (few passes) — each pass relocates to the single
+// deepest intrusion, which monotonically shrinks the worst overlap.
+function clampPointOutOfRoad(p, cway, margin = CW_MARGIN) {
+  let q = [p[0], p[1]];
+  for (let iter = 0; iter < 6; iter++) {
+    let worst = 0, target = null;
+    for (const { c, r } of cway.bulbs) {
+      const dx = q[0] - c[0], dz = q[1] - c[1];
+      const d = Math.hypot(dx, dz), keep = r + margin, over = keep - d;
+      if (over > worst) {
+        worst = over;
+        target = d < 1e-6 ? [c[0] + keep, c[1]] : [c[0] + dx / d * keep, c[1] + dz / d * keep];
+      }
+    }
+    for (const { a, b, half } of cway.segs) {
+      let dx = b[0] - a[0], dz = b[1] - a[1];
+      const L2 = dx * dx + dz * dz || 1;
+      let t = ((q[0] - a[0]) * dx + (q[1] - a[1]) * dz) / L2;
+      t = Math.max(0, Math.min(1, t));
+      const cx = a[0] + t * dx, cz = a[1] + t * dz;
+      let ox = q[0] - cx, oz = q[1] - cz;
+      const d = Math.hypot(ox, oz), keep = half + margin, over = keep - d;
+      if (over > worst) {
+        worst = over;
+        if (d < 1e-6) { const nl = Math.hypot(dx, dz) || 1; ox = -dz / nl; oz = dx / nl; }
+        else { ox /= d; oz /= d; }
+        target = [cx + ox * keep, cz + oz * keep];
+      }
+    }
+    if (!target || worst < 1e-3) break;
+    q = target;
+  }
+  return finite(q) ? q : p;
+}
+
+// Clamp every vertex of a closed concrete polygon out of the carriageway. Vertices already
+// outside are untouched, so straight runs keep their shape; only the bits that crossed the
+// asphalt get tucked back to the curb gutter line.
+function clampPolyOutOfRoad(poly, cway) {
+  if (!poly || !cway) return poly;
+  return poly.map(p => clampPointOutOfRoad(p, cway));
+}
+
+// =====================================================================================
 // D. dead-end U-returns + cul-de-sac rings — no road veto.
 // =====================================================================================
 // buildDeadEndCaps: a closed semicircle concrete polygon wrapping each ordinary residential
@@ -375,7 +457,7 @@ export function buildCulDeSacRings(scene, env, junctions) {
 // within STITCH_EPS, then emit each piece as a filled concrete band (sidewalk runs) plus the
 // corner/cap/ring polygons. The inner (curb-side) edge of every straight run is emitted as a
 // `curb` centerline. This keeps the network visually continuous while staying robust 2D.
-export function stitchSidewalkNetwork(runs, corners, caps, culRings) {
+export function stitchSidewalkNetwork(runs, corners, caps, culRings, cway = null) {
   // Build a snap registry of all corner/cap rim points so run ends weld to them.
   const anchors = [];
   for (const poly of corners) for (const p of poly) anchors.push(p);
@@ -385,6 +467,10 @@ export function stitchSidewalkNetwork(runs, corners, caps, culRings) {
     for (const a of anchors) { const d = Math.hypot(a[0] - p[0], a[1] - p[1]); if (d < bd) { bd = d; best = a; } }
     return best ? [best[0], best[1]] : p;
   };
+  // Every concrete polygon is tucked back out of the carriageway so no sidewalk/fillet/cap
+  // ever paints gray over the asphalt (bugs: concrete jutting into the road; sidewalk cutting
+  // into the cul-de-sac bulb). No-op when cway is absent.
+  const tuck = (poly) => cway ? clampPolyOutOfRoad(poly, cway) : poly;
 
   const surfaces = [];   // concrete-sidewalk filled polygons
   const curbLines = [];  // shared welded curb geometry (inner edge of each run)
@@ -397,16 +483,18 @@ export function stitchSidewalkNetwork(runs, corners, caps, culRings) {
     line = smoothLine(line, { lo: 4, hi: 160 });
     if (line.length < 2) continue;
     const ring = bandRing(line, SW_WIDTH);
-    if (ring && ring.length >= 3) surfaces.push({ polygon: ring });
+    if (ring && ring.length >= 3) surfaces.push({ polygon: tuck(ring) });
     // inner (curb-side) edge: offset the walk centreline toward the road by SW_WIDTH/2.
     // The road is on the side opposite `side`; walk centreline was offset by +d*side from
     // the road centreline, so the curb side is toward -side.
     const inner = offsetLine(line, -(SW_WIDTH / 2) * run.side);
-    if (inner.length >= 2) curbLines.push({ line: inner, side: run.side, spec: run.spec });
+    if (inner.length >= 2) curbLines.push({ line: cway ? clampPolyOutOfRoad(inner, cway) : inner, side: run.side, spec: run.spec });
   }
-  for (const poly of corners) surfaces.push({ polygon: poly });
-  for (const poly of caps) surfaces.push({ polygon: poly });
-  for (const ring of culRings) surfaces.push({ polygon: ring.polygon, holes: ring.holes });
+  for (const poly of corners) surfaces.push({ polygon: tuck(poly) });
+  for (const poly of caps) surfaces.push({ polygon: tuck(poly) });
+  // Cul-de-sac annulus: tuck the OUTER ring out of any carriageway, but leave the inner hole
+  // as-is — the hole is the asphalt cutout and is already sized to the bulb radius.
+  for (const ring of culRings) surfaces.push({ polygon: tuck(ring.polygon), holes: ring.holes });
   return { surfaces, curbLines };
 }
 
@@ -423,6 +511,7 @@ export function buildRoadSurfaces(scene, env) {
     if (!Array.isArray(pl) || pl.length < 2) continue;
     const lw = pl.map(([e, n]) => env.w2(e, n));
     const pieces = Number.isFinite(half) ? clipPolylineToBox(lw, half) : [lw];
+    const court = isCulDeSacRoad(r);   // courts/cul-de-sacs/loops get NO lane lines (see buildLanePaint)
     for (let piece of pieces) {
       piece = smoothLine(piece, { lo: 6, hi: 135 });
       if (piece.length < 2) continue;
@@ -430,6 +519,7 @@ export function buildRoadSurfaces(scene, env) {
         kind: spec.isService ? 'driveway' : 'asphalt',
         centerline: piece,
         width: spec.width,
+        court,
         z: spec.isService ? 1 : 0,
         material: spec.isService ? 'asphalt-light' : 'asphalt',
       });
@@ -497,7 +587,15 @@ export function buildLanePaint(roadSurfaces, junctions) {
 
   for (const s of roadSurfaces) {
     if (s.kind !== 'asphalt' || !s.centerline || s.centerline.length < 2) continue;
+    // Courts / cul-de-sacs / loop roads get NO centre or edge lane lines: a closed-loop
+    // court centreline, offset and dashed, draws a GIANT yellow oval/circle that follows
+    // no street. Real residential courts are unmarked anyway. (bug: giant yellow circle)
+    if (s.court) continue;
     const cl = s.centerline, w = s.width;
+    // Defensive guard: never paint a lane line around a (near-)closed loop — its first and
+    // last vertex coincide, so any centre/edge line would wrap into a closed ring. Belt &
+    // braces with the s.court skip above for unnamed loops.
+    if (Math.hypot(cl[0][0] - cl[cl.length - 1][0], cl[0][1] - cl[cl.length - 1][1]) < 20) continue;
     const isTertiary = w >= 11;
     if (isTertiary) {
       // double yellow: two solid offset centrelines ±0.10, gapped through junctions
@@ -639,11 +737,12 @@ export function buildRoadNetwork(scene, mapSurfaces, env) {
   const pads = buildJunctionPads(scene, env, junctions);   // asphalt hull pads + bulbs
 
   // --- sidewalks (runs + corners + caps + cul-de-sac rings) → welded network + curb edges
+  const cway = buildCarriageway(scene, env);               // asphalt keep-out (segments + bulbs)
   const runs = buildSidewalkRuns(scene, env, junctions);
   const corners = buildCurbReturns(junctions);
   const caps = buildDeadEndCaps(scene, env, junctions);
   const culRings = buildCulDeSacRings(scene, env, junctions);
-  const { surfaces: swPolys, curbLines: curbFromRuns } = stitchSidewalkNetwork(runs, corners, caps, culRings);
+  const { surfaces: swPolys, curbLines: curbFromRuns } = stitchSidewalkNetwork(runs, corners, caps, culRings, cway);
 
   // --- inferred paint
   const lane = buildLanePaint(roadCenters, junctions);

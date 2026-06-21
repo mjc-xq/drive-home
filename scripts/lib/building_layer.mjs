@@ -22,6 +22,9 @@ import * as ShapeUtilsHost from 'three';   // only for ShapeUtils.triangulateSha
 
 const TILE = 5.0;            // facade UV tile (m) for procedural stucco walls (sparser windows)
 const WALL_EMBED = 0.4;      // wall bottoms drop to per-corner terrain - EMBED so feet touch grade
+const MAX_FOUNDATION = 3.0;  // but NEVER plunge more than this below the floor: a footprint that
+                             // reaches over the steep creek ravine would otherwise send its wall
+                             // straight down into the creekbed. Clamp it to a realistic foundation.
 const EAVE_OVERHANG = 0.4;   // ~0.4 m eave lip on hipped/gabled roofs (spec)
 const FASCIA = 0.18;         // vertical fascia band hanging under the eave lip
 
@@ -117,11 +120,30 @@ export function buildBuildingLayer({
     }
     return ys;
   }
-  // Seat the floor AT/just-below the LOW grade (10th-pct, spike-robust) so houses sit ON the lot.
+  // Footprint EDGE grade samples (corners + edge midpoints only) — the perimeter where the
+  // house actually meets the ground/street. Used to clamp the floor so an incised channel
+  // sample *inside* the footprint (creek bank) can't drag it down (the "houses sink into the
+  // creek" bug: a creek-straddling footprint's 10th-pct low grade is the channel bottom, ~7 m
+  // below the street pad).
+  function footprintEdgeSamples(ringW) {
+    const ys = [];
+    for (const [x, z] of ringW) ys.push(terrainAt(x, z));
+    for (let i = 0; i < ringW.length; i++) {
+      const [ax, az] = ringW[i], [bx, bz] = ringW[(i + 1) % ringW.length];
+      ys.push(terrainAt((ax + bx) / 2, (az + bz) / 2));
+    }
+    return ys;
+  }
+  const median = (a) => { const s = [...a].sort((p, q) => p - q); return s[s.length >> 1]; };
+  // Seat the floor AT/just-below the LOW grade (10th-pct, spike-robust) so houses sit ON the lot,
+  // BUT never more than BASE_CLAMP below the footprint's EDGE-median grade — so a creek-channel
+  // (or any steep grade break crossed by the footprint) can't sink the house off its pad.
+  const BASE_CLAMP = 1.0;
   const buildingBase = (ringW) => {
     const ys = footprintTerrainSamples(ringW).sort((a, b) => a - b);
     const lo = ys[Math.min(ys.length - 1, Math.floor(0.10 * (ys.length - 1)))];
-    return lo - 0.12;
+    const edgeMed = median(footprintEdgeSamples(ringW));
+    return Math.max(lo, edgeMed - BASE_CLAMP) - 0.12;
   };
 
   // ---- roof generators -----------------------------------------------------------------
@@ -179,9 +201,12 @@ export function buildBuildingLayer({
   // Wall TOP flat at yt (= base + wallH); each BOTTOM corner drops to its own terrain - EMBED so a
   // facade on a slope is watertight. When uvRect is given, V maps eave(v0)->ground(v1) into the
   // atlas sub-rect (no roof band); else procedural stucco UVs (u = perimeter/TILE, v = height/TILE).
-  function pushWallFace(W, xi, zi, xj, zj, yt, dist0, dist1, cen, uvRect) {
-    const ybi = Math.min(yt - 0.1, terrainAt(xi, zi) - WALL_EMBED);
-    const ybj = Math.min(yt - 0.1, terrainAt(xj, zj) - WALL_EMBED);
+  function pushWallFace(W, xi, zi, xj, zj, yt, base, dist0, dist1, cen, uvRect) {
+    // wall foot drops to per-corner terrain - EMBED, BUT clamped so it never sinks more than
+    // MAX_FOUNDATION below the floor — ravine-edge footprints otherwise plunge into the creekbed.
+    const yMin = base - MAX_FOUNDATION;
+    const ybi = Math.max(yMin, Math.min(yt - 0.1, terrainAt(xi, zi) - WALL_EMBED));
+    const ybj = Math.max(yMin, Math.min(yt - 0.1, terrainAt(xj, zj) - WALL_EMBED));
     const A = [xi, ybi, zi], B = [xj, ybj, zj], Cc = [xj, yt, zj], Dd = [xi, yt, zi];
     const L = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
     const nx = -(zj - zi) / L, nz = (xj - xi) / L;
@@ -225,9 +250,9 @@ export function buildBuildingLayer({
         const page = rect.page | 0;
         let bucket = W.atlasByPage.get(page);
         if (!bucket) { bucket = { pos: [], uv: [] }; W.atlasByPage.set(page, bucket); }
-        pushWallFace(bucket, xi, zi, xj, zj, yt, dist, dist + seg, cen, rect);
+        pushWallFace(bucket, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, rect);
       } else {
-        pushWallFace(W.stucco, xi, zi, xj, zj, yt, dist, dist + seg, cen, null);
+        pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
       }
       dist += seg;
     }

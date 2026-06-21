@@ -16,7 +16,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { emitGroundRibbon, fanDisc, offsetLine } from '../road_prep.mjs';
+import { emitGroundRibbon, fanDisc, offsetLine, snapCreekToChannel } from '../road_prep.mjs';
 
 const CREEK_WIDTH = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 7.5;
 const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.05;
@@ -199,6 +199,15 @@ export async function buildTreeLayer({
   let hasCreek = false;
   if (creek && creek.p) {
     creekW = creek.p.map(([e, n]) => w2(e, n)).filter(([x, z]) => x >= x0 - 3 && x <= x1 + 3 && z >= z0 - 3 && z <= z1 + 3);
+    if (creekW.length >= 2) {
+      // SNAP the creek toward the real DEM channel AND away from buildings — the raw OSM
+      // centreline runs through houses otherwise (the "river through the house" bug). Margin =
+      // full water half-width + bank slack so the whole ribbon clears building footprints.
+      creekW = snapCreekToChannel(creekW, terrainAt, {
+        radius: 18, step: 1.5, strength: 0.9, smoothPasses: 2,
+        avoidPolygons: polys, avoidPolygonMargin: CREEK_WIDTH / 2 + 1.75,
+      });
+    }
     if (creekW.length >= 2) {
       const cPos = [], cIdx = [];
       flatWaterRibbon(creekW, CREEK_WIDTH, CREEK_DEPTH, terrainAt, cPos, cIdx);
