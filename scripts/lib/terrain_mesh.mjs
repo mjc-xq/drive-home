@@ -87,6 +87,19 @@ export function buildTerrainMesh({ D, geo, opts = {} }) {
     (inTexCore(cx, cz) ? coreIdx : farIdx).push(a, b, c);
   };
 
+  // UNIFORM option: ONE resolution everywhere -> NO 1 m/4 m resolution seam. The seam's normal
+  // discontinuity + the coarse 4 m triangles read as faint bright lines at grazing angle (the
+  // "white diamond"). A single regular grid removes it; the surface is still the exact DEM,
+  // sampled at uniformStep m, and collision==visual==placement is preserved (same emitted tris).
+  if (opts.uniformStep) {
+    const s = opts.uniformStep;
+    const ux1 = Math.floor(X1 / s) * s, uz1 = Math.floor(Z1 / s) * s;
+    for (let z = Math.ceil(Z0 / s) * s; z < uz1; z += s)
+      for (let x = Math.ceil(X0 / s) * s; x < ux1; x += s) {
+        const a = getVert(x, z), b = getVert(x + s, z), c = getVert(x, z + s), d = getVert(x + s, z + s);
+        pushTri(a, c, b); pushTri(b, c, d);
+      }
+  } else {
   // 1) CORE: full 1 m grid over [-coreHalf, coreHalf]
   for (let z = -coreHalf; z < coreHalf; z++) {
     for (let x = -coreHalf; x < coreHalf; x++) {
@@ -134,6 +147,7 @@ export function buildTerrainMesh({ D, geo, opts = {} }) {
       for (let i = 0; i < loop.length; i++) pushTri(ctr, loop[i], loop[(i + 1) % loop.length]);
     }
   }
+  }   // end else (adaptive 1 m core + 4 m far)
 
   // ---- normals (area-weighted) + tangents (world +X = U) -----------------------------
   const nVerts = pos.length / 3;

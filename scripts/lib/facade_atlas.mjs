@@ -3,20 +3,28 @@
 //
 // WHY: the old exporter floated SVFacade_* overlay quads 0.16 m PROUD of each wall (they
 // z-fight + read as decals) and shipped 967 crops as small as 522x163 px — far/low-res walls
-// turned to melty 64px mush. Here a wall gets a real SV crop ONLY when it belongs to a HERO
-// building (owner house + the handful of on-patch neighbours the player can walk up to) AND
-// the crop clears `minPxPerM`. Everyone else, and any wall below the gate, falls back to the
-// procedural tiled stucco (exports/facade.png) tinted by the caller's per-building wallColor.
-// We never ship a melty photo: the gate -> procedural stucco instead.
+// turned to melty 64px mush. Here EVERY in-patch building that carries an SV wall crop clearing
+// `minPxPerM` gets a real photo facade (not just the owner house + a few near neighbours) — the
+// crops pack into AS MANY 4096 atlas pages as needed. Any wall below the gate, and any building
+// off the terrain patch, falls back to the procedural tiled stucco (exports/facade.png) tinted
+// by the caller's per-building wallColor. We never ship a melty photo: the gate -> stucco instead.
 //
-// HOW: hero crops are SHELF-PACKED (skyline rows, tall-first) into one or a few RGB atlas
-// pages composited with sharp, each resized to a hero texels-per-metre so the wall is crisp.
-// The returned rectByWall maps 'b{building}_e{edge}' -> { page, u0,v0,u1,v1 }; the exporter
-// sets that wall's UVs to the sub-rect (V: eave=v0/top -> ground=v1/bottom, matching the
-// crop's own ground-to-eave layout, so NO roof band shows) and uses the atlas page material.
-// Walls not in rectByWall get the stucco tile. crop_v (sub-band of the wall) is respected:
-// the sub-rect is the crop, but we record only the captured V-band so the exporter knows
-// which slice of the wall it covers (the exporter clamps wall UVs to [0,1] regardless).
+// ROOF BLEED (PROBLEM 1): the SV crops claim 'wall-only-ground-to-eave' but fetch_sv_facades.py
+// crops the top using the UNRELIABLE OSM wallH, so when wallH is overestimated the crop's TOP
+// still contains roof/eave/sky. Since we build our OWN 3D roof, that photo-roof would show on the
+// wall (a double roof). FIX: we TRIM the top ROOF_TRIM fraction of every source crop before
+// packing, so ONLY pure wall maps onto the wall quad. The built roof + eave overhang covers the
+// lost sliver of wall-top. We shift the recorded crop_v[0] down by the same fraction so the band
+// the exporter thinks it captured matches the trimmed photo.
+//
+// HOW: crops are SHELF-PACKED (skyline rows, tall-first) into one or a few RGB atlas pages
+// composited with sharp, each resized to a hero texels-per-metre so the wall is crisp. The
+// returned rectByWall maps 'b{building}_e{edge}' -> { page, u0,v0,u1,v1 }; the exporter sets that
+// wall's UVs to the sub-rect (V: eave=v0/top -> ground=v1/bottom, matching the crop's own
+// ground-to-eave layout, so NO roof band shows) and uses the atlas page material. Walls not in
+// rectByWall get the stucco tile. heroBuildings (returned) is the set of buildings that actually
+// got >=1 packed crop — the exporter/building_layer only applies a rect when its building is in
+// that set, so it must list every facade'd building.
 
 import sharp from 'sharp';
 import { mkdirSync } from 'node:fs';
@@ -25,6 +33,8 @@ import path from 'node:path';
 const GUTTER = 2;          // px of empty space around each packed rect (anti-bleed)
 const HERO_PX_PER_M = 128; // target texels/metre on a hero wall (crisp; clamped per-wall below)
 const MAX_RECT = 2048;     // cap a single packed crop's long side so one wall can't blow a page
+const ROOF_TRIM = 0.18;    // drop the top 18% of each source crop (roof/eave/sky bleed from the
+                           // unreliable OSM wallH); only pure wall is packed onto the wall quad.
 
 // ---- shelf (skyline-row) bin packer ----------------------------------------------------
 // Sort rects tall->short, lay them left->right on a shelf; a rect that won't fit the row starts
@@ -50,9 +60,15 @@ const centroidEN = (p) => p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1
 const inRect = (x, z, r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
 
 /**
- * Bake hero Street-View facade crops into RGB atlas page(s). See file header for the contract.
- * Walls that aren't hero, or whose px/m < minPxPerM, are intentionally absent from rectByWall
- * (the caller applies procedural stucco there).
+ * Bake Street-View facade crops into RGB atlas page(s). See file header for the contract.
+ * EVERY in-demRect building with an SV crop that clears the px/m gate gets a real photo facade;
+ * walls below the gate, and buildings off the patch, are intentionally absent from rectByWall
+ * (the caller applies procedural stucco there). heroBuildings (returned) lists exactly the
+ * buildings that ended up with >=1 packed crop, so the caller knows which buildings to facade.
+ *
+ * `heroRadius`/`heroCap` are accepted for back-compat but no longer restrict coverage to near the
+ * house — they're ignored. The owner house is always eligible; everything else just needs to be
+ * inside demRect with a usable crop.
  */
 export async function bakeFacadeAtlas({
   buildings, svWalls, svDir, houseIndex, demRect, w2,
@@ -60,9 +76,9 @@ export async function bakeFacadeAtlas({
 }) {
   mkdirSync(outDir, { recursive: true });
 
-  // 1) HERO SELECTION: owner house always; plus buildings whose footprint centroid is inside
-  //    demRect AND within heroRadius of the house centroid AND that carry >=1 SV wall crop.
-  //    Sort the neighbours by distance, cap the total at heroCap (house counts toward the cap).
+  // 1) COVERAGE: facade EVERY building that carries >=1 SV wall crop AND whose footprint centroid
+  //    is inside demRect (off-patch buildings aren't reachable/visible — leave them stucco). No
+  //    near-house radius or cap: we want as many real photo facades as the crops + gate allow.
   const wallsByB = new Map();                               // building index -> [wall,...]
   for (const wall of svWalls) {
     if (!wallsByB.has(wall.building)) wallsByB.set(wall.building, []);
@@ -74,29 +90,25 @@ export async function bakeFacadeAtlas({
     const [e, n] = centroidEN(b.p);
     return w2(e, n);                                        // -> [x, z]
   };
-  const houseC = worldCentroid(houseIndex);
-  const cands = [];
+  const candBuildings = [];                                // every in-patch building with SV walls
   for (const ib of wallsByB.keys()) {
-    if (ib === houseIndex) continue;
+    if (ib === houseIndex) { candBuildings.push(ib); continue; }   // house always eligible
     const c = worldCentroid(ib);
-    if (!c || !houseC) continue;
-    if (!inRect(c[0], c[1], demRect)) continue;            // off the terrain patch -> not walkable
-    const d = Math.hypot(c[0] - houseC[0], c[1] - houseC[1]);
-    if (d > heroRadius) continue;                          // too far to walk up to
-    cands.push({ ib, d });
+    if (!c) continue;
+    if (!inRect(c[0], c[1], demRect)) continue;            // off the terrain patch -> stucco
+    candBuildings.push(ib);
   }
-  cands.sort((a, b) => a.d - b.d);
-  const heroBuildings = [houseIndex, ...cands.map((c) => c.ib)].slice(0, heroCap);
-  const heroSet = new Set(heroBuildings);
 
-  // 2) MEASURE + RESIZE hero crops past the px/m gate. px/m = crop width / wall width (the crop
+  // 2) MEASURE + TRIM + RESIZE crops past the px/m gate. px/m = crop width / wall width (the crop
   //    spans the wall left->right). Below minPxPerM the SV photo is too coarse -> SKIP (fallback).
-  //    Otherwise resize toward HERO_PX_PER_M (never UP-scale past the source; clamp the long side
-  //    to MAX_RECT and to the page) so the wall is crisp without blowing the atlas.
-  const rects = [];                                        // packable resized crops
-  const pxPerM = [];                                       // hero-wall px/m distribution (for the report)
+  //    TRIM the top ROOF_TRIM of every crop first (roof/eave/sky bleed), then resize toward
+  //    HERO_PX_PER_M (never UP-scale past the source; clamp the long side to MAX_RECT and the
+  //    page) so the wall is crisp without blowing the atlas.
+  const rects = [];                                        // packable trimmed+resized crops
+  const pxPerM = [];                                       // wall px/m distribution (for the report)
+  const facadedSet = new Set();                            // buildings that actually got a packed crop
   let rejected = 0;
-  for (const ib of heroBuildings) {
+  for (const ib of candBuildings) {
     for (const wall of wallsByB.get(ib) || []) {
       const wallW = +wall.wallW || 0, wallH = +wall.wallH || 0;
       if (wallW <= 0 || wallH <= 0 || !wall.image) continue;
@@ -108,24 +120,39 @@ export async function bakeFacadeAtlas({
       const ppm = srcW / wallW;
       pxPerM.push(ppm);
       if (ppm < minPxPerM) { rejected++; continue; }       // too melty -> procedural stucco instead
-      // Target size: HERO_PX_PER_M texels/metre, clamped so we never enlarge past the source and
-      // the long side stays <= MAX_RECT and <= page. Keep the source aspect (it already matches
-      // the wall's W:H from the ground-to-eave crop).
+      // ROOF TRIM: drop the top ROOF_TRIM band of the SOURCE crop (it's roof/eave/sky bleed from
+      // the overestimated OSM wallH). Pack only the remaining lower wall portion.
+      const trimTop = Math.min(srcH - 2, Math.max(0, Math.round(srcH * ROOF_TRIM)));
+      const keptH = srcH - trimTop;
+      if (keptH < 2) continue;
+      // Target size: HERO_PX_PER_M texels/metre, clamped so we never enlarge past the kept source
+      // and the long side stays <= MAX_RECT and <= page. Aspect follows the trimmed crop (wall
+      // width : remaining wall height).
       let tw = Math.min(srcW, Math.round(wallW * HERO_PX_PER_M));
       const cap = Math.min(MAX_RECT, pageSize - GUTTER * 2);
       if (tw > cap) tw = cap;
       tw = Math.max(8, tw);
-      const th = Math.max(8, Math.round(tw * srcH / srcW));
-      const buf = await sharp(imgPath).resize(tw, th, { fit: 'fill' }).removeAlpha().raw()
+      const th = Math.max(8, Math.round(tw * keptH / srcW));
+      const buf = await sharp(imgPath)
+        .extract({ left: 0, top: trimTop, width: srcW, height: keptH })   // cut the roof band off
+        .resize(tw, th, { fit: 'fill' }).removeAlpha().raw()
         .toBuffer({ resolveWithObject: true });
+      // crop_v is the wall V-band this photo covers (eave=0 .. ground=1). Trimming the top of the
+      // crop removes that fraction of the captured WALL height, so push cv0 down accordingly.
+      const cv0src = Array.isArray(wall.crop_v) ? wall.crop_v[0] : 0;
+      const cv1src = Array.isArray(wall.crop_v) ? wall.crop_v[1] : 1;
+      const cv0 = cv0src + (cv1src - cv0src) * (trimTop / srcH);
       rects.push({
         key: `b${wall.building}_e${wall.edge}`,
         w: tw, h: th, raw: buf.data, channels: buf.info.channels,
-        cv0: Array.isArray(wall.crop_v) ? wall.crop_v[0] : 0,
-        cv1: Array.isArray(wall.crop_v) ? wall.crop_v[1] : 1,
+        cv0, cv1: cv1src,
       });
+      facadedSet.add(ib);
     }
   }
+  // heroBuildings = exactly the buildings that got a packed crop (the caller's hero gate keys off
+  // this; a building absent here stays stucco even if a stray rect exists).
+  const heroBuildings = [...facadedSet];
   rects.sort((a, b) => b.h - a.h || b.w - a.w);            // tall-first -> better shelf occupancy
 
   // 3) PACK + COMPOSITE pages, build rectByWall. UV sub-rect insets a half-texel so bilinear taps

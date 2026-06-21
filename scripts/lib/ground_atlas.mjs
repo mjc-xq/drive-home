@@ -21,9 +21,10 @@ const MAT = {
   grassRough: 0.95,
   asphalt: { rgb: [54, 54, 58], rough: 0.93 },
   'asphalt-light': { rgb: [96, 96, 99], rough: 0.92 },   // driveways/parking
-  concrete: { rgb: [188, 185, 177], rough: 0.86 },        // sidewalks
-  'concrete-curb': { rgb: [176, 174, 168], rough: 0.84 }, // curb band
-  'concrete-light': { rgb: [205, 203, 196], rough: 0.85 },// crosswalk slab
+  // mid-grey concrete (was ~188 -> blew out to harsh white under sun); reads as concrete, not white
+  concrete: { rgb: [156, 154, 148], rough: 0.86 },        // sidewalks
+  'concrete-curb': { rgb: [150, 148, 142], rough: 0.84 }, // curb band
+  'concrete-light': { rgb: [186, 184, 178], rough: 0.85 },// crosswalk slab (kept a touch lighter)
 };
 const PAINT = {
   'double-yellow': [236, 200, 30],
