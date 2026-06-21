@@ -98,7 +98,10 @@ export async function bakeGroundAtlas({
 }) {
   mkdirSync(outDir, { recursive: true });
   const meta = await sharp(aerialPath).metadata();
-  const coreBox = { x0: -texCoreHalf, x1: texCoreHalf, z0: -texCoreHalf, z1: texCoreHalf };
+  // The core ground texture covers the REAL terrain extent (demRect), not a fixed ±texCoreHalf box —
+  // otherwise the aerial gets clamped+stretched to fill ±600 on levels whose DEM is only ±230..±360
+  // (misaligned ground + wasted texels). Matches terrain_mesh.coreUV which now maps demRect -> [0,1].
+  const coreBox = demRect;
   const out = (n) => path.join(outDir, n);
 
   // ---- FAR albedo: aerial over the whole DEM rect + COARSE painted features ----------

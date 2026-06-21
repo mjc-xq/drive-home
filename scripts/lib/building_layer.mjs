@@ -138,8 +138,13 @@ export function buildBuildingLayer({
     let nx = -(zj - zi) / L, nz = (xj - xi) / L;
     if (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
     const o = PROUD_OVERLAY;
+    // crop_v = the wall V-band [cv0 (top of photo, near eave) .. cv1 (ground)] the photo actually
+    // covers after ROOF_TRIM. Cap the quad TOP at that band so a roof-trimmed photo isn't stretched
+    // up to the eave (M3) — the wall above the photo shows the windowed stucco underneath.
+    const cv = rect.crop_v || [0, 1];
+    const ytTop = yt - cv[0] * (yt - base);
     const A = [xi + nx * o, ybi, zi + nz * o], B = [xj + nx * o, ybj, zj + nz * o];
-    const Cc = [xj + nx * o, yt, zj + nz * o], Dd = [xi + nx * o, yt, zi + nz * o];
+    const Cc = [xj + nx * o, ytTop, zj + nz * o], Dd = [xi + nx * o, ytTop, zi + nz * o];
     const { u0, v0, u1, v1 } = rect;
     const bucket = overlayBucket(rect.page | 0);
     for (const v of [A, B, Cc, A, Cc, Dd]) bucket.pos.push(v[0], v[1], v[2]);

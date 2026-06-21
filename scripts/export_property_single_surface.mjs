@@ -80,8 +80,12 @@ console.log(`terrain: ${terrain.stats.verts} verts, ${terrain.stats.tris} tris `
   `(core ${terrain.stats.coreTris}, far ${terrain.stats.farTris}), Y[${terrain.stats.minY.toFixed(1)}..${terrain.stats.maxY.toFixed(1)}]`);
 
 // ---- 2) road + sidewalk network + inferred paint -----------------------------------
-const network = buildRoadNetwork(S, MS, { w2, clipHalf: 596 });
-const curbLines = curbLinesFromRoads(S.roads || [], w2, { clipHalf: 596 });
+// clip the road network + curbs to the REAL terrain extent (per level), not a fixed ±596 — else
+// roads/sidewalks are generated far beyond the smaller school/xq terrains (B1).
+const _dr = terrain.demRect;
+const clipHalf = Math.max(Math.abs(_dr.x0), Math.abs(_dr.x1), Math.abs(_dr.z0), Math.abs(_dr.z1));
+const network = buildRoadNetwork(S, MS, { w2, clipHalf, demRect: _dr });
+const curbLines = curbLinesFromRoads(S.roads || [], w2, { clipHalf });
 console.log(`network: ${network.surfaces.length} surfaces, ${network.paint.length} paint groups, ${curbLines.length} curb lines`);
 
 // ---- 3) bake ground textures (de-roaded aerial bed + painted features) -------------
