@@ -162,9 +162,9 @@
 
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb',
-        codeUrl: 'Build/da-hilg.wasm.unityweb',
+        dataUrl: 'Build/da-hilg.data.unityweb?v=8decfd1e823b376',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decfd1e823b376',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decfd1e823b376',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -177,7 +177,7 @@
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js';
+      script.src = 'Build/da-hilg.loader.js?v=8decfd1e823b376';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
@@ -186,6 +186,16 @@
           window.__dahilg.unityInstance = unityInstance;
           window.__dahilg.unityReady = true;
           document.querySelector('#unity-loading-bar').style.display = 'none';
+          try {
+            // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike
+            // Unity's WebGL device detection which can't tell a phone from a desktop). A touch
+            // device has touch points and no fine pointer (mouse/trackpad). Drives the on-screen
+            // joystick/look/buttons so the game is playable on a phone.
+            var touchDevice = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+              && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+            window.__dahilg.touchMode = touchDevice;
+            unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
+          } catch (touchErr) { rememberHudError(touchErr); }
           if (unityInstance.Module && unityInstance.Module.WebGLInput) {
             unityInstance.Module.WebGLInput._stickyCursorLock = false;
           }

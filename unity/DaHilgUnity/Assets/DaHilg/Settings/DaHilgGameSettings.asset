@@ -103,7 +103,7 @@ MonoBehaviour:
   NormalSpawnInterval: 0.48
   MarkedDuration: 3.1
   AttachmentFlashDuration: 0.58
-  RollCooldown: 0.9
+  RollCooldown: 1.55
   RollDuration: 0.78
   RollSpeed: 5.7
   RollCrushRadius: 1.38
