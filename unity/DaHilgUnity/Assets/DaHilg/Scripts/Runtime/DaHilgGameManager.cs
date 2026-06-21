@@ -9,6 +9,15 @@ namespace DaHilg
         const float k_StartShieldSeconds = 3f;
         const float k_StuckTime = 0.6f;
 
+        // Buried-TIME overwhelm: a tier-weighted load that builds while you're piled and bleeds
+        // when light, so being swarmed is a felt 2-3s arc with a GUARANTEED thrash-out — never a
+        // frame-perfect freeze. Replaces the old instantaneous attached-count cliffs.
+        const float k_BuriedFallT = 2.6f;  // crawl-only gate
+        const float k_BuriedStopT = 5.6f;  // pinned (heavy trudge) gate
+        const float k_BuriedMax = 7.2f;    // meter ceiling
+        float m_BuriedLoad;
+        float m_Struggle;
+
         readonly List<DaHilgActor> m_Actors = new List<DaHilgActor>(4);
         readonly List<DaHilgNibblerAgent> m_Nibblers = new List<DaHilgNibblerAgent>(32);
         readonly List<DaHilgAnimalAgent> m_Animals = new List<DaHilgAnimalAgent>(8);
@@ -49,6 +58,8 @@ namespace DaHilg
         public int AttachedNibblerCount { get; private set; }
         public bool PlayerMarked => Mode == DaHilgGameMode.Nibblers && Time.time < m_MarkedUntil;
         public float Marked01 => Settings != null ? Mathf.Clamp01((m_MarkedUntil - Time.time) / Mathf.Max(0.1f, Settings.MarkedDuration)) : 0f;
+        // 0..1 toward a full pin — the HUD's headline "buried" gauge binds to this.
+        public float BuriedLoad01 => Mathf.Clamp01(m_BuriedLoad / k_BuriedStopT);
         public float AttachmentFlash01 => Settings != null ? Mathf.Clamp01((m_AttachFlashUntil - Time.time) / Mathf.Max(0.1f, Settings.AttachmentFlashDuration)) : 0f;
         public bool RollReady => m_ActiveActor == null || m_ActiveActor.RollReady(Time.time);
         public float RollCooldownRemaining => m_ActiveActor != null ? m_ActiveActor.RollCooldownRemaining(Time.time) : 0f;
@@ -137,8 +148,9 @@ namespace DaHilg
                 m_PendingMeleeHitAt = -1f;
             }
 
-            bool crawlOnly = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmDown;
-            bool pinned = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmStop;
+            UpdateBuriedLoad(dt);
+            bool crawlOnly = Mode == DaHilgGameMode.Nibblers && m_BuriedLoad >= k_BuriedFallT;
+            bool pinned = Mode == DaHilgGameMode.Nibblers && m_BuriedLoad >= k_BuriedStopT;
             if (m_ActiveActor != null)
             {
                 m_ActiveActor.StepPlayer(Input.Move, Input.RunHeld, !menuConsumedInput && Input.JumpPressed, CameraRig != null ? CameraRig.Yaw : 0f, Settings, dt, Time.time, crawlOnly, pinned);
@@ -658,16 +670,29 @@ namespace DaHilg
                 m_NextNibblerSpawn = Time.time + (marked ? Settings.DangerSpawnInterval : Settings.NormalSpawnInterval);
             }
 
-            if ((Input.JumpPressed || m_ActiveActor.WasJumpStartedThisFrame) && AttachedNibblerCount > 0)
+            bool jumpHit = Input.JumpPressed || m_ActiveActor.WasJumpStartedThisFrame;
+            if (m_BuriedLoad >= k_BuriedStopT)
             {
-                int shed = Mathf.Clamp(AttachedNibblerCount / 3, 1, AttachedNibblerCount);
-                for (int i = 0; i < m_Nibblers.Count && shed > 0; i++)
+                // Pinned: a GUARANTEED thrash-out — auto-struggle plus mash-to-go-faster, so you
+                // are never hard-locked. Each completed struggle flings a batch off and bleeds load.
+                m_Struggle += dt * 0.85f + (jumpHit ? 0.5f : 0f);
+                if (m_Struggle >= 1f)
                 {
-                    if (m_Nibblers[i].Active && m_Nibblers[i].Attached)
-                    {
-                        m_Nibblers[i].Scatter(m_ActiveActor.FeetPosition);
-                        shed--;
-                    }
+                    ShedAttached(5);
+                    m_BuriedLoad = Mathf.Max(0f, m_BuriedLoad - 1.6f);
+                    m_Struggle = 0f;
+                }
+            }
+            else
+            {
+                m_Struggle = 0f;
+                if (jumpHit && AttachedNibblerCount > 0)
+                {
+                    // Jump is the radial PEEL: a heavy pile loses ~40% in one pop.
+                    int shed = AttachedNibblerCount >= Settings.OverwhelmStagger
+                        ? Mathf.Clamp(Mathf.RoundToInt(0.40f * AttachedNibblerCount), 1, AttachedNibblerCount)
+                        : Mathf.Clamp(AttachedNibblerCount / 3, 1, AttachedNibblerCount);
+                    ShedAttached(shed);
                 }
             }
 
@@ -680,8 +705,9 @@ namespace DaHilg
             m_ActiveActor.AttachedNibblers = attached;
             if (attached > m_LastAttachedCount)
             {
+                // Flash the new-attach cue, but DON'T re-mark — marking now only happens on
+                // danger-zone entry, so "marked" stays a real spike instead of constant wallpaper.
                 m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
-                MarkPlayer();
             }
             m_LastAttachedCount = attached;
 
@@ -804,6 +830,31 @@ namespace DaHilg
                 if (m_Nibblers[i].Active && m_Nibblers[i].Attached) count++;
             }
             return count;
+        }
+
+        void UpdateBuriedLoad(float dt)
+        {
+            // During mode/level start grace there's no pressure; otherwise build by tier and bleed
+            // when light. tierMul: pinned-band fills fast, down-band steady, stagger-band slow rise.
+            if (Mode != DaHilgGameMode.Nibblers || StartShieldActive) { m_BuriedLoad = 0f; m_Struggle = 0f; return; }
+            int n = AttachedNibblerCount;
+            float tierMul = n >= Settings.OverwhelmStop ? 2.2f
+                          : n >= Settings.OverwhelmDown ? 1.0f
+                          : n >= Settings.OverwhelmStagger ? 0.35f
+                          : -1.8f;
+            m_BuriedLoad = Mathf.Clamp(m_BuriedLoad + dt * tierMul, 0f, k_BuriedMax);
+        }
+
+        void ShedAttached(int count)
+        {
+            for (int i = 0; i < m_Nibblers.Count && count > 0; i++)
+            {
+                if (m_Nibblers[i].Active && m_Nibblers[i].Attached)
+                {
+                    m_Nibblers[i].Scatter(m_ActiveActor.FeetPosition);
+                    count--;
+                }
+            }
         }
 
         void MarkPlayer()

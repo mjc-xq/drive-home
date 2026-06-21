@@ -221,7 +221,7 @@ namespace DaHilg
             m_RollDirection = push.sqrMagnitude > 0.001f ? push.normalized : side;
             m_RollStartedAt = now;
             m_RollUntil = now + Mathf.Max(0.2f, settings.RollDuration);
-            m_NextRollAt = now + Mathf.Max(settings.RollCooldown, settings.RollDuration + 0.15f);
+            m_NextRollAt = now + settings.RollCooldown; // honest cooldown (the old Max() clamp ate any value < 0.93)
             m_JumpQueuedTime = -100f;
             m_EmoteUntil = 0f;
             if (m_VerticalVelocity < 0f) m_VerticalVelocity = -2f;
@@ -313,7 +313,7 @@ namespace DaHilg
             if (desired.sqrMagnitude > 1f) desired.Normalize();
 
             float cap = crawlOnly ? settings.CrawlSpeed : (run ? settings.RunSpeed : settings.WalkSpeed);
-            if (pinned && !Rolling) cap = 0f;
+            if (pinned && !Rolling) cap = settings.RunSpeed * 0.4f; // heavy trudge, never a frozen stun-lock
 
             StepMotion(desired, cap, true, cameraYaw, settings, dt, now);
         }
