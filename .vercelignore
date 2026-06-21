@@ -1,22 +1,21 @@
-# Vercel runs `vite build` from src/ + public/ — exclude everything not needed at deploy,
-# which also keeps the upload under Vercel's 15k-file limit (repo has ~39k files otherwise:
-# node_modules, scripts/_cache, exports, unity/Library, .git, etc.).
-node_modules
-.git
-dist
-scripts
-exports
-unity
-docs
-plans
-tests
-npc-staging
-.playwright-mcp
-.agents
+# Vercel runs `vite build` from src/ + public/. Exclude top-level dirs/files not needed at deploy.
+# IMPORTANT: anchor directory names with a leading slash. A bare name (e.g. "unity") matches at
+# ANY depth in gitignore syntax and would also strip public/unity — the deployed WebGL game — -> 404.
+/node_modules
+/.git
+/dist
+/scripts
+/exports
+/unity
+/docs
+/plans
+/tests
+/npc-staging
+/.playwright-mcp
+/.agents
 *.log
-# NOTE: do NOT add a global *.usdz/*.blend ignore — src/assets/couchy.usdz is imported by the
-# app (src/engine/interior.js). exports/ + unity/ (the big .usdz/.blend artifacts) are already
-# excluded above as whole directories.
+# NOTE: do NOT glob *.usdz/*.blend — src/assets/couchy.usdz is imported by the app
+# (src/engine/interior.js). The big .usdz/.blend artifacts live under exports/ + unity/ (excluded above).
 tmp-*.png
 tmp_*.cjs
 char-*.jpeg
