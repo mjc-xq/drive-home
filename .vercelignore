@@ -14,9 +14,9 @@ npc-staging
 .playwright-mcp
 .agents
 *.log
-*.blend
-*.blend1
-*.usdz
+# NOTE: do NOT add a global *.usdz/*.blend ignore — src/assets/couchy.usdz is imported by the
+# app (src/engine/interior.js). exports/ + unity/ (the big .usdz/.blend artifacts) are already
+# excluded above as whole directories.
 tmp-*.png
 tmp_*.cjs
 char-*.jpeg
