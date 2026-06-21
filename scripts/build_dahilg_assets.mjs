@@ -415,7 +415,7 @@ async function buildLevelGlb({ src, out }) {
     // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
     // their mesh is disposed) collision helpers survive even if their mesh were dropped —
     // but here the collision meshes are real geometry and stay intact.
-    await meshoptPipeline(levelDoc, `${out}.glb`, { quantizationVolume: 'scene' }, 1024);
+    await meshoptPipeline(levelDoc, `${out}.glb`, { quantizationVolume: 'scene' }, 2048);   // 2048 (was 1024): aerial src is 6400px + facade atlas pages are 4096px — 1024 made the ground + photo facades blurry/washed
   }
   await writeAndVerify(levelDoc, OUT(`${out}.glb`), { label: out });
 

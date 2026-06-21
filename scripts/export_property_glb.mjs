@@ -687,8 +687,8 @@ const buildingBase = ringW => {
   // grade, which on any slope lifts the whole building up and exposes a tall bare downhill wall.
   // 20th-percentile is spike-robust (ignores a lone DEM pit) but still low → grounded. The
   // downhill wall foot is hidden a touch by terrain; the uphill side is a shallow natural cut.
-  const lo = ys[Math.min(ys.length - 1, Math.floor(0.20 * (ys.length - 1)))];  // 20th-percentile (grounded, spike-robust)
-  return lo - 0.1;                                                             // small embed so the floor edge sits in grade
+  const lo = ys[Math.min(ys.length - 1, Math.floor(0.10 * (ys.length - 1)))];  // 10th-percentile ≈ low grade (spike-robust; ignores a lone DEM pit)
+  return lo - 0.12;                                                            // seat the floor AT/just-below the low grade so walls go INTO the ground — no raised skirt/podium
 };
 const houseIdx = S.buildings.findIndex(b => b.house);
 // GRADED APRON / PAD around each footprint: a ring of quads from the footprint edge outward

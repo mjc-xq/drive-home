@@ -1291,7 +1291,7 @@ body {
             RenderSettings.skybox = skybox;
 
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
-            RenderSettings.ambientIntensity = 1.15f;
+            RenderSettings.ambientIntensity = 0.78f;   // was 1.15 — over-bright skybox ambient washed out the textures (esp. with the pale ETC1S textures); lower restores contrast/saturation
             RenderSettings.ambientSkyColor = new Color(0.62f, 0.70f, 0.74f);
             RenderSettings.ambientEquatorColor = new Color(0.42f, 0.46f, 0.44f);
             RenderSettings.ambientGroundColor = new Color(0.24f, 0.26f, 0.20f);

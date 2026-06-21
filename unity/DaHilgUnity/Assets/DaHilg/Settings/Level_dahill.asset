@@ -34,8 +34,8 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 16.1045, z: 0}
-    Size: {x: 34.309998, y: 9.309001, z: 28.63}
+    Center: {x: 0, y: 15.9135, z: 0}
+    Size: {x: 34.309998, y: 8.927001, z: 28.63}
   NibblerSafeZones:
   - Id: safe_start
     Label: Start
