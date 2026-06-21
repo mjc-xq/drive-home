@@ -11,9 +11,30 @@ namespace DaHilg
     [RequireComponent(typeof(UIDocument))]
     public sealed class DaHilgHud : MonoBehaviour
     {
+        // ── Driving-game theme tokens (mirrors src/styles.css :root) ─────────────
+        // Square chrome (radius 0), nav-app glass panels, AGC numbers + Chakra-style
+        // kicker labels. Every color below is the hex from styles.css converted to
+        // Unity's 0..1 RGBA so the Unity HUD reads as the same product.
+        static readonly Color k_Nav = new Color(0.176f, 0.549f, 1f, 1f);        // --nav  #2D8CFF
+        static readonly Color k_Go = new Color(0.169f, 0.910f, 0.310f, 1f);     // --go   #2BE84F
+        static readonly Color k_Coin = new Color(1f, 0.784f, 0.239f, 1f);       // --coin #FFC83D
+        static readonly Color k_Reverse = new Color(1f, 0.322f, 0.278f, 1f);    // --reverse #FF5247
+        static readonly Color k_Jump = new Color(0.608f, 0.482f, 1f, 1f);       // --jump #9B7BFF
+        static readonly Color k_Glass = new Color(0.031f, 0.039f, 0.055f, 0.66f); // --hud-glass
+        static readonly Color k_GlassDeep = new Color(0.039f, 0.047f, 0.063f, 0.82f);
+        static readonly Color k_PanelDeep = new Color(0.039f, 0.047f, 0.063f, 0.95f);
+        static readonly Color k_Line = new Color(1f, 1f, 1f, 0.18f);            // --hud-line
+        static readonly Color k_Text = new Color(0.957f, 0.945f, 0.917f, 1f);   // --txt
+        static readonly Color k_TextDim = new Color(1f, 1f, 1f, 0.5f);
+        static readonly Color k_TextFaint = new Color(1f, 1f, 1f, 0.62f);
+        static readonly Color k_Fill = new Color(1f, 1f, 1f, 0.05f);
+        static readonly Color k_FillHi = new Color(1f, 1f, 1f, 0.1f);
+
         DaHilgGameManager m_Manager;
         DaHilgInputRouter m_Input;
         VisualElement m_Root;
+        Font m_AgcFont;
+        Font m_AgcHeavyFont;
         Label m_Title;
         Label m_State;
         Label m_Score;
@@ -22,6 +43,11 @@ namespace DaHilg
         Label m_Attached;
         VisualElement m_HealthFill;
         VisualElement m_TopPanel;
+        VisualElement m_TopPanelBody;
+        Button m_TopCollapseButton;
+        VisualElement m_TopCompactStrip;
+        Label m_TopCompactLabel;
+        bool m_TopPanelCollapsed;
         VisualElement m_MarkOverlay;
         Label m_MarkLabel;
         VisualElement m_NibblerMeter;
@@ -104,8 +130,15 @@ namespace DaHilg
                 ? "Nibblers " + actor.AttachedNibblers.ToString("00") + " / " + m_Manager.Settings.NibblerPoolSize.ToString("00")
                 : (m_Manager.HasWon() ? "all greeted" : "family nearby");
             m_State.text = actor.Label + " · " + Mathf.RoundToInt(actor.Health) + "%";
-            m_HealthFill.style.width = Length.Percent(Mathf.Clamp(actor.Health, 0f, 100f));
+
+            // Horizontal health bar — go (>60) → coin (30..60) → reverse (<30), matching
+            // the driving game's HealthBar fill ramp.
+            float health = Mathf.Clamp(actor.Health, 0f, 100f);
+            m_HealthFill.style.width = Length.Percent(health);
+            m_HealthFill.style.backgroundColor = health < 30f ? k_Reverse : (health < 60f ? k_Coin : k_Go);
             RefreshNibblerStatus(actor);
+
+            UpdateTopCompactLabel(actor, health);
 
             if (m_Manager.IsPaused()) m_Prompt.text = "Paused";
             else if (m_Manager.Mode == DaHilgGameMode.Greet && m_Manager.NearbyGreetable != null) m_Prompt.text = "E greet " + m_Manager.NearbyGreetable.Label;
@@ -140,8 +173,8 @@ namespace DaHilg
                 bool active = m_Manager.CameraRig != null
                     && button.userData is DaHilgCameraMode mode
                     && mode == m_Manager.CameraRig.Mode;
-                button.style.backgroundColor = active ? new Color(0.16f, 0.46f, 0.92f, 0.88f) : new Color(1f, 1f, 1f, 0.12f);
-                button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.22f);
+                button.style.backgroundColor = active ? WithAlpha(k_Nav, 0.22f) : k_Fill;
+                button.style.borderTopColor = active ? k_Nav : k_Line;
                 button.style.borderBottomColor = button.style.borderTopColor.value;
                 button.style.borderLeftColor = button.style.borderTopColor.value;
                 button.style.borderRightColor = button.style.borderTopColor.value;
@@ -156,8 +189,8 @@ namespace DaHilg
                 Button button = m_LevelButtons[i];
                 string slug = button.userData as string;
                 bool active = m_Manager.CurrentLevel != null && slug == m_Manager.CurrentLevel.Slug;
-                button.style.backgroundColor = active ? new Color(0.12f, 0.56f, 0.38f, 0.88f) : new Color(1f, 1f, 1f, 0.12f);
-                button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.22f);
+                button.style.backgroundColor = active ? WithAlpha(k_Go, 0.22f) : k_Fill;
+                button.style.borderTopColor = active ? k_Go : k_Line;
                 button.style.borderBottomColor = button.style.borderTopColor.value;
                 button.style.borderLeftColor = button.style.borderTopColor.value;
                 button.style.borderRightColor = button.style.borderTopColor.value;
@@ -174,13 +207,30 @@ namespace DaHilg
             m_Minimap?.SetManager(m_Manager);
         }
 
+        void UpdateTopCompactLabel(DaHilgActor actor, float health)
+        {
+            if (m_TopCompactLabel == null) return;
+            string who = actor != null && !string.IsNullOrEmpty(actor.Label) ? actor.Label : "—";
+            if (m_Manager.Mode == DaHilgGameMode.Nibblers)
+            {
+                m_TopCompactLabel.text = who + " · " + Mathf.RoundToInt(health) + "% · "
+                    + actor.AttachedNibblers.ToString("00") + " NIB";
+            }
+            else
+            {
+                m_TopCompactLabel.text = who + " · " + Mathf.RoundToInt(health) + "% · " + m_Score.text;
+            }
+        }
+
         void RefreshNibblerStatus(DaHilgActor actor)
         {
             if (m_NibblerMeter == null || m_RollState == null) return;
 
             bool nibblers = m_Manager.Mode == DaHilgGameMode.Nibblers;
-            m_NibblerMeter.style.display = nibblers ? DisplayStyle.Flex : DisplayStyle.None;
-            m_RollState.style.display = nibblers ? DisplayStyle.Flex : DisplayStyle.None;
+            // The nibbler counter chip + roll readout only matter in Nibblers mode.
+            DisplayStyle nibblerDisplay = nibblers && !m_TopPanelCollapsed ? DisplayStyle.Flex : DisplayStyle.None;
+            m_NibblerMeter.style.display = nibblerDisplay;
+            m_RollState.style.display = nibblerDisplay;
             if (!nibblers)
             {
                 if (m_MarkOverlay != null) m_MarkOverlay.style.display = DisplayStyle.None;
@@ -190,15 +240,14 @@ namespace DaHilg
 
             float attached01 = Mathf.Clamp01(actor.AttachedNibblers / Mathf.Max(1f, m_Manager.Settings.OverwhelmStop));
             m_NibblerFill.style.width = Length.Percent(attached01 * 100f);
-            Color calm = new Color(0.24f, 0.88f, 0.42f, 1f);
-            Color hot = new Color(1f, 0.18f, 0.08f, 1f);
-            m_NibblerFill.style.backgroundColor = Color.Lerp(calm, hot, Mathf.Clamp01(attached01 * 1.3f));
+            // calm (go) → hot (reverse) as the pile climbs, matching the swarm tint ramp.
+            m_NibblerFill.style.backgroundColor = Color.Lerp(k_Go, k_Reverse, Mathf.Clamp01(attached01 * 1.3f));
 
             bool rollReady = m_Manager.RollReady;
             m_RollState.text = rollReady
                 ? "ROLL READY  ·  " + m_Manager.CrushedNibblerTotal + " crushed"
                 : "ROLL " + m_Manager.RollCooldownRemaining.ToString("0.0") + "s  ·  " + m_Manager.CrushedNibblerTotal + " crushed";
-            m_RollState.style.color = rollReady ? new Color(0.72f, 1f, 0.78f, 1f) : new Color(1f, 0.74f, 0.32f, 1f);
+            m_RollState.style.color = rollReady ? k_Go : k_Coin;
 
             bool marked = m_Manager.PlayerMarked;
             float flash = Mathf.Max(m_Manager.Marked01, m_Manager.AttachmentFlash01);
@@ -218,7 +267,7 @@ namespace DaHilg
             if (m_RollButton != null)
             {
                 m_RollButton.text = rollReady ? "ROLL" : m_Manager.RollCooldownRemaining.ToString("0.0");
-                m_RollButton.style.backgroundColor = rollReady ? new Color(0.18f, 0.55f, 1f, 0.86f) : new Color(0.62f, 0.36f, 0.16f, 0.72f);
+                m_RollButton.style.backgroundColor = rollReady ? WithAlpha(k_Nav, 0.86f) : WithAlpha(k_Coin, 0.66f);
             }
         }
 
@@ -229,36 +278,37 @@ namespace DaHilg
             if (m_CompactCameraButton != null)
             {
                 string camera = m_Manager.CameraRig != null ? m_Manager.CameraRig.ModeLabel() : "CAMERA";
-                m_CompactCameraButton.text = "VIEW\n" + camera;
-                StyleBarSegment(m_CompactCameraButton, true, new Color(0.16f, 0.46f, 0.92f, 0.88f));
+                SetSegmentLabel(m_CompactCameraButton, "VIEW", camera);
+                StyleBarSegment(m_CompactCameraButton, false, WithAlpha(k_Nav, 0.22f));
             }
 
             if (m_CompactPlayerButton != null)
             {
-                string label = actor != null && !string.IsNullOrEmpty(actor.Label) ? actor.Label.ToUpperInvariant() : string.Empty;
-                m_CompactPlayerButton.text = actor != null ? "PLAYER\n" + label : "PLAYER";
-                StyleBarSegment(m_CompactPlayerButton, true, actor != null ? CharacterAccent(actor.Id) : new Color(0.16f, 0.46f, 0.92f, 0.88f));
+                string label = actor != null && !string.IsNullOrEmpty(actor.Label) ? actor.Label.ToUpperInvariant() : "—";
+                SetSegmentLabel(m_CompactPlayerButton, "PLAYER", label);
+                StyleBarSegment(m_CompactPlayerButton, false, WithAlpha(k_Nav, 0.22f));
             }
 
             if (m_CompactLevelButton != null)
             {
-                m_CompactLevelButton.text = m_Manager.CurrentLevel != null
-                    ? "LEVEL\n" + LevelButtonLabel(m_Manager.CurrentLevel).ToUpperInvariant()
+                string label = m_Manager.CurrentLevel != null
+                    ? LevelButtonLabel(m_Manager.CurrentLevel).ToUpperInvariant()
                     : "LEVEL";
-                StyleBarSegment(m_CompactLevelButton, m_LevelDialogOpen, new Color(0.12f, 0.56f, 0.38f, 0.86f));
+                SetSegmentLabel(m_CompactLevelButton, "LEVEL", label);
+                StyleBarSegment(m_CompactLevelButton, m_LevelDialogOpen, WithAlpha(k_Go, 0.22f));
             }
 
             if (m_CompactMenuButton != null)
             {
-                m_CompactMenuButton.text = m_CompactMenuOpen ? "CLOSE" : "ACTIONS";
-                StyleBarSegment(m_CompactMenuButton, m_CompactMenuOpen, new Color(0.16f, 0.46f, 0.92f, 0.82f));
+                SetSegmentLabel(m_CompactMenuButton, m_CompactMenuOpen ? "CLOSE" : "MENU", m_CompactMenuOpen ? string.Empty : "ACTIONS");
+                StyleBarSegment(m_CompactMenuButton, m_CompactMenuOpen, WithAlpha(k_Nav, 0.22f));
             }
 
             for (int i = 0; i < m_CompactCharacterButtons.Count; i++)
             {
                 Button button = m_CompactCharacterButtons[i];
                 bool active = actor != null && (button.userData as string) == actor.Id;
-                Color color = active && actor != null ? CharacterAccent(actor.Id) : new Color(1f, 1f, 1f, 0.09f);
+                Color color = active && actor != null ? CharacterAccent(actor.Id) : k_Fill;
                 StyleCompactButton(button, active, color);
             }
 
@@ -268,29 +318,36 @@ namespace DaHilg
                 bool active = m_Manager.CameraRig != null
                     && button.userData is DaHilgCameraMode mode
                     && mode == m_Manager.CameraRig.Mode;
-                StyleCompactButton(button, active, new Color(0.16f, 0.46f, 0.92f, 0.86f));
+                StyleCompactButton(button, active, WithAlpha(k_Nav, 0.26f));
             }
 
             for (int i = 0; i < m_CompactLevelButtons.Count; i++)
             {
                 Button button = m_CompactLevelButtons[i];
                 bool active = m_Manager.CurrentLevel != null && (button.userData as string) == m_Manager.CurrentLevel.Slug;
-                StyleCompactButton(button, active, new Color(0.12f, 0.56f, 0.38f, 0.86f));
+                StyleCompactButton(button, active, WithAlpha(k_Go, 0.26f));
             }
 
             for (int i = 0; i < m_CompactEmoteButtons.Count; i++)
             {
-                StyleCompactButton(m_CompactEmoteButtons[i], false, new Color(1f, 1f, 1f, 0.09f));
+                StyleCompactButton(m_CompactEmoteButtons[i], false, k_Fill);
             }
 
             RefreshLevelDialogButtons();
         }
 
+        // Stack a tiny kicker word over a bigger value, like the driving game's .segLab.
+        static void SetSegmentLabel(Button button, string kick, string value)
+        {
+            if (button == null) return;
+            button.text = string.IsNullOrEmpty(value) ? kick : kick + "\n" + value;
+        }
+
         void StyleCompactButton(Button button, bool active, Color activeColor)
         {
             if (button == null) return;
-            button.style.backgroundColor = active ? activeColor : new Color(1f, 1f, 1f, 0.09f);
-            Color border = active ? Color.white : new Color(1f, 1f, 1f, 0.14f);
+            button.style.backgroundColor = active ? activeColor : k_Fill;
+            Color border = active ? Color.white : k_Line;
             button.style.borderTopColor = border;
             button.style.borderBottomColor = border;
             button.style.borderLeftColor = border;
@@ -304,7 +361,7 @@ namespace DaHilg
         void StyleBarSegment(Button button, bool active, Color activeColor)
         {
             if (button == null) return;
-            button.style.backgroundColor = active ? activeColor : new Color(1f, 1f, 1f, 0.04f);
+            button.style.backgroundColor = active ? activeColor : k_Fill;
             button.style.borderTopWidth = 0;
             button.style.borderBottomWidth = 0;
             button.style.borderLeftWidth = 0;
@@ -313,13 +370,13 @@ namespace DaHilg
 
         Color CharacterAccent(string id)
         {
-            if (m_Manager == null || m_Manager.Settings == null || m_Manager.Settings.Characters == null) return new Color(0.16f, 0.46f, 0.92f, 0.86f);
+            if (m_Manager == null || m_Manager.Settings == null || m_Manager.Settings.Characters == null) return WithAlpha(k_Nav, 0.86f);
             for (int i = 0; i < m_Manager.Settings.Characters.Length; i++)
             {
                 DaHilgCharacterSlot slot = m_Manager.Settings.Characters[i];
                 if (slot.Id == id) return new Color(slot.Accent.r, slot.Accent.g, slot.Accent.b, 0.82f);
             }
-            return new Color(0.16f, 0.46f, 0.92f, 0.86f);
+            return WithAlpha(k_Nav, 0.86f);
         }
 
         public bool TickMenuInput(DaHilgInputRouter input)
@@ -430,6 +487,8 @@ namespace DaHilg
 
         void Build()
         {
+            LoadFonts();
+
             UIDocument doc = GetComponent<UIDocument>();
             m_Root = doc.rootVisualElement;
             m_Root.Clear();
@@ -438,8 +497,13 @@ namespace DaHilg
             m_Root.style.right = 0;
             m_Root.style.top = 0;
             m_Root.style.bottom = 0;
-            m_Root.style.color = Color.white;
-            m_Root.pickingMode = PickingMode.Position;
+            m_Root.style.color = k_Text;
+            // The full-screen HUD root must pass pointer events through to the game canvas
+            // (interactive children opt back into Position) — otherwise empty HUD areas eat
+            // desktop clicks and block the right-click pointer-lock used for mouse-look.
+            m_Root.pickingMode = PickingMode.Ignore;
+            // Every label/button inherits the AGC face from the root unless overridden.
+            ApplyFont(m_Root, m_AgcFont);
 
             m_MarkOverlay = new VisualElement();
             m_MarkOverlay.pickingMode = PickingMode.Ignore;
@@ -465,99 +529,34 @@ namespace DaHilg
             m_MarkLabel.style.left = Length.Percent(50);
             m_MarkLabel.style.top = 64;
             m_MarkLabel.style.translate = new Translate(Length.Percent(-50), 0);
-            m_MarkLabel.style.paddingLeft = 12;
-            m_MarkLabel.style.paddingRight = 12;
-            m_MarkLabel.style.paddingTop = 6;
-            m_MarkLabel.style.paddingBottom = 6;
-            m_MarkLabel.style.backgroundColor = new Color(0.82f, 0.06f, 0.02f, 0.86f);
-            m_MarkLabel.style.borderTopLeftRadius = 6;
-            m_MarkLabel.style.borderTopRightRadius = 6;
-            m_MarkLabel.style.borderBottomLeftRadius = 6;
-            m_MarkLabel.style.borderBottomRightRadius = 6;
+            m_MarkLabel.style.paddingLeft = 14;
+            m_MarkLabel.style.paddingRight = 14;
+            m_MarkLabel.style.paddingTop = 7;
+            m_MarkLabel.style.paddingBottom = 7;
+            m_MarkLabel.style.backgroundColor = WithAlpha(k_Reverse, 0.86f);
+            m_MarkLabel.style.letterSpacing = 2f;
+            ApplyFont(m_MarkLabel, m_AgcHeavyFont);
             m_MarkLabel.style.display = DisplayStyle.None;
             m_Root.Add(m_MarkLabel);
 
-            m_TopPanel = Panel();
-            m_TopPanel.style.left = 18;
-            m_TopPanel.style.top = 18;
-            m_TopPanel.style.width = 270;
-            m_Root.Add(m_TopPanel);
-
-            m_Title = Label("Da Hilg", 20, FontStyle.Bold);
-            m_TopPanel.Add(m_Title);
-            VisualElement row = new VisualElement { style = { flexDirection = FlexDirection.Row, marginTop = 8 } };
-            m_TopPanel.Add(row);
-            m_Mode = Chip("GREET");
-            m_Score = Chip("000");
-            row.Add(m_Mode);
-            row.Add(m_Score);
-            m_State = Label("", 13, FontStyle.Normal);
-            m_State.style.marginTop = 8;
-            m_TopPanel.Add(m_State);
-
-            VisualElement health = new VisualElement();
-            health.style.height = 8;
-            health.style.marginTop = 8;
-            health.style.backgroundColor = new Color(0f, 0f, 0f, 0.45f);
-            health.style.borderTopLeftRadius = 4;
-            health.style.borderTopRightRadius = 4;
-            health.style.borderBottomLeftRadius = 4;
-            health.style.borderBottomRightRadius = 4;
-            m_TopPanel.Add(health);
-            m_HealthFill = new VisualElement();
-            m_HealthFill.style.height = Length.Percent(100);
-            m_HealthFill.style.width = Length.Percent(100);
-            m_HealthFill.style.backgroundColor = new Color(0.18f, 0.91f, 0.31f, 1f);
-            m_HealthFill.style.borderTopLeftRadius = 4;
-            m_HealthFill.style.borderTopRightRadius = 4;
-            m_HealthFill.style.borderBottomLeftRadius = 4;
-            m_HealthFill.style.borderBottomRightRadius = 4;
-            health.Add(m_HealthFill);
-
-            m_Attached = Label("", 12, FontStyle.Normal);
-            m_Attached.style.marginTop = 8;
-            m_TopPanel.Add(m_Attached);
-
-            m_NibblerMeter = new VisualElement();
-            m_NibblerMeter.style.height = 10;
-            m_NibblerMeter.style.marginTop = 6;
-            m_NibblerMeter.style.backgroundColor = new Color(0f, 0f, 0f, 0.46f);
-            m_NibblerMeter.style.borderTopLeftRadius = 5;
-            m_NibblerMeter.style.borderTopRightRadius = 5;
-            m_NibblerMeter.style.borderBottomLeftRadius = 5;
-            m_NibblerMeter.style.borderBottomRightRadius = 5;
-            m_TopPanel.Add(m_NibblerMeter);
-            m_NibblerFill = new VisualElement();
-            m_NibblerFill.style.height = Length.Percent(100);
-            m_NibblerFill.style.width = Length.Percent(0);
-            m_NibblerFill.style.backgroundColor = new Color(0.24f, 0.88f, 0.42f, 1f);
-            m_NibblerFill.style.borderTopLeftRadius = 5;
-            m_NibblerFill.style.borderTopRightRadius = 5;
-            m_NibblerFill.style.borderBottomLeftRadius = 5;
-            m_NibblerFill.style.borderBottomRightRadius = 5;
-            m_NibblerMeter.Add(m_NibblerFill);
-
-            m_RollState = Label("", 11, FontStyle.Bold);
-            m_RollState.style.marginTop = 7;
-            m_TopPanel.Add(m_RollState);
+            BuildTopPanel();
 
             m_Prompt = Label("", 13, FontStyle.Bold);
             m_Prompt.style.position = Position.Absolute;
             m_Prompt.style.left = Length.Percent(50);
             m_Prompt.style.bottom = 126;
             m_Prompt.style.translate = new Translate(Length.Percent(-50), 0);
-            m_Prompt.style.paddingLeft = 14;
-            m_Prompt.style.paddingRight = 14;
-            m_Prompt.style.paddingTop = 8;
-            m_Prompt.style.paddingBottom = 8;
-            m_Prompt.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.72f);
-            m_Prompt.style.borderTopLeftRadius = 8;
-            m_Prompt.style.borderTopRightRadius = 8;
-            m_Prompt.style.borderBottomLeftRadius = 8;
-            m_Prompt.style.borderBottomRightRadius = 8;
+            m_Prompt.style.paddingLeft = 16;
+            m_Prompt.style.paddingRight = 16;
+            m_Prompt.style.paddingTop = 9;
+            m_Prompt.style.paddingBottom = 9;
+            m_Prompt.style.backgroundColor = k_Glass;
+            ApplyBorder(m_Prompt, k_Line, 1);
+            m_Prompt.pickingMode = PickingMode.Ignore; // pure readout — must not eat desktop clicks
             m_Root.Add(m_Prompt);
 
             VisualElement cross = new VisualElement();
+            cross.pickingMode = PickingMode.Ignore; // decorative crosshair
             cross.style.position = Position.Absolute;
             cross.style.left = Length.Percent(50);
             cross.style.top = Length.Percent(50);
@@ -572,10 +571,6 @@ namespace DaHilg
             cross.style.borderBottomColor = cross.style.borderTopColor.value;
             cross.style.borderLeftColor = cross.style.borderTopColor.value;
             cross.style.borderRightColor = cross.style.borderTopColor.value;
-            cross.style.borderTopLeftRadius = 4;
-            cross.style.borderTopRightRadius = 4;
-            cross.style.borderBottomLeftRadius = 4;
-            cross.style.borderBottomRightRadius = 4;
             m_Root.Add(cross);
 
             BuildCharacterBar();
@@ -586,6 +581,186 @@ namespace DaHilg
             BuildLevelBar();
             BuildCompactControls();
             BuildLevelDialog();
+        }
+
+        void LoadFonts()
+        {
+            // Runtime-loadable AGC faces (converted from the driving game's woff2 to TTF
+            // and dropped under Assets/DaHilg/Resources/Fonts so Resources.Load works in
+            // the WebGL build). Falls back to the built-in face if loading ever fails.
+            m_AgcFont = Resources.Load<Font>("Fonts/AGC-Bold");
+            m_AgcHeavyFont = Resources.Load<Font>("Fonts/AGC-Heavy") ?? Resources.Load<Font>("Fonts/AGC-Black") ?? m_AgcFont;
+            if (m_AgcFont == null) m_AgcFont = m_AgcHeavyFont;
+            if (m_AgcFont == null)
+                Debug.LogError("[DaHilg] AGC font failed to load from Resources/Fonts — HUD falls back to the built-in face. Ensure AGC-*.ttf are imported under Assets/DaHilg/Resources/Fonts.");
+        }
+
+        static void ApplyFont(VisualElement element, Font font)
+        {
+            if (element == null || font == null) return;
+            element.style.unityFontDefinition = new StyleFontDefinition(FontDefinition.FromFont(font));
+        }
+
+        void BuildTopPanel()
+        {
+            // ── TOP-LEFT collapsible status panel ─────────────────────────────────
+            // Square nav-app glass card holding title/mode/score, the horizontal health
+            // row, the nibbler counter chip and the framed minimap. A small ▾ toggle
+            // collapses it to a one-line strip so the screen frees up.
+            m_TopPanel = Panel();
+            m_TopPanel.style.left = 18;
+            m_TopPanel.style.top = 18;
+            m_TopPanel.style.width = 252;
+            m_Root.Add(m_TopPanel);
+
+            // Header row: title + collapse toggle, always visible.
+            VisualElement header = new VisualElement();
+            header.style.flexDirection = FlexDirection.Row;
+            header.style.alignItems = Align.Center;
+            header.style.justifyContent = Justify.SpaceBetween;
+            m_TopPanel.Add(header);
+
+            m_Title = Label("Da Hilg", 18, FontStyle.Bold);
+            ApplyFont(m_Title, m_AgcHeavyFont);
+            m_Title.style.flexGrow = 1;
+            m_Title.style.flexShrink = 1;
+            m_Title.style.overflow = Overflow.Hidden;
+            m_Title.style.textOverflow = TextOverflow.Ellipsis;
+            m_Title.style.whiteSpace = WhiteSpace.NoWrap;
+            header.Add(m_Title);
+
+            m_TopCollapseButton = new Button(ToggleTopPanel) { text = "▾" };
+            m_TopCollapseButton.focusable = true;
+            m_TopCollapseButton.style.width = 26;
+            m_TopCollapseButton.style.height = 26;
+            m_TopCollapseButton.style.marginLeft = 8;
+            m_TopCollapseButton.style.marginTop = 0;
+            m_TopCollapseButton.style.marginBottom = 0;
+            m_TopCollapseButton.style.marginRight = 0;
+            m_TopCollapseButton.style.paddingLeft = 0;
+            m_TopCollapseButton.style.paddingRight = 0;
+            m_TopCollapseButton.style.paddingTop = 0;
+            m_TopCollapseButton.style.paddingBottom = 0;
+            m_TopCollapseButton.style.flexShrink = 0;
+            m_TopCollapseButton.style.fontSize = 12;
+            m_TopCollapseButton.style.color = k_Text;
+            m_TopCollapseButton.style.backgroundColor = k_Fill;
+            m_TopCollapseButton.style.unityTextAlign = TextAnchor.MiddleCenter;
+            ApplyBorder(m_TopCollapseButton, k_Line, 1);
+            header.Add(m_TopCollapseButton);
+
+            // Collapsed one-line strip (hidden until collapsed).
+            m_TopCompactStrip = new VisualElement();
+            m_TopCompactStrip.style.flexDirection = FlexDirection.Row;
+            m_TopCompactStrip.style.alignItems = Align.Center;
+            m_TopCompactStrip.style.marginTop = 7;
+            m_TopCompactStrip.style.display = DisplayStyle.None;
+            m_TopPanel.Add(m_TopCompactStrip);
+            m_TopCompactLabel = Label("", 11, FontStyle.Bold);
+            m_TopCompactLabel.style.color = k_TextFaint;
+            m_TopCompactLabel.style.letterSpacing = 0.5f;
+            m_TopCompactStrip.Add(m_TopCompactLabel);
+
+            // Expanded body holding all the detail widgets.
+            m_TopPanelBody = new VisualElement();
+            m_TopPanelBody.style.flexDirection = FlexDirection.Column;
+            m_TopPanel.Add(m_TopPanelBody);
+
+            VisualElement chipRow = new VisualElement { style = { flexDirection = FlexDirection.Row, marginTop = 9, alignItems = Align.Center } };
+            m_TopPanelBody.Add(chipRow);
+            m_Mode = Chip("GREET", k_Nav);
+            m_Score = Chip("000", k_Coin);
+            ApplyFont(m_Score, m_AgcHeavyFont);
+            chipRow.Add(m_Mode);
+            chipRow.Add(m_Score);
+
+            m_State = Label("", 12, FontStyle.Normal);
+            m_State.style.marginTop = 9;
+            m_State.style.color = WithAlpha(Color.white, 0.82f);
+            m_TopPanelBody.Add(m_State);
+
+            // ── Compact HORIZONTAL health row: slim bar + inline % readout ─────────
+            VisualElement healthRow = new VisualElement();
+            healthRow.style.flexDirection = FlexDirection.Row;
+            healthRow.style.alignItems = Align.Center;
+            healthRow.style.marginTop = 7;
+            m_TopPanelBody.Add(healthRow);
+
+            Label healthKick = Label("HP", 8, FontStyle.Bold);
+            healthKick.style.color = k_TextDim;
+            healthKick.style.letterSpacing = 1.5f;
+            healthKick.style.marginRight = 7;
+            healthKick.style.flexShrink = 0;
+            healthRow.Add(healthKick);
+
+            VisualElement healthTrack = new VisualElement();
+            healthTrack.style.flexGrow = 1;
+            healthTrack.style.height = 6;
+            healthTrack.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+            ApplyBorder(healthTrack, k_Line, 1);
+            healthTrack.style.overflow = Overflow.Hidden;
+            healthRow.Add(healthTrack);
+            m_HealthFill = new VisualElement();
+            m_HealthFill.style.position = Position.Absolute;
+            m_HealthFill.style.left = 0;
+            m_HealthFill.style.top = 0;
+            m_HealthFill.style.bottom = 0;
+            m_HealthFill.style.width = Length.Percent(100);
+            m_HealthFill.style.backgroundColor = k_Go;
+            healthTrack.Add(m_HealthFill);
+
+            // ── Inline nibbler counter chip (compact, only shows in Nibblers) ──────
+            m_Attached = Label("", 11, FontStyle.Normal);
+            m_Attached.style.marginTop = 8;
+            m_Attached.style.color = WithAlpha(Color.white, 0.78f);
+            m_TopPanelBody.Add(m_Attached);
+
+            VisualElement nibRow = new VisualElement();
+            nibRow.style.flexDirection = FlexDirection.Row;
+            nibRow.style.alignItems = Align.Center;
+            nibRow.style.marginTop = 6;
+            m_TopPanelBody.Add(nibRow);
+
+            Label nibKick = Label("NIB", 8, FontStyle.Bold);
+            nibKick.style.color = k_TextDim;
+            nibKick.style.letterSpacing = 1.5f;
+            nibKick.style.marginRight = 7;
+            nibKick.style.flexShrink = 0;
+            nibRow.Add(nibKick);
+
+            m_NibblerMeter = new VisualElement();
+            m_NibblerMeter.style.flexGrow = 1;
+            m_NibblerMeter.style.height = 6;
+            m_NibblerMeter.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+            ApplyBorder(m_NibblerMeter, k_Line, 1);
+            m_NibblerMeter.style.overflow = Overflow.Hidden;
+            nibRow.Add(m_NibblerMeter);
+            m_NibblerFill = new VisualElement();
+            m_NibblerFill.style.position = Position.Absolute;
+            m_NibblerFill.style.left = 0;
+            m_NibblerFill.style.top = 0;
+            m_NibblerFill.style.bottom = 0;
+            m_NibblerFill.style.width = Length.Percent(0);
+            m_NibblerFill.style.backgroundColor = k_Go;
+            m_NibblerMeter.Add(m_NibblerFill);
+
+            m_RollState = Label("", 10, FontStyle.Bold);
+            m_RollState.style.marginTop = 7;
+            m_RollState.style.letterSpacing = 0.5f;
+            m_TopPanelBody.Add(m_RollState);
+        }
+
+        void ToggleTopPanel()
+        {
+            if (Time.unscaledTime - m_LastHudActivationTime < 0.08f) return;
+            m_LastHudActivationTime = Time.unscaledTime;
+            m_TopPanelCollapsed = !m_TopPanelCollapsed;
+            if (m_TopCollapseButton != null) m_TopCollapseButton.text = m_TopPanelCollapsed ? "▸" : "▾";
+            if (m_TopPanelBody != null) m_TopPanelBody.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
+            if (m_TopCompactStrip != null) m_TopCompactStrip.style.display = m_TopPanelCollapsed ? DisplayStyle.Flex : DisplayStyle.None;
+            // Hide the framed minimap while collapsed so the compact strip stands alone.
+            if (m_Minimap != null) m_Minimap.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
+            Refresh();
         }
 
         void BuildMinimap()
@@ -606,15 +781,12 @@ namespace DaHilg
             m_CharacterBar.style.bottom = 24;
             m_CharacterBar.style.translate = new Translate(Length.Percent(-50), 0);
             m_CharacterBar.style.flexDirection = FlexDirection.Row;
-            m_CharacterBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.62f);
+            m_CharacterBar.style.backgroundColor = k_Glass;
+            ApplyBorder(m_CharacterBar, k_Line, 1);
             m_CharacterBar.style.paddingLeft = 6;
             m_CharacterBar.style.paddingRight = 6;
             m_CharacterBar.style.paddingTop = 6;
             m_CharacterBar.style.paddingBottom = 6;
-            m_CharacterBar.style.borderTopLeftRadius = 8;
-            m_CharacterBar.style.borderTopRightRadius = 8;
-            m_CharacterBar.style.borderBottomLeftRadius = 8;
-            m_CharacterBar.style.borderBottomRightRadius = 8;
             m_Root.Add(m_CharacterBar);
 
             m_CharacterButtons.Clear();
@@ -639,10 +811,6 @@ namespace DaHilg
                 button.style.borderBottomWidth = 1;
                 button.style.borderLeftWidth = 1;
                 button.style.borderRightWidth = 1;
-                button.style.borderTopLeftRadius = 6;
-                button.style.borderTopRightRadius = 6;
-                button.style.borderBottomLeftRadius = 6;
-                button.style.borderBottomRightRadius = 6;
                 m_CharacterBar.Add(button);
                 m_CharacterButtons.Add(button);
             }
@@ -691,7 +859,7 @@ namespace DaHilg
             m_Joy.style.borderBottomWidth = 2;
             m_Joy.style.borderLeftWidth = 2;
             m_Joy.style.borderRightWidth = 2;
-            m_Joy.style.borderTopColor = new Color(1f, 1f, 1f, 0.28f);
+            m_Joy.style.borderTopColor = WithAlpha(k_Nav, 0.55f);
             m_Joy.style.borderBottomColor = m_Joy.style.borderTopColor.value;
             m_Joy.style.borderLeftColor = m_Joy.style.borderTopColor.value;
             m_Joy.style.borderRightColor = m_Joy.style.borderTopColor.value;
@@ -708,7 +876,7 @@ namespace DaHilg
             m_Knob.style.top = (k_JoySize - k_JoyKnobSize) * 0.5f;
             m_Knob.style.width = k_JoyKnobSize;
             m_Knob.style.height = k_JoyKnobSize;
-            m_Knob.style.backgroundColor = new Color(0.22f, 0.56f, 1f, 0.92f);
+            m_Knob.style.backgroundColor = WithAlpha(k_Nav, 0.92f);
             m_Knob.style.borderTopLeftRadius = k_JoyKnobSize * 0.5f;
             m_Knob.style.borderTopRightRadius = k_JoyKnobSize * 0.5f;
             m_Knob.style.borderBottomLeftRadius = k_JoyKnobSize * 0.5f;
@@ -716,7 +884,7 @@ namespace DaHilg
             m_Knob.pickingMode = PickingMode.Ignore;
             m_Joy.Add(m_Knob);
 
-            Button jump = TouchButton("JUMP");
+            Button jump = TouchButton("JUMP", k_Nav);
             m_JumpButton = jump;
             jump.style.right = 34;
             jump.style.bottom = 34;
@@ -728,7 +896,7 @@ namespace DaHilg
             jump.clicked += () => m_Input.QueueTouchJump();
             m_Root.Add(jump);
 
-            Button roll = TouchButton("ROLL");
+            Button roll = TouchButton("ROLL", k_Nav);
             m_RollButton = roll;
             roll.style.right = 34;
             roll.style.bottom = 162;
@@ -740,7 +908,7 @@ namespace DaHilg
             roll.clicked += () => m_Input.QueueTouchRoll();
             m_Root.Add(roll);
 
-            Button run = TouchButton("RUN");
+            Button run = TouchButton("RUN", k_Nav);
             m_RunButton = run;
             run.style.right = 34;
             run.style.bottom = 98;
@@ -754,7 +922,7 @@ namespace DaHilg
             run.RegisterCallback<PointerLeaveEvent>(_ => m_Input.SetTouchRun(false));
             m_Root.Add(run);
 
-            Button punch = TouchButton("PUNCH");
+            Button punch = TouchButton("PUNCH", k_Reverse);
             m_PunchButton = punch;
             punch.style.right = 102;
             punch.style.bottom = 34;
@@ -790,11 +958,14 @@ namespace DaHilg
             if (m_CompactBar != null) m_CompactBar.style.display = DisplayStyle.Flex;
             if (m_CompactPanel != null) m_CompactPanel.style.display = m_CompactMenuOpen ? DisplayStyle.Flex : DisplayStyle.None;
             if (m_LevelDialog != null) m_LevelDialog.style.display = m_LevelDialogOpen ? DisplayStyle.Flex : DisplayStyle.None;
+            // Minimap visibility is tied to the collapse state, not the breakpoint.
+            if (m_Minimap != null) m_Minimap.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
 
             if (landscape)
             {
                 SetPanelFrame(m_TopPanel, 12, StyleKeyword.Auto, 12, StyleKeyword.Auto, 224, StyleKeyword.Auto);
-                SetPanelFrame(m_Minimap, 12, StyleKeyword.Auto, 152, StyleKeyword.Auto, 190, 132);
+                // Minimap sits just under the (collapsible) status card so they never overlap.
+                SetPanelFrame(m_Minimap, 12, StyleKeyword.Auto, MinimapTop(landscape), StyleKeyword.Auto, 190, 132);
                 SetBarFrame(m_CharacterBar, StyleKeyword.Auto, 12, 152, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_EmoteBar, StyleKeyword.Auto, 12, 198, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_CameraBar, StyleKeyword.Auto, 12, 244, StyleKeyword.Auto, new Translate(0, 0));
@@ -830,15 +1001,15 @@ namespace DaHilg
             }
             else if (touch)
             {
-                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 252, StyleKeyword.Auto);
-                SetPanelFrame(m_Minimap, 18, StyleKeyword.Auto, 154, StyleKeyword.Auto, 150, 136);
+                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 234, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, 18, StyleKeyword.Auto, MinimapTop(landscape), StyleKeyword.Auto, 150, 122);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 118, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 166, new Translate(Length.Percent(-50), 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 258, new Translate(Length.Percent(-50), 0), 340, 13);
                 SetBarFrame(m_CompactBar, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 332;
+                if (m_CompactBar != null) m_CompactBar.style.width = 320;
                 SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 18, 68, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 430;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
@@ -867,8 +1038,8 @@ namespace DaHilg
             }
             else
             {
-                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 270, StyleKeyword.Auto);
-                SetPanelFrame(m_Minimap, 18, StyleKeyword.Auto, 194, StyleKeyword.Auto, 220, 168);
+                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 252, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, 18, StyleKeyword.Auto, MinimapTop(landscape), StyleKeyword.Auto, 220, 168);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 116, new Translate(Length.Percent(-50), 0));
@@ -881,9 +1052,52 @@ namespace DaHilg
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
             }
 
+            // Narrow screens (portrait phones / short windows): the top-right segmented bar
+            // cannot sit beside the top-left status card without overlapping it. Stack the bar
+            // as a full-width row at the very top and drop the status card + minimap below it.
+            if (Screen.width < 720 && m_CompactBar != null)
+            {
+                m_CompactBar.style.left = 12;
+                m_CompactBar.style.right = 12;
+                m_CompactBar.style.top = 12;
+                m_CompactBar.style.width = StyleKeyword.Auto;
+                float panelLeft = landscape ? 12f : 18f;
+                if (m_TopPanel != null)
+                {
+                    m_TopPanel.style.left = panelLeft;
+                    m_TopPanel.style.top = 64;
+                }
+                if (m_Minimap != null)
+                {
+                    float ph = m_TopPanelCollapsed ? 56f : 188f;
+                    float resolved = m_TopPanel != null ? m_TopPanel.resolvedStyle.height : float.NaN;
+                    if (!float.IsNaN(resolved) && resolved > 1f) ph = resolved;
+                    m_Minimap.style.left = panelLeft;
+                    m_Minimap.style.top = 64f + ph + 8f;
+                }
+                if (m_CompactPanel != null) m_CompactPanel.style.top = 60;
+            }
+
             m_CompactBar?.BringToFront();
             m_CompactPanel?.BringToFront();
             m_LevelDialog?.BringToFront();
+        }
+
+        // The status panel grows/shrinks with collapse; the minimap follows under it so
+        // they never collide. A measured estimate of the panel's resolved height keeps
+        // the gap stable across all aspect ratios; falls back to a fixed offset.
+        StyleLength MinimapTop(bool landscape)
+        {
+            float panelTop = landscape ? 12f : 18f;
+            float gap = 8f;
+            float panelHeight = m_TopPanelCollapsed ? 56f : (landscape ? 150f : 188f);
+            if (m_TopPanel != null)
+            {
+                // The measured height is valid collapsed OR expanded — use it whenever resolved.
+                float resolved = m_TopPanel.resolvedStyle.height;
+                if (!float.IsNaN(resolved) && resolved > 1f) panelHeight = resolved;
+            }
+            return panelTop + panelHeight + gap;
         }
 
         static void SetPanelFrame(VisualElement element, StyleLength left, StyleLength right, StyleLength top, StyleLength bottom, StyleLength width, StyleLength height)
@@ -923,7 +1137,12 @@ namespace DaHilg
 
         static bool ShouldShowTouchControls()
         {
-            return Application.isMobilePlatform || Mathf.Min(Screen.width, Screen.height) < 720;
+            // Touch controls only when there is genuinely no mouse — never on desktop.
+            // The old "Min(Screen.width, Screen.height) < 720" heuristic misfired on short
+            // desktop browser windows and overlaid full-screen pointer-capturing zones that
+            // killed desktop mouse-look / pointer-lock.
+            if (Application.isMobilePlatform) return true;
+            return Touchscreen.current != null && Mouse.current == null;
         }
 
         void BuildEmoteBar()
@@ -934,15 +1153,12 @@ namespace DaHilg
             m_EmoteBar.style.bottom = 72;
             m_EmoteBar.style.translate = new Translate(Length.Percent(-50), 0);
             m_EmoteBar.style.flexDirection = FlexDirection.Row;
-            m_EmoteBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.5f);
+            m_EmoteBar.style.backgroundColor = k_Glass;
+            ApplyBorder(m_EmoteBar, k_Line, 1);
             m_EmoteBar.style.paddingLeft = 5;
             m_EmoteBar.style.paddingRight = 5;
             m_EmoteBar.style.paddingTop = 5;
             m_EmoteBar.style.paddingBottom = 5;
-            m_EmoteBar.style.borderTopLeftRadius = 8;
-            m_EmoteBar.style.borderTopRightRadius = 8;
-            m_EmoteBar.style.borderBottomLeftRadius = 8;
-            m_EmoteBar.style.borderBottomRightRadius = 8;
 
             m_EmoteButtons.Clear();
             RemoveMenuEntriesForRow(1);
@@ -959,12 +1175,9 @@ namespace DaHilg
                 button.style.height = 30;
                 button.style.minWidth = 58;
                 button.style.unityFontStyleAndWeight = FontStyle.Bold;
-                button.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+                button.style.backgroundColor = k_Fill;
                 button.style.color = Color.white;
-                button.style.borderTopLeftRadius = 6;
-                button.style.borderTopRightRadius = 6;
-                button.style.borderBottomLeftRadius = 6;
-                button.style.borderBottomRightRadius = 6;
+                ApplyBorder(button, k_Line, 1);
                 m_EmoteBar.Add(button);
                 m_EmoteButtons.Add(button);
             }
@@ -980,15 +1193,12 @@ namespace DaHilg
             m_CameraBar.style.bottom = 116;
             m_CameraBar.style.translate = new Translate(Length.Percent(-50), 0);
             m_CameraBar.style.flexDirection = FlexDirection.Row;
-            m_CameraBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.55f);
+            m_CameraBar.style.backgroundColor = k_Glass;
+            ApplyBorder(m_CameraBar, k_Line, 1);
             m_CameraBar.style.paddingLeft = 5;
             m_CameraBar.style.paddingRight = 5;
             m_CameraBar.style.paddingTop = 5;
             m_CameraBar.style.paddingBottom = 5;
-            m_CameraBar.style.borderTopLeftRadius = 8;
-            m_CameraBar.style.borderTopRightRadius = 8;
-            m_CameraBar.style.borderBottomLeftRadius = 8;
-            m_CameraBar.style.borderBottomRightRadius = 8;
 
             m_CameraButtons.Clear();
             RemoveMenuEntriesForRow(2);
@@ -1009,15 +1219,12 @@ namespace DaHilg
             m_LevelBar.style.top = 18;
             m_LevelBar.style.translate = new Translate(Length.Percent(-50), 0);
             m_LevelBar.style.flexDirection = FlexDirection.Row;
-            m_LevelBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.55f);
+            m_LevelBar.style.backgroundColor = k_Glass;
+            ApplyBorder(m_LevelBar, k_Line, 1);
             m_LevelBar.style.paddingLeft = 5;
             m_LevelBar.style.paddingRight = 5;
             m_LevelBar.style.paddingTop = 5;
             m_LevelBar.style.paddingBottom = 5;
-            m_LevelBar.style.borderTopLeftRadius = 8;
-            m_LevelBar.style.borderTopRightRadius = 8;
-            m_LevelBar.style.borderBottomLeftRadius = 8;
-            m_LevelBar.style.borderBottomRightRadius = 8;
 
             m_LevelButtons.Clear();
             RemoveMenuEntriesForRow(3);
@@ -1036,6 +1243,9 @@ namespace DaHilg
 
         void BuildCompactControls()
         {
+            // ── TOP-RIGHT segmented action bar (VIEW / PLAYER / LEVEL / ACTIONS) ──
+            // Square glass strip mirroring the driving game's .segBar; segments stack a
+            // tiny kicker over a value.
             m_CompactBar = new VisualElement();
             m_CompactBar.style.position = Position.Absolute;
             m_CompactBar.style.right = 18;
@@ -1043,19 +1253,8 @@ namespace DaHilg
             m_CompactBar.style.width = 372;
             m_CompactBar.style.flexDirection = FlexDirection.Row;
             m_CompactBar.style.alignItems = Align.Stretch;
-            m_CompactBar.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.72f);
-            m_CompactBar.style.borderTopWidth = 1;
-            m_CompactBar.style.borderBottomWidth = 1;
-            m_CompactBar.style.borderLeftWidth = 1;
-            m_CompactBar.style.borderRightWidth = 1;
-            m_CompactBar.style.borderTopColor = new Color(1f, 1f, 1f, 0.18f);
-            m_CompactBar.style.borderBottomColor = m_CompactBar.style.borderTopColor.value;
-            m_CompactBar.style.borderLeftColor = m_CompactBar.style.borderTopColor.value;
-            m_CompactBar.style.borderRightColor = m_CompactBar.style.borderTopColor.value;
-            m_CompactBar.style.borderTopLeftRadius = 10;
-            m_CompactBar.style.borderTopRightRadius = 10;
-            m_CompactBar.style.borderBottomLeftRadius = 10;
-            m_CompactBar.style.borderBottomRightRadius = 10;
+            m_CompactBar.style.backgroundColor = k_Glass;
+            ApplyBorder(m_CompactBar, k_Line, 1);
             m_CompactBar.style.overflow = Overflow.Hidden;
             m_CompactBar.style.paddingLeft = 0;
             m_CompactBar.style.paddingRight = 0;
@@ -1113,15 +1312,8 @@ namespace DaHilg
             m_CompactPanel.style.top = 68;
             m_CompactPanel.style.width = 248;
             m_CompactPanel.style.maxHeight = 430;
-            m_CompactPanel.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.82f);
-            m_CompactPanel.style.borderTopWidth = 1;
-            m_CompactPanel.style.borderBottomWidth = 1;
-            m_CompactPanel.style.borderLeftWidth = 1;
-            m_CompactPanel.style.borderRightWidth = 1;
-            m_CompactPanel.style.borderTopColor = new Color(1f, 1f, 1f, 0.18f);
-            m_CompactPanel.style.borderBottomColor = m_CompactPanel.style.borderTopColor.value;
-            m_CompactPanel.style.borderLeftColor = m_CompactPanel.style.borderTopColor.value;
-            m_CompactPanel.style.borderRightColor = m_CompactPanel.style.borderTopColor.value;
+            m_CompactPanel.style.backgroundColor = k_GlassDeep;
+            ApplyBorder(m_CompactPanel, k_Line, 1);
             m_CompactPanel.style.paddingLeft = 8;
             m_CompactPanel.style.paddingRight = 8;
             m_CompactPanel.style.paddingTop = 8;
@@ -1155,10 +1347,6 @@ namespace DaHilg
             button.style.borderBottomWidth = 0;
             button.style.borderLeftWidth = 0;
             button.style.borderRightWidth = 0;
-            button.style.borderTopLeftRadius = 0;
-            button.style.borderTopRightRadius = 0;
-            button.style.borderBottomLeftRadius = 0;
-            button.style.borderBottomRightRadius = 0;
         }
 
         void AddCompactActionSection()
@@ -1229,7 +1417,7 @@ namespace DaHilg
             m_LevelDialog.style.right = 0;
             m_LevelDialog.style.top = 0;
             m_LevelDialog.style.bottom = 0;
-            m_LevelDialog.style.backgroundColor = new Color(0f, 0f, 0f, 0.28f);
+            m_LevelDialog.style.backgroundColor = new Color(0f, 0f, 0f, 0.42f);
             m_LevelDialog.style.display = DisplayStyle.None;
             m_LevelDialog.pickingMode = PickingMode.Position;
             m_LevelDialog.RegisterCallback<PointerDownEvent>(e => e.StopPropagation());
@@ -1246,23 +1434,22 @@ namespace DaHilg
             m_LevelDialogPanel.style.paddingRight = 18;
             m_LevelDialogPanel.style.paddingTop = 16;
             m_LevelDialogPanel.style.paddingBottom = 16;
-            m_LevelDialogPanel.style.backgroundColor = new Color(0.05f, 0.06f, 0.09f, 0.97f);
-            m_LevelDialogPanel.style.borderTopWidth = 1;
+            m_LevelDialogPanel.style.backgroundColor = k_PanelDeep;
+            // Square sheet with a nav top accent, like the driving game's #carCard.
+            m_LevelDialogPanel.style.borderTopWidth = 2;
             m_LevelDialogPanel.style.borderBottomWidth = 1;
             m_LevelDialogPanel.style.borderLeftWidth = 1;
             m_LevelDialogPanel.style.borderRightWidth = 1;
-            m_LevelDialogPanel.style.borderTopColor = new Color(1f, 1f, 1f, 0.22f);
-            m_LevelDialogPanel.style.borderBottomColor = m_LevelDialogPanel.style.borderTopColor.value;
-            m_LevelDialogPanel.style.borderLeftColor = m_LevelDialogPanel.style.borderTopColor.value;
-            m_LevelDialogPanel.style.borderRightColor = m_LevelDialogPanel.style.borderTopColor.value;
-            m_LevelDialogPanel.style.borderTopLeftRadius = 14;
-            m_LevelDialogPanel.style.borderTopRightRadius = 14;
-            m_LevelDialogPanel.style.borderBottomLeftRadius = 14;
-            m_LevelDialogPanel.style.borderBottomRightRadius = 14;
+            m_LevelDialogPanel.style.borderTopColor = k_Nav;
+            m_LevelDialogPanel.style.borderBottomColor = k_Line;
+            m_LevelDialogPanel.style.borderLeftColor = k_Line;
+            m_LevelDialogPanel.style.borderRightColor = k_Line;
             m_LevelDialog.Add(m_LevelDialogPanel);
 
-            m_LevelDialogTitle = Label("CHANGE LEVEL", 16, FontStyle.Bold);
+            m_LevelDialogTitle = Label("CHANGE LEVEL", 18, FontStyle.Bold);
+            ApplyFont(m_LevelDialogTitle, m_AgcHeavyFont);
             m_LevelDialogTitle.style.unityTextAlign = TextAnchor.MiddleCenter;
+            m_LevelDialogTitle.style.letterSpacing = 1f;
             m_LevelDialogTitle.style.marginBottom = 14;
             m_LevelDialogPanel.Add(m_LevelDialogTitle);
 
@@ -1284,10 +1471,6 @@ namespace DaHilg
                     button.style.height = 46;
                     button.style.fontSize = 13;
                     button.style.marginBottom = 8;
-                    button.style.borderTopLeftRadius = 8;
-                    button.style.borderTopRightRadius = 8;
-                    button.style.borderBottomLeftRadius = 8;
-                    button.style.borderBottomRightRadius = 8;
                     button.userData = slug;
                     levelList.Add(button);
                     m_LevelDialogButtons.Add(button);
@@ -1307,10 +1490,6 @@ namespace DaHilg
             m_LevelCancelButton.style.height = 48;
             m_LevelCancelButton.style.fontSize = 13;
             m_LevelCancelButton.style.marginRight = 6;
-            m_LevelCancelButton.style.borderTopLeftRadius = 8;
-            m_LevelCancelButton.style.borderTopRightRadius = 8;
-            m_LevelCancelButton.style.borderBottomLeftRadius = 8;
-            m_LevelCancelButton.style.borderBottomRightRadius = 8;
             actions.Add(m_LevelCancelButton);
             RegisterMenuButton(m_LevelCancelButton, 6, 0, CloseLevelDialog);
 
@@ -1320,11 +1499,7 @@ namespace DaHilg
             m_LevelConfirmButton.style.height = 48;
             m_LevelConfirmButton.style.fontSize = 14;
             m_LevelConfirmButton.style.marginLeft = 6;
-            m_LevelConfirmButton.style.backgroundColor = new Color(0.16f, 0.46f, 0.92f, 0.95f);
-            m_LevelConfirmButton.style.borderTopLeftRadius = 8;
-            m_LevelConfirmButton.style.borderTopRightRadius = 8;
-            m_LevelConfirmButton.style.borderBottomLeftRadius = 8;
-            m_LevelConfirmButton.style.borderBottomRightRadius = 8;
+            m_LevelConfirmButton.style.backgroundColor = WithAlpha(k_Nav, 0.95f);
             actions.Add(m_LevelConfirmButton);
             RegisterMenuButton(m_LevelConfirmButton, 6, 1, ConfirmLevelChange);
         }
@@ -1379,8 +1554,8 @@ namespace DaHilg
                 bool selected = !string.IsNullOrEmpty(slug) && slug == m_PendingLevelSlug;
                 bool active = m_Manager.CurrentLevel != null && slug == m_Manager.CurrentLevel.Slug;
                 Color color = selected
-                    ? new Color(0.12f, 0.56f, 0.38f, 0.90f)
-                    : (active ? new Color(0.16f, 0.46f, 0.92f, 0.84f) : new Color(1f, 1f, 1f, 0.09f));
+                    ? WithAlpha(k_Go, 0.26f)
+                    : (active ? WithAlpha(k_Nav, 0.24f) : k_Fill);
                 StyleCompactButton(button, selected || active, color);
             }
         }
@@ -1492,9 +1667,10 @@ namespace DaHilg
             VisualElement section = new VisualElement();
             section.style.flexDirection = FlexDirection.Column;
             section.style.marginBottom = 8;
-            Label label = Label(title, 9, FontStyle.Bold);
-            label.style.color = new Color(1f, 1f, 1f, 0.58f);
-            label.style.marginBottom = 5;
+            Label label = Label(title, 8, FontStyle.Bold);
+            label.style.color = k_TextDim;
+            label.style.letterSpacing = 1.5f;
+            label.style.marginBottom = 6;
             section.Add(label);
             return section;
         }
@@ -1515,10 +1691,6 @@ namespace DaHilg
             button.style.flexBasis = Length.Percent(48);
             button.style.minWidth = 0;
             button.style.marginBottom = 6;
-            button.style.borderTopLeftRadius = 6;
-            button.style.borderTopRightRadius = 6;
-            button.style.borderBottomLeftRadius = 6;
-            button.style.borderBottomRightRadius = 6;
         }
 
         Button CompactButton(string text, Action activate, float minWidth)
@@ -1543,20 +1715,13 @@ namespace DaHilg
             button.style.marginBottom = 0;
             button.style.paddingLeft = 9;
             button.style.paddingRight = 9;
-            button.style.backgroundColor = new Color(1f, 1f, 1f, 0.09f);
+            button.style.backgroundColor = k_Fill;
             button.style.color = Color.white;
             button.style.unityFontStyleAndWeight = FontStyle.Bold;
             button.style.unityTextAlign = TextAnchor.MiddleCenter;
             button.style.whiteSpace = WhiteSpace.Normal;
             button.style.fontSize = 11;
-            button.style.borderTopWidth = 1;
-            button.style.borderBottomWidth = 1;
-            button.style.borderLeftWidth = 1;
-            button.style.borderRightWidth = 1;
-            button.style.borderTopColor = new Color(1f, 1f, 1f, 0.12f);
-            button.style.borderBottomColor = button.style.borderTopColor.value;
-            button.style.borderLeftColor = button.style.borderTopColor.value;
-            button.style.borderRightColor = button.style.borderTopColor.value;
+            ApplyBorder(button, k_Line, 1);
             button.RegisterCallback<PointerDownEvent>(e =>
             {
                 ActivateOnce();
@@ -1577,16 +1742,9 @@ namespace DaHilg
             button.style.height = 30;
             button.style.minWidth = 58;
             button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            button.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+            button.style.backgroundColor = k_Fill;
             button.style.color = Color.white;
-            button.style.borderTopWidth = 1;
-            button.style.borderBottomWidth = 1;
-            button.style.borderLeftWidth = 1;
-            button.style.borderRightWidth = 1;
-            button.style.borderTopLeftRadius = 6;
-            button.style.borderTopRightRadius = 6;
-            button.style.borderBottomLeftRadius = 6;
-            button.style.borderBottomRightRadius = 6;
+            ApplyBorder(button, k_Line, 1);
             m_CameraBar.Add(button);
             m_CameraButtons.Add(button);
         }
@@ -1604,16 +1762,9 @@ namespace DaHilg
             button.style.height = 30;
             button.style.minWidth = 68;
             button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            button.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
+            button.style.backgroundColor = k_Fill;
             button.style.color = Color.white;
-            button.style.borderTopWidth = 1;
-            button.style.borderBottomWidth = 1;
-            button.style.borderLeftWidth = 1;
-            button.style.borderRightWidth = 1;
-            button.style.borderTopLeftRadius = 6;
-            button.style.borderTopRightRadius = 6;
-            button.style.borderBottomLeftRadius = 6;
-            button.style.borderBottomRightRadius = 6;
+            ApplyBorder(button, k_Line, 1);
             m_LevelBar.Add(button);
             m_LevelButtons.Add(button);
         }
@@ -1812,6 +1963,8 @@ namespace DaHilg
                 return ElementContains(m_LevelDialogPanel, panelPoint);
             }
 
+            if (TryActivateButtonAt(m_TopCollapseButton, ToggleTopPanel, panelPoint)) return true;
+
             for (int i = m_MenuEntries.Count - 1; i >= 0; i--)
             {
                 MenuEntry entry = m_MenuEntries[i];
@@ -1936,9 +2089,10 @@ namespace DaHilg
                     && m_Manager.CurrentLevel != null
                     && (button.userData as string) == m_Manager.CurrentLevel.Slug;
 
+                // Keyboard/gamepad focus uses the coin highlight; active state uses white.
                 Color border = selected
-                    ? new Color(1f, 0.78f, 0.22f, 1f)
-                    : (activeCharacter || activeCamera || activeLevel ? Color.white : new Color(1f, 1f, 1f, 0.24f));
+                    ? k_Coin
+                    : (activeCharacter || activeCamera || activeLevel ? Color.white : k_Line);
                 float borderWidth = selected ? 3f : (activeCharacter || activeCamera || activeLevel ? 2f : 1f);
 
                 button.style.borderTopColor = border;
@@ -2079,19 +2233,36 @@ namespace DaHilg
             return Mathf.Max(1f, Screen.height);
         }
 
+        // ── Theme helpers ─────────────────────────────────────────────────────────
+        static Color WithAlpha(Color c, float a)
+        {
+            return new Color(c.r, c.g, c.b, a);
+        }
+
+        static void ApplyBorder(VisualElement element, Color color, float width)
+        {
+            if (element == null) return;
+            element.style.borderTopWidth = width;
+            element.style.borderBottomWidth = width;
+            element.style.borderLeftWidth = width;
+            element.style.borderRightWidth = width;
+            element.style.borderTopColor = color;
+            element.style.borderBottomColor = color;
+            element.style.borderLeftColor = color;
+            element.style.borderRightColor = color;
+        }
+
         static VisualElement Panel()
         {
+            // Square nav-app glass card (radius 0), matching the driving game's .glass/.panel.
             VisualElement panel = new VisualElement();
             panel.style.position = Position.Absolute;
-            panel.style.paddingLeft = 14;
-            panel.style.paddingRight = 14;
-            panel.style.paddingTop = 12;
+            panel.style.paddingLeft = 13;
+            panel.style.paddingRight = 13;
+            panel.style.paddingTop = 11;
             panel.style.paddingBottom = 12;
-            panel.style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.68f);
-            panel.style.borderTopLeftRadius = 8;
-            panel.style.borderTopRightRadius = 8;
-            panel.style.borderBottomLeftRadius = 8;
-            panel.style.borderBottomRightRadius = 8;
+            panel.style.backgroundColor = k_Glass;
+            ApplyBorder(panel, k_Line, 1);
             return panel;
         }
 
@@ -2104,35 +2275,32 @@ namespace DaHilg
             return label;
         }
 
-        static Label Chip(string text)
+        // Square pill counter chip with a colored kicker accent (mirrors .ssCell / chips).
+        Label Chip(string text, Color accent)
         {
             Label label = Label(text, 12, FontStyle.Bold);
             label.style.marginRight = 8;
-            label.style.paddingLeft = 8;
-            label.style.paddingRight = 8;
+            label.style.paddingLeft = 9;
+            label.style.paddingRight = 9;
             label.style.paddingTop = 4;
             label.style.paddingBottom = 4;
-            label.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
-            label.style.borderTopLeftRadius = 6;
-            label.style.borderTopRightRadius = 6;
-            label.style.borderBottomLeftRadius = 6;
-            label.style.borderBottomRightRadius = 6;
+            label.style.letterSpacing = 1f;
+            label.style.backgroundColor = WithAlpha(accent, 0.16f);
+            ApplyBorder(label, WithAlpha(accent, 0.55f), 1);
+            label.style.color = Color.white;
             return label;
         }
 
-        static Button TouchButton(string text)
+        Button TouchButton(string text, Color accent)
         {
             Button button = new Button { text = text };
             button.style.position = Position.Absolute;
             button.style.width = 58;
             button.style.height = 48;
-            button.style.backgroundColor = new Color(0.18f, 0.55f, 1f, 0.82f);
+            button.style.backgroundColor = WithAlpha(accent, 0.82f);
             button.style.color = Color.white;
             button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            button.style.borderTopLeftRadius = 8;
-            button.style.borderTopRightRadius = 8;
-            button.style.borderBottomLeftRadius = 8;
-            button.style.borderBottomRightRadius = 8;
+            ApplyBorder(button, WithAlpha(Color.white, 0.22f), 1);
             return button;
         }
     }

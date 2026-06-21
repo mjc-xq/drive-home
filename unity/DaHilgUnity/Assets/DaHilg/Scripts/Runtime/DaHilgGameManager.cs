@@ -6,7 +6,7 @@ namespace DaHilg
 {
     public sealed class DaHilgGameManager : MonoBehaviour
     {
-        const float k_StartShieldSeconds = 11f;
+        const float k_StartShieldSeconds = 3f;
         const float k_StuckTime = 0.6f;
 
         readonly List<DaHilgActor> m_Actors = new List<DaHilgActor>(4);
@@ -128,7 +128,7 @@ namespace DaHilg
             if (Input.ToggleModePressed) ToggleMode();
             if (Input.SwitchPressed) CycleActor(1);
             if (Input.PreviousSwitchPressed) CycleActor(-1);
-            if (Input.EmotePressed >= 0 && Input.EmotePressed < m_Emotes.Length) m_ActiveActor?.PlayEmote(m_Emotes[Input.EmotePressed]);
+            if (Input.EmotePressed >= 0 && Input.EmotePressed < m_Emotes.Length) m_ActiveActor?.PlayEmote(m_Emotes[Input.EmotePressed], true);
             if (!menuConsumedInput && Input.RollPressed) TryFallRoll();
             if (!menuConsumedInput && Input.AttackPressed) TryMelee();
             if (m_PendingMeleeHitAt >= 0f && Time.time >= m_PendingMeleeHitAt)
@@ -246,7 +246,7 @@ namespace DaHilg
 
             bool first = !m_NearbyGreetable.Greeted;
             m_NearbyGreetable.Greeted = true;
-            m_NearbyGreetable.PlayEmote(first ? "Cheer" : "Wave");
+            m_NearbyGreetable.PlayEmote(first ? "Cheer" : "Wave", false, m_ActiveActor.FeetPosition);
             if (first) Score += 100;
 
             bool allGreeted = true;
@@ -449,7 +449,7 @@ namespace DaHilg
                     {
                         actor.NpcState = DaHilgNpcState.Touch;
                         actor.StateUntil = now + 0.6f;
-                        actor.PlayEmote("Cheer");
+                        actor.PlayEmote("Cheer", false, m_ActiveActor.FeetPosition);
                         break;
                     }
                     actor.StepNpc(SeekDirection(actor, toPlayer, true, 1f, dt), true, Settings, dt, now);
@@ -501,7 +501,7 @@ namespace DaHilg
                 actor.StepNpc(Vector3.zero, false, Settings, dt, Time.time);
                 if (Time.time >= actor.StateUntil)
                 {
-                    actor.PlayEmote(actor.Id == "drew" && UnityEngine.Random.value < 0.5f ? "Dance" : "Cheer");
+                    actor.PlayEmote(actor.Id == "drew" && UnityEngine.Random.value < 0.5f ? "Dance" : "Cheer", false, m_ActiveActor.FeetPosition);
                     actor.StateUntil = Time.time + UnityEngine.Random.Range(1.8f, 3.0f);
                 }
                 return;
@@ -645,11 +645,11 @@ namespace DaHilg
             }
             else if (Time.time >= m_NextNibblerSpawn)
             {
-                int baseTarget = Mathf.Clamp(2 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 8f), 2, Settings.NibblerPoolSize);
+                int baseTarget = Mathf.Clamp(8 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 3f), 8, Settings.NibblerPoolSize);
                 bool marked = danger || PlayerMarked;
-                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), 2, Settings.NibblerPoolSize);
+                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), 8, Settings.NibblerPoolSize);
                 int active = ActiveNibblerCount();
-                int spawnBudget = marked ? Mathf.Min(3, target - active) : 1;
+                int spawnBudget = Mathf.Min(marked ? 4 : 2, Mathf.Max(0, target - active));
                 for (int i = 0; i < spawnBudget; i++)
                 {
                     if (ActiveNibblerCount() >= target) break;

@@ -390,8 +390,10 @@ namespace DaHilg
                 float targetYaw = Quaternion.LookRotation(new Vector3(faceVelocity.x, 0f, faceVelocity.z)).eulerAngles.y;
                 m_FacingYaw = Mathf.LerpAngle(m_FacingYaw, targetYaw, 1f - Mathf.Exp(-k_FaceLerp * dt));
             }
-            else if (playerFacing)
+            else if (playerFacing && Time.time >= m_EmoteUntil)
             {
+                // Hold the player's heading while an emote plays so the body doesn't swing
+                // to camera-forward; movement (Speed>0.2) clears m_EmoteUntil and resumes aiming.
                 m_FacingYaw = Mathf.LerpAngle(m_FacingYaw, playerYaw, 1f - Mathf.Exp(-k_FaceLerp * dt));
             }
 
@@ -424,10 +426,19 @@ namespace DaHilg
             UpdateLocomotionAnimation(settings, dt);
         }
 
-        public void PlayEmote(string emote)
+        public void PlayEmote(string emote, bool fromInput = false, Vector3? faceTarget = null)
         {
+            // The player only emotes on an explicit input/event — never from ambient NPC AI.
+            if (Role == DaHilgActorRole.Player && !fromInput) return;
             if (Rolling) return;
             if (!Grounded && (m_Settings == null || !IsCloseToLevelGround(m_Settings))) return;
+            // Face the emote target (e.g. an NPC turning to greet the player) before it plays.
+            if (faceTarget.HasValue)
+            {
+                Vector3 to = faceTarget.Value - FeetPosition; to.y = 0f;
+                if (to.sqrMagnitude > 0.0001f)
+                    m_FacingYaw = Quaternion.LookRotation(to.normalized, Vector3.up).eulerAngles.y;
+            }
             m_EmoteUntil = Time.time + EmoteDuration(emote);
             SetAnimatorSpeed(1f, Time.deltaTime);
             PlayAnim(emote, 0.12f);

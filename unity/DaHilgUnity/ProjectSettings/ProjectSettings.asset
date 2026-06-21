@@ -589,7 +589,8 @@ PlayerSettings:
   webWasm2023: 1
   webEnableSubmoduleStrippingCompatibility: 0
   scriptingDefineSymbols:
-    WebGL: GLTFAST_BUILTIN_RP
+    Standalone: GLTFAST_BUILTIN_RP;GLTFAST_KEEP_MESH_DATA
+    WebGL: GLTFAST_BUILTIN_RP;GLTFAST_KEEP_MESH_DATA
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend: {}

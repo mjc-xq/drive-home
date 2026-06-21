@@ -207,12 +207,25 @@ namespace DaHilg
                 }
 
                 Collider levelCollider = filter.GetComponent<Collider>();
-                if (useCollider && filter.GetComponent<Collider>() == null)
+                if (useCollider && levelCollider == null)
                 {
-                    MeshCollider collider = filter.gameObject.AddComponent<MeshCollider>();
-                    collider.sharedMesh = filter.sharedMesh;
-                    collider.convex = false;
-                    levelCollider = collider;
+                    Mesh shared = filter.sharedMesh;
+                    // glTFast strips mesh CPU data after GPU upload unless GLTFAST_KEEP_MESH_DATA
+                    // is defined; baking a MeshCollider from a non-readable mesh yields an EMPTY
+                    // collider and actors fall through the streamed terrain. Fail loud, don't bake.
+                    if (shared == null || !shared.isReadable)
+                    {
+                        Debug.LogError("[DaHilg] Level mesh '" + filter.name +
+                            "' is not readable; skipping its MeshCollider (set GLTFAST_KEEP_MESH_DATA). " +
+                            "Actors could fall through this surface.");
+                    }
+                    else
+                    {
+                        MeshCollider collider = filter.gameObject.AddComponent<MeshCollider>();
+                        collider.sharedMesh = shared;
+                        collider.convex = false;
+                        levelCollider = collider;
+                    }
                 }
                 else if (useCollider)
                 {
