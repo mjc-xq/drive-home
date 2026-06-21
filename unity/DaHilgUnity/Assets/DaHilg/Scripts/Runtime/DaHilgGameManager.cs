@@ -812,12 +812,17 @@ namespace DaHilg
         int CrushNibblersByRoll()
         {
             if (m_ActiveActor == null) return 0;
-            Vector3 center = m_ActiveActor.RollCrushCenter(Settings);
+            // When you're loaded, the crush is an omnidirectional NOVA centered on the body so it
+            // actually clears all sides; when light, it's the lopsided roll-side sweep.
+            bool omni = AttachedNibblerCount >= Settings.OverwhelmStagger;
+            Vector3 center = omni ? m_ActiveActor.FeetPosition + Vector3.up * 0.26f : m_ActiveActor.RollCrushCenter(Settings);
             float side = m_ActiveActor.RollSideSign;
+            // A fatter pile pops a bigger ring (capped so some always survive the blast).
+            float radius = Mathf.Min(2.2f, Settings.RollCrushRadius + 0.04f * AttachedNibblerCount);
             int crushed = 0;
             for (int i = 0; i < m_Nibblers.Count; i++)
             {
-                if (m_Nibblers[i].TryCrushByRoll(m_ActiveActor, center, side, Settings)) crushed++;
+                if (m_Nibblers[i].TryCrushByRoll(m_ActiveActor, center, side, radius, omni, Settings)) crushed++;
             }
             return crushed;
         }
@@ -876,6 +881,19 @@ namespace DaHilg
             if (agent == null || m_ActiveActor == null) return;
 
             float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+            // Spawn from the player's BLIND SPOTS (behind the camera) so nibblers fade in from the
+            // shadows instead of popping into view. Only in camera modes where "behind" is meaningful.
+            if (CameraRig != null && (CameraRig.Mode == DaHilgCameraMode.ThirdPerson
+                || CameraRig.Mode == DaHilgCameraMode.Shoulder || CameraRig.Mode == DaHilgCameraMode.High))
+            {
+                Vector3 camForward = Quaternion.Euler(0f, CameraRig.Yaw, 0f) * Vector3.forward;
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    Vector3 dir = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
+                    if (Vector3.Dot(dir, camForward) <= 0.6f) break;
+                    angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+                }
+            }
             float radius = UnityEngine.Random.Range(Settings.NibblerSpawnMinRadius, Settings.NibblerSpawnMaxRadius);
             Vector3 pos = m_ActiveActor.FeetPosition + new Vector3(Mathf.Cos(angle) * radius, 0.8f, Mathf.Sin(angle) * radius);
             agent.Spawn(DaHilgLevelRuntime.GroundSpawn(pos));

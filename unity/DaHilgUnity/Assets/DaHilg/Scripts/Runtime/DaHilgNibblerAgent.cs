@@ -46,6 +46,7 @@ namespace DaHilg
         float m_LungeDuration;
         float m_JumpCooldown;
         float m_ClimbSpeed;
+        float m_CrushSpin;
         string m_Anim;
 
         public GameObject Root { get; }
@@ -183,7 +184,7 @@ namespace DaHilg
             // Aim for a point on a ring around the player (per-seed angle) so the swarm
             // surrounds rather than stacking on the identical center point.
             float ringAngle = m_Seed * Mathf.PI * 2f + m_Index * 2.39996f;
-            float ringRadius = Mathf.Max(0.6f, settings.NibblerAttachDistance * 0.85f);
+            float ringRadius = 0.15f + m_Seed * 0.35f; // small per-seed jitter; the doughnut emerges from separation
             // Aim at the player's torso (not the feet) so the swarm visibly climbs the body
             // instead of orbiting a point on the ground (which reads as "off the player").
             float aimY = player.BodyHeight * 0.5f;
@@ -213,10 +214,11 @@ namespace DaHilg
             Vector3 dir = dist > 0.001f ? planar / dist : Vector3.zero;
             Vector3 side = Vector3.Cross(Vector3.up, dir);
             float weave = Mathf.Sin(Time.time * (2.8f + m_Seed * 1.8f) + m_Index * 0.73f) * 0.42f;
-            Vector3 separation = ComputeSeparation();
-            Vector3 desired = (dir + side * weave + separation * 0.6f).normalized;
+            Vector3 desired = (dir + side * weave).normalized;
             float speed = settings.NibblerRunSpeed * (0.82f + m_Seed * 0.36f);
-            Vector3 targetVelocity = desired * speed;
+            // Separation is applied AFTER the seek (un-normalized) so a dense pile spreads into a
+            // readable, aimable doughnut instead of collapsing onto one mushy point.
+            Vector3 targetVelocity = desired * speed + ComputeSeparation() * 3.0f;
             m_Velocity.x = Mathf.Lerp(m_Velocity.x, targetVelocity.x, 1f - Mathf.Exp(-10f * dt));
             m_Velocity.z = Mathf.Lerp(m_Velocity.z, targetVelocity.z, 1f - Mathf.Exp(-10f * dt));
             m_Velocity.y += settings.Gravity * dt;
@@ -237,7 +239,7 @@ namespace DaHilg
 
         Vector3 ComputeSeparation()
         {
-            float neighborRadius = Mathf.Max(0.3f, m_Controller.radius) * 1.2f;
+            const float neighborRadius = 0.6f; // absolute spacing — wide enough to form a legible shape
             float sqrRadius = neighborRadius * neighborRadius;
             Vector3 selfPos = Root.transform.position;
             Vector3 push = Vector3.zero;
@@ -249,9 +251,10 @@ namespace DaHilg
                 offset.y = 0f;
                 float sqr = offset.sqrMagnitude;
                 if (sqr < 0.0001f || sqr > sqrRadius) continue;
-                push += offset / Mathf.Sqrt(sqr);
+                float w = 1f - sqr / sqrRadius;              // soft falloff: closer = stronger push
+                push += (offset / Mathf.Sqrt(sqr)) * w;
             }
-            return push.sqrMagnitude > 0.0001f ? push.normalized : Vector3.zero;
+            return push; // NOT normalized — strength scales with how crowded it is here
         }
 
         void StartLunge(DaHilgActor player, DaHilgGameSettings settings)
@@ -381,7 +384,7 @@ namespace DaHilg
             Play("Jump", 0.05f);
         }
 
-        public bool TryCrushByRoll(DaHilgActor player, Vector3 crushCenter, float sideSign, DaHilgGameSettings settings)
+        public bool TryCrushByRoll(DaHilgActor player, Vector3 crushCenter, float sideSign, float radius, bool omni, DaHilgGameSettings settings)
         {
             if (!Active || player == null || settings == null) return false;
 
@@ -389,14 +392,22 @@ namespace DaHilg
             bool bodySideHit = false;
             if (Attached || m_State == NibblerState.Climb || m_State == NibblerState.Lunge)
             {
-                float anchorSide = m_AttachBaseLocal.x >= 0f ? 1f : -1f;
                 float maxCrushY = Mathf.Min(player.BodyHeight, settings.RollCrushBodyHeight);
-                bodySideHit = Mathf.Approximately(anchorSide, side) && m_AttachY <= maxCrushY;
+                if (omni)
+                {
+                    // Loaded: a 360 nova clears clingers on EVERY side, not just the roll side.
+                    bodySideHit = m_AttachY <= maxCrushY;
+                }
+                else
+                {
+                    float anchorSide = m_AttachBaseLocal.x >= 0f ? 1f : -1f;
+                    bodySideHit = Mathf.Approximately(anchorSide, side) && m_AttachY <= maxCrushY;
+                }
             }
 
             Vector3 toCenter = Root.transform.position - crushCenter;
             float planarDistance = new Vector2(toCenter.x, toCenter.z).magnitude;
-            bool groundHit = planarDistance <= settings.RollCrushRadius
+            bool groundHit = planarDistance <= radius
                 && Root.transform.position.y <= crushCenter.y + Mathf.Max(0.45f, settings.RollCrushBodyHeight);
 
             if (!bodySideHit && !groundHit) return false;
@@ -426,7 +437,9 @@ namespace DaHilg
                 away.y = 0f;
             }
             away.Normalize();
-            m_Velocity = away * (4.8f + m_Seed * 1.8f) + Vector3.up * (1.8f + m_Seed * 0.8f);
+            // Juicy launch + tumble so a crush reads as a satisfying pop, not a quiet fade.
+            m_Velocity = away * (6.5f + m_Seed * 2.0f) + Vector3.up * (3.5f + m_Seed * 1.0f);
+            m_CrushSpin = (m_Seed < 0.5f ? -1f : 1f) * (540f + m_Seed * 540f);
             Play("Knockdown", 0.04f);
         }
 
@@ -446,8 +459,12 @@ namespace DaHilg
                 SnapToLevelGround(settings);
             }
 
-            Root.transform.localScale = Vector3.one * m_Scale * Mathf.Lerp(1f, 0.58f, Mathf.Clamp01(m_StateTime / 0.38f));
-            if (m_StateTime > 0.46f) Despawn();
+            // Pop: punch to 1.3x, then ease fully to 0 over ~0.30s while tumbling.
+            float u = Mathf.Clamp01(m_StateTime / 0.30f);
+            float pop = u < 0.12f ? Mathf.Lerp(1f, 1.3f, u / 0.12f) : Mathf.Lerp(1.3f, 0f, (u - 0.12f) / 0.88f);
+            Root.transform.localScale = Vector3.one * m_Scale * pop;
+            Root.transform.Rotate(Vector3.up, m_CrushSpin * dt, Space.World);
+            if (m_StateTime > 0.30f) Despawn();
         }
 
         bool SnapToLevelGround(DaHilgGameSettings settings)
