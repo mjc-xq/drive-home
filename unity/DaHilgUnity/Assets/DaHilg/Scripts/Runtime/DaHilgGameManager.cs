@@ -729,6 +729,7 @@ namespace DaHilg
             {
                 Score += m_LastRollCrushCount * Mathf.Max(1, Settings.RollCrushScore);
                 m_CrushedNibblerTotal += m_LastRollCrushCount;
+                CrushImpact(m_LastRollCrushCount);
                 m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
                 AttachedNibblerCount = CountAttachedNibblers();
                 m_ActiveActor.AttachedNibblers = AttachedNibblerCount;
@@ -781,6 +782,7 @@ namespace DaHilg
             {
                 Score += crushed * Mathf.Max(1, Settings.RollCrushScore);
                 m_CrushedNibblerTotal += crushed;
+                CrushImpact(crushed);
                 m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
                 AttachedNibblerCount = CountAttachedNibblers();
                 m_ActiveActor.AttachedNibblers = AttachedNibblerCount;
@@ -825,6 +827,14 @@ namespace DaHilg
                 if (m_Nibblers[i].TryCrushByRoll(m_ActiveActor, center, side, radius, omni, Settings)) crushed++;
             }
             return crushed;
+        }
+
+        // Count-scaled crush firework: shake + FOV punch. A 12+ clear is a full-power finale.
+        void CrushImpact(int count)
+        {
+            if (CameraRig == null || count <= 0) return;
+            float power = Mathf.Clamp01(count / 12f);
+            CameraRig.Punch(0.04f + 0.14f * power, 2f + 6f * power);
         }
 
         int CountAttachedNibblers()

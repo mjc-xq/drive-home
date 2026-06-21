@@ -31,6 +31,9 @@ namespace DaHilg
         Vector3 m_CurrentShoulder;
         float m_CurrentArm;
         float m_IdleLookTime;
+        float m_ShakeAmp;   // decaying positional shake (crush juice)
+        float m_FovPunch;   // decaying FOV zoom-in punch (crush juice)
+        const float k_BaseFov = 68f;
 
         public DaHilgActor Target
         {
@@ -217,6 +220,16 @@ namespace DaHilg
             Pitch = Mathf.Clamp(Pitch - delta.y, preset.MinPitch, preset.MaxPitch);
         }
 
+        // Crush juice: a one-shot additive screen shake + FOV punch that decay inside Follow().
+        // Applied to the follow TARGET (upstream of the deoccluder) + the vcam lens, so it never
+        // fights Cinemachine's transform resolution. No Time.timeScale.
+        public void Punch(float shakeAmp, float fovPunch)
+        {
+            m_ShakeAmp = Mathf.Max(m_ShakeAmp, shakeAmp);
+            if (Mode != DaHilgCameraMode.FirstPerson && Mode != DaHilgCameraMode.TopDown)
+                m_FovPunch = Mathf.Max(m_FovPunch, fovPunch);
+        }
+
         public void Follow(DaHilgGameSettings settings, float dt)
         {
             if (Target == null || m_FollowTarget == null || m_ThirdPersonFollow == null) return;
@@ -240,8 +253,20 @@ namespace DaHilg
                 pivot = Target.FeetPosition + Vector3.up * preset.PivotHeight + yawOnly * Vector3.forward * 0.08f;
             }
 
-            m_FollowTarget.SetPositionAndRotation(pivot, Quaternion.Euler(Pitch, Yaw, 0f));
+            Vector3 shakeOffset = Vector3.zero;
+            if (m_ShakeAmp > 0.0008f)
+            {
+                shakeOffset = new Vector3(Random.value - 0.5f, Random.value - 0.5f, Random.value - 0.5f) * m_ShakeAmp;
+                m_ShakeAmp = Mathf.Lerp(m_ShakeAmp, 0f, 1f - Mathf.Exp(-16f * dt));
+            }
+            m_FollowTarget.SetPositionAndRotation(pivot + shakeOffset, Quaternion.Euler(Pitch, Yaw, 0f));
             ApplyPreset(preset, dt);
+
+            if (m_VirtualCamera != null)
+            {
+                m_VirtualCamera.Lens.FieldOfView = k_BaseFov - m_FovPunch;
+                if (m_FovPunch > 0.01f) m_FovPunch = Mathf.Lerp(m_FovPunch, 0f, 1f - Mathf.Exp(-9f * dt));
+            }
         }
 
         void ApplyPreset(CameraPreset preset, float dt)
