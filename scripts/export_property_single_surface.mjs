@@ -1,0 +1,192 @@
+// export_property_single_surface.mjs — the SKUNKWORKS rethought exporter.
+//
+// Produces ONE welded terrain whose surface, collision, and foot-placement coincide by
+// construction, with roads/sidewalks/curbs/crosswalks/lane-paint PAINTED into the terrain's
+// own ground textures (no stacked floating ribbons -> z-fighting is structurally impossible).
+// Houses sit on that surface with Street-View facades projected INTO their wall UVs; trees are
+// their own layer; a side-channel surface-class raster annotates grass/dirt/bush for later Unity
+// foliage. Behind its own filename so the legacy pipeline is untouched.
+//
+// Run:  node --max-old-space-size=6144 scripts/export_property_single_surface.mjs [level]
+//   level (dahill default) selects the input set; output -> exports/<slug>-single.glb (+ sidecars)
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+globalThis.self = globalThis;
+if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary packer shim
+  globalThis.FileReader = class {
+    readAsArrayBuffer(b) { b.arrayBuffer().then(x => { this.result = x; this.onloadend && this.onloadend(); }); }
+    readAsDataURL(b) { b.arrayBuffer().then(x => { this.result = `data:${b.type || 'application/octet-stream'};base64,${Buffer.from(x).toString('base64')}`; this.onloadend && this.onloadend(); }); }
+  };
+}
+
+const THREE = await import('three');
+const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+const { NodeIO } = await import('@gltf-transform/core');
+
+import { loadDEM, makeGeo, buildTerrainMesh } from './lib/terrain_mesh.mjs';
+import { buildRoadNetwork } from './lib/road_network.mjs';
+import { curbLinesFromRoads } from './road_prep.mjs';
+import { bakeGroundAtlas } from './lib/ground_atlas.mjs';
+import { buildSurfaceAnnotation } from './lib/surface_annotation.mjs';
+import { bakeFacadeAtlas } from './lib/facade_atlas.mjs';
+import { makeBuildingColor } from './lib/building_color.mjs';
+import { buildBuildingLayer } from './lib/building_layer.mjs';
+import { buildTreeLayer } from './lib/tree_layer.mjs';
+
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const R = (...p) => path.join(ROOT, ...p);
+const LEVEL = process.argv[2] || 'dahill';
+
+// input set per level (dahill = working scene at root; others = exports/<dir>/ sidecars)
+const SETS = {
+  dahill:  { scene: 'src/assets/scene.json', dir: 'exports',                     slug: 'dahill' },
+  canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
+  stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
+  meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
+};
+const SET = SETS[LEVEL] || SETS.dahill;
+const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
+
+const S = JSON.parse(readFileSync(R(SET.scene), 'utf8'));
+const C = S.center;
+const ORIGIN = S.origin || {};
+const LAT0 = Number.isFinite(+ORIGIN.lat) ? +ORIGIN.lat : 37.6835313;
+const LON0 = Number.isFinite(+ORIGIN.lon) ? +ORIGIN.lon : -122.0686199;
+const COSLAT = Math.cos(LAT0 * Math.PI / 180);
+const w2 = (e, n) => [e - C[0], -(n - C[1])];
+
+const MS = existsSync(pick('map_surfaces_osm.json')) ? JSON.parse(readFileSync(pick('map_surfaces_osm.json'), 'utf8')) : {};
+const AB = JSON.parse(readFileSync(pick('google_aerial.json'), 'utf8'));
+const aerialPath = pick('google_aerial.jpg');
+
+console.log(`\n=== single-surface export: ${SET.slug} ===`);
+console.log(`scene: ${SET.scene}  buildings=${(S.buildings || []).length} roads=${(S.roads || []).length}`);
+
+// ---- 1) terrain (the ONE welded surface) -------------------------------------------
+const D = loadDEM(pick('dem_1m.json'));
+const geo = makeGeo(D, { C, LAT0, LON0, COSLAT });
+const terrain = buildTerrainMesh({ D, geo, opts: { coreHalf: 200, farStep: 4, texCoreHalf: 300 } });
+const terrainAt = terrain.terrainAt;
+console.log(`terrain: ${terrain.stats.verts} verts, ${terrain.stats.tris} tris ` +
+  `(core ${terrain.stats.coreTris}, far ${terrain.stats.farTris}), Y[${terrain.stats.minY.toFixed(1)}..${terrain.stats.maxY.toFixed(1)}]`);
+
+// ---- 2) road + sidewalk network + inferred paint -----------------------------------
+const network = buildRoadNetwork(S, MS, { w2, clipHalf: 596 });
+const curbLines = curbLinesFromRoads(S.roads || [], w2, { clipHalf: 596 });
+console.log(`network: ${network.surfaces.length} surfaces, ${network.paint.length} paint groups, ${curbLines.length} curb lines`);
+
+// ---- 3) bake ground textures (de-roaded aerial bed + painted features) -------------
+const groundDir = R(SET.dir === 'exports' ? 'exports/_ground' : path.join(SET.dir, '_ground'));
+const ground = await bakeGroundAtlas({
+  aerialPath, aerialBounds: AB, C, demRect: terrain.demRect, texCoreHalf: terrain.texCoreHalf,
+  network, curbLines, outDir: groundDir, coreSize: 4096, farSize: 2048,
+});
+console.log(`ground: core=${path.basename(ground.core.albedo)} far=${path.basename(ground.far.albedo)} pavedPolys=${ground.pavedPolys.length}`);
+
+// ---- 4) assemble THREE scene -------------------------------------------------------
+const scene = new THREE.Scene(); scene.name = `${SET.slug}_single_surface`;
+
+function meshFromPrim(prim, name, matName) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(prim.pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(prim.nrm, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(prim.uv, 2));
+  g.setAttribute('tangent', new THREE.Float32BufferAttribute(prim.tan, 4));
+  g.setIndex(prim.idx);
+  const m = new THREE.MeshStandardMaterial({ name: matName, color: 0xffffff, roughness: 0.95, metalness: 0 });
+  m.side = THREE.FrontSide;
+  const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
+}
+// Terrain: core (crisp painted ground) + far (coarse aerial backdrop). Both start with 'Terrain'
+// so the runtime classifies them; disjoint opaque triangle sets -> one surface, no z-fight.
+scene.add(meshFromPrim(terrain.corePrim, 'Terrain', 'TerrainCore_mat'));
+scene.add(meshFromPrim(terrain.farPrim, 'Terrain_far', 'TerrainFar_mat'));
+
+// ---- 4b) houses + trees + creek (the eye-level vertical structure) ------------------
+const houseIndex = (S.buildings || []).findIndex((b) => b.house);
+const svFacadesPath = pick('sv_facades.json');
+const svWalls = existsSync(svFacadesPath) ? (JSON.parse(readFileSync(svFacadesPath, 'utf8')).walls || []) : [];
+const facadeDir = SET.dir === 'exports' ? R('exports/_facades') : R(SET.dir, '_facades');
+const facade = svWalls.length
+  ? await bakeFacadeAtlas({ buildings: S.buildings, svWalls, svDir: R(SET.dir), houseIndex, demRect: terrain.demRect, w2, outDir: facadeDir })
+  : { pages: [], rectByWall: {}, heroBuildings: [], stuccoTile: R('exports/facade.png') };
+console.log(`facade: ${facade.pages.length} atlas page(s), ${Object.keys(facade.rectByWall).length} hero walls (rest stucco)`);
+
+const { wallColor, roofColor } = makeBuildingColor(pick);
+const isSchool = S.meta?.kind === 'school-region-export';
+const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terrain.demRect, isSchool, wallColor, roofColor, facade, ROOT });
+console.log(`buildings: emitted=${bres.counts.emitted} skipped=${bres.counts.skipped} clipped=${bres.counts.clipped} (drop ${(100 * bres.counts.skipped / Math.max(1, bres.counts.emitted + bres.counts.skipped)).toFixed(1)}%)`);
+
+const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys });
+console.log(`trees: ${tres.nTrees} (own 'Trees' layer), shrubs: ${tres.nShrubs}, creek: ${tres.hasCreek}`);
+
+// ---- collision proxies (invisible; runtime bakes a trimesh + hides these) -----------
+function proxyMesh(pos, idx, name) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (idx) g.setIndex(idx);
+  g.computeVertexNormals();
+  // invisible alpha-mask proxy: discarded by every viewer, never z-fights the visual surface
+  const m = new THREE.MeshStandardMaterial({ name: name + '_mat', color: 0xff00ff, transparent: false, alphaTest: 0.5, opacity: 0 });
+  m.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
+}
+// Collision_Terrain IS the visual terrain's final verts/indices -> walkable surface == what you see.
+scene.add(proxyMesh(terrain.collision.pos, terrain.collision.idx, 'Collision_Terrain'));
+
+// ---- 5) export GLB, then attach the ground textures via gltf-transform --------------
+mkdirSync(R('exports'), { recursive: true });
+const outGlb = R('exports', `${SET.slug}-single.glb`);
+const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
+const io = new NodeIO();
+const doc = await io.readBinary(new Uint8Array(glb));
+
+const texOf = (p, mime) => doc.createTexture(path.basename(p)).setImage(new Uint8Array(readFileSync(p)))
+  .setMimeType(mime || (p.endsWith('.jpg') ? 'image/jpeg' : 'image/png'));
+const coreAlb = texOf(ground.core.albedo), coreOrm = texOf(ground.core.orm);
+const farAlb = texOf(ground.far.albedo);
+const facadeTexes = facade.pages.map((p) => texOf(p));
+const stuccoTex = existsSync(facade.stuccoTile) ? texOf(facade.stuccoTile) : null;
+const CLAMP = 33071, REPEAT = 10497;
+for (const m of doc.getRoot().listMaterials()) {
+  const n = m.getName() || '';
+  if (n === 'TerrainCore_mat') {
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(coreAlb);
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
+    // ORM: R=occlusion, G=roughness, B=metalness (one texture for both slots, glTF-legal)
+    m.setMetallicRoughnessTexture(coreOrm).setRoughnessFactor(1).setMetallicFactor(1);
+    m.getMetallicRoughnessTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
+    m.setOcclusionTexture(coreOrm);
+    m.getOcclusionTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
+  } else if (n === 'TerrainFar_mat') {
+    m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(farAlb).setRoughnessFactor(0.95).setMetallicFactor(0);
+    m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
+  } else {
+    const fm = n.match(/^FacadeAtlas_page(\d+)_mat$/);
+    if (fm && facadeTexes[+fm[1]]) {        // hero walls: the SV photo IS the wall texture
+      m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(facadeTexes[+fm[1]]);
+      m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
+    } else if (/^Stucco_b\d+_mat$/.test(n) && stuccoTex) {   // tiled window/stucco x per-building wallColor
+      m.setBaseColorTexture(stuccoTex);
+      m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
+    }
+  }
+}
+writeFileSync(outGlb, Buffer.from(await io.writeBinary(doc)));
+console.log(`wrote ${path.relative(ROOT, outGlb)} (${(statSync(outGlb).size / 1e6).toFixed(1)} MB)`);
+
+// ---- 6) surface annotation sidecar (vegetation) ------------------------------------
+const buildingFootprintsWorld = (S.buildings || []).map(b => (b.p || []).map(([e, n]) => w2(e, n)));
+const parcels = existsSync(pick('parcels.json')) ? (JSON.parse(readFileSync(pick('parcels.json'), 'utf8')).parcels || []) : [];
+const treesPlaced = existsSync(pick('trees_placed.json')) ? (JSON.parse(readFileSync(pick('trees_placed.json'), 'utf8')).trees || []) : [];
+const annot = await buildSurfaceAnnotation({
+  aerialPath, aerialBounds: AB, C, demRect: terrain.demRect, rasterSize: 1024,
+  pavedPolys: ground.pavedPolys, buildingFootprintsWorld, parcels, treesPlaced,
+  outDir: groundDir, level: SET.slug,
+}).catch(e => { console.warn('  ! surface annotation skipped:', e.message); return null; });
+if (annot) console.log(`vegetation: ${path.basename(annot.classRasterPath)} + ${path.basename(annot.vegetationJsonPath)}`);
+
+console.log('done.\n');
