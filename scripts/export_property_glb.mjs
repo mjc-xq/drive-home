@@ -682,8 +682,13 @@ function footprintTerrainSamples(ringW) {
 }
 const buildingBase = ringW => {
   const ys = footprintTerrainSamples(ringW).sort((a, b) => a - b);
-  const hi = ys[Math.min(ys.length - 1, Math.floor(0.85 * (ys.length - 1)))];  // 85th-percentile (spike-robust)
-  return hi - 0.15;                                                            // small embed below the high grade
+  // GROUND the floor near the LOW grade of the footprint so each house sits ON its lot like
+  // real life — NOT on a raised podium. The old 85th-percentile placed the floor at the HIGH
+  // grade, which on any slope lifts the whole building up and exposes a tall bare downhill wall.
+  // 20th-percentile is spike-robust (ignores a lone DEM pit) but still low → grounded. The
+  // downhill wall foot is hidden a touch by terrain; the uphill side is a shallow natural cut.
+  const lo = ys[Math.min(ys.length - 1, Math.floor(0.20 * (ys.length - 1)))];  // 20th-percentile (grounded, spike-robust)
+  return lo - 0.1;                                                             // small embed so the floor edge sits in grade
 };
 const houseIdx = S.buildings.findIndex(b => b.house);
 // GRADED APRON / PAD around each footprint: a ring of quads from the footprint edge outward
@@ -996,7 +1001,7 @@ const CONCRETE_TILE = 2.5;
 // geometric lift. These are real-world curb/slab thicknesses (curb ~9cm, sidewalk ~6cm) so the skirt
 // edges read correctly instead of as chunky slabs. Order: curb > dash > sidewalk > driveway > asphalt
 // where layers overlap.
-const LIFT_ASPHALT = 0.05, LIFT_DRIVEWAY = 0.06, LIFT_DASH = 0.07, LIFT_SIDEWALK = 0.08, LIFT_CURB = 0.11;
+const LIFT_ASPHALT = 0.09, LIFT_DRIVEWAY = 0.10, LIFT_DASH = 0.11, LIFT_SIDEWALK = 0.12, LIFT_CURB = 0.15;
 // Asphalt PADS (cul-de-sac bulbs, junction blend fillets, dead-end caps) are coincident
 // with the road ribbon in the SAME 'Roads' mesh -> z-fight at the same Y. Lift them just
 // above the ribbon (still below the dash) so they win cleanly without floating.
@@ -1014,7 +1019,7 @@ const CURB_WIDTH = 0.55;                     // curb ribbon width (top score lin
 // 0.16); built wide enough (+0.3 m) to tuck UNDER the curb + sidewalk edges so there is no
 // open vertical trench to fall into and no coincidence with the concrete layers. Matte
 // brown 'GapDirt' material; collider copies these buffers so collision stays consistent.
-const LIFT_GAPFILL = LIFT_ASPHALT + 0.005;
+const LIFT_GAPFILL = LIFT_SIDEWALK - 0.01;   // concrete gutter just below the sidewalk (was ~road level → grazing-angle z-fight)
 const gfPos = [], gfIdx = [];
 const MAPSURFACES = path.join(ROOT, 'exports/map_surfaces_osm.json');
 const mapSurfaces = existsSync(MAPSURFACES) ? JSON.parse(readFileSync(MAPSURFACES, 'utf8')) : {};
@@ -1325,7 +1330,7 @@ if (xwalkIdx.length) scene.add(mkMesh(xwalkPos, xwalkIdx, 0xd9d5ca, 'Crosswalks_
 // were blank before): the concrete material keys off /curb/i and these uvs tile the joints.
 if (cuIdx.length) scene.add(mkMesh(cuPos, cuIdx, 0xcacaca, 'RoadCurbs', { uvs: cuUv, rough: 0.9 }));
 // Gap-fill dirt strip bridging sidewalk edge → curb (matte brown, no score texture).
-if (gfIdx.length) scene.add(mkMesh(gfPos, gfIdx, 0x6b5a44, 'GapDirt', { rough: 1.0 }));
+if (gfIdx.length) scene.add(mkMesh(gfPos, gfIdx, 0xb4b1a8, 'GapDirt', { rough: 1.0 }));   // concrete-gray gutter (blends with sidewalk; was brown -> ugly chevron at grazing angles)
 if (dPos.length) scene.add(mkMesh(dPos, null, 0xf2c81e, 'RoadLines'));
 
 // creek ribbon

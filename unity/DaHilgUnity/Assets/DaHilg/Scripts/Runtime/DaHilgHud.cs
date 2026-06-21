@@ -39,6 +39,7 @@ namespace DaHilg
         Button m_RunButton;
         Button m_JumpButton;
         Button m_RollButton;
+        Button m_PunchButton;
         VisualElement m_CompactBar;
         VisualElement m_CompactPanel;
         Button m_CompactCameraButton;
@@ -753,6 +754,18 @@ namespace DaHilg
             run.RegisterCallback<PointerLeaveEvent>(_ => m_Input.SetTouchRun(false));
             m_Root.Add(run);
 
+            Button punch = TouchButton("PUNCH");
+            m_PunchButton = punch;
+            punch.style.right = 102;
+            punch.style.bottom = 34;
+            punch.RegisterCallback<PointerDownEvent>(e =>
+            {
+                m_Input.QueueTouchAttack();
+                e.StopPropagation();
+            });
+            punch.clicked += () => m_Input.QueueTouchAttack();
+            m_Root.Add(punch);
+
             RefreshResponsiveControls();
         }
 
@@ -769,6 +782,7 @@ namespace DaHilg
             if (m_RunButton != null) m_RunButton.style.display = actionDisplay;
             if (m_JumpButton != null) m_JumpButton.style.display = actionDisplay;
             if (m_RollButton != null) m_RollButton.style.display = actionDisplay;
+            if (m_PunchButton != null) m_PunchButton.style.display = actionDisplay;
             if (m_CharacterBar != null) m_CharacterBar.style.display = standardBars;
             if (m_EmoteBar != null) m_EmoteBar.style.display = standardBars;
             if (m_CameraBar != null) m_CameraBar.style.display = standardBars;
@@ -808,6 +822,11 @@ namespace DaHilg
                     m_RollButton.style.right = 92;
                     m_RollButton.style.bottom = 132;
                 }
+                if (m_PunchButton != null)
+                {
+                    m_PunchButton.style.right = 160;
+                    m_PunchButton.style.bottom = 132;
+                }
             }
             else if (touch)
             {
@@ -839,6 +858,11 @@ namespace DaHilg
                 {
                     m_RollButton.style.right = 34;
                     m_RollButton.style.bottom = 162;
+                }
+                if (m_PunchButton != null)
+                {
+                    m_PunchButton.style.right = 102;
+                    m_PunchButton.style.bottom = 34;
                 }
             }
             else
@@ -1854,6 +1878,10 @@ namespace DaHilg
                 case "actions":
                 case "menu":
                     ToggleCompactMenu();
+                    return true;
+                case "attack":
+                case "punch":
+                    m_Input?.QueueTouchAttack();
                     return true;
                 default:
                     return false;

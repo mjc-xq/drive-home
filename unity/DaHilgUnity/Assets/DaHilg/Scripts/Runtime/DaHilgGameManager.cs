@@ -27,6 +27,7 @@ namespace DaHilg
         float m_MarkedUntil;
         float m_AttachFlashUntil;
         float m_LastRollAt = -999f;
+        float m_PendingMeleeHitAt = -1f;
         int m_LastAttachedCount;
         int m_LastRollCrushCount;
         int m_CrushedNibblerTotal;
@@ -129,12 +130,19 @@ namespace DaHilg
             if (Input.PreviousSwitchPressed) CycleActor(-1);
             if (Input.EmotePressed >= 0 && Input.EmotePressed < m_Emotes.Length) m_ActiveActor?.PlayEmote(m_Emotes[Input.EmotePressed]);
             if (!menuConsumedInput && Input.RollPressed) TryFallRoll();
+            if (!menuConsumedInput && Input.AttackPressed) TryMelee();
+            if (m_PendingMeleeHitAt >= 0f && Time.time >= m_PendingMeleeHitAt)
+            {
+                DoMeleeHits();
+                m_PendingMeleeHitAt = -1f;
+            }
 
             bool crawlOnly = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmDown;
             bool pinned = Mode == DaHilgGameMode.Nibblers && AttachedNibblerCount >= Settings.OverwhelmStop;
             if (m_ActiveActor != null)
             {
                 m_ActiveActor.StepPlayer(Input.Move, Input.RunHeld, !menuConsumedInput && Input.JumpPressed, CameraRig != null ? CameraRig.Yaw : 0f, Settings, dt, Time.time, crawlOnly, pinned);
+                m_ActiveActor.TickHitMotion(dt, Time.time);
             }
 
             for (int i = 0; i < m_Actors.Count; i++)
@@ -142,6 +150,7 @@ namespace DaHilg
                 DaHilgActor actor = m_Actors[i];
                 if (actor == m_ActiveActor) continue;
                 TickNpc(actor, dt);
+                actor.TickHitMotion(dt, Time.time);
             }
             for (int i = 0; i < m_Animals.Count; i++) m_Animals[i].Tick(dt);
 
@@ -367,6 +376,10 @@ namespace DaHilg
         void TickNpc(DaHilgActor actor, float dt)
         {
             if (m_ActiveActor == null) return;
+
+            // Staggered NPCs play their hit animation and only take knockback motion
+            // (applied separately via TickHitMotion); suppress wander/chase this frame.
+            if (actor.Staggered(Time.time)) return;
 
             Vector3 toPlayer = m_ActiveActor.FeetPosition - actor.FeetPosition;
             toPlayer.y = 0f;
@@ -695,6 +708,79 @@ namespace DaHilg
                 m_ActiveActor.AttachedNibblers = AttachedNibblerCount;
                 m_LastAttachedCount = AttachedNibblerCount;
             }
+        }
+
+        void TryMelee()
+        {
+            if (m_ActiveActor == null) return;
+            if (m_ActiveActor.StartMelee(Time.time)) m_PendingMeleeHitAt = Time.time + 0.12f;
+        }
+
+        // Resolves a single melee swing: a short forward cone in front of the active actor.
+        // Works in both modes — punches NPCs, crushes nibblers, knocks animals back.
+        void DoMeleeHits()
+        {
+            DaHilgActor a = m_ActiveActor;
+            if (a == null) return;
+
+            Vector3 fwd = Quaternion.Euler(0f, a.FacingYaw, 0f) * Vector3.forward;
+            float reach = a.BodyRadius + 1.8f;
+            int hits = 0;
+
+            for (int i = 0; i < m_Actors.Count; i++)
+            {
+                DaHilgActor target = m_Actors[i];
+                if (target == a) continue;
+                if (InMeleeCone(a.FeetPosition, fwd, reach, target.FeetPosition))
+                {
+                    target.TakeHit(a.FeetPosition, 20f, 6.5f, false, Time.time);
+                    Score += 5;
+                    hits++;
+                }
+            }
+
+            int crushed = 0;
+            for (int i = 0; i < m_Nibblers.Count; i++)
+            {
+                DaHilgNibblerAgent nibbler = m_Nibblers[i];
+                if (!nibbler.Active) continue;
+                if (!InMeleeCone(a.FeetPosition, fwd, reach, nibbler.Position)) continue;
+                if (nibbler.CrushByMelee(a.FeetPosition))
+                {
+                    crushed++;
+                    hits++;
+                }
+            }
+            if (crushed > 0)
+            {
+                Score += crushed * Mathf.Max(1, Settings.RollCrushScore);
+                m_CrushedNibblerTotal += crushed;
+                m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
+                AttachedNibblerCount = CountAttachedNibblers();
+                m_ActiveActor.AttachedNibblers = AttachedNibblerCount;
+                m_LastAttachedCount = AttachedNibblerCount;
+            }
+
+            for (int i = 0; i < m_Animals.Count; i++)
+            {
+                DaHilgAnimalAgent animal = m_Animals[i];
+                if (!InMeleeCone(a.FeetPosition, fwd, reach, animal.Position)) continue;
+                Vector3 away = animal.Position - a.FeetPosition;
+                away.y = 0f;
+                away = away.sqrMagnitude > 0.0001f ? away.normalized : fwd;
+                animal.Teleport(DaHilgLevelRuntime.GroundSpawn(animal.Position + away * 2.5f));
+                Score += 1;
+                hits++;
+            }
+        }
+
+        static bool InMeleeCone(Vector3 origin, Vector3 forward, float reach, Vector3 targetPos)
+        {
+            Vector3 to = targetPos - origin;
+            to.y = 0f;
+            float d = to.magnitude;
+            if (d > reach || d <= 0.01f) return false;
+            return Vector3.Dot(to / d, forward) >= 0.25f;
         }
 
         int CrushNibblersByRoll()

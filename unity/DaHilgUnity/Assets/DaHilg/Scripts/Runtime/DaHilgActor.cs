@@ -50,6 +50,12 @@ namespace DaHilg
         float m_NextRollAt;
         float m_RollSide = 1f;
         Vector3 m_RollDirection;
+        float m_NextMeleeAt;
+        float m_MeleeActiveUntil;
+        int m_ComboStep;
+        float m_StaggerUntil;
+        Vector3 m_HitVel;
+        float m_HitVelUntil;
 
         public string Id { get; private set; }
         public string Label { get; private set; }
@@ -231,6 +237,69 @@ namespace DaHilg
             return FeetPosition
                 + right * RollSideSign * Mathf.Max(m_BodyRadius + radius * 0.32f, 0.62f)
                 + Vector3.up * 0.26f;
+        }
+
+        public bool StartMelee(float now)
+        {
+            if (Health <= 0f || Rolling || now < m_NextMeleeAt || now < m_StaggerUntil) return false;
+
+            m_NextMeleeAt = now + 0.42f;
+            m_MeleeActiveUntil = now + 0.45f;
+            m_ComboStep = (m_ComboStep + 1) % 3;
+            m_EmoteUntil = 0f;
+            SetAnimatorSpeed(m_ComboStep == 2 ? 1.18f : 1f, Time.deltaTime);
+            PlayAnim("Attack", 0.05f);
+            return true;
+        }
+
+        public bool MeleeActive(float now) => now < m_MeleeActiveUntil;
+
+        public bool Staggered(float now) => now < m_StaggerUntil;
+
+        public void TakeHit(Vector3 fromPos, float damage, float knockback, bool heavy, float now)
+        {
+            if (Health <= 0f) return;
+
+            Health = Mathf.Max(0f, Health - damage);
+
+            Vector3 dir = FeetPosition - fromPos;
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 0.0001f)
+            {
+                dir = -(Quaternion.Euler(0f, m_FacingYaw, 0f) * Vector3.forward);
+            }
+            dir.Normalize();
+
+            m_HitVel = dir * knockback;
+            m_HitVelUntil = now + 0.30f;
+            m_StaggerUntil = now + (heavy ? 1.1f : 0.45f);
+            m_EmoteUntil = 0f;
+
+            // Face the attacker so the hit reads as a reaction.
+            Vector3 toAttacker = fromPos - FeetPosition;
+            toAttacker.y = 0f;
+            if (toAttacker.sqrMagnitude > 0.0001f)
+            {
+                m_FacingYaw = Quaternion.LookRotation(toAttacker.normalized, Vector3.up).eulerAngles.y;
+            }
+
+            SetAnimatorSpeed(1f, Time.deltaTime);
+            PlayAnim(heavy ? "Knockdown" : "Stumble", 0.06f);
+        }
+
+        public void TickHitMotion(float dt, float now)
+        {
+            if (m_Controller == null || !m_Controller.enabled) return;
+            if (now >= m_HitVelUntil)
+            {
+                m_HitVel = Vector3.zero;
+                return;
+            }
+
+            Vector3 horizontal = new Vector3(m_HitVel.x, 0f, m_HitVel.z) * dt;
+            if (horizontal.sqrMagnitude > 0f) m_Controller.Move(horizontal);
+            if (m_Settings != null) SnapToLevelGround(m_Settings, now);
+            m_HitVel = Vector3.Lerp(m_HitVel, Vector3.zero, dt * 6f);
         }
 
         public void StepPlayer(Vector2 inputMove, bool run, bool jumpPressed, float cameraYaw, DaHilgGameSettings settings, float dt, float now, bool crawlOnly, bool pinned)

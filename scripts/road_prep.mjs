@@ -375,8 +375,8 @@ export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
 // road-edge collider copies these same buffers, the skirt is consistent for the player too.
 export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, opts = {}) {
   const skip = opts.skip || null;
-  const alongStep = opts.alongStep ?? 1.0;   // tight sampling so paved ribbons follow the exact DEM surface (no between-sample poke-through at small lifts)
-  const crossStep = opts.crossStep ?? 0.6;
+  const alongStep = opts.alongStep ?? 0.5;   // tight sampling so paved ribbons hug the full-res DEM surface (sub-DEM-cell) — no terrain poke-through between samples
+  const crossStep = opts.crossStep ?? 0.45;
   const skirt = opts.skirt ?? 0;            // >0 emits side walls down to grade
   const skirtFoot = opts.skirtFoot ?? 0.02; // wall foot height above terrain
   // PATH-ALIGNED UVs: when opts.uvArr + opts.uvTile are supplied, emit a uv per vert with
