@@ -17,7 +17,7 @@ MonoBehaviour:
   SubLabel: 807 Broadway, Oakland
   LevelPrefab: {fileID: 0}
   SourceMeta: {fileID: 4900000, guid: da15ebc00a0d04e859b489ec2261fdb3, type: 3}
-  Minimap: {fileID: 0}
+  Minimap: {fileID: 4900000, guid: 043eb1092464848f8b97ae47d0cc5488, type: 3}
   LevelOffset: {x: -39.165, y: 0.845, z: 31.22}
   PlayerSpawns:
   - {x: 0, y: 0.05, z: 26.9}
