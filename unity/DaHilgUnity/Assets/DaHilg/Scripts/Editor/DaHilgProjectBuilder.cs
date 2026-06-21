@@ -261,6 +261,16 @@ namespace DaHilg.Editor
             string frameworkUrl = FindBuildFile(output, "da-hilg.framework.js");
             string codeUrl = FindBuildFile(output, "da-hilg.wasm");
 
+            // Cache-bust: the Build files have FIXED names but vercel.json serves them with an
+            // immutable 1-year cache, so a redeploy reusing those names can hand a browser/CDN a
+            // MISMATCHED old framework + new wasm -> "call_indirect signature mismatch" at load.
+            // A per-build version query makes every build a fresh URL (and keeps immutable safe).
+            string cacheBust = "?v=" + System.DateTime.UtcNow.Ticks.ToString("x");
+            loaderUrl += cacheBust;
+            dataUrl += cacheBust;
+            frameworkUrl += cacheBust;
+            codeUrl += cacheBust;
+
             string html = @"<!DOCTYPE html>
 <html lang=""en-us"">
   <head>
@@ -449,6 +459,16 @@ namespace DaHilg.Editor
           window.__dahilg.unityInstance = unityInstance;
           window.__dahilg.unityReady = true;
           document.querySelector('#unity-loading-bar').style.display = 'none';
+          try {
+            // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike
+            // Unity's WebGL device detection which can't tell a phone from a desktop). A touch
+            // device has touch points and no fine pointer (mouse/trackpad). Drives the on-screen
+            // joystick/look/buttons so the game is playable on a phone.
+            var touchDevice = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+              && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+            window.__dahilg.touchMode = touchDevice;
+            unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
+          } catch (touchErr) { rememberHudError(touchErr); }
           if (unityInstance.Module && unityInstance.Module.WebGLInput) {
             unityInstance.Module.WebGLInput._stickyCursorLock = false;
           }

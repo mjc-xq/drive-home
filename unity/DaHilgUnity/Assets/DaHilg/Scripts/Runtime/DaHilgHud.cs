@@ -1147,14 +1147,29 @@ namespace DaHilg
             m_Prompt.style.unityTextAlign = TextAnchor.MiddleCenter;
         }
 
+        static bool s_HadMouse;
+        static int s_WebTouchMode = -1; // -1 unknown, 0 desktop, 1 touch — set authoritatively by the page
+
+        // Called from index.html JS once Unity is ready, with the browser's reliable touch verdict
+        // (maxTouchPoints + no fine pointer). This is what makes the PHONE actually show the
+        // joystick/look/buttons, since Unity's WebGL device detection can't tell a phone from a desktop.
+        [Preserve]
+        public void SetWebTouchMode(int touch)
+        {
+            s_WebTouchMode = touch != 0 ? 1 : 0;
+            RefreshResponsiveControls();
+        }
+
         static bool ShouldShowTouchControls()
         {
-            // Touch controls only when there is genuinely no mouse — never on desktop.
-            // The old "Min(Screen.width, Screen.height) < 720" heuristic misfired on short
-            // desktop browser windows and overlaid full-screen pointer-capturing zones that
-            // killed desktop mouse-look / pointer-lock.
-            if (Application.isMobilePlatform) return true;
-            return Touchscreen.current != null && Mouse.current == null;
+            // The page's JS touch verdict is authoritative when present.
+            if (s_WebTouchMode >= 0) return s_WebTouchMode != 0;
+            // Fallback until it arrives: show touch until a real mouse is ever seen, OR if a
+            // touchscreen is present. Mobile web has no Mouse device; desktop has one from frame 1,
+            // so desktop locks to mouse+keyboard (the killed-desktop-controls fix). The old
+            // "< 720px" heuristic misfired on short desktop windows.
+            if (Mouse.current != null) s_HadMouse = true;
+            return Application.isMobilePlatform || Touchscreen.current != null || !s_HadMouse;
         }
 
         void BuildEmoteBar()
