@@ -1,26 +1,26 @@
 {
-  "source": "meemaw-property.glb",
+  "source": "meemaw-single.glb",
   "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
   "offset": [
     35.35,
-    59.24,
+    59.243,
     6.125
   ],
-  "groundY": 59.24,
+  "groundY": 59.243,
   "houseCenter": [
     35.35,
-    68.988,
+    68.956,
     6.125
   ],
   "houseBox": {
     "min": [
       -8.46,
-      7.165,
+      7.141,
       -9.645
     ],
     "max": [
       8.46,
-      12.33,
+      12.287,
       9.645
     ]
   },
@@ -72,5 +72,16 @@
       0.05,
       18
     ]
-  ]
+  ],
+  "pavedMask": "meemaw.paved_mask.png",
+  "pavedMaskRect": {
+    "min": [
+      -265.35,
+      -236.125
+    ],
+    "size": [
+      460,
+      460
+    ]
+  }
 }

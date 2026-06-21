@@ -1,26 +1,26 @@
 {
-  "source": "stanton-elementary-property.glb",
+  "source": "stanton-single.glb",
   "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
   "offset": [
     -26.245,
-    58.54,
+    58.525,
     50.17
   ],
-  "groundY": 58.54,
+  "groundY": 58.525,
   "houseCenter": [
     -26.245,
-    75.381,
+    75.38,
     50.17
   ],
   "houseBox": {
     "min": [
       -27.585,
-      14.146,
+      14.164,
       -21.17
     ],
     "max": [
       27.585,
-      19.535,
+      19.547,
       21.17
     ]
   },
@@ -72,5 +72,16 @@
       0.05,
       18
     ]
-  ]
+  ],
+  "pavedMask": "stanton.paved_mask.png",
+  "pavedMaskRect": {
+    "min": [
+      -203.755,
+      -280.17
+    ],
+    "size": [
+      458,
+      458
+    ]
+  }
 }
