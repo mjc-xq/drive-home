@@ -539,7 +539,7 @@ namespace DaHilg
             m_MarkLabel.pickingMode = PickingMode.Ignore;
             m_MarkLabel.style.position = Position.Absolute;
             m_MarkLabel.style.left = Length.Percent(50);
-            m_MarkLabel.style.top = 64;
+            m_MarkLabel.style.top = Length.Percent(30); // clear of the top-left status card on narrow phones
             m_MarkLabel.style.translate = new Translate(Length.Percent(-50), 0);
             m_MarkLabel.style.paddingLeft = 14;
             m_MarkLabel.style.paddingRight = 14;
@@ -1027,25 +1027,26 @@ namespace DaHilg
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
 
                 PositionJoystickGhost(false);
-                if (m_RunButton != null)
-                {
-                    m_RunButton.style.right = 34;
-                    m_RunButton.style.bottom = 98;
-                }
+                // 66px circular discs: stack with ~8px gaps so they never overlap each other.
                 if (m_JumpButton != null)
                 {
-                    m_JumpButton.style.right = 34;
-                    m_JumpButton.style.bottom = 34;
-                }
-                if (m_RollButton != null)
-                {
-                    m_RollButton.style.right = 34;
-                    m_RollButton.style.bottom = 162;
+                    m_JumpButton.style.right = 28;
+                    m_JumpButton.style.bottom = 30;
                 }
                 if (m_PunchButton != null)
                 {
-                    m_PunchButton.style.right = 102;
-                    m_PunchButton.style.bottom = 34;
+                    m_PunchButton.style.right = 104;
+                    m_PunchButton.style.bottom = 30;
+                }
+                if (m_RunButton != null)
+                {
+                    m_RunButton.style.right = 28;
+                    m_RunButton.style.bottom = 104;
+                }
+                if (m_RollButton != null)
+                {
+                    m_RollButton.style.right = 28;
+                    m_RollButton.style.bottom = 178;
                 }
             }
             else
@@ -2320,14 +2321,25 @@ namespace DaHilg
 
         Button TouchButton(string text, Color accent)
         {
+            // Circular disc to match the driving game's mobile controls (TouchButtons.jsx: 56-64px
+            // round discs), AGC font, accent fill.
+            const float d = 66f;
             Button button = new Button { text = text };
             button.style.position = Position.Absolute;
-            button.style.width = 58;
-            button.style.height = 48;
+            button.style.width = d;
+            button.style.height = d;
+            button.style.borderTopLeftRadius = d * 0.5f;
+            button.style.borderTopRightRadius = d * 0.5f;
+            button.style.borderBottomLeftRadius = d * 0.5f;
+            button.style.borderBottomRightRadius = d * 0.5f;
+            button.style.paddingLeft = 0;
+            button.style.paddingRight = 0;
             button.style.backgroundColor = WithAlpha(accent, 0.82f);
             button.style.color = Color.white;
+            button.style.fontSize = 12;
             button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            ApplyBorder(button, WithAlpha(Color.white, 0.22f), 1);
+            ApplyBorder(button, WithAlpha(Color.white, 0.32f), 2);
+            ApplyFont(button, m_AgcFont);
             return button;
         }
     }

@@ -32,6 +32,7 @@ namespace DaHilg
         readonly Animator m_Animator;
         readonly CharacterController m_Controller;
         readonly float m_Scale;
+        readonly Renderer[] m_Renderers;
         readonly int m_Index;
         readonly float m_Seed;
         readonly string m_RunClip;
@@ -50,6 +51,8 @@ namespace DaHilg
         float m_ClimbSpeed;
         float m_CrushSpin;
         string m_Anim;
+        bool m_Hidden;
+        static Camera s_Cam;
 
         public GameObject Root { get; }
         public bool Active { get; private set; }
@@ -91,6 +94,8 @@ namespace DaHilg
             m_Animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms; // don't animate the off-screen swarm
             m_Animator.speed = 0.86f + m_Seed * 0.46f;
             if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
+
+            m_Renderers = Root.GetComponentsInChildren<Renderer>(true);
 
             Root.SetActive(false);
         }
@@ -155,6 +160,7 @@ namespace DaHilg
             SetPlayer(player.transform);
             m_StateTime += dt;
             m_JumpCooldown -= dt;
+            UpdateCameraOcclusion();
 
             if (safe && m_State != NibblerState.Scatter)
             {
@@ -181,6 +187,19 @@ namespace DaHilg
                     TickChase(player, settings, dt, safe);
                     return false;
             }
+        }
+
+        // A nibbler within the camera's lens (an attached one when the 3rd-person camera is pulled
+        // in, or one lunging past the lens) renders as a screen-filling "giant". Hide its renderers
+        // while it's that close so it can never block the view.
+        void UpdateCameraOcclusion()
+        {
+            if (m_Renderers == null || m_Renderers.Length == 0) return;
+            if (s_Cam == null) { s_Cam = Camera.main; if (s_Cam == null) return; }
+            bool hide = (Root.transform.position - s_Cam.transform.position).sqrMagnitude < 1.8f * 1.8f;
+            if (hide == m_Hidden) return;
+            m_Hidden = hide;
+            for (int i = 0; i < m_Renderers.Length; i++) if (m_Renderers[i] != null) m_Renderers[i].enabled = !hide;
         }
 
         void TickChase(DaHilgActor player, DaHilgGameSettings settings, float dt, bool safe)
