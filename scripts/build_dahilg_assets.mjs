@@ -77,6 +77,7 @@ const LEVELS = [
   { src: 'canyon-single.glb',   out: 'canyon',  metaSource: 'canyon-single.glb',   pavedMaskSrc: 'canyon-middle-school/_ground/paved_mask.png' },
   { src: 'stanton-single.glb',  out: 'stanton', metaSource: 'stanton-single.glb',  pavedMaskSrc: 'stanton-elementary/_ground/paved_mask.png' },
   { src: 'meemaw-single.glb',   out: 'meemaw',  metaSource: 'meemaw-single.glb',   pavedMaskSrc: 'meemaw/_ground/paved_mask.png' },
+  { src: 'xq-single.glb',       out: 'xq',      metaSource: 'xq-single.glb',       pavedMaskSrc: 'xq/_ground/paved_mask.png' },
 ];
 
 // ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----

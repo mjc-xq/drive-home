@@ -50,6 +50,10 @@ const LEVELS = [
   { slug: 'canyon',  glb: 'canyon',  region: 'canyon-middle-school',   streamed: true },
   { slug: 'stanton', glb: 'stanton', region: 'stanton-elementary',     streamed: true },
   { slug: 'meemaw',  glb: 'meemaw',  region: 'meemaw',                 streamed: true },
+  // 'xq' (807 Broadway, Oakland): its single-surface master (exports/xq-single.glb) is produced
+  // out-of-band, so it has NO working/region export step here — the `assets` stage reads it
+  // straight from exports/ (see build_dahilg_assets.mjs LEVELS) and `unitysrc` streams it.
+  { slug: 'xq',      glb: 'xq',                                        streamed: true },
   // 'house' (interior) is baked, comes from a static GLB; not part of the geo export.
 ];
 
