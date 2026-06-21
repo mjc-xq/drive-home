@@ -28,7 +28,7 @@
             ...attributes,
             alpha: false,
             premultipliedAlpha: false,
-            preserveDrawingBuffer: true
+            preserveDrawingBuffer: false
           };
         }
         return getCanvasContext(contextType, attributes);
@@ -40,8 +40,9 @@
         }
       }
 
-      document.addEventListener('pointerlockchange', () => window.setTimeout(releasePointerLock, 0));
-      document.addEventListener('webkitpointerlockchange', () => window.setTimeout(releasePointerLock, 0));
+      // NOTE: do NOT auto-release pointer lock on pointerlockchange — that cancelled the
+      // right-drag mouse-look on desktop the instant Unity acquired the lock. The input router
+      // locks on right-hold and releases on right-up; the browser frees the lock on Esc.
 
       function focusCanvas() {
         try {
@@ -175,22 +176,24 @@
 
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb?v=8decfd35f7dd3d8',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decfd35f7dd3d8',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decfd35f7dd3d8',
+        dataUrl: 'Build/da-hilg.data.unityweb?v=8decfdc03917abc',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decfdc03917abc',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decfdc03917abc',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
         productVersion: '1.2',
-        webglContextAttributes: { alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 2 },
+        webglContextAttributes: { alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 2 },
         showBanner: unityShowBanner
       };
 
-      config.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+      // Cap the framebuffer hard on mobile: a 3x retina iPhone at DPR 1.75 renders ~3x the pixels
+      // and OOM-crashes Safari. DPR 1 on touch devices is a large memory saving; desktop keeps 1.75.
+      config.devicePixelRatio = __dahilgTouch ? 1 : Math.min(window.devicePixelRatio || 1, 1.75);
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8decfd35f7dd3d8';
+      script.src = 'Build/da-hilg.loader.js?v=8decfdc03917abc';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;

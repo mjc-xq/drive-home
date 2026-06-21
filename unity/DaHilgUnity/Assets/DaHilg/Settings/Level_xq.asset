@@ -10,35 +10,30 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 39525536a00ea4f5a9129560e691ab09, type: 3}
-  m_Name: Level_meemaw
+  m_Name: Level_xq
   m_EditorClassIdentifier: Assembly-CSharp::DaHilg.DaHilgLevelProfile
-  Slug: meemaw
-  Label: Meemaw's
-  SubLabel: Castro Valley
+  Slug: xq
+  Label: XQ
+  SubLabel: 807 Broadway, Oakland
   LevelPrefab: {fileID: 0}
-  SourceMeta: {fileID: 4900000, guid: 171b5c12db0f54ae9acf12a105cae28e, type: 3}
-  Minimap: {fileID: 4900000, guid: 3886db3c399ed4210baecc77af3cb3e0, type: 3}
-  LevelOffset: {x: 35.35, y: 59.243, z: 6.125}
+  SourceMeta: {fileID: 0}
+  Minimap: {fileID: 0}
+  LevelOffset: {x: 0, y: 0, z: 0}
   PlayerSpawns:
-  - {x: 0, y: 0.05, z: 12.645}
-  - {x: 11.46, y: 0.05, z: 0}
-  - {x: -11.46, y: 0.05, z: -2}
+  - {x: 0, y: 0.05, z: 12}
   NpcSpawns:
-  - {x: 14.46, y: 0.05, z: 15.645}
-  - {x: -14.46, y: 0.05, z: 15.645}
-  - {x: 16.46, y: 0.05, z: -13.645}
-  - {x: -16.46, y: 0.05, z: -13.645}
-  - {x: 0, y: 0.05, z: 23.645}
-  - {x: 18, y: 0.05, z: 18}
+  - {x: 6, y: 0.05, z: 18}
+  - {x: -6, y: 0.05, z: 18}
+  - {x: 6, y: 0.05, z: 6}
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 9.714, z: 0}
-    Size: {x: 26.92, y: 9.146, z: 29.29}
+    Center: {x: 0, y: 3, z: 0}
+    Size: {x: 36, y: 10, z: 36}
   NibblerSafeZones:
   - Id: safe_start
     Label: Start
-    Center: {x: 0, y: 6, z: 12.645}
+    Center: {x: 0, y: 6, z: 12}
     Size: {x: 36, y: 18, z: 36}
   - Id: safe_home
     Label: Home

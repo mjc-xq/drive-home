@@ -18,7 +18,7 @@ MonoBehaviour:
   LevelPrefab: {fileID: 0}
   SourceMeta: {fileID: 4900000, guid: 85520341f482946f99ac553d207f2580, type: 3}
   Minimap: {fileID: 4900000, guid: c087edc70f215466eb43be481e10f6f7, type: 3}
-  LevelOffset: {x: -0.095, y: 33.105, z: -0.695}
+  LevelOffset: {x: -0.095, y: 32.98, z: -0.695}
   PlayerSpawns:
   - {x: 0, y: 0.05, z: 23.315}
   - {x: 0, y: 0.05, z: 12.315}
@@ -34,8 +34,8 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 15.9135, z: 0}
-    Size: {x: 34.309998, y: 8.927001, z: 28.63}
+    Center: {x: 0, y: 16.046, z: 0}
+    Size: {x: 34.309998, y: 8.8619995, z: 28.63}
   NibblerSafeZones:
   - Id: safe_start
     Label: Start
