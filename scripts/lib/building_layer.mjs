@@ -4,19 +4,22 @@
 //   * ONE terrain already exists; we receive terrainAt(X,Z) (EXACT point-in-triangle height)
 //     and seat every wall foot on it (legacy WALL_EMBED logic, unchanged).
 //   * NO road/sidewalk/curb/ground ribbons here — those are TEXTURE on the terrain now.
-//   * Facades are the wall texture itself (a hero facade ATLAS sub-rect), not floating proud
-//     SVFacade_* decals and not proud emitFacadeDetails trim micro-slabs. Both DROPPED.
 //   * MISSING-BUILDINGS FIX: legacy dropped any footprint not ENTIRELY in-patch (every(inPatch)),
 //     silently losing 37-66% of buildings on school levels. Here we CLIP each footprint to the
 //     DEM rect (Sutherland-Hodgman) and emit the clipped part; only fully-outside footprints skip.
 //
-// Adds to `scene`: House_walls, House_roof, Buildings_walls (per-building material groups),
-//   Buildings_roofs, Doors/Doors_trim/Doors_transom/GarageDoors/GarageDoor_trim (owner house
-//   only, residential levels), House_windows/House_window_trim (owner cues), and Collision_Buildings.
+// FACADE MODEL (matches the proven legacy toggleable-overlay): every wall, in EVERY orientation,
+// is ALWAYS procedural windowed stucco tinted by the building's real Street-View wallColor(ib) —
+// the window grid is emitted on every wall edge (windows live UNDER the photo). A HERO wall that
+// carries a packed SV atlas crop (facade.rectByWall['b{idx}_e{edge}']) additionally gets a SEPARATE
+// overlay quad pushed ~0.17 m PROUD of the wall (in front of the window trim at ~0.12 m), grouped by
+// atlas page into node 'SVFacade_page{N}' with material 'FacadeAtlasOverlay_page{N}_mat'. The runtime
+// toggles every 'SVFacade*' node as a group: photo mode ON => the overlay covers the windows; OFF =>
+// the windowed stucco wall shows. The photo is NEVER baked into the wall UV.
 //
-// Wall UVs: for each wall edge of a HERO building (facade.rectByWall['b{idx}_e{edge}'] present),
-//   the wall quad's UVs land in that atlas sub-rect (v0=eave..v1=ground) and use the atlas-page
-//   material; else a procedural tiled stucco material (facade.stuccoTile) tinted by wallColor(ib).
+// Adds to `scene`: House_walls, House_roof, Buildings_walls (per-building stucco material groups),
+//   Buildings_roofs, SVFacade_page{N} (toggleable photo overlays), Doors/Doors_trim/Doors_transom/
+//   GarageDoors/GarageDoor_trim, House_windows/House_window_trim, and Collision_Buildings.
 
 import * as ShapeUtilsHost from 'three';   // only for ShapeUtils.triangulateShape (caller's THREE preferred)
 
@@ -66,29 +69,83 @@ function clipPolyToRect(ring, r) {
   return poly.length >= 3 ? poly : null;
 }
 
+// distance from (x,z) to the nearest segment of a set of world-XZ polylines (legacy port).
+function distToLines(x, z, lines, max) {
+  let best = max;
+  for (const lw of lines) for (let k = 1; k < lw.length; k++) {
+    const [ax, az] = lw[k - 1], [bx, bz] = lw[k]; let dx = bx - ax, dz = bz - az;
+    const L2 = dx * dx + dz * dz || 1; let t = ((x - ax) * dx + (z - az) * dz) / L2; t = Math.max(0, Math.min(1, t));
+    best = Math.min(best, Math.hypot(x - (ax + t * dx), z - (az + t * dz)));
+  }
+  return best;
+}
+
+// proud-quad helper (legacy pushWallRect): pushes one quad `off` metres proud of a wall edge.
+// (ax,az) = edge start; (ex,ez) = unit edge dir; (nx,nz) = outward unit normal; s0..s1 = along-edge
+// span (measured from ax); y0..y1 = vertical span. Default `off` 0.09 m.
+function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
+  const A = [ax + ex * s0 + nx * off, y0, az + ez * s0 + nz * off];
+  const B = [ax + ex * s1 + nx * off, y0, az + ez * s1 + nz * off];
+  const Cc = [ax + ex * s1 + nx * off, y1, az + ez * s1 + nz * off];
+  const Dd = [ax + ex * s0 + nx * off, y1, az + ez * s0 + nz * off];
+  for (const v of [A, B, Cc, A, Cc, Dd]) pos.push(v[0], v[1], v[2]);
+}
+
 export function buildBuildingLayer({
   THREE, scene, S, w2, terrainAt, demRect, isSchool,
-  wallColor, roofColor, facade, ROOT,
+  wallColor, roofColor, facade, ROOT, roadLines = [],
 }) {
   const ShapeUtils = (THREE && THREE.ShapeUtils) || ShapeUtilsHost.ShapeUtils;
   const rectByWall = (facade && facade.rectByWall) || {};
   const heroSet = (facade && facade.heroBuildings) || new Set();
   const isHero = (ib) => (heroSet.has ? heroSet.has(ib) : (Array.isArray(heroSet) && heroSet.includes(ib)));
-  const nPages = (facade && facade.pages && facade.pages.length) || 0;
 
-  // ---- per-page atlas material (shared across all hero walls on that page) --------------
-  // Named 'FacadeAtlas_page{N}_mat' so the exporter can attach facade.pages[N] PNG by name.
-  const facadePageMaterials = new Map();   // page -> material name (for the exporter)
-  const pageMatCache = new Map();
-  const pageMaterial = (page) => {
-    let m = pageMatCache.get(page);
+  // ---- per-page OVERLAY material (one removable photo layer per atlas page) --------------
+  // The photo is NOT the wall texture — it is a SEPARATE quad proud of the (always-present)
+  // windowed-stucco wall, grouped per atlas page into node 'SVFacade_page{N}' with material
+  // 'FacadeAtlasOverlay_page{N}_mat' (the exporter attaches facade.pages[N] JPEG by that name).
+  // The runtime toggles every 'SVFacade*' node to turn photo mode on/off.
+  const overlayPageMaterials = new Map();   // page -> material name (for the exporter)
+  const overlayMatCache = new Map();
+  const overlayMaterial = (page) => {
+    let m = overlayMatCache.get(page);
     if (m) return m;
-    const name = `FacadeAtlas_page${page}_mat`;
+    const name = `FacadeAtlasOverlay_page${page}_mat`;
     m = new THREE.MeshStandardMaterial({ name, color: 0xffffff, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
-    pageMatCache.set(page, m);
-    facadePageMaterials.set(page, name);
+    overlayMatCache.set(page, m);
+    overlayPageMaterials.set(page, name);
     return m;
   };
+  // OVERLAY-quad accumulator: page -> {pos, uv} of all hero-wall photo quads on that page. One
+  // SVFacade_page{N} mesh per page (so the runtime toggles them as a group). PROUD_OVERLAY sits
+  // in FRONT of the window trim (which pushes out to ~0.12 m) so the photo covers the windows when
+  // ON and the windowed stucco shows when the overlay is hidden.
+  const PROUD_OVERLAY = 0.17;
+  const overlayByPage = new Map();
+  const overlayBucket = (page) => {
+    let b = overlayByPage.get(page);
+    if (!b) { b = { pos: [], uv: [] }; overlayByPage.set(page, b); }
+    return b;
+  };
+  // Emit one hero wall's photo overlay quad PROUD of its wall edge into its page bucket. The quad
+  // spans the wall foot..eave (matching pushWallFace), UVs map U left->right across the edge and V
+  // eave(top=v0)..ground(bottom=v1) into the atlas sub-rect (no roof band — facade_atlas trimmed it).
+  function emitOverlayQuad(xi, zi, xj, zj, yt, base, cen, rect) {
+    const yMin = base - MAX_FOUNDATION;
+    const ybi = Math.max(yMin, Math.min(yt - 0.1, terrainAt(xi, zi) - WALL_EMBED));
+    const ybj = Math.max(yMin, Math.min(yt - 0.1, terrainAt(xj, zj) - WALL_EMBED));
+    const L = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
+    let nx = -(zj - zi) / L, nz = (xj - xi) / L;
+    if (((xi + xj) * 0.5 - cen[0]) * nx + ((zi + zj) * 0.5 - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    const o = PROUD_OVERLAY;
+    const A = [xi + nx * o, ybi, zi + nz * o], B = [xj + nx * o, ybj, zj + nz * o];
+    const Cc = [xj + nx * o, yt, zj + nz * o], Dd = [xi + nx * o, yt, zi + nz * o];
+    const { u0, v0, u1, v1 } = rect;
+    const bucket = overlayBucket(rect.page | 0);
+    for (const v of [A, B, Cc, A, Cc, Dd]) bucket.pos.push(v[0], v[1], v[2]);
+    // A/B = wall foot (ground=v1); Cc/Dd = eave (v0). U: A,Dd=left(u0); B,Cc=right(u1).
+    bucket.uv.push(u0, v1, u1, v1, u1, v0, u0, v1, u1, v0, u0, v0);
+  }
   // procedural tiled stucco (facade.stuccoTile PNG) tinted by the building's wallColor. One
   // material per building so each house keeps its own paint; the exporter attaches the stucco
   // PNG to every /stucco/i material by name (REPEAT wrap over the TILE-scaled wall UVs).
@@ -233,27 +290,24 @@ export function buildBuildingLayer({
   }
 
   // ---- emit one ring (walls + flat eave cap + overhang + roof shells) -------------------
-  // W = { stucco: {pos,uv}, atlasByPage: Map(page -> {pos,uv}) }  (walls split by material)
-  // Rf = { pos } roof triangles for this building.  ib = building index (for hero/atlas lookup).
+  // W = { stucco: {pos,uv} } — EVERY wall in EVERY orientation is procedural windowed stucco
+  // (tinted by wallColor(ib)); the photo is NOT the wall texture. Rf = { pos } roof triangles.
+  // ib = building index. A HERO wall that has a packed atlas crop ALSO emits a SEPARATE photo
+  // overlay quad (into overlayByPage) proud of the stucco wall — toggled at runtime, windows under.
   function emitRing(ring, base, wallH, roofRects, ib, W, Rf, allRings) {
     if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
     const yt = base + wallH;
     const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
     const hero = isHero(ib);
     let dist = 0;
-    for (let i = 0; i < ring.length; i++) {              // walls
+    for (let i = 0; i < ring.length; i++) {              // walls (ALWAYS stucco)
       const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
       const seg = Math.hypot(xj - xi, zj - zi);
-      // HERO wall with a packed atlas crop for this edge -> use the atlas sub-rect + page material.
+      pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
+      // HERO wall with a packed atlas crop for this edge -> ALSO emit a removable photo overlay
+      // quad proud of the (windowed) stucco wall, grouped by atlas page for the runtime toggle.
       const rect = hero ? rectByWall[`b${ib}_e${i}`] : null;
-      if (rect) {
-        const page = rect.page | 0;
-        let bucket = W.atlasByPage.get(page);
-        if (!bucket) { bucket = { pos: [], uv: [] }; W.atlasByPage.set(page, bucket); }
-        pushWallFace(bucket, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, rect);
-      } else {
-        pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
-      }
+      if (rect) emitOverlayQuad(xi, zi, xj, zj, yt, base, cen, rect);
       dist += seg;
     }
     // flat eave cap (triangulated footprint at the eave height)
@@ -337,6 +391,153 @@ export function buildBuildingLayer({
     const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
   }
 
+  // ---- facade DETAIL emitters (ported from legacy export_property_glb.mjs) --------------
+  // Restore the proud-quad window/door/trim detail dropped in the single-surface rewrite. These
+  // accumulate into bucket objects D = {glass, trim, siding}; the caller emits one mesh per bucket.
+  //
+  // emitFacadeShellDetails — corner/edge trim, header/sill bands, and faint siding course lines.
+  // Perf gate: skips short/low walls (L<1.4 || wallH<2.1) so ~1600 buildings + sheds stay sane.
+  function emitFacadeShellDetails(ring, base, wallH, D) {
+    if (!D) return;
+    const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+    const yBase = base + 0.12, yTop = base + wallH - 0.16;
+    for (let i = 0; i < ring.length; i++) {
+      const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+      const L = Math.hypot(bx - ax, bz - az);
+      if (L < 1.4 || wallH < 2.1) continue;
+      let ex = (bx - ax) / L, ez = (bz - az) / L;
+      let nx = -ez, nz = ex;
+      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+      if (D.trim) {
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.02, Math.min(0.14, L), yBase, yTop, 0.116);
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, Math.max(0, L - 0.14), L - 0.02, yBase, yTop, 0.116);
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.08, L - 0.08, base + wallH - 0.24, base + wallH - 0.08, 0.118);
+        pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.08, L - 0.08, base + 0.16, base + 0.30, 0.118);
+        for (let y = base + 2.65; y < base + wallH - 0.55; y += 2.55) {
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.18, L - 0.18, y - 0.035, y + 0.035, 0.121);
+        }
+      }
+      if (D.siding) {
+        for (let y = base + 0.82; y < base + wallH - 0.65; y += 0.92) {
+          pushWallRect(D.siding, ax, az, ex, ez, nx, nz, 0.22, L - 0.22, y - 0.006, y + 0.006, 0.124);
+        }
+      }
+    }
+  }
+  // emitFacadeDetails — the WINDOW GRID (glass panes + trim surrounds + mullions, floor/bay spacing)
+  // plus the SCHOOL commercial storefront branch. Internally calls emitFacadeShellDetails.
+  // opts: { house, autoWindows:false (skip the grid) }.
+  // Windows are emitted on EVERY wall edge of EVERY orientation — they live UNDER the photo overlay,
+  // so a hero (photo) wall keeps its window grid (visible when photo mode is OFF). Perf gate only:
+  // window grid skips L<2.4 || wallH<2.7.
+  function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
+    if (!D) return;
+    emitFacadeShellDetails(ring, base, wallH, D);
+    if (opts.autoWindows === false) return;
+    const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+    const yt = base + wallH;
+    for (let i = 0; i < ring.length; i++) {
+      const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+      const L = Math.hypot(bx - ax, bz - az);
+      if (L < 2.4 || wallH < 2.7) continue;
+      let ex = (bx - ax) / L, ez = (bz - az) / L;
+      let nx = -ez, nz = ex;
+      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+      const bay = opts.house ? 3.0 : 3.35 + (((i * 97 + Math.round(L * 10)) % 5) - 2) * 0.10;
+      const count = Math.max(1, Math.min(12, Math.floor((L - 1.0) / bay)));
+      const floors = Math.max(1, Math.min(3, Math.floor((wallH - 1.15) / 2.55)));
+      // SCHOOL/commercial storefront: a long, tall, non-residential wall gets a CONTINUOUS
+      // ground-floor glass band with vertical mullions instead of the punched window grid.
+      const commercial = isSchool && !opts.house && L >= 9 && wallH >= 4;
+      if (commercial) {
+        const gy0 = base + 0.85, gy1 = base + Math.min(3.2, wallH - 1.4);   // ground-floor band
+        if (gy1 - gy0 > 0.6) {
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.45, L - 0.45, gy0 - 0.18, gy0, 0.10);          // sill
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, 0.45, L - 0.45, gy1, gy1 + 0.16, 0.10);          // head
+          pushWallRect(D.glass, ax, az, ex, ez, nx, nz, 0.5, L - 0.5, gy0, gy1, 0.085);                 // continuous glass band
+          const mull = Math.max(2, Math.round((L - 1.0) / 2.0));
+          for (let mI = 0; mI <= mull; mI++) {
+            const ms = 0.5 + (L - 1.0) * mI / mull;
+            pushWallRect(D.trim, ax, az, ex, ez, nx, nz, ms - 0.05, ms + 0.05, gy0, gy1, 0.10);         // vertical mullion
+          }
+        }
+      }
+      for (let f = 0; f < floors; f++) {
+        if (commercial && f === 0) continue;     // ground floor is the storefront band above
+        const y0 = base + 1.10 + f * 2.45;
+        const y1 = Math.min(y0 + 1.02, yt - 0.42);
+        if (y1 - y0 < 0.45) continue;
+        for (let wI = 0; wI < count; wI++) {
+          if (!opts.house && count > 3 && ((wI + i + f) % 7) === 5) continue;
+          const jitter = (((i + 3) * 37 + (wI + 11) * 19 + f * 13) % 17 - 8) / 100;
+          const s = (wI + 1 + jitter) * L / (count + 1);
+          if (s < 0.85 || L - s < 0.85) continue;
+          const hw = Math.min(0.64, Math.max(0.34, L / (count + 1) * (0.18 + ((wI + i) % 3) * 0.025)));
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - hw - 0.12, s + hw + 0.12, y0 - 0.10, y1 + 0.10, 0.082);
+          pushWallRect(D.glass, ax, az, ex, ez, nx, nz, s - hw, s + hw, y0, y1, 0.105);
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - 0.025, s + 0.025, y0 + 0.05, y1 - 0.05, 0.118);
+          pushWallRect(D.trim, ax, az, ex, ez, nx, nz, s - hw - 0.18, s + hw + 0.18, y0 - 0.20, y0 - 0.12, 0.115);
+        }
+      }
+    }
+  }
+  // emitOwnerHouseFacadeCues — owner front-door/window cues. The owner house uses these instead of
+  // the auto window grid (autoWindows:false) so the front reads as a residence with a real door.
+  function emitOwnerHouseFacadeCues(ring, wallH, out) {
+    if (!ring || ring.length < 3 || !out) return;
+    const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+    const edges = ring.map(([ax, az], i) => {
+      const [bx, bz] = ring[(i + 1) % ring.length];
+      const L = Math.hypot(bx - ax, bz - az);
+      let ex = (bx - ax) / (L || 1), ez = (bz - az) / (L || 1);
+      let nx = -ez, nz = ex;
+      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+      return { i, ax, az, bx, bz, L, ex, ez, nx, nz, mx, mz, roadD: distToLines(mx, mz, roadLines, 1e9) };
+    }).filter(e => e.L >= 2.2);
+    if (!edges.length) return;
+    const front = edges.reduce((a, b) => b.roadD < a.roadD ? b : a);
+    const back = edges.reduce((a, b) => {
+      const da = (a.nx * front.nx + a.nz * front.nz);
+      const db = (b.nx * front.nx + b.nz * front.nz);
+      return db < da ? b : a;
+    }, front);
+    const addWindow = (e, t, halfW = 0.48, y0 = 1.08, h = 0.92, wide = false) => {
+      if (!e || e.L < 2.4) return;
+      const s = Math.max(halfW + 0.18, Math.min(e.L - halfW - 0.18, e.L * t));
+      const base = terrainAt(e.mx, e.mz) - 0.10;
+      const yA = base + y0, yB = Math.min(base + y0 + h, base + wallH - 0.45);
+      if (yB - yA < 0.35) return;
+      pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, yA - 0.10, yB + 0.10, 0.086);
+      pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, yA, yB, 0.118);
+      pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - 0.025, s + 0.025, yA + 0.04, yB - 0.04, 0.13);
+      if (wide) pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.18, s + halfW + 0.18, yA - 0.20, yA - 0.12, 0.13);
+    };
+    const addDoorGlass = (e, t, halfW = 0.62) => {
+      const s = Math.max(halfW + 0.22, Math.min(e.L - halfW - 0.22, e.L * t));
+      const base = terrainAt(e.mx, e.mz) - 0.10;
+      pushWallRect(out.trim, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW - 0.12, s + halfW + 0.12, base + 0.02, base + 2.16, 0.088);
+      pushWallRect(out.glass, e.ax, e.az, e.ex, e.ez, e.nx, e.nz, s - halfW, s + halfW, base + 0.12, base + 2.04, 0.122);
+    };
+    const garageT = front.ax > front.bx ? 0.20 : 0.80;
+    const doorT = front.ax > front.bx ? 0.72 : 0.28;
+    addWindow(front, (doorT + garageT) / 2, 0.42, 1.18, 0.82);
+    for (const e of edges) {
+      if (e === front) continue;
+      if (e === back) {
+        addDoorGlass(e, 0.48, 0.82);
+        if (e.L > 6.0) { addWindow(e, 0.23, 0.42); addWindow(e, 0.75, 0.42); }
+      } else if (e.L > 5.5) {
+        addWindow(e, 0.32, 0.46);
+        addWindow(e, 0.68, 0.46);
+      } else {
+        addWindow(e, 0.50, 0.42);
+      }
+    }
+  }
+
   // ====================================================================================
   // assemble
   // ====================================================================================
@@ -347,8 +548,14 @@ export function buildBuildingLayer({
   let emitted = 0, skipped = 0, clipped = 0;
 
   // ---- owner house (its own walls/roof meshes; hero by definition) ----------------------
-  const hW = { stucco: { pos: [], uv: [], material: null }, atlasByPage: new Map() };
+  // Walls are ALWAYS windowed stucco; hero photo overlays accumulate into overlayByPage (emitted
+  // once as SVFacade_page{N} meshes after every building, so they toggle as one group).
+  const hW = { stucco: { pos: [], uv: [], material: null } };
   const hRf = { pos: [] };
+  // owner-house facade detail bucket (its own meshes): the shell trim/siding from emitFacadeDetails
+  // PLUS the front-door/window cues. The grid itself is suppressed (autoWindows:false) — the cues
+  // place a door + real windows facing the street instead of a generic punched grid.
+  const hD = { glass: [], trim: [], siding: [] };
   if (houseIdx >= 0) {
     const houseB = S.buildings[houseIdx];
     let ring = houseB.p.map(([e, n]) => w2(e, n));
@@ -360,23 +567,28 @@ export function buildBuildingLayer({
     buildingPolys.push(houseRing);
     buildingCollision.push({ ring: houseRing, base, h: houseWallH });
     emitted++;
-    // house walls: stucco bucket + atlas page buckets, each its own material
-    const hBuckets = [];
+    // facade detail: shell trim/siding only (no auto grid); the cues add the street-facing windows.
+    emitFacadeDetails(houseRing, base, houseWallH, hD, { house: true, autoWindows: false });
+    if (!isSchool) emitOwnerHouseFacadeCues(houseRing, houseWallH, hD);
+    // house walls: a single stucco bucket (the photo, if any, is a separate SVFacade overlay).
     hW.stucco.material = stuccoMaterial(houseIdx);
-    hBuckets.push(hW.stucco);
-    for (const [page, b] of hW.atlasByPage) hBuckets.push({ ...b, material: pageMaterial(page) });
-    const hwMesh = wallMeshFromBuckets(hBuckets, 'House_walls');
+    const hwMesh = wallMeshFromBuckets([hW.stucco], 'House_walls');
     if (hwMesh) scene.add(hwMesh);
     const hrMesh = roofMeshFromGroups(hRf.pos, [[0, hRf.pos.length / 3, roofColor(houseIdx)]], 'House_roof');
     if (hrMesh) scene.add(hrMesh);
+    // owner-house facade detail meshes (legacy node names + colours)
+    const addH = (m) => { if (m) scene.add(m); };
+    addH(simpleMesh(hD.siding, 0xbcb4a4, 'House_siding_lines'));
+    addH(simpleMesh(hD.trim, 0xd8d0bd, 'House_window_trim'));
+    addH(simpleMesh(hD.glass, 0x223647, 'House_windows'));
   }
 
   // ---- other buildings -----------------------------------------------------------------
-  const bW = { stucco: { pos: [], uv: [], material: null }, atlasByPage: new Map() };
   const bRf = { pos: [] };
-  // per-building wall groups: each building gets its own stucco material slot; atlas pages are
-  // shared. We accumulate stucco per building into separate buckets so each keeps its paint.
-  const stuccoBuckets = [];   // [{pos, uv, material}] one per building (with stucco walls)
+  // SHARED facade detail bucket for every non-owner building — one mesh per kind at the end.
+  const bD = { glass: [], trim: [], siding: [] };
+  // per-building wall groups: each building gets its own stucco material slot (its real paint).
+  const stuccoBuckets = [];   // [{pos, uv, material}] one per building (always-present stucco walls)
   const roofGroups = [];      // [start, count, col]
 
   S.buildings.forEach((b, ib) => {
@@ -389,90 +601,106 @@ export function buildBuildingLayer({
     ring = cr;
     const base = buildingBase(ring);
     const h = wallHeight(b);
-    // emit this building's walls into a FRESH per-building bucket set so each keeps its own paint
-    const localW = { stucco: { pos: [], uv: [], material: stuccoMaterial(ib) }, atlasByPage: new Map() };
+    // emit this building's walls into a FRESH per-building stucco bucket so each keeps its own paint
+    const localW = { stucco: { pos: [], uv: [], material: stuccoMaterial(ib) } };
     const rs = bRf.pos.length / 3;
     const emittedRing = emitRing(ring, base, h, b.r, ib, localW, bRf, buildingPolys);
     buildingPolys.push(emittedRing);
     buildingCollision.push({ ring: emittedRing, base, h });
-    // merge local stucco -> its own bucket; local atlas pages -> shared atlasByPage buckets
+    // facade detail: window grid on EVERY wall edge (+ shell trim). Windows live UNDER the photo
+    // overlay, so a hero wall keeps its grid (shown when photo mode is OFF). No per-edge skip.
+    emitFacadeDetails(emittedRing, base, h, bD, {});
     if (localW.stucco.pos.length) stuccoBuckets.push(localW.stucco);
-    for (const [page, lb] of localW.atlasByPage) {
-      let shared = bW.atlasByPage.get(page);
-      if (!shared) { shared = { pos: [], uv: [] }; bW.atlasByPage.set(page, shared); }
-      for (const v of lb.pos) shared.pos.push(v);
-      for (const v of lb.uv) shared.uv.push(v);
-    }
     roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
     emitted++;
   });
 
-  if (stuccoBuckets.length || bW.atlasByPage.size) {
-    const buckets = [...stuccoBuckets];
-    for (const [page, b] of bW.atlasByPage) buckets.push({ ...b, material: pageMaterial(page) });
-    const wallsMesh = wallMeshFromBuckets(buckets, 'Buildings_walls');
+  if (stuccoBuckets.length) {
+    const wallsMesh = wallMeshFromBuckets(stuccoBuckets, 'Buildings_walls');
     if (wallsMesh) scene.add(wallsMesh);
   }
   if (bRf.pos.length) {
     const roofsMesh = roofMeshFromGroups(bRf.pos, roofGroups, 'Buildings_roofs');
     if (roofsMesh) scene.add(roofsMesh);
   }
+  // shared building facade detail meshes (legacy node names + colours)
+  const addB = (m) => { if (m) scene.add(m); };
+  addB(simpleMesh(bD.siding, 0xb6ad9f, 'Buildings_siding_lines'));
+  addB(simpleMesh(bD.trim, 0xd2c9b8, 'Buildings_window_trim'));
+  addB(simpleMesh(bD.glass, 0x203342, 'Buildings_windows'));
 
-  // ---- owner-house residential cues: front door / garage (skip on school) --------------
-  // Ported from the legacy door/garage pass, but ONLY for the owner house (no per-building door
-  // spam in this frame). Needs road lines for front-edge detection; we approximate "front" as the
-  // footprint edge nearest the demRect-projected road side is unavailable here, so use the legacy
-  // owner heuristic: garage on the higher-X end of the longest near-square front wall.
-  if (houseRing && houseRing.length >= 3 && !isSchool) {
-    const dwPos = [], doorTrim = [], doorGlass = [], garagePos = [], garageTrim = [];
+  // ---- toggleable Street-View photo OVERLAY (one mesh per atlas page) --------------------
+  // All hero-wall photo quads for atlas page N go into ONE node 'SVFacade_page{N}' with material
+  // 'FacadeAtlasOverlay_page{N}_mat' (the exporter attaches facade.pages[N] JPEG by that name), so
+  // the runtime can flip every 'SVFacade*' node together to turn photo mode on/off. The quads sit
+  // PROUD of the always-present windowed-stucco wall; hiding them reveals the windows underneath.
+  for (const [page, b] of [...overlayByPage.entries()].sort((a, c) => a[0] - c[0])) {
+    if (!b.pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, overlayMaterial(page));
+    mesh.name = `SVFacade_page${page}`;
+    mesh.userData = { source: 'Google Street View Static', overlay: true, page };
+    scene.add(mesh);
+  }
+
+  // ---- Doors + Garage (ported full per-building loop) ----------------------------------
+  // Per building: a road-facing door (slab + jamb/lintel trim + transom glass) on the footprint
+  // edge whose midpoint is nearest a road (falls back to the longest edge if no roadLines). The
+  // OWNER HOUSE additionally gets a GARAGE (panel + trim + mullions) on the road/higher-X end of
+  // that wall. Doors are added REGARDLESS of any photo facade — they read as real entrances.
+  {
+    const dwPos = [], garagePos = [], garageTrim = [], doorTrim = [], doorGlass = [];
     const DOORCOL = new THREE.Color(0.26, 0.18, 0.12);
-    const cen = houseRing.reduce((a, [x, z]) => [a[0] + x / houseRing.length, a[1] + z / houseRing.length], [0, 0]);
-    // pushWallRect proud of the wall (small offset) — owner cues only, allowed (not the dropped
-    // per-building proud facade trim). off ~0.07-0.14 m, consistent with legacy door framing.
-    const pushWallRect = (arr, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off) => {
-      const A = [ax + ex * s0 + nx * off, y0, az + ez * s0 + nz * off];
-      const B = [ax + ex * s1 + nx * off, y0, az + ez * s1 + nz * off];
-      const Cc = [ax + ex * s1 + nx * off, y1, az + ez * s1 + nz * off];
-      const Dd = [ax + ex * s0 + nx * off, y1, az + ez * s0 + nz * off];
-      for (const v of [A, B, Cc, A, Cc, Dd]) arr.push(v[0], v[1], v[2]);
-    };
-    // pick the longest edge as the front wall (no road network here)
-    let best = null, bestL = 0;
-    for (let i = 0; i < houseRing.length; i++) {
-      const [ax, az] = houseRing[i], [bx, bz] = houseRing[(i + 1) % houseRing.length];
-      const L = Math.hypot(bx - ax, bz - az);
-      if (L > bestL) { bestL = L; best = [ax, az, bx, bz]; }
-    }
-    if (best && bestL >= 2.4) {
+    buildingPolys.forEach((ring) => {
+      if (!ring || ring.length < 2) return;
+      const isOwner = ring === houseRing;
+      const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
+      // edge whose midpoint is nearest a road (or longest edge when no roadLines)
+      let best = null, bestD = Infinity, bestL = 0;
+      for (let i = 0; i < ring.length; i++) {
+        const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+        const eL = Math.hypot(bx - ax, bz - az);
+        if (eL < 1.6) continue;
+        const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+        const d = roadLines.length ? distToLines(mx, mz, roadLines, 1e9) : -eL;   // no roads -> prefer longest
+        if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; bestL = eL; }
+      }
+      if (!best || bestL < 2.4) return;
       const [ax, az, bx, bz] = best;
       let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
-      let nx = -ez, nz = ex;
+      let nx = -ez, nz = ex;                                    // outward normal (away from centroid)
       const m0x = (ax + bx) / 2, m0z = (az + bz) / 2;
       if ((m0x - cen[0]) * nx + (m0z - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
-      // door on the SW (lower-X) half, garage on the higher-X end (legacy owner-house layout)
-      const t = (ax > bx) ? 0.72 : 0.28;
+      // owner house: door on the SW (lower-X) half so the garage gets the road/NE (higher-X) end.
+      let t = 0.5;
+      if (isOwner) t = (ax > bx) ? 0.72 : 0.28;
       const dcx = ax + (bx - ax) * t, dcz = az + (bz - az) * t;
-      const hw = 0.5, H = 2.1, dbase = terrainAt(dcx, dcz) - 0.1, cx = dcx + nx * 0.07, cz = dcz + nz * 0.07;
-      const P = (s, y) => [cx + ex * s, dbase + y, cz + ez * s];
+      const hw = 0.5, H = 2.1, base = terrainAt(dcx, dcz) - 0.1, cx = dcx + nx * 0.07, cz = dcz + nz * 0.07;
+      const P = (s, y) => [cx + ex * s, base + y, cz + ez * s];
       const A = P(-hw, 0), B = P(hw, 0), Cc = P(hw, H), D = P(-hw, H);
       for (const tri of [[A, B, Cc], [A, Cc, D]]) for (const v of tri) dwPos.push(v[0], v[1], v[2]);
+      // door FRAME (jambs + lintel) just proud of the slab + a glass TRANSOM panel above the head.
       const sd = t * L, jw = 0.10, head = 0.10;
-      pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd - hw - jw, sd - hw, dbase, dbase + H + head, 0.10);
-      pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd + hw, sd + hw + jw, dbase, dbase + H + head, 0.10);
-      pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd - hw - jw, sd + hw + jw, dbase + H, dbase + H + head, 0.10);
-      pushWallRect(doorGlass, ax, az, ex, ez, nx, nz, sd - hw + 0.04, sd + hw - 0.04, dbase + H + head, dbase + H + head + 0.42, 0.112);
-      // garage door on the road/higher-X end
-      const gt = (ax > bx) ? 0.20 : 0.80;
-      const gs = L * gt, ghw = Math.min(1.65, Math.max(1.25, L * 0.16));
-      const gx = ax + ex * gs, gz = az + ez * gs, gb = terrainAt(gx, gz) - 0.08;
-      pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw - 0.16, gs + ghw + 0.16, gb - 0.03, gb + 2.35, 0.095);
-      pushWallRect(garagePos, ax, az, ex, ez, nx, nz, gs - ghw, gs + ghw, gb + 0.06, gb + 2.18, 0.125);
-      for (let p = 1; p <= 3; p++) {
-        const y = gb + 0.06 + p * (2.12 / 4);
-        pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw + 0.05, gs + ghw - 0.05, y - 0.025, y + 0.025, 0.145);
+      pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd - hw - jw, sd - hw, base, base + H + head, 0.10);          // left jamb
+      pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd + hw, sd + hw + jw, base, base + H + head, 0.10);          // right jamb
+      pushWallRect(doorTrim, ax, az, ex, ez, nx, nz, sd - hw - jw, sd + hw + jw, base + H, base + H + head, 0.10); // head lintel
+      pushWallRect(doorGlass, ax, az, ex, ez, nx, nz, sd - hw + 0.04, sd + hw - 0.04, base + H + head, base + H + head + 0.42, 0.112); // transom
+      if (isOwner && !isSchool) {     // owner-house garage; never on a SCHOOL export
+        const gt = (ax > bx) ? 0.20 : 0.80;
+        const gs = L * gt, ghw = Math.min(1.65, Math.max(1.25, L * 0.16));
+        const gx = ax + ex * gs, gz = az + ez * gs, gb = terrainAt(gx, gz) - 0.08;
+        pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw - 0.16, gs + ghw + 0.16, gb - 0.03, gb + 2.35, 0.095);
+        pushWallRect(garagePos, ax, az, ex, ez, nx, nz, gs - ghw, gs + ghw, gb + 0.06, gb + 2.18, 0.125);
+        for (let p = 1; p <= 3; p++) {
+          const y = gb + 0.06 + p * (2.12 / 4);
+          pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - ghw + 0.05, gs + ghw - 0.05, y - 0.025, y + 0.025, 0.145);
+        }
+        pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - 0.025, gs + 0.025, gb + 0.12, gb + 2.08, 0.145);
       }
-      pushWallRect(garageTrim, ax, az, ex, ez, nx, nz, gs - 0.025, gs + 0.025, gb + 0.12, gb + 2.08, 0.145);
-    }
+    });
     const add = (m) => { if (m) scene.add(m); };
     add(simpleMesh(dwPos, DOORCOL, 'Doors'));
     add(simpleMesh(doorTrim, 0xd2c9b8, 'Doors_trim'));
@@ -507,14 +735,18 @@ export function buildBuildingLayer({
     const mesh = new THREE.Mesh(g, m); mesh.name = 'Collision_Buildings'; scene.add(mesh);
   }
 
-  const counts = { emitted, skipped, clipped };
+  // hero-wall count = total photo overlay quads emitted (6 verts per quad) across all pages.
+  let heroWalls = 0;
+  for (const b of overlayByPage.values()) heroWalls += (b.pos.length / 3 / 6) | 0;
+  const counts = { emitted, skipped, clipped, heroWalls };
   const total = emitted + skipped;
   const dropRatio = total ? skipped / total : 0;
   console.log(`buildings: emitted=${emitted} skipped=${skipped} clipped=${clipped} (drop ratio ${(dropRatio * 100).toFixed(1)}%)`);
+  console.log(`facade overlays: ${heroWalls} hero walls across ${overlayByPage.size} SVFacade page node(s)`);
   if (dropRatio > 0.10) console.warn(`  ***** WARNING: building drop ratio ${(dropRatio * 100).toFixed(1)}% > 10% — many buildings outside the DEM rect *****`);
 
   return {
     houseRing, houseWallH, buildingCollision, buildingPolys, counts,
-    facadePageMaterials,   // page -> material name (exporter attaches facade.pages[page] by name)
+    overlayPageMaterials,  // page -> overlay material name (exporter attaches facade.pages[page] by name)
   };
 }

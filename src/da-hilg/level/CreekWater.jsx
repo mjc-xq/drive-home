@@ -31,14 +31,9 @@ import * as THREE from 'three';
 const CREEK_MESH_NAMES = [
   'Creek_SanLorenzo',
   'Creek_Banks',
-  'Creek_FlowLines',
   'Creek_Rocks',
   'Creek_Reeds',
 ];
-
-// Meshes that read as road-marker lines / sidewalk over the creek. We only hide
-// these where they actually overlap the creek footprint (see hideCreekClutter).
-const CLUTTER_MESH_NAMES = ['RoadLines', 'Sidewalks'];
 
 /**
  * Compute the creek's XZ footprint and minimum Y in the SCENE's local space.
@@ -96,63 +91,8 @@ export function computeCreekBounds(scene) {
   };
 }
 
-/**
- * Hide road-line / sidewalk clutter that overlaps the creek footprint so it stops
- * reading as "lines in the water". Conservative: only hides a clutter mesh whose
- * OWN bounds sit (mostly) within the creek XZ box — never the whole road network.
- *
- * If you can't reliably identify clutter this way, the integrator can instead hide
- * the brown-sidewalk creek mesh directly:  setMeshVisible(scene,'Creek_Banks',false)
- *
- * @param {import('three').Object3D} scene loaded level scene
- * @param {ReturnType<typeof computeCreekBounds>} [bounds] precomputed creek bounds
- * @returns {string[]} names of meshes that were hidden (for logging)
- */
-export function hideCreekClutter(scene, bounds) {
-  if (!scene) return [];
-  const b = bounds || computeCreekBounds(scene);
-  if (!b) return [];
-
-  scene.updateWorldMatrix(true, true);
-  const sceneInv = new THREE.Matrix4().copy(scene.matrixWorld).invert();
-  const box = new THREE.Box3();
-  const toLocal = new THREE.Matrix4();
-  const v = new THREE.Vector3();
-  const hidden = [];
-
-  // A little margin so a mesh whose edge laps just outside still counts as "over
-  // the creek". Tight enough that the broad road network is never swallowed.
-  const margin = Math.max(2, Math.min(b.width, b.depth) * 0.15);
-
-  scene.traverse((o) => {
-    if (!o.isMesh) return;
-    if (!CLUTTER_MESH_NAMES.includes(o.name || '')) return;
-    const pos = o.geometry?.attributes?.position;
-    if (!pos) return;
-
-    // Mesh XZ bounds in scene-local space.
-    toLocal.multiplyMatrices(sceneInv, o.matrixWorld);
-    box.makeEmpty();
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i).applyMatrix4(toLocal);
-      box.expandByPoint(v);
-    }
-
-    // Hide only if this clutter mesh's footprint is essentially inside the creek
-    // box (with margin). A mesh that merely brushes the creek is left visible.
-    const inside =
-      box.min.x >= b.minX - margin &&
-      box.max.x <= b.maxX + margin &&
-      box.min.z >= b.minZ - margin &&
-      box.max.z <= b.maxZ + margin;
-    if (inside) {
-      o.visible = false;
-      hidden.push(o.name);
-    }
-  });
-
-  return hidden;
-}
+// (hideCreekClutter removed: the single-surface level folds roads/sidewalks into the terrain
+//  texture, so there are no floating RoadLines/Sidewalks meshes over the creek to hide.)
 
 /** Find a mesh by exact name and set its visibility. Returns whether it matched. */
 export function setMeshVisible(scene, name, visible) {

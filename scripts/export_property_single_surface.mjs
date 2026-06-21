@@ -48,6 +48,7 @@ const SETS = {
   canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
   stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
+  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq' },
 };
 const SET = SETS[LEVEL] || SETS.dahill;
 const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
@@ -120,7 +121,7 @@ const facadeDir = SET.dir === 'exports' ? R('exports/_facades') : R(SET.dir, '_f
 const facade = svWalls.length
   ? await bakeFacadeAtlas({ buildings: S.buildings, svWalls, svDir: R(SET.dir), houseIndex, demRect: terrain.demRect, w2, outDir: facadeDir })
   : { pages: [], rectByWall: {}, heroBuildings: [], stuccoTile: R('exports/facade.png') };
-console.log(`facade: ${facade.pages.length} atlas page(s), ${Object.keys(facade.rectByWall).length} hero walls (rest stucco)`);
+console.log(`facade: ${facade.pages.length} atlas page(s), ${Object.keys(facade.rectByWall).length} hero walls (toggleable photo overlay; windowed stucco underneath)`);
 
 // ---- 4a-bis) FILL MISSING BUILDINGS: lots that have a real house in the aerial (and/or Mapbox)
 // but none in our OSM/Overture scene.buildings. Inferred footprints flow through the existing
@@ -165,7 +166,8 @@ if (S.creek && Array.isArray(S.creek.p) && S.creek.p.length > 1) {
 
 const { wallColor, roofColor } = makeBuildingColor(pick);
 const isSchool = S.meta?.kind === 'school-region-export';
-const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terrain.demRect, isSchool, wallColor, roofColor, facade, ROOT });
+const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terrain.demRect, isSchool, wallColor, roofColor, facade, ROOT,
+  roadLines: network.surfaces.filter(s => s.kind === 'asphalt' && s.centerline).map(s => s.centerline) });
 console.log(`buildings: emitted=${bres.counts.emitted} skipped=${bres.counts.skipped} clipped=${bres.counts.clipped} (drop ${(100 * bres.counts.skipped / Math.max(1, bres.counts.emitted + bres.counts.skipped)).toFixed(1)}%)`);
 
 const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys });
@@ -219,11 +221,11 @@ for (const m of doc.getRoot().listMaterials()) {
     m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(farAlb).setRoughnessFactor(0.95).setMetallicFactor(0);
     m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
   } else {
-    const fm = n.match(/^FacadeAtlas_page(\d+)_mat$/);
-    if (fm && facadeTexes[+fm[1]]) {        // hero walls: the SV photo IS the wall texture
+    const fm = n.match(/^FacadeAtlasOverlay_page(\d+)_mat$/);
+    if (fm && facadeTexes[+fm[1]]) {        // hero photo OVERLAY (SVFacade_page{N} quads, proud of the wall)
       m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(facadeTexes[+fm[1]]);
       m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
-    } else if (/^Stucco_b\d+_mat$/.test(n) && stuccoTex) {   // tiled window/stucco x per-building wallColor
+    } else if (/^Stucco_b\d+_mat$/.test(n) && stuccoTex) {   // tiled window/stucco x per-building wallColor (the always-present wall)
       m.setBaseColorTexture(stuccoTex);
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
     }

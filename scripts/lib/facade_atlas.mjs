@@ -1,13 +1,16 @@
-// facade_atlas.mjs — project REAL Street-View building facades INTO the wall texture
-// (coplanar, the wall IS the photo), phased by a px/m quality gate.
+// facade_atlas.mjs — pack REAL Street-View building facades into RGB atlas page(s), phased by a
+// px/m quality gate. The caller (building_layer.mjs) draws each packed crop as a TOGGLEABLE
+// overlay quad PROUD of an always-present windowed-stucco wall (so photo mode can be turned OFF
+// and the windowed wall shows underneath) — this module just selects + packs; it does NOT decide
+// the wall texture. SELECTION IS FULLY DETERMINISTIC: buildings scanned by ascending index, walls
+// by ascending edge index, equal-size crops tiebroken on the stable wall key — so dahill produces
+// the same ~700-wall hero set, identically, every run.
 //
-// WHY: the old exporter floated SVFacade_* overlay quads 0.16 m PROUD of each wall (they
-// z-fight + read as decals) and shipped 967 crops as small as 522x163 px — far/low-res walls
-// turned to melty 64px mush. Here EVERY in-patch building that carries an SV wall crop clearing
-// `minPxPerM` gets a real photo facade (not just the owner house + a few near neighbours) — the
-// crops pack into AS MANY 4096 atlas pages as needed. Any wall below the gate, and any building
-// off the terrain patch, falls back to the procedural tiled stucco (exports/facade.png) tinted
-// by the caller's per-building wallColor. We never ship a melty photo: the gate -> stucco instead.
+// WHY: EVERY in-patch building that carries an SV wall crop clearing `minPxPerM` gets a real photo
+// facade overlay (not just the owner house + a few near neighbours) — the crops pack into AS MANY
+// 4096 atlas pages as needed. Any wall below the gate, and any building off the terrain patch, gets
+// no overlay (the windowed stucco wall is what shows). We never ship a melty photo: the gate -> no
+// overlay -> the windowed stucco wall reads instead.
 //
 // ROOF BLEED (PROBLEM 1): the SV crops claim 'wall-only-ground-to-eave' but fetch_sv_facades.py
 // crops the top using the UNRELIABLE OSM wallH, so when wallH is overestimated the crop's TOP
@@ -19,12 +22,12 @@
 //
 // HOW: crops are SHELF-PACKED (skyline rows, tall-first) into one or a few RGB atlas pages
 // composited with sharp, each resized to a hero texels-per-metre so the wall is crisp. The
-// returned rectByWall maps 'b{building}_e{edge}' -> { page, u0,v0,u1,v1 }; the exporter sets that
-// wall's UVs to the sub-rect (V: eave=v0/top -> ground=v1/bottom, matching the crop's own
-// ground-to-eave layout, so NO roof band shows) and uses the atlas page material. Walls not in
-// rectByWall get the stucco tile. heroBuildings (returned) is the set of buildings that actually
-// got >=1 packed crop — the exporter/building_layer only applies a rect when its building is in
-// that set, so it must list every facade'd building.
+// returned rectByWall maps 'b{building}_e{edge}' -> { page, u0,v0,u1,v1 }; building_layer.mjs draws
+// a SEPARATE overlay quad for that wall with UVs in the sub-rect (V: eave=v0/top -> ground=v1/bottom,
+// matching the crop's own ground-to-eave layout, so NO roof band shows) into node SVFacade_page{N}
+// with material FacadeAtlasOverlay_page{N}_mat. heroBuildings (returned) is the set of buildings
+// that got >=1 packed crop — the caller only emits an overlay when its building is in that set, so
+// it must list every facade'd building.
 
 import sharp from 'sharp';
 import { mkdirSync } from 'node:fs';
@@ -90,8 +93,11 @@ export async function bakeFacadeAtlas({
     const [e, n] = centroidEN(b.p);
     return w2(e, n);                                        // -> [x, z]
   };
+  // DETERMINISM: iterate buildings by ASCENDING building index (a stable key), never Map
+  // iteration order, so the candidate set + crop order is identical every run regardless of how
+  // svWalls happened to be ordered. (Map insertion order is input-dependent; sorting pins it.)
   const candBuildings = [];                                // every in-patch building with SV walls
-  for (const ib of wallsByB.keys()) {
+  for (const ib of [...wallsByB.keys()].sort((a, b) => a - b)) {
     if (ib === houseIndex) { candBuildings.push(ib); continue; }   // house always eligible
     const c = worldCentroid(ib);
     if (!c) continue;
@@ -109,7 +115,10 @@ export async function bakeFacadeAtlas({
   const facadedSet = new Set();                            // buildings that actually got a packed crop
   let rejected = 0;
   for (const ib of candBuildings) {
-    for (const wall of wallsByB.get(ib) || []) {
+    // DETERMINISM: walls in ASCENDING edge index, a stable per-building key (the source array
+    // order is input-dependent; sorting pins both the eligibility scan and the pack order).
+    const wallsForB = [...(wallsByB.get(ib) || [])].sort((a, b) => (a.edge | 0) - (b.edge | 0));
+    for (const wall of wallsForB) {
       const wallW = +wall.wallW || 0, wallH = +wall.wallH || 0;
       if (wallW <= 0 || wallH <= 0 || !wall.image) continue;
       const imgPath = path.join(svDir, wall.image);
@@ -152,8 +161,10 @@ export async function bakeFacadeAtlas({
   }
   // heroBuildings = exactly the buildings that got a packed crop (the caller's hero gate keys off
   // this; a building absent here stays stucco even if a stray rect exists).
-  const heroBuildings = [...facadedSet];
-  rects.sort((a, b) => b.h - a.h || b.w - a.w);            // tall-first -> better shelf occupancy
+  const heroBuildings = [...facadedSet].sort((a, b) => a - b);
+  // tall-first -> better shelf occupancy. Final tiebreak on the stable wall KEY so equal-size
+  // crops always pack in the same slot every run (deterministic atlas + UVs).
+  rects.sort((a, b) => b.h - a.h || b.w - a.w || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
   // 3) PACK + COMPOSITE pages, build rectByWall. UV sub-rect insets a half-texel so bilinear taps
   //    never reach into the 2 px gutter (neighbour bleed). v0=top=eave, v1=bottom=ground — the

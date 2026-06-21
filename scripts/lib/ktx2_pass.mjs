@@ -34,15 +34,25 @@ export function ktx2Encoder() {
   return null;
 }
 
-/** Encode one PNG file to KTX2 with mipmaps using the chosen encoder. */
-function encodeOne(encoder, inPng, outKtx) {
+/**
+ * Encode one PNG file to KTX2 with mipmaps using the chosen encoder.
+ * @param {'basisu'|'toktx'} encoder
+ * @param {string} inPng
+ * @param {string} outKtx
+ * @param {boolean} [hq=false] high-quality (no RDO): keeps fine painted detail (lane/curb on the
+ *   ground albedo, facade text) crisp at the cost of a larger file. RDO trades a little fidelity
+ *   for size, which smears the painted road lines — so the big ground/facade textures opt out.
+ */
+function encodeOne(encoder, inPng, outKtx, hq = false) {
   if (encoder === 'basisu') {
-    // UASTC (near-lossless 4x4) + RDO + KTX2 zstd supercompression. ETC1S badly desaturated /
+    // UASTC (near-lossless 4x4) + KTX2 zstd supercompression. ETC1S badly desaturated /
     // washed out the photographic content (Street View facades + aerial ground); UASTC keeps the
-    // colour. RDO (-uastc_rdo_l) + zstd (-ktx2_zstd) keep the disk size reasonable. sRGB by default.
-    execFileSync('basisu', ['-ktx2', '-uastc', '-uastc_rdo_l', '1.0', '-mipmap', '-output_file', outKtx, inPng], {
-      stdio: 'ignore',
-    });
+    // colour. RDO (-uastc_rdo_l) trades fidelity for disk size — fine for most maps but it smears
+    // the crisp painted lane/curb lines, so `hq` textures skip RDO entirely. sRGB by default.
+    const args = ['-ktx2', '-uastc'];
+    if (!hq) args.push('-uastc_rdo_l', '1.0');
+    args.push('-mipmap', '-output_file', outKtx, inPng);
+    execFileSync('basisu', args, { stdio: 'ignore' });
   } else {
     // toktx fallback: UASTC + zstd supercompression.
     execFileSync('toktx', ['--genmipmap', '--encode', 'uastc', '--zcmp', '18', outKtx, inPng], {
@@ -52,13 +62,19 @@ function encodeOne(encoder, inPng, outKtx) {
 }
 
 /**
- * Encode every texture in `doc` to KTX2 in place (resized to `maxSize`). No-ops if no
- * encoder is on PATH. Returns a summary; the caller logs it.
+ * Encode every texture in `doc` to KTX2 in place (resized to a per-texture cap). No-ops if
+ * no encoder is on PATH. Returns a summary; the caller logs it.
+ *
+ * `maxSize` is the DEFAULT per-texture pixel cap. `capFor(tex, i)` (optional) overrides it
+ * per texture: return a number (a custom cap) or `{ maxSize, hq }` ({ hq:true } => no-RDO,
+ * high-quality encode for textures whose fine painted/photographic detail must stay crisp —
+ * the large ground albedo + facade atlas pages). Returning a falsy value keeps the default.
+ *
  * @param {import('@gltf-transform/core').Document} doc
- * @param {{ maxSize?: number, label?: string }} [opts]
+ * @param {{ maxSize?: number, label?: string, capFor?: (tex: import('@gltf-transform/core').Texture, i: number) => (number | { maxSize?: number, hq?: boolean } | null | undefined) }} [opts]
  * @returns {Promise<{ encoder: string|null, count: number, skipped: number }>}
  */
-export async function ktx2CompressDoc(doc, { maxSize = 1024, label = '' } = {}) {
+export async function ktx2CompressDoc(doc, { maxSize = 1024, label = '', capFor = null } = {}) {
   const encoder = ktx2Encoder();
   if (!encoder) return { encoder: null, count: 0, skipped: 0 };
 
@@ -80,19 +96,29 @@ export async function ktx2CompressDoc(doc, { maxSize = 1024, label = '' } = {}) 
       const inPng = path.join(tmp, `t${i}.png`);
       const outKtx = path.join(tmp, `t${i}.ktx2`);
       try {
+        // Resolve the per-texture cap + quality. capFor() may return a bare number (cap) or
+        // { maxSize, hq }; anything falsy falls back to the document-wide default.
+        let cap = maxSize;
+        let hq = false;
+        const override = capFor ? capFor(tex, i) : null;
+        if (typeof override === 'number') cap = override;
+        else if (override && typeof override === 'object') {
+          if (typeof override.maxSize === 'number') cap = override.maxSize;
+          if (override.hq) hq = true;
+        }
         // ETC1S/UASTC are 4x4-block formats — dimensions MUST be multiples of four or
         // the GPU rejects the upload. Downscale to fit the cap (never enlarge), then
         // round each side to the nearest multiple of 4 (sub-4px aspect change).
         const meta = await sharp(Buffer.from(img)).metadata();
-        const sw = meta.width || maxSize;
-        const sh = meta.height || maxSize;
-        const scale = Math.min(1, maxSize / Math.max(sw, sh));
+        const sw = meta.width || cap;
+        const sh = meta.height || cap;
+        const scale = Math.min(1, cap / Math.max(sw, sh));
         const round4 = (n) => Math.max(4, Math.round((n * scale) / 4) * 4);
         await sharp(Buffer.from(img))
           .resize(round4(sw), round4(sh), { fit: 'fill' })
           .png()
           .toFile(inPng);
-        encodeOne(encoder, inPng, outKtx);
+        encodeOne(encoder, inPng, outKtx, hq);
         const bytes = readFileSync(outKtx);
         tex.setImage(new Uint8Array(bytes)).setMimeType('image/ktx2');
         count++;

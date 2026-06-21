@@ -46,6 +46,11 @@ export const levelMeta = {
   houseBox: { min: [0, 0, 0], max: [0, 0, 0] },
   spawns: [[0, 0.1, 0]],     // player spawn points (recentered)
   npcSpawns: [],             // NPC spawn points (recentered)
+  // Grass occlusion: the build copies a top-down paved/built mask next to the level GLB.
+  // pavedMask is the URL of that PNG (null when absent); pavedMaskRect is the recentered-world
+  // XZ rect it covers ({ min:[x,z], size:[w,d] }). The grass shader maps a blade's XZ → mask UV.
+  pavedMask: null,
+  pavedMaskRect: null,
 };
 
 export const clock = { now: 0, dt: 0 };
