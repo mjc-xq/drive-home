@@ -451,11 +451,15 @@ export function buildBuildingLayer({
       const mx = (ax + bx) / 2, mz = (az + bz) / 2;
       if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
       const bay = opts.house ? 3.0 : 3.35 + (((i * 97 + Math.round(L * 10)) % 5) - 2) * 0.10;
-      const count = Math.max(1, Math.min(12, Math.floor((L - 1.0) / bay)));
-      const floors = Math.max(1, Math.min(3, Math.floor((wallH - 1.15) / 2.55)));
-      // SCHOOL/commercial storefront: a long, tall, non-residential wall gets a CONTINUOUS
-      // ground-floor glass band with vertical mullions instead of the punched window grid.
-      const commercial = isSchool && !opts.house && L >= 9 && wallH >= 4;
+      // windows scale with wall AREA: long walls get many bays (cap 40, was 12 -> warehouses/
+      // long apartments were blank), tall walls get many floors (cap 50, was 3 -> downtown towers
+      // were blank above the 3rd floor). The y-clamp below stops the grid at the real wall top.
+      const count = Math.max(1, Math.min(40, Math.floor((L - 1.0) / bay)));
+      const floors = Math.max(1, Math.min(50, Math.floor((wallH - 1.15) / 2.55)));
+      // commercial storefront: a long, tall, non-residential wall gets a CONTINUOUS ground-floor
+      // glass band + mullions. Now fires on ANY large non-house wall (was isSchool-only -> xq/canyon
+      // commercial blocks stayed blank); the upper floors still get the punched window grid above it.
+      const commercial = !opts.house && L >= 12 && wallH >= 4.5;
       if (commercial) {
         const gy0 = base + 0.85, gy1 = base + Math.min(3.2, wallH - 1.4);   // ground-floor band
         if (gy1 - gy0 > 0.6) {
