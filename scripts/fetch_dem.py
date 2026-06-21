@@ -8,6 +8,7 @@ no Google-photoreal-style melted artifacts. ~30x crisper than the Terrarium DEM
 baked into scene.json.
 
 Usage:  scripts/.venv/bin/python scripts/fetch_dem.py [patch_meters]
+        DAHILL_DEM_PATCH_M=1200 scripts/.venv/bin/python scripts/fetch_dem.py
 """
 import json
 import math
@@ -28,7 +29,9 @@ LON0 = float(ORIGIN.get("lon", -122.0686199))
 COSLAT = math.cos(math.radians(LAT0))
 CX, CY = SCENE["center"]                       # house centroid in ENU metres
 
-PATCH = float(sys.argv[1]) if len(sys.argv) > 1 else 256.0  # square side, metres
+# Standalone Dahill rebuilds need the full Linden/Dahill loop plus context. Place
+# and school wrappers pass explicit sizes, so this default does not resize them.
+PATCH = float(sys.argv[1]) if len(sys.argv) > 1 else float(os.environ.get("DAHILL_DEM_PATCH_M", "1200"))
 HALF = PATCH / 2.0
 PX = int(round(PATCH))                          # 1 px per metre (native 3DEP res)
 

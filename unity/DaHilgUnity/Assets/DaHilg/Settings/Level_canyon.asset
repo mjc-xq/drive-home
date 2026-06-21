@@ -15,10 +15,10 @@ MonoBehaviour:
   Slug: canyon
   Label: Canyon Middle
   SubLabel: Castro Valley
-  LevelPrefab: {fileID: 8771091787928289351, guid: aaf6058a562dd4c51a2a6fa67ce861fd, type: 3}
+  LevelPrefab: {fileID: 0}
   SourceMeta: {fileID: 4900000, guid: c66125a540a8746c9b18d95271b0bb75, type: 3}
   Minimap: {fileID: 4900000, guid: ca5f05fff9fa247a8ab6a943fa04a39c, type: 3}
-  LevelOffset: {x: -72.31, y: 61.615, z: -1.945}
+  LevelOffset: {x: -72.31, y: 61.48, z: -1.945}
   PlayerSpawns:
   - {x: 0, y: 0.05, z: 26.235}
   - {x: 43.64, y: 0.05, z: 0}
@@ -33,13 +33,17 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 58.864, z: 0}
-    Size: {x: 91.28, y: 9.100002, z: 56.47}
+    Center: {x: 0, y: 58.5235, z: 0}
+    Size: {x: 91.28, y: 10.685001, z: 56.47}
   NibblerSafeZones:
+  - Id: safe_start
+    Label: Start
+    Center: {x: 0, y: 6, z: 26.235}
+    Size: {x: 36, y: 18, z: 36}
   - Id: safe_home
     Label: Home
-    Center: {x: 0, y: 4.05, z: 26.235}
-    Size: {x: 40, y: 400, z: 40}
+    Center: {x: 0, y: 4, z: 0}
+    Size: {x: 44, y: 400, z: 44}
   - Id: safe_creek
     Label: Creek Landing
     Center: {x: -60, y: 6, z: -120}

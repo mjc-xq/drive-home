@@ -6,6 +6,8 @@ namespace DaHilg
     [RequireComponent(typeof(Camera))]
     public sealed class DaHilgCameraRig : MonoBehaviour
     {
+        [Tooltip("Rate at which yaw slowly recenters behind the player after look input goes idle (0 = off).")]
+        [SerializeField] float m_RecenterRate = 2f;
         static readonly DaHilgCameraMode[] s_ModeCycle =
         {
             DaHilgCameraMode.ThirdPerson,
@@ -19,11 +21,16 @@ namespace DaHilg
         CinemachineBrain m_Brain;
         CinemachineCamera m_VirtualCamera;
         CinemachineThirdPersonFollow m_ThirdPersonFollow;
+#if CINEMACHINE_PHYSICS
+        CinemachineDeoccluder m_Deoccluder;
+        CinemachineDecollider m_Decollider;
+#endif
         Transform m_FollowTarget;
         DaHilgActor m_Target;
         float m_CurrentDistance;
         Vector3 m_CurrentShoulder;
         float m_CurrentArm;
+        float m_IdleLookTime;
 
         public DaHilgActor Target
         {
@@ -59,7 +66,7 @@ namespace DaHilg
             EnsureCinemachine();
             Mode = settings.DefaultCameraMode;
             CameraPreset preset = PresetFor(Mode, settings);
-            Pitch = Mathf.Clamp(Pitch, preset.MinPitch, preset.MaxPitch);
+            Pitch = Mode == DaHilgCameraMode.High ? 42f : Mathf.Clamp(Pitch, preset.MinPitch, preset.MaxPitch);
             m_CurrentDistance = preset.Distance;
             m_CurrentShoulder = preset.ShoulderOffset;
             m_CurrentArm = preset.VerticalArm;
@@ -91,10 +98,77 @@ namespace DaHilg
             }
 
             m_VirtualCamera.Follow = m_FollowTarget;
-            m_VirtualCamera.LookAt = null;
+            m_VirtualCamera.LookAt = m_FollowTarget;
             m_ThirdPersonFollow = m_VirtualCamera.GetComponent<CinemachineThirdPersonFollow>();
             if (m_ThirdPersonFollow == null) m_ThirdPersonFollow = m_VirtualCamera.gameObject.AddComponent<CinemachineThirdPersonFollow>();
+#if CINEMACHINE_PHYSICS
+            ConfigureCameraObstacleHandling();
+#endif
         }
+
+#if CINEMACHINE_PHYSICS
+        void ConfigureCameraObstacleHandling()
+        {
+            if (m_VirtualCamera == null || m_ThirdPersonFollow == null) return;
+
+            LayerMask defaultLayers = Physics.DefaultRaycastLayers;
+            m_ThirdPersonFollow.AvoidObstacles = new CinemachineThirdPersonFollow.ObstacleSettings
+            {
+                Enabled = true,
+                CollisionFilter = defaultLayers,
+                IgnoreTag = "Player",
+                CameraRadius = 0.32f,
+                DampingIntoCollision = 0.05f,
+                DampingFromCollision = 0.34f
+            };
+
+            m_Deoccluder = m_VirtualCamera.GetComponent<CinemachineDeoccluder>();
+            if (m_Deoccluder == null) m_Deoccluder = m_VirtualCamera.gameObject.AddComponent<CinemachineDeoccluder>();
+            m_Deoccluder.CollideAgainst = defaultLayers;
+            m_Deoccluder.IgnoreTag = "Player";
+            m_Deoccluder.MinimumDistanceFromTarget = 0.42f;
+            m_Deoccluder.AvoidObstacles = new CinemachineDeoccluder.ObstacleAvoidance
+            {
+                Enabled = true,
+                DistanceLimit = 0f,
+                MinimumOcclusionTime = 0f,
+                CameraRadius = 0.34f,
+                Strategy = CinemachineDeoccluder.ObstacleAvoidance.ResolutionStrategy.PreserveCameraDistance,
+                MaximumEffort = 5,
+                SmoothingTime = 0.04f,
+                Damping = 0.30f,
+                DampingWhenOccluded = 0.08f,
+                UseFollowTarget = new CinemachineDeoccluder.ObstacleAvoidance.FollowTargetSettings
+                {
+                    Enabled = true,
+                    YOffset = 1.15f
+                }
+            };
+
+            m_Decollider = m_VirtualCamera.GetComponent<CinemachineDecollider>();
+            if (m_Decollider == null) m_Decollider = m_VirtualCamera.gameObject.AddComponent<CinemachineDecollider>();
+            m_Decollider.CameraRadius = 0.30f;
+            m_Decollider.Decollision = new CinemachineDecollider.DecollisionSettings
+            {
+                Enabled = true,
+                ObstacleLayers = defaultLayers,
+                Damping = 0.22f,
+                SmoothingTime = 0.04f,
+                UseFollowTarget = new CinemachineDecollider.DecollisionSettings.FollowTargetSettings
+                {
+                    Enabled = true,
+                    YOffset = 1.15f
+                }
+            };
+            m_Decollider.TerrainResolution = new CinemachineDecollider.TerrainSettings
+            {
+                Enabled = true,
+                TerrainLayers = defaultLayers,
+                MaximumRaycast = 5f,
+                Damping = 0.18f
+            };
+        }
+#endif
 
         public void ToggleMode()
         {
@@ -137,6 +211,7 @@ namespace DaHilg
 
         public void AddLook(Vector2 delta, DaHilgGameSettings settings)
         {
+            if (delta.sqrMagnitude > 0f) m_IdleLookTime = 0f;
             Yaw += delta.x;
             CameraPreset preset = PresetFor(Mode, settings);
             Pitch = Mathf.Clamp(Pitch - delta.y, preset.MinPitch, preset.MaxPitch);
@@ -148,6 +223,15 @@ namespace DaHilg
 
             CameraPreset preset = PresetFor(Mode, settings);
             Pitch = Mathf.Clamp(Pitch, preset.MinPitch, preset.MaxPitch);
+
+            m_IdleLookTime += dt;
+            bool recenterAllowed = m_RecenterRate > 0f
+                && Mode != DaHilgCameraMode.FirstPerson
+                && Mode != DaHilgCameraMode.Shoulder;
+            if (recenterAllowed && m_IdleLookTime > 1f && Target.Speed > 0.5f)
+            {
+                Yaw = Mathf.LerpAngle(Yaw, Target.FacingYaw, 1f - Mathf.Exp(-m_RecenterRate * dt));
+            }
 
             Vector3 pivot = Target.FeetPosition + Vector3.up * preset.PivotHeight;
             if (Mode == DaHilgCameraMode.FirstPerson)
@@ -200,14 +284,14 @@ namespace DaHilg
                 case DaHilgCameraMode.High:
                     return new CameraPreset
                     {
-                        PivotHeight = pivotHeight + 0.35f,
-                        Distance = Mathf.Max(5.4f, thirdDistance + 1.8f),
-                        ShoulderOffset = new Vector3(0.18f, 0.28f, 0f),
-                        VerticalArm = 0.28f,
+                        PivotHeight = pivotHeight + 0.55f,
+                        Distance = Mathf.Max(6.2f, thirdDistance + 2.5f),
+                        ShoulderOffset = new Vector3(0.12f, 0.42f, 0f),
+                        VerticalArm = 0.36f,
                         CameraSide = 1f,
                         Damping = new Vector3(0.10f, 0.24f, 0.16f),
-                        MinPitch = 26f,
-                        MaxPitch = 66f,
+                        MinPitch = 34f,
+                        MaxPitch = 70f,
                         ChangeSpeed = 10f
                     };
                 case DaHilgCameraMode.TopDown:

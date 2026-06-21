@@ -39,7 +39,7 @@ export default function MenuPage() {
           </button>
           <a className="modeCard unity" href="/unity/da-hilg/index.html" aria-label="Open Da Hilg Unity WebGL port">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z" /><path d="M12 12 4 7.5M12 12l8-4.5M12 12v9" /></svg>
-            <span className="mcTitle">Da Hilg Unity</span><span className="mcSub">WebGL port</span>
+            <span className="mcTitle">Da Hilg Unity</span><span className="mcSub">WebGL port · large download</span>
           </a>
         </div>
       </div>

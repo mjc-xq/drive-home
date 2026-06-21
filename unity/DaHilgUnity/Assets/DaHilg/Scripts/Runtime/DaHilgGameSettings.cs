@@ -117,6 +117,14 @@ namespace DaHilg
         public int DangerNibblerBonus = 8;
         public float DangerSpawnInterval = 0.12f;
         public float NormalSpawnInterval = 0.35f;
+        public float MarkedDuration = 2.8f;
+        public float AttachmentFlashDuration = 0.55f;
+        public float RollCooldown = 1.65f;
+        public float RollDuration = 0.82f;
+        public float RollSpeed = 5.4f;
+        public float RollCrushRadius = 1.28f;
+        public float RollCrushBodyHeight = 1.05f;
+        public int RollCrushScore = 35;
 
         public DaHilgLevelProfile FindLevel(string slug)
         {

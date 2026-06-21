@@ -1,0 +1,25 @@
+# Vercel runs `vite build` from src/ + public/ — exclude everything not needed at deploy,
+# which also keeps the upload under Vercel's 15k-file limit (repo has ~39k files otherwise:
+# node_modules, scripts/_cache, exports, unity/Library, .git, etc.).
+node_modules
+.git
+dist
+scripts
+exports
+unity
+docs
+plans
+tests
+npc-staging
+.playwright-mcp
+.agents
+*.log
+*.blend
+*.blend1
+*.usdz
+tmp-*.png
+tmp_*.cjs
+char-*.jpeg
+dahilg-*.jpeg
+nibblers-*.jpeg
+visual-*.jpeg

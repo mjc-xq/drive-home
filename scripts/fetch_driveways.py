@@ -39,6 +39,18 @@ def bbox_around(center, radius_m):
     return lat - dlat, lon - dlon, lat + dlat, lon + dlon
 
 
+def default_radius(scene):
+    if os.environ.get("DAHILL_SURFACE_RADIUS_M"):
+        return float(os.environ["DAHILL_SURFACE_RADIUS_M"])
+    dem_path = os.path.join(ROOT, "exports", "dem_1m.json")
+    if os.path.exists(dem_path):
+        dem = json.load(open(dem_path))
+        half = (dem["latN"] - dem["latS"]) * 110540.0 / 2.0
+        return max(420.0, half + 80.0)
+    meta = scene.get("meta") or {}
+    return max(420.0, float(meta.get("queryRadiusM") or 420.0))
+
+
 def overpass(query):
     key = hashlib.md5(query.encode()).hexdigest()
     path = os.path.join(CACHE, f"overpass_{key}.json")
@@ -69,7 +81,8 @@ def main():
     LON0 = float(origin.get("lon", -122.0686199))
     COSLAT = math.cos(math.radians(LAT0))
     center = scene["center"]
-    s, w, n, e = bbox_around(center, 420)
+    radius_m = float(sys.argv[1]) if len(sys.argv) > 1 else default_radius(scene)
+    s, w, n, e = bbox_around(center, radius_m)
     query = (
         "[out:json][timeout:90];"
         "("
@@ -111,7 +124,7 @@ def main():
             "count": len(driveways),
             "driveways": driveways,
         }, f)
-    print(f"wrote {OUT} ({len(driveways)} mapped service/driveway ways)")
+    print(f"wrote {OUT} radius {radius_m:.0f} m ({len(driveways)} mapped service/driveway ways)")
 
 
 if __name__ == "__main__":

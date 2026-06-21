@@ -15,10 +15,10 @@ MonoBehaviour:
   Slug: stanton
   Label: Stanton Elementary
   SubLabel: Castro Valley
-  LevelPrefab: {fileID: 8771091787928289351, guid: fcf43ee3a8b5c4a37827632ee45b346f, type: 3}
+  LevelPrefab: {fileID: 0}
   SourceMeta: {fileID: 4900000, guid: 0756fc9572c454b7a8c3d645afdd5ed3, type: 3}
   Minimap: {fileID: 4900000, guid: 63616b6e08b604a1f937600615de3cef, type: 3}
-  LevelOffset: {x: -26.245, y: 58.545, z: 50.17}
+  LevelOffset: {x: -26.245, y: 58.54, z: 50.17}
   PlayerSpawns:
   - {x: 0, y: 0.05, z: 24.17}
   - {x: 30.585, y: 0.05, z: 0}
@@ -33,13 +33,17 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 17.155, z: 0}
-    Size: {x: 65.17, y: 8.820001, z: 52.34}
+    Center: {x: 0, y: 17.060501, z: 0}
+    Size: {x: 65.17, y: 9.829, z: 52.34}
   NibblerSafeZones:
+  - Id: safe_start
+    Label: Start
+    Center: {x: 0, y: 6, z: 24.17}
+    Size: {x: 36, y: 18, z: 36}
   - Id: safe_home
     Label: Home
-    Center: {x: 0, y: 4.05, z: 24.17}
-    Size: {x: 40, y: 400, z: 40}
+    Center: {x: 0, y: 4, z: 0}
+    Size: {x: 44, y: 400, z: 44}
   - Id: safe_creek
     Label: Creek Landing
     Center: {x: -60, y: 6, z: -120}

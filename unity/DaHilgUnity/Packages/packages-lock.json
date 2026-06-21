@@ -94,6 +94,16 @@
       "source": "builtin",
       "dependencies": {}
     },
+    "com.unity.meshopt.decompress": {
+      "version": "0.2.0-exp.1",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.burst": "1.8.24",
+        "com.unity.mathematics": "1.2.6"
+      },
+      "url": "https://packages.unity.com"
+    },
     "com.unity.multiplayer.center": {
       "version": "1.0.1",
       "depth": 0,

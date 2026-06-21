@@ -272,7 +272,18 @@ export function buildRoadJunctions(roads, w2, opts = {}) {
     }
   }
 
-  return junctions.filter(j => j.arms.length >= 2);
+  const isRealJunction = (j) => {
+    if (j.arms.length >= 3) return true;
+    if (j.arms.length < 2) return false;
+    // OSM often splits one continuous street into two ways at a harmless shared
+    // vertex. Those two arms are nearly opposite directions and should not create
+    // an asphalt pad, dash gap, or sidewalk-intersection return.
+    const a = j.arms[0], b = j.arms[1];
+    const dot = a.dx * b.dx + a.dz * b.dz;
+    return dot > -0.92;
+  };
+
+  return junctions.filter(isRealJunction);
 }
 
 // Pull each creek vertex toward the lowest DEM point along a perpendicular probe.
@@ -284,6 +295,41 @@ export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
   const step = opts.step ?? 1.5;
   const strength = opts.strength ?? 0.9;
   const smoothPasses = opts.smoothPasses ?? 2;
+  const avoidSegments = opts.avoidSegments || [];
+  const avoidMargin = opts.avoidMargin ?? 1.5;
+  const avoidPolygonMargin = opts.avoidPolygonMargin ?? 1.0;
+  const pointInRing = (x, z, ring) => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, zi] = ring[i], [xj, zj] = ring[j];
+      if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+    }
+    return inside;
+  };
+  const avoidPolygons = (opts.avoidPolygons || [])
+    .filter(r => Array.isArray(r) && r.length >= 3)
+    .map(ring => ({
+      ring,
+      minX: Math.min(...ring.map(p => p[0])) - avoidPolygonMargin,
+      maxX: Math.max(...ring.map(p => p[0])) + avoidPolygonMargin,
+      minZ: Math.min(...ring.map(p => p[1])) - avoidPolygonMargin,
+      maxZ: Math.max(...ring.map(p => p[1])) + avoidPolygonMargin,
+    }));
+  const isInAvoidPolygon = (x, z) => avoidPolygons.some((p) => {
+    if (x < p.minX || x > p.maxX || z < p.minZ || z > p.maxZ) return false;
+    if (pointInRing(x, z, p.ring)) return true;
+    if (avoidPolygonMargin <= 0) return false;
+    for (let i = 0; i < p.ring.length; i++) {
+      const a = p.ring[i], b = p.ring[(i + 1) % p.ring.length];
+      if (distPointSeg(x, z, a[0], a[1], b[0], b[1]).d <= avoidPolygonMargin) return true;
+    }
+    return false;
+  });
+  const isAvoided = (x, z) => isInAvoidPolygon(x, z) || avoidSegments.some((s) => {
+    const spec = s.spec || {};
+    const width = Number.isFinite(+s.width) ? +s.width : Number.isFinite(+spec.width) ? +spec.width : 0;
+    return distPointSeg(x, z, s.a[0], s.a[1], s.b[0], s.b[1]).d <= width / 2 + avoidMargin;
+  });
   if (!Array.isArray(lineW) || lineW.length < 3) return (lineW || []).map(p => [p[0], p[1]]);
 
   let out = lineW.map((p, i) => {
@@ -292,9 +338,10 @@ export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
     const L = Math.hypot(dx, dz) || 1;
     dx /= L; dz /= L;
     const nx = -dz, nz = dx;
-    let bx = p[0], bz = p[1], bh = terrainAt(p[0], p[1]);
+    let bx = p[0], bz = p[1], bh = isAvoided(p[0], p[1]) ? Infinity : terrainAt(p[0], p[1]);
     for (let t = -radius; t <= radius + 1e-6; t += step) {
       const x = p[0] + nx * t, z = p[1] + nz * t;
+      if (isAvoided(x, z)) continue;
       const h = terrainAt(x, z);
       if (h < bh) { bh = h; bx = x; bz = z; }
     }
@@ -328,8 +375,8 @@ export function snapCreekToChannel(lineW, terrainAt, opts = {}) {
 // road-edge collider copies these same buffers, the skirt is consistent for the player too.
 export function emitGroundRibbon(lineW, width, lift, terrainAt, posArr, idxArr, opts = {}) {
   const skip = opts.skip || null;
-  const alongStep = opts.alongStep ?? 1.5;
-  const crossStep = opts.crossStep ?? 0.75;
+  const alongStep = opts.alongStep ?? 1.0;   // tight sampling so paved ribbons follow the exact DEM surface (no between-sample poke-through at small lifts)
+  const crossStep = opts.crossStep ?? 0.6;
   const skirt = opts.skirt ?? 0;            // >0 emits side walls down to grade
   const skirtFoot = opts.skirtFoot ?? 0.02; // wall foot height above terrain
   // PATH-ALIGNED UVs: when opts.uvArr + opts.uvTile are supplied, emit a uv per vert with
@@ -417,8 +464,17 @@ export function buildSidewalkConnectors(roads, w2, opts = {}) {
   const avoid = opts.avoid || (() => false);
   const roadSegs = opts.roadSegments || roadSegmentsWorld(roads, w2, { includeService: false });
   const junctions = opts.junctions || buildRoadJunctions(roads, w2, { includeService: true });
+  const curbReturnR = opts.curbReturnR ?? 2.5;                 // fillet radius at the inside corner
+  const minCornerAngle = opts.minCornerAngle ?? (20 * Math.PI / 180); // skip near-collinear / doubling-back pairs
 
   const arcs = [];
+  // Intersect line (p + d*t) with line (q + e*s); null when (near-)parallel.
+  const lineIntersect = (p, d, q, e) => {
+    const den = d[0] * e[1] - d[1] * e[0];
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / den;
+    return [p[0] + d[0] * t, p[1] + d[1] * t];
+  };
   const normGap = (a0, a1) => {
     let g = a1 - a0;
     while (g <= 0) g += Math.PI * 2;
@@ -491,26 +547,65 @@ export function buildSidewalkConnectors(roads, w2, opts = {}) {
       }
     }
 
-    if (unique.length < 3) continue;
-    for (let i = 0; i < unique.length; i++) {
-      const p0 = unique[i], p1 = unique[(i + 1) % unique.length];
-      if (p0.armKey === p1.armKey) continue;       // never bridge across one road mouth
-      const gap = normGap(p0.a, p1.a);
-      if (gap < minGap || gap > maxGap) continue;
-      const r0 = Math.hypot(p0.x - c[0], p0.z - c[1]);
-      const r1 = Math.hypot(p1.x - c[0], p1.z - c[1]);
-      const steps = Math.max(2, Math.ceil(gap * Math.max(r0, r1) / step));
-      const arc = [];
-      for (let s = 0; s <= steps; s++) {
-        const t = s / steps;
-        const a = p0.a + gap * t;
-        const rr = r0 * (1 - t) + r1 * t;
-        const x = c[0] + Math.cos(a) * rr;
-        const z = c[1] + Math.sin(a) * rr;
-        if (!inPatch(x, z)) continue;
-        arc.push([x, z]);
+    // CORNER FILLETS: a real curb return is a SMALL fillet centred at the inside
+    // corner (where the two straight sidewalk offset-centrelines would cross),
+    // tangent to both walks — NOT a big arc swung around the junction centre (that
+    // dives across the road mouth and gets rejected by clearRun). Build one fillet
+    // per adjacent walk-arm pair, so T- and L-corners (>=2 non-service arms) are
+    // covered, not just full 4-ways.
+    const walkArms = j.arms.filter(a => !a.spec.isService);
+    if (walkArms.length < 2) continue;               // all-service junctions get no sidewalk
+    walkArms.sort((a, b) => Math.atan2(a.dz, a.dx) - Math.atan2(b.dz, b.dx));
+    for (let i = 0; i < walkArms.length; i++) {
+      const A = walkArms[i], B = walkArms[(i + 1) % walkArms.length];
+      // interior turn between the two outward arm directions
+      const dot = A.dx * B.dx + A.dz * B.dz;
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot)));
+      if (ang < minCornerAngle) continue;            // near-collinear -> bridge pass handles it
+      if (Math.PI - ang < minCornerAngle) continue;  // doubling back -> no real corner
+      const sideDistA = A.spec.width / 2 + sideGap;
+      const sideDistB = B.spec.width / 2 + sideGap;
+      // Offset each arm's centreline toward its neighbour so the two offset walks
+      // cross at the inside corner. The side normal whose +dot with the neighbour
+      // direction is the one that points INTO the wedge between A and B.
+      const nA = [-A.dz, A.dx];
+      const sA = (nA[0] * B.dx + nA[1] * B.dz) >= 0 ? 1 : -1;
+      const offA = [nA[0] * sA, nA[1] * sA];
+      const lineApt = [j.x + offA[0] * sideDistA, j.z + offA[1] * sideDistA];
+      const lineAdir = [A.dx, A.dz];
+      const nB = [-B.dz, B.dx];
+      const sB = (nB[0] * A.dx + nB[1] * A.dz) >= 0 ? 1 : -1;
+      const offB = [nB[0] * sB, nB[1] * sB];
+      const lineBpt = [j.x + offB[0] * sideDistB, j.z + offB[1] * sideDistB];
+      const lineBdir = [B.dx, B.dz];
+      const X = lineIntersect(lineApt, lineAdir, lineBpt, lineBdir);
+      if (!X) continue;                              // parallel offset walks: no corner
+      // Fillet of radius curbReturnR tangent to both walks. Arms point AWAY from
+      // the junction, so tangent points lie OUTWARD from X along each walk dir.
+      let tdist = curbReturnR / Math.tan(ang / 2);
+      tdist = Math.max(0, Math.min(8, tdist));
+      const tpA = [X[0] + A.dx * tdist, X[1] + A.dz * tdist];
+      const tpB = [X[0] + B.dx * tdist, X[1] + B.dz * tdist];
+      // Fillet centre sits along the angle bisector at distance R / sin(half-angle).
+      let bx = A.dx + B.dx, bz = A.dz + B.dz;
+      const bl = Math.hypot(bx, bz) || 1;
+      bx /= bl; bz /= bl;
+      const fd = curbReturnR / Math.sin(ang / 2);
+      const F = [X[0] + bx * fd, X[1] + bz * fd];
+      // Arc from tpA to tpB around F, sweeping the SHORT way.
+      const a0 = Math.atan2(tpA[1] - F[1], tpA[0] - F[0]);
+      const a1 = Math.atan2(tpB[1] - F[1], tpB[0] - F[0]);
+      let sweep = a1 - a0;
+      while (sweep > Math.PI) sweep -= Math.PI * 2;
+      while (sweep < -Math.PI) sweep += Math.PI * 2;
+      const steps = Math.max(2, Math.ceil(curbReturnR * Math.abs(sweep) / (opts.step ?? 1.2)));
+      const run = [[tpA[0], tpA[1]]];
+      for (let s = 1; s < steps; s++) {
+        const a = a0 + sweep * (s / steps);
+        run.push([F[0] + Math.cos(a) * curbReturnR, F[1] + Math.sin(a) * curbReturnR]);
       }
-      if (arc.length >= 2 && clearRun(arc)) arcs.push(arc);
+      run.push([tpB[0], tpB[1]]);
+      if (clearRun(run)) arcs.push(run);
     }
   }
   return arcs;
@@ -522,9 +617,11 @@ export function buildSidewalkConnectors(roads, w2, opts = {}) {
 export function buildSidewalkEndCaps(roads, w2, opts = {}) {
   const sideGap = opts.sideGap ?? 2.2;
   const step = opts.step ?? 2.0;
+  const roadMargin = opts.roadMargin ?? 0.95;
   const inPatch = opts.inPatch || (() => true);
   const avoid = opts.avoid || (() => false);
   const isCourt = opts.isCourt || isCulDeSacRoad;
+  const roadSegs = opts.roadSegments || roadSegmentsWorld(roads, w2, { includeService: false });
   const hit = buildVertHit(roads, w2);
   const arcs = [];
 
@@ -556,6 +653,13 @@ export function buildSidewalkEndCaps(roads, w2, opts = {}) {
         const x = tip[0] + Math.cos(a) * radius;
         const z = tip[1] + Math.sin(a) * radius;
         if (!inPatch(x, z) || avoid(x, z)) { ok = false; break; }
+        for (const rs of roadSegs) {
+          if (distPointSeg(x, z, rs.a[0], rs.a[1], rs.b[0], rs.b[1]).d < rs.spec.width / 2 + roadMargin) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok) break;
         arc.push([x, z]);
       }
       if (ok && arc.length >= 2) arcs.push(arc);

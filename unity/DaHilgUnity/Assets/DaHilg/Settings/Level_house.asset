@@ -34,16 +34,20 @@ MonoBehaviour:
   - Id: house_entry
     Label: Entry
     Center: {x: 0, y: 1.4, z: -6.2}
-    Size: {x: 4.8, y: 3, z: 4.2}
+    Size: {x: 4.8, y: 3, z: 3.8}
   DangerZones:
   - Id: house_kitchen
     Label: Kitchen Swarm
-    Center: {x: 0, y: 1.4, z: 4.8}
-    Size: {x: 6.2, y: 3.2, z: 4.8}
+    Center: {x: 0, y: 1.4, z: 4.6}
+    Size: {x: 8.8, y: 3.2, z: 7.4}
   - Id: house_hall
     Label: Hallway Swarm
-    Center: {x: 0, y: 1.4, z: -2.8}
-    Size: {x: 5.4, y: 3.2, z: 4.8}
+    Center: {x: 0, y: 1.4, z: -1.9}
+    Size: {x: 7.6, y: 3.2, z: 7.6}
+  - Id: house_rooms
+    Label: Room Swarm
+    Center: {x: 0, y: 1.4, z: 1.2}
+    Size: {x: 9.6, y: 3.2, z: 5.8}
   AnimalSpawns: []
   PlayBounds:
     m_Center: {x: 0, y: 2, z: 0}
