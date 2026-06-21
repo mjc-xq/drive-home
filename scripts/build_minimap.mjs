@@ -30,6 +30,7 @@ const LEVEL_CONFIG = {
   canyon:  { src: 'canyon-middle-school-property.glb', out: 'canyon.minimap.json' },
   stanton: { src: 'stanton-elementary-property.glb',  out: 'stanton.minimap.json' },
   meemaw:  { src: 'meemaw-property.glb',               out: 'meemaw.minimap.json' },
+  xq:      { src: 'xq-property.glb',                    out: 'xq.minimap.json' },
 };
 const SLUG = process.argv[2] || 'dahill';
 const cfg = LEVEL_CONFIG[SLUG];
