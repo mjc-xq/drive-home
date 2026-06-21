@@ -45,7 +45,21 @@ function applyMeta(src) {
   levelMeta.houseBox = src.houseBox && src.houseBox.min && src.houseBox.max ? src.houseBox : FALLBACK.houseBox;
   levelMeta.spawns = Array.isArray(src.spawns) && src.spawns.length ? src.spawns : FALLBACK.spawns;
   levelMeta.npcSpawns = Array.isArray(src.npcSpawns) ? src.npcSpawns : FALLBACK.npcSpawns;
+  // Grass occlusion: the paved-mask sidecar (bare filename) + the recentered DEM rect it covers.
+  // Resolve the filename against the meta URL's directory (both live in /da-hilg/). Both ship
+  // already recentered, so they're used as-is. Absent => null (the web grass occlusion stays off).
+  levelMeta.pavedMask = src.pavedMask ? resolveSidecar(src.pavedMask) : null;
+  levelMeta.pavedMaskRect =
+    src.pavedMaskRect && Array.isArray(src.pavedMaskRect.min) && Array.isArray(src.pavedMaskRect.size)
+      ? src.pavedMaskRect
+      : null;
   levelMeta.loaded = true;
+}
+
+/** Resolve a bare sidecar filename against the meta URL's directory (e.g. /da-hilg/). */
+function resolveSidecar(name) {
+  const dir = LEVEL_META_URL.slice(0, LEVEL_META_URL.lastIndexOf('/') + 1);
+  return dir + name;
 }
 
 /**

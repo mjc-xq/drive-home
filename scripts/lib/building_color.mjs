@@ -9,13 +9,18 @@ import path from 'node:path';
 
 const STUCCO = [0.82, 0.78, 0.70];
 const ROOFP = [[0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55], [0.60, 0.50, 0.42], [0.62, 0.59, 0.52]];
+// Wider, more saturated real-house paints so the stucco-fallback block reads as a varied
+// neighbourhood (warm tans/buffs, sage + olive greens, slate + steel blues, taupe, warm browns,
+// warm white) rather than a wash of pale tan.
 const WALL_PALETTE = [
-  [0.86, 0.82, 0.74], [0.80, 0.72, 0.60], [0.74, 0.78, 0.80], [0.82, 0.79, 0.72],
-  [0.70, 0.74, 0.66], [0.86, 0.80, 0.70], [0.66, 0.70, 0.74], [0.82, 0.74, 0.64],
-  [0.78, 0.70, 0.62], [0.72, 0.76, 0.74], [0.62, 0.66, 0.70], [0.84, 0.78, 0.66],
+  [0.87, 0.83, 0.74], [0.79, 0.68, 0.54], [0.66, 0.72, 0.62], [0.83, 0.79, 0.70],
+  [0.58, 0.66, 0.72], [0.86, 0.77, 0.63], [0.52, 0.60, 0.66], [0.80, 0.69, 0.56],
+  [0.73, 0.61, 0.52], [0.62, 0.69, 0.64], [0.49, 0.55, 0.61], [0.85, 0.75, 0.60],
+  [0.70, 0.53, 0.45], [0.57, 0.63, 0.55], [0.90, 0.87, 0.81], [0.64, 0.58, 0.52],
 ];
 const ROOF_PALETTE = [
-  [0.58, 0.55, 0.50], [0.60, 0.46, 0.38], [0.50, 0.53, 0.55], [0.60, 0.50, 0.42], [0.62, 0.59, 0.52],
+  [0.46, 0.43, 0.40], [0.56, 0.40, 0.32], [0.42, 0.45, 0.49], [0.52, 0.43, 0.36],
+  [0.48, 0.47, 0.43], [0.36, 0.38, 0.40], [0.60, 0.44, 0.34], [0.40, 0.34, 0.30],
 ];
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const mix3 = (a, b, t) => a.map((v, i) => v * (1 - t) + b[i] * t);
@@ -57,7 +62,7 @@ export function makeBuildingColor(pick) {
     let c = src.map((v) => v * (remapLuma(L) / L));
     c = deGreen(c);
     const m = luma(c);
-    c = c.map((v) => m + (v - m) * 1.12);
+    c = c.map((v) => m + (v - m) * 1.24);   // stronger chroma so paint reads as colour, not pale wash
     return c.map(clamp01);
   };
   const roofColor = (ib) => {

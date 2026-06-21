@@ -17,7 +17,7 @@ import { useDaHilgGLTF } from '../loaders.js';
 import { levelMeta } from '../state/refs.js';
 import { LEVEL_URL } from '../constants.js';
 import { showFacadesAtom, showWaterAtom, showGrassAtom } from '../state/settingsAtoms.js';
-import { CreekWater, computeCreekBounds, hideCreekClutter, setMeshVisible } from './CreekWater.jsx';
+import { CreekWater, computeCreekBounds, setMeshVisible } from './CreekWater.jsx';
 import { WindGrass } from './WindGrass.jsx';
 import { InstanceCulling } from './InstanceCulling.jsx';
 
@@ -29,27 +29,20 @@ const LEVEL_SOURCE = LEVEL_URL;
 const ANISO_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
 
 /** Tune one mesh's material(s) so the neighborhood reads crisp + sunlit, not pale. */
-// Paved ground ribbons drape directly on the terrain and z-fight with it on slopes. A
-// negative polygon offset makes them consistently WIN the depth test, so they never flicker
-// or let the landscape poke through — and it does so without a big geometric lift (which
-// floats the ribbons off the ground and leaves gaps under their edges).
-const isPavedGround = (name) =>
-  /^(Roads|Driveways|Sidewalks|Crosswalks|RoadCurbs|RoadLines|ParkingAreas|GapDirt)/.test(name);
-// Terrain rendered single-sided shows the sky/black through any back-facing slope triangle;
-// double-siding fills those without a re-export.
+// The single-surface level welds roads/sidewalks/curbs into the ONE terrain texture, so there
+// are no coplanar paved ribbons draped on the terrain anymore — the old polygonOffset z-fight
+// firefighting is obsolete and removed. The 'Terrain' node is just classified for anisotropy.
 const isTerrain = (name) => name === 'Terrain' || name.startsWith('Terrain') || name === 'Satellite Ground';
 
 function tuneMaterial(o, maxAniso) {
   const name = o.name || '';
   const isWindow = name.toLowerCase().includes('window');
   const isGlass = name.includes('windows') || isWindow;
-  const paved = isPavedGround(name);
-  const terrain = isTerrain(name);
   const mats = Array.isArray(o.material) ? o.material : [o.material];
   for (const m of mats) {
     if (!m) continue;
     if (m.map) m.map.colorSpace = THREE.SRGBColorSpace; // photo/colour maps are sRGB
-    // Full anisotropic filtering so grazing surfaces (lawn, road, sidewalk) stay sharp.
+    // Full anisotropic filtering so grazing surfaces (lawn, road texture) stay sharp.
     for (const slot of ANISO_SLOTS) {
       const t = m[slot];
       if (t && t.anisotropy !== maxAniso) {
@@ -60,15 +53,6 @@ function tuneMaterial(o, maxAniso) {
     if ('roughness' in m) m.roughness = isGlass ? 0.2 : 0.92;
     if ('metalness' in m) m.metalness = isGlass ? 0.45 : 0.0;
     if (m.emissive) m.emissive.setScalar(0); // kill any baked-in glow that washes it out
-    if (paved) {
-      // GENTLE bias: just enough to win the depth test against the terrain at coincident
-      // points, but small so a road dipping slightly below the terrain on a slope does NOT
-      // bleed its dark asphalt over a wide band (the small geometric lift does the rest).
-      m.polygonOffset = true;
-      m.polygonOffsetFactor = -1;
-      m.polygonOffsetUnits = -1;
-    }
-    void terrain; // (terrain double-side reverted — heightfield normals already face up)
     m.needsUpdate = true;
   }
 }
@@ -83,8 +67,10 @@ function processScene(scene, maxAniso) {
       return;
     }
     o.frustumCulled = true;
+    // The welded Terrain receives shadows (it's the ground); so does everything else here.
     o.receiveShadow = true;
-    // Buildings + the house cast shadows for form; the heavy terrain/roads don't.
+    if (isTerrain(name)) o.frustumCulled = false; // one big ground surface — never frustum-cull it out
+    // Buildings + the house cast shadows for form; the heavy terrain doesn't.
     o.castShadow = name.startsWith('House') || name.startsWith('Buildings');
     tuneMaterial(o, maxAniso);
   });
@@ -132,107 +118,105 @@ function bakeCollider(scene) {
   return { vertices: new Float32Array(positions), indices: new Uint32Array(indices), bounds };
 }
 
-/**
- * True for the "paved/built" meshes the player walks ON but grass must NOT grow on:
- * roads, road-lines, curbs, sidewalks, walkways, driveways, the owner house, the
- * neighborhood buildings, their doors/garage doors, and the photo roofs. Terrain,
- * ground, creek, trees, shrubs, fences, grass clumps, and the flat SVFacade photo
- * planes are NOT here — grass is fine on/around those.
- */
-function isPavedOrBuilt(name) {
+/** True for the BUILT meshes (owner house + neighborhood buildings) grass must not grow under.
+ *  Roads/sidewalks/driveways are NOT here — those live in the painted paved_mask.png sidecar. */
+function isBuilt(name) {
   if (!name) return false;
   return (
-    name.startsWith('Buildings') || // Buildings group + Buildings_* parts
-    name.startsWith('House_') ||    // owner-house walls/roof/trim/windows
+    name.startsWith('Buildings') || // Buildings group + Buildings_walls/_roofs
+    name.startsWith('House_') ||    // owner-house walls/roof
     name === 'Doors' ||
-    name.startsWith('GarageDoor') ||
-    name.startsWith('Roofs_photo') ||
-    name.startsWith('Roof Photo') ||
-    name.startsWith('Driveways') ||
-    name === 'RoadCurbs' ||
-    name === 'RoadLines' ||
-    name === 'Roads' ||
-    name === 'Sidewalks' ||
-    name === 'Walkways'
+    name.startsWith('Doors_') ||
+    name.startsWith('GarageDoor')
   );
 }
 
 /**
- * Render a ONE-TIME top-down paved/building MASK for the grass shader to sample.
+ * Build the top-down grass-occlusion mask by COMPOSITING two sources into one render target:
  *
- * We gather every paved/built mesh (see isPavedOrBuilt), draw each as flat WHITE on a
- * BLACK clear from an orthographic camera looking straight down over the level's XZ
- * footprint, into an offscreen render target. White texels = NO grass. The grass
- * vertex shader maps each blade's recentered-world XZ into this texture and collapses
- * any blade that lands on white. Built once (no per-frame cost).
+ *   1) the exporter's paved_mask.png sidecar (roads/sidewalks/curbs/driveways), painted over
+ *      the DEM rect — the single-surface level folds those into the terrain texture, so this
+ *      sidecar (NOT a render of road meshes, which no longer exist) is the source of truth; and
+ *   2) the Buildings/House footprints, rendered WHITE on top so grass doesn't grow under them.
  *
- * Runs in the SAME recentered world space the grass lives in: the level renders inside
- * a <group position={recenter}>, so each mesh's matrixWorld is already recentered —
- * we render with those world matrices and a camera in that space, no offset math.
+ * White texels = NO grass. The grass vertex shader maps each blade's recentered-world XZ into
+ * this texture (over the DEM rect's min/size) and collapses any blade that lands on white. The
+ * camera/orientation match WindGrass's existing sampling (X→U, Z→V with the shader's V-flip), so
+ * the sidecar PNG (loaded with the default flipY) and the building render line up by construction.
+ *
+ * Built once (no per-frame cost). Runs in the SAME recentered world space the grass lives in
+ * (the level renders inside a <group position={recenter}>, so each mesh's matrixWorld is already
+ * recentered). Returns null (grass occlusion off) if the sidecar/rect aren't available.
  *
  * @param {THREE.Object3D} scene the loaded (mounted, recentered) level scene
  * @param {THREE.WebGLRenderer} gl the live renderer
+ * @param {THREE.Texture} pavedTex the loaded paved_mask.png texture (white = paved)
+ * @param {{ min: [number,number], size: [number,number] }} rect recentered DEM rect (X,Z)
  * @returns {{ texture: THREE.Texture, min: [number,number], size: [number,number] } | null}
  */
-function buildPaveMask(scene, gl) {
+function buildPaveMask(scene, gl, pavedTex, rect) {
+  if (!pavedTex || !rect || !Array.isArray(rect.min) || !Array.isArray(rect.size)) return null;
   scene.updateWorldMatrix(true, true);
 
-  // Collect paved/built meshes + accumulate their recentered-world XZ bounds.
-  const meshes = [];
+  const [minX, minZ] = rect.min;
+  const [sizeX, sizeZ] = rect.size;
+  if (!(sizeX > 0) || !(sizeZ > 0)) return null;
+  const maxX = minX + sizeX;
+  const maxZ = minZ + sizeZ;
+  const cx = (minX + maxX) / 2;
+  const cz = (minZ + maxZ) / 2;
+
+  // The occlusion scene: a full-rect quad textured with the paved sidecar (the painted
+  // roads/walks/driveways) + a WHITE copy of each Buildings/House mesh on top.
+  const maskScene = new THREE.Scene();
+
+  // 1) Paved sidecar as a ground-plane quad spanning the DEM rect. Drawn at the lowest Y so the
+  //    building renders (above it) always win. The shader samples this exact mask UV later, but
+  //    here we re-project it through the same top-down camera so it composites with the buildings.
+  pavedTex.colorSpace = THREE.NoColorSpace;
+  const pavedMat = new THREE.MeshBasicMaterial({ map: pavedTex });
+  const pavedPlane = new THREE.Mesh(new THREE.PlaneGeometry(sizeX, sizeZ), pavedMat);
+  // PlaneGeometry lies in XY; rotate it flat into XZ. After rot −90° about X, plane local +Y → +Z.
+  pavedPlane.rotation.x = -Math.PI / 2;
+  pavedPlane.position.set(cx, 0, cz);
+  maskScene.add(pavedPlane);
+
+  // 2) Buildings/House footprints in white, baked at their recentered world matrix.
+  const built = [];
   const box = new THREE.Box3();
   const worldBox = new THREE.Box3();
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
   scene.traverse((o) => {
-    if (!o.isMesh || !o.geometry) return;
-    if (!isPavedOrBuilt(o.name)) return;
-    meshes.push(o);
+    if (!o.isMesh || !o.geometry || !isBuilt(o.name)) return;
+    const m = new THREE.Mesh(o.geometry, white);
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(o.matrixWorld);
+    m.renderOrder = 1; // composite above the paved plane
+    maskScene.add(m);
+    built.push(m);
     if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
     worldBox.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
     box.union(worldBox);
   });
-  if (!meshes.length || !isFinite(box.min.x)) return null;
 
-  // Pad the bounds so blades right at a road edge still sample cleanly, then SQUARE
-  // it (equal world-units per texel on both axes keeps the mask undistorted).
-  const pad = 4;
-  let minX = box.min.x - pad;
-  let minZ = box.min.z - pad;
-  let maxX = box.max.x + pad;
-  let maxZ = box.max.z + pad;
-  const span = Math.max(maxX - minX, maxZ - minZ);
-  const cx = (minX + maxX) / 2;
-  const cz = (minZ + maxZ) / 2;
-  minX = cx - span / 2;
-  maxX = cx + span / 2;
-  minZ = cz - span / 2;
-  maxZ = cz + span / 2;
-
-  // Mask scene: a white copy of each paved/built mesh, baked at its world matrix.
-  const maskScene = new THREE.Scene();
-  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-  for (const o of meshes) {
-    const m = new THREE.Mesh(o.geometry, white);
-    m.matrixAutoUpdate = false;
-    m.matrix.copy(o.matrixWorld);
-    maskScene.add(m);
-  }
-
-  // Top-down orthographic camera: looks straight DOWN the −Y axis over the (squared)
-  // footprint. up = −Z makes the camera basis camera-right = world +X and camera-up =
-  // world −Z, so the rendered image is an un-mirrored top-down with V running along
-  // world −Z (the shader flips V to map world Z → V). The frustum is symmetric about
-  // the camera (centered at cx,cz), so half-span on each side.
-  const SIZE = 2048; // ~0.25 m / texel over a ~470 m span — fine for road edges
-  const half = span / 2;
-  const cam = new THREE.OrthographicCamera(
-    -half, half, half, -half, // left, right, top, bottom in camera-local axes
-    0.1, box.max.y - box.min.y + 200,
-  );
-  cam.position.set(cx, box.max.y + 50, cz);
+  // Top-down orthographic camera over the DEM rect. up = −Z makes camera-right = world +X and
+  // camera-up = world −Z, an un-mirrored top-down with V along world −Z (the shader flips V to
+  // map world Z → V). Frustum is the exact rect so the rendered image == the sampled mask space.
+  const yHi = isFinite(box.max.y) ? box.max.y + 50 : 200;
+  const yLo = isFinite(box.min.y) ? box.min.y : -50;
+  const cam = new THREE.OrthographicCamera(-sizeX / 2, sizeX / 2, sizeZ / 2, -sizeZ / 2, 0.1, (yHi - yLo) + 200);
+  cam.position.set(cx, yHi, cz);
   cam.up.set(0, 0, -1);
-  cam.lookAt(cx, box.min.y, cz);
+  cam.lookAt(cx, yLo, cz);
   cam.updateMatrixWorld(true);
 
-  const rt = new THREE.WebGLRenderTarget(SIZE, SIZE, {
+  // Non-square RT proportional to the rect so the mask isn't distorted (the shader maps by
+  // rect size, not pixels, so aspect-correct or not it samples right — but keep it honest).
+  const LONG = 2048;
+  const aspect = sizeX / sizeZ;
+  const rw = aspect >= 1 ? LONG : Math.max(4, Math.round(LONG * aspect));
+  const rh = aspect >= 1 ? Math.max(4, Math.round(LONG / aspect)) : LONG;
+  const rt = new THREE.WebGLRenderTarget(rw, rh, {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
     depthBuffer: true,
@@ -250,8 +234,11 @@ function buildPaveMask(scene, gl) {
   gl.setRenderTarget(prevTarget);
   gl.setClearColor(prevClear, prevAlpha);
 
+  pavedPlane.geometry.dispose();
+  pavedMat.dispose();
   white.dispose();
-  return { texture: rt.texture, min: [minX, minZ], size: [maxX - minX, maxZ - minZ] };
+  void built;
+  return { texture: rt.texture, min: [minX, minZ], size: [sizeX, sizeZ] };
 }
 
 /**
@@ -286,6 +273,16 @@ export function Level({ onReady }) {
   // Hide proxies/LOD + tune materials once (full anisotropy from the live GPU caps).
   useMemo(() => processScene(scene, gl.capabilities.getMaxAnisotropy()), [scene, gl]);
 
+  // Photo-facade toggle: the SV photos are SEPARATE overlay quads (nodes named 'SVFacade_page*')
+  // riding in front of the always-present windowed-stucco walls. Flip every SVFacade* node's
+  // visibility as a group — ON (default) the photos cover the windows; OFF reveals the windowed
+  // stucco wall underneath (no geometry goes missing). Re-runs when the toggle or scene changes.
+  useEffect(() => {
+    scene.traverse((o) => {
+      if (o.isMesh && (o.name || '').startsWith('SVFacade')) o.visible = showFacades;
+    });
+  }, [scene, showFacades]);
+
   const offset = levelMeta.offset || [0, 0, 0];
   const recenter = [-offset[0], -offset[1], -offset[2]];
 
@@ -305,12 +302,11 @@ export function Level({ onReady }) {
       if (baked.bounds) levelMeta.bounds = baked.bounds; // map boundary (walkable XZ extent)
       const b = computeCreekBounds(scene);
       setCreekBounds(b);
-      if (b) hideCreekClutter(scene, b);
-      // Hide the authored creek SOURCE meshes — Creek_FlowLines reads as road-marker
-      // lines and Creek_Banks/Creek_SanLorenzo as brown sidewalk / hill-climbing water.
-      // CreekWater re-skins Creek_SanLorenzo as flowing water; keep Rocks + Reeds as
-      // decoration. SanLorenzo starts hidden here so it's invisible when water is OFF.
-      setMeshVisible(scene, 'Creek_FlowLines', false);
+      // Hide the authored creek SOURCE meshes — Creek_Banks reads as brown sidewalk and
+      // Creek_SanLorenzo as hill-climbing water. CreekWater re-skins Creek_SanLorenzo as
+      // flowing water; keep Rocks + Reeds as decoration. SanLorenzo starts hidden here so
+      // it's invisible when water is OFF. (No RoadLines/Sidewalks float over the creek in
+      // the single-surface level, so the old hideCreekClutter pass is gone.)
       setMeshVisible(scene, 'Creek_Banks', false);
       setMeshVisible(scene, 'Creek_SanLorenzo', false);
       onReadyRef.current?.();
@@ -318,24 +314,34 @@ export function Level({ onReady }) {
     return () => cancelAnimationFrame(raf);
   }, [ready, scene, gl]);
 
-  // Build the top-down paved/building mask (so grass skips roads/walks/driveways/
-  // buildings) LAZILY — only when grass is enabled, its single consumer. Default play
-  // (grass OFF) never pays this 2048² offscreen render on the level-ready frame.
+  // Build the top-down grass-occlusion mask (so grass skips roads/walks/driveways from the
+  // painted paved_mask.png sidecar + footprints under Buildings/House) LAZILY — only when
+  // grass is enabled, its single consumer. Default play (grass OFF) never fetches the sidecar
+  // PNG nor pays the one-time offscreen composite on the level-ready frame.
   const builtPaveRef = useRef(false);
   useEffect(() => {
     if (!ready || !showGrass || builtPaveRef.current) return;
     builtPaveRef.current = true;
-    setPaveMask(buildPaveMask(scene, gl));
+    const maskUrl = levelMeta.pavedMask;
+    const rect = levelMeta.pavedMaskRect;
+    if (!maskUrl || !rect) return; // no sidecar this level → grass occlusion stays off (no mask)
+    let cancelled = false;
+    let loadedTex = null;
+    new THREE.TextureLoader().load(
+      maskUrl,
+      (tex) => {
+        if (cancelled) { tex.dispose(); return; }
+        loadedTex = tex;
+        // Compose the sidecar (roads/walks) with the Buildings/House footprints into one mask.
+        setPaveMask(buildPaveMask(scene, gl, tex, rect));
+        tex.dispose(); // the composite copied it into its own render target
+        loadedTex = null;
+      },
+      undefined,
+      (err) => console.warn('[Level] paved mask load failed:', err?.message ?? err),
+    );
+    return () => { cancelled = true; loadedTex?.dispose(); };
   }, [ready, showGrass, scene, gl]);
-
-  // Facade toggle: show/hide the Street View photo facades as a group. Names survive
-  // the meshopt build, so we gate by SVFacade*. No-op until the export carries them.
-  useEffect(() => {
-    if (!ready) return;
-    scene.traverse((o) => {
-      if (o.isMesh && (o.name || '').startsWith('SVFacade')) o.visible = showFacades;
-    });
-  }, [scene, ready, showFacades]);
 
   if (!ready) return null;
 

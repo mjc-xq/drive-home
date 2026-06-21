@@ -22,7 +22,7 @@ import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
 import { ktx2CompressDoc } from './lib/ktx2_pass.mjs';
 import { atlasFacades } from './atlas_facades.mjs';
-import { mkdirSync, statSync, existsSync } from 'node:fs';
+import { mkdirSync, statSync, existsSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,25 +56,27 @@ const mb = (bytes) => (bytes / 1e6).toFixed(2) + ' MB';
 const written = [];          // { path, bytes } for the final summary
 const DRACO_EXT = 'KHR_draco_mesh_compression';
 
-// ---- LEVELS: the three shippable levels, each built from its own raw export ----
-// All three exports share an IDENTICAL node structure (Collision_Terrain/Roads/Buildings/
-// Trees, House_walls, LOD_Buildings_Low) so the generic level + meta passes below run
-// unchanged per source. dahill keeps the legacy level.glb/level.meta.json names for
-// backward-compat; canyon/stanton get their own slug-named outputs.
-//   - src:        the raw export filename in exports/
+// ---- LEVELS: the shippable levels, each built from its own SINGLE-SURFACE export ----
+// The new exporter (export_property_single_surface.mjs) welds the whole property into ONE
+// textured terrain — roads/sidewalks/curbs/lane-paint are PAINTED into the ground texture, and
+// the Street-View facades are baked into the building-wall UVs (FacadeAtlas_page{N}/Stucco_*
+// materials). So the *-single.glb has NO Roads/Sidewalks/SVFacade_* meshes and NO
+// Collision_Roads node — only the welded surface + its Collision_Terrain twin, plus the same
+// Buildings/House/Trees/Creek/Shrubs node names the runtime keys off (so the level/meta passes
+// below run essentially unchanged). dahill keeps the legacy level.glb/level.meta.json names.
+//   - src:        the single-surface export filename in exports/
 //   - out:        output basename → OUT(`${out}.glb`) + OUT(`${out}.meta.json`)
-//   - metaSource: the `source` string recorded in the .meta.json (the original property GLB)
-// The exporter now emits trees itself (Node-only, no Blender), so the self-contained
-// *-property.glb IS the level source. Canyon/Stanton -property.glb are regenerated with
-// the same improved exporter via scripts/reexport_places.mjs before this build runs.
+//   - metaSource: the `source` string recorded in the .meta.json (the single-surface GLB)
+//   - pavedMaskSrc: the exporter's grass-occlusion sidecar (top-down paved/built mask over the
+//                   DEM rect). dahill's _ground sits at exports/_ground; the others nest under
+//                   their place dir (exports/<dir>/_ground). Copied to OUT(`${out}.paved_mask.png`)
+//                   and referenced from the .meta.json (the web grass occlusion samples it — the
+//                   old paved mask was rendered from Roads/Sidewalks meshes that no longer exist).
 const LEVELS = [
-  { src: '1840-dahill-property.glb',          out: 'level',   metaSource: '1840-dahill-property.glb' },
-  { src: 'canyon-middle-school-property.glb',  out: 'canyon',  metaSource: 'canyon-middle-school-property.glb' },
-  { src: 'stanton-elementary-property.glb',   out: 'stanton', metaSource: 'stanton-elementary-property.glb' },
-  // meemaw (4311 Circle Ave): source GLB is generated in a later integration step, so it
-  // won't exist yet — the build loops below skip-with-warning any level whose source is
-  // missing, so this entry is harmless until exports/meemaw-property.glb lands.
-  { src: 'meemaw-property.glb',                out: 'meemaw',  metaSource: 'meemaw-property.glb' },
+  { src: 'dahill-single.glb',   out: 'level',   metaSource: 'dahill-single.glb',   pavedMaskSrc: '_ground/paved_mask.png' },
+  { src: 'canyon-single.glb',   out: 'canyon',  metaSource: 'canyon-single.glb',   pavedMaskSrc: 'canyon-middle-school/_ground/paved_mask.png' },
+  { src: 'stanton-single.glb',  out: 'stanton', metaSource: 'stanton-single.glb',  pavedMaskSrc: 'stanton-elementary/_ground/paved_mask.png' },
+  { src: 'meemaw-single.glb',   out: 'meemaw',  metaSource: 'meemaw-single.glb',   pavedMaskSrc: 'meemaw/_ground/paved_mask.png' },
 ];
 
 // ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----
@@ -187,18 +189,21 @@ async function simplifyToTarget(doc, label, { targetTris, error = 0.02, minRatio
 //   -> reorder -> quantize(flags) -> meshopt(setRequired) -> write.
 // quantizeFlags differ: characters use skinned-safe values so the 1.7 m rig keeps
 // tight feet (no over-quantized sliding); the level uses gltf-transform defaults.
-// texCap is the per-class texture size cap (1024 landscape / 512 characters).
+// texCap is the DEFAULT per-class texture size cap (1024 landscape / 512 characters).
+// texCapFor (optional) is a per-texture override passed straight to ktx2CompressDoc — the
+// level uses it to give the big ground albedo + facade atlas pages a 4096 cap (so the painted
+// lane/curb + photo facades stay crisp) while ORM/others keep the default.
 // simplifyOpts (optional, characters only): { targetTris, error, minRatio } — runs the
 // skinned-mesh decimation AFTER weld (welded topology = better collapses) and BEFORE
 // quantize/meshopt (decimate the float mesh, then compress the smaller result).
 // Textures become GPU-compressed KTX2 when an encoder is on PATH, else webp.
-async function meshoptPipeline(doc, label, quantizeFlags, texCap = 1024, simplifyOpts = null) {
+async function meshoptPipeline(doc, label, quantizeFlags, texCap = 1024, simplifyOpts = null, texCapFor = null) {
   await doc.transform(dedup());
   await doc.transform(prune({ keepLeaves: true }));
   await doc.transform(weld());
   if (simplifyOpts) await simplifyToTarget(doc, label, simplifyOpts);
   stripDraco(doc);          // geometry is already decoded on read; drop the dangling ext decl
-  const ktx = await ktx2CompressDoc(doc, { maxSize: texCap, label });
+  const ktx = await ktx2CompressDoc(doc, { maxSize: texCap, label, capFor: texCapFor });
   if (ktx.encoder) {
     console.log(`    textures: KTX2/${ktx.encoder} x${ktx.count} @cap ${texCap}` +
       (ktx.skipped ? ` (${ktx.skipped} skipped)` : ''));
@@ -337,17 +342,37 @@ function instanceStaticRepeats(doc, { min = 4 } = {}) {
   return { instancedMeshes, foldedNodes };
 }
 
+// ---- per-texture KTX2 cap resolver for a single-surface level -----------------------
+// The single-surface export names its textures consistently: ground_core_albedo /
+// ground_far_albedo (the big aerial+painted-roads ground bed, up to 6144px), ground_core_orm
+// (the ORM packing), and facade.png / facade_atlas_* (the baked Street-View wall photos). The
+// ground albedo + facade pages carry the fine PAINTED detail (lane lines, curbs, photo facades)
+// that RDO smears and a 2048 cap blurs — give them a 4096 NO-RDO/high-quality encode. ORM and
+// everything else keep the document default (2048, RDO on). Returns a capFor(tex) for
+// ktx2CompressDoc. Heuristic is by texture NAME (survives the pipeline) with an ORM guard.
+function makeLevelTexCapFor() {
+  const BIG = /albedo|facade|_atlas/i;   // crisp photographic/painted maps → 4096 hq
+  const ORM = /orm|_mr\b|metalrough/i;   // ORM packing → never bump (no fine detail to keep)
+  return (tex) => {
+    const name = tex.getName() || '';
+    if (ORM.test(name)) return null;     // default cap, RDO on
+    if (BIG.test(name)) return { maxSize: 4096, hq: true };
+    return null;                         // default cap
+  };
+}
+
 // =====================================================================================
-// LEVEL builder: meshopt + webp for ONE level. Keep geometry as-is (no recenter of verts).
-// Preserve the named collision/helper nodes. Drop the hidden LOD_Buildings_Low duplicate.
-// Generic over `src` (raw export filename) and `out` (output basename) — every Da Hilg
-// level export shares the same node structure, so this runs unchanged per source.
+// LEVEL builder: meshopt + KTX2 for ONE single-surface level. Keep geometry as-is (no
+// recenter of verts). Preserve the named collision/helper nodes. Drop the hidden
+// LOD_Buildings_Low duplicate if present (the single-surface export no longer emits it).
+// Generic over `src` (single-surface export filename) and `out` (output basename) — every
+// Da Hilg single-surface export shares the same node structure, so this runs per source.
 // Returns the source byte size (the dahill call stashes it for the summary).
 // -------------------------------------------------------------------------------------
-async function buildLevelGlb({ src, out }) {
+async function buildLevelGlb({ src, out, pavedMaskSrc }) {
   console.log(`\n[1/4] ${out}.glb  <- exports/${src}`);
-  // The full, textured, tree+fence-rich neighborhood export (always grab the freshest
-  // from exports/ when re-importing — see docs/dahilg-neighborhood-export.md).
+  // The full, textured, tree-rich single-surface export (always grab the freshest from
+  // exports/ when re-importing — see docs/dahilg-neighborhood-export.md).
   const levelSrc = SRC('exports', src);
   const srcBytes = statSync(levelSrc).size;
   const levelDoc = await io.read(levelSrc);
@@ -368,14 +393,33 @@ async function buildLevelGlb({ src, out }) {
       console.log('  (LOD_Buildings_Low not present — nothing to drop)');
     }
 
-    // Sanity: the collision/helper nodes the game relies on must still exist.
-    const KEEP = ['Collision_Terrain', 'Collision_Roads', 'Collision_Buildings', 'Collision_Trees'];
+    // Sanity: the collision/helper nodes the game relies on must still exist. Collision_Roads
+    // is OPTIONAL now — the single-surface export folds the roads into the welded terrain
+    // (roads are texture on Collision_Terrain), so there is no separate road collider. The
+    // terrain/buildings/trees colliders + House_walls are still required.
+    const KEEP = ['Collision_Terrain', 'Collision_Buildings', 'Collision_Trees', 'House_walls'];
     for (const nm of KEEP) {
       if (!root.listNodes().some((n) => n.getName() === nm)) {
         throw new Error(`${out}.glb: required collision node "${nm}" is missing before write.`);
       }
     }
-    console.log('  preserved collision nodes: ' + KEEP.join(', '));
+    console.log('  preserved required nodes: ' + KEEP.join(', ') + ' (Collision_Roads optional — roads are on the terrain now)');
+
+    // Capture the SOURCE (un-quantized) Terrain vs Collision_Terrain min-Y so the assert below
+    // runs on exact float coords (the welded surface must be its own collider — visual==collision
+    // by construction; this guards a regression where they drift apart).
+    {
+      const tNode = root.listNodes().find((n) => n.getName() === 'Terrain');
+      const ctNode = root.listNodes().find((n) => n.getName() === 'Collision_Terrain');
+      const tMinY = tNode ? getBounds(tNode).min[1] : NaN;
+      const ctMinY = ctNode ? getBounds(ctNode).min[1] : NaN;
+      const dy = Math.abs(ctMinY - tMinY);
+      if (!(dy < 0.05)) {
+        throw new Error(`${out}.glb: Collision_Terrain.minY (${ctMinY}) and Terrain.minY (${tMinY}) ` +
+          `differ by ${dy} (>= 0.05 m) — the welded collider no longer matches the visual surface.`);
+      }
+      console.log(`  collision==visual: |Collision_Terrain.minY - Terrain.minY| = ${dy.toFixed(4)} m (< 0.05)`);
+    }
 
     // Visual/collision separation: the Collision_* meshes are physics-only (the runtime
     // bakes a trimesh collider from them and hides them). Strip their materials so the
@@ -400,22 +444,30 @@ async function buildLevelGlb({ src, out }) {
     await levelDoc.transform(dedup());
     instanceStaticRepeats(levelDoc, { min: 4 });
 
-    // ATLAS the per-wall Street-View facade textures. The export emits one cropped JPEG +
-    // material per building wall (SVFacade_*), so a busy level hauls hundreds of separate
-    // facade textures/materials/draw calls. atlasFacades() bin-packs them into 1-few 4096px
-    // pages, remaps each facade's [0,1] UVs into its atlas sub-rect, and collapses them onto
-    // one shared material per page — must run BEFORE meshoptPipeline so KTX2 compresses the
-    // atlas pages (not the now-disposed per-wall crops).
-    {
-      const fa = await atlasFacades(levelDoc);
-      console.log(`  atlased facades: ${fa.facadesPacked} walls -> ${fa.pages} atlas page(s); ` +
-        `textures ${fa.texturesBefore} -> ${fa.texturesAfter}`);
-    }
+    // FACADE ATLAS: SKIPPED for single-surface inputs. The new exporter already bakes the
+    // Street-View facades into the building-wall UVs (FacadeAtlas_page{N}_mat / Stucco_*
+    // materials), so there are no per-wall SVFacade_* textures to pack — atlasFacades() would
+    // find zero facade materials and no-op anyway. Bypass it explicitly (and keep the import
+    // referenced so lint/`node --check` stay happy) rather than relying on the no-op.
+    void atlasFacades;
 
     // NOTE: prune(keepLeaves:true) keeps childless empty nodes, so the (now empty after
     // their mesh is disposed) collision helpers survive even if their mesh were dropped —
     // but here the collision meshes are real geometry and stay intact.
-    await meshoptPipeline(levelDoc, `${out}.glb`, { quantizationVolume: 'scene' }, 2048);   // 2048 (was 1024): aerial src is 6400px + facade atlas pages are 4096px — 1024 made the ground + photo facades blurry/washed
+    //
+    // Quantize POSITION at 16-bit (was the gltf-transform 14-bit default over the whole scene
+    // volume): the welded terrain carries fine micro-relief that 14-bit over a ±600 m scene
+    // collapses to a stair-stepped surface (feet/wheels jitter). 16-bit keeps it smooth.
+    //
+    // Per-texture KTX2 cap: the big ground albedo (~6144 core) + facade atlas pages get a 4096
+    // cap with NO-RDO/high-quality encode so the painted lane/curb + photo facades stay crisp;
+    // ORM/other maps keep the 2048 default. Resolve by texture/material/image-size heuristic.
+    const texCapFor = makeLevelTexCapFor();
+    await meshoptPipeline(
+      levelDoc, `${out}.glb`,
+      { quantizationVolume: 'scene', quantizePosition: 16 },
+      2048, null, texCapFor,
+    );
   }
   await writeAndVerify(levelDoc, OUT(`${out}.glb`), { label: out });
 
@@ -432,7 +484,26 @@ async function buildLevelGlb({ src, out }) {
     console.log(`  round-trip OK: ${outRoot.listMeshes().length} meshes, ` +
       `bounds min=[${b.min.map((v) => v.toFixed(1))}] max=[${b.max.map((v) => v.toFixed(1))}]`);
   }
-  return srcBytes;
+
+  // Copy the exporter's paved-mask sidecar next to the GLB (OUT(`${out}.paved_mask.png`)). The web
+  // grass occlusion samples this top-down paved/built mask over the DEM rect to cull blades on
+  // roads/walks/driveways — the old level RENDERED that mask from Roads/Sidewalks meshes that the
+  // single-surface export no longer carries (roads are texture now), so the sidecar is the source
+  // of truth. Returns whether the mask landed (the meta pass references it via `pavedMask`).
+  let pavedMaskOut = null;
+  if (pavedMaskSrc) {
+    const maskSrc = SRC('exports', pavedMaskSrc);
+    if (existsSync(maskSrc)) {
+      const maskDst = OUT(`${out}.paved_mask.png`);
+      copyFileSync(maskSrc, maskDst);
+      written.push({ path: maskDst, bytes: statSync(maskDst).size });
+      pavedMaskOut = `${out}.paved_mask.png`;
+      console.log(`  copied paved mask -> ${path.relative(ROOT, maskDst)} (${mb(statSync(maskDst).size)})`);
+    } else {
+      console.warn(`  ! paved mask sidecar missing: ${pavedMaskSrc} (web grass occlusion will fall back to off)`);
+    }
+  }
+  return { srcBytes, pavedMask: pavedMaskOut };
 }
 
 // =====================================================================================
@@ -443,13 +514,15 @@ console.log('\n=== Da Hilg asset build ===');
 //    feed the summary's "level + 4 chars" reduction figure.
 // -------------------------------------------------------------------------------------
 let levelSrcBytes = 0;
+const levelPavedMask = {};   // out -> "<out>.paved_mask.png" (or undefined) for the meta pass
 for (const lv of LEVELS) {
   if (!existsSync(SRC('exports', lv.src))) {
     console.warn(`  ! skip missing level source: ${lv.src}`);
     continue;
   }
-  const bytes = await buildLevelGlb(lv);
-  if (lv.out === 'level') levelSrcBytes = bytes;   // dahill drives the summary comparison
+  const { srcBytes, pavedMask } = await buildLevelGlb(lv);
+  levelPavedMask[lv.out] = pavedMask;
+  if (lv.out === 'level') levelSrcBytes = srcBytes;   // dahill drives the summary comparison
 }
 
 // -------------------------------------------------------------------------------------
@@ -683,19 +756,23 @@ for (const { out, src } of CHARS) {
 //    meta MUST come from the source), records `metaSource`, and writes OUT(`${out}.meta.json`).
 // -------------------------------------------------------------------------------------
 const { writeFileSync } = await import('node:fs');
-async function buildLevelMeta({ src, out, metaSource }) {
+async function buildLevelMeta({ src, out, metaSource }, pavedMask) {
   console.log(`\n[4/4] ${out}.meta.json  <- exports/${src}`);
   const metaDoc = await io.read(SRC('exports', src));
   const metaRoot = metaDoc.getRoot();
   const nodeByName = (nm) => metaRoot.listNodes().find((n) => n.getName() === nm);
 
   const terrainNode = nodeByName('Collision_Terrain');
+  const visualTerrainNode = nodeByName('Terrain');
   const houseNode = nodeByName('House_walls');
   if (!terrainNode) throw new Error(`meta(${out}): Collision_Terrain node missing — cannot compute groundY.`);
   if (!houseNode) throw new Error(`meta(${out}): House_walls node missing — cannot compute houseCenter.`);
 
   const terrainBounds = getBounds(terrainNode);   // world-space AABB
   const houseBounds = getBounds(houseNode);
+  // The visual Terrain bounds give the DEM rect the paved_mask covers (it's painted over the
+  // same world rect). Fall back to the collider bounds if the visual node is somehow absent.
+  const demBounds = visualTerrainNode ? getBounds(visualTerrainNode) : terrainBounds;
 
   // groundY: min Y of the walkable terrain (ORIGINAL coords).
   const groundY = terrainBounds.min[1];
@@ -745,6 +822,17 @@ async function buildLevelMeta({ src, out, metaSource }) {
     [r3(hcR[0] + 18),      feetY, r3(hcR[2] + 18)],
   ];
 
+  // pavedMaskRect: the DEM/terrain rect the paved_mask covers, in RECENTERED world XZ. The web
+  // grass occlusion loads <out>.paved_mask.png and maps a blade's recentered-world XZ into the
+  // mask UV over this rect (min + size). The mask was painted with X→U (left→right) and Z→V; the
+  // grass shader flips V for the default texture flipY, so { min:[x,z], size:[w,d] } maps cleanly.
+  const demMinR = sub(demBounds.min);
+  const demMaxR = sub(demBounds.max);
+  const pavedMaskRect = {
+    min: [r3(demMinR[0]), r3(demMinR[2])],
+    size: [r3(demMaxR[0] - demMinR[0]), r3(demMaxR[2] - demMinR[2])],
+  };
+
   const meta = {
     source: metaSource,
     note: 'Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.',
@@ -754,6 +842,10 @@ async function buildLevelMeta({ src, out, metaSource }) {
     houseBox,
     spawns,
     npcSpawns,
+    // Grass occlusion: the top-down paved/built mask sidecar + the recentered DEM rect it covers.
+    // null pavedMask => the sidecar was missing; the web grass occlusion then stays off (no mask).
+    pavedMask: pavedMask || null,
+    pavedMaskRect,
   };
 
   const metaPath = OUT(`${out}.meta.json`);
@@ -767,17 +859,18 @@ async function buildLevelMeta({ src, out, metaSource }) {
   console.log(`    houseBox    = min[${houseBox.min.join(', ')}] max[${houseBox.max.join(', ')}]   (recentered)`);
   console.log(`    spawns      = ${spawns.length} pts, e.g. [${spawns[0].join(', ')}]   (recentered)`);
   console.log(`    npcSpawns   = ${npcSpawns.length} pts within ~25 m of origin (recentered)`);
+  console.log(`    pavedMask   = ${meta.pavedMask || '(none)'}   rect min[${pavedMaskRect.min.join(', ')}] size[${pavedMaskRect.size.join(', ')}] (recentered)`);
   return meta;
 }
 
-// Build meta for all three levels; keep dahill's for the final summary line.
+// Build meta for all levels; keep dahill's for the final summary line.
 let meta;
 for (const lv of LEVELS) {
   if (!existsSync(SRC('exports', lv.src))) {
     console.warn(`  ! skip missing level source: ${lv.src}`);
     continue;
   }
-  const m = await buildLevelMeta(lv);
+  const m = await buildLevelMeta(lv, levelPavedMask[lv.out]);
   if (lv.out === 'level') meta = m;   // dahill drives the summary
 }
 

@@ -2,11 +2,11 @@
 // read by the renderers to gate optional layers. Defaults: everything ON.
 import { atom } from 'jotai';
 
-// Defaults favor GAMEPLAY/performance over graphics: facades + grass start OFF (they
-// are the heaviest optional layers — facade textures + the instanced grass field's
-// fragment overdraw). Re-enable either from the pause menu's GRAPHICS section.
-/** Show the Street View photo facades on the buildings. */
-export const showFacadesAtom = atom(false);
+// Photo facades default ON: the SVFacade overlay quads ride in front of the always-present
+// windowed-stucco walls (turning them OFF reveals the windows underneath — no missing geometry).
+// Grass stays OFF (the instanced curved-blade field's fragment overdraw is the heaviest layer).
+/** Show the Street View photo facade overlays (SVFacade_page* nodes) on the buildings. */
+export const showFacadesAtom = atom(true);
 /** Show the flowing creek water (the "fancy water"). */
 export const showWaterAtom = atom(true);
 // Grass OFF by default — the instanced curved-blade field is the biggest GPU

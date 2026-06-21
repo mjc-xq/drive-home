@@ -17,7 +17,6 @@ namespace DaHilg
         static readonly int s_ColorId = Shader.PropertyToID("_Color");
         static readonly HashSet<Collider> s_LevelColliders = new HashSet<Collider>();
         static readonly HashSet<Material> s_ConfiguredVegetationMaterials = new HashSet<Material>();
-        static readonly HashSet<Material> s_ConfiguredRoadMaterials = new HashSet<Material>();
         static readonly RaycastHit[] s_GroundHits = new RaycastHit[64];
         static readonly RaycastHit[] s_SphereHits = new RaycastHit[32];
 
@@ -314,14 +313,13 @@ namespace DaHilg
                 return;
             }
 
+            // The single-surface level welds roads/sidewalks/curbs into the ONE textured terrain,
+            // so there are no separate coplanar road meshes to z-fight — the old per-road
+            // renderQueue+5 / double-sided ConfigureRoadMaterial firefighting is obsolete and
+            // removed. `isRoad` only classifies the (rare) road-named material for tinting now.
             bool isRoad = ContainsAny(key, "road", "street", "drive", "asphalt", "curb");
             bool isGround = isRoad || ContainsAny(key, "ground", "terrain", "grass", "yard", "walk", "sidewalk", "landscape", "dirt", "soil");
             if (!isGround && !isWater) return;
-
-            // Z-fight fix (belt-and-suspenders with the exporter's geometric lift): nudge
-            // coplanar road/paved materials a few queue slots later so they win in-engine,
-            // and make ground road materials double-sided so slope undersides don't vanish.
-            if (isRoad) ConfigureRoadMaterial(renderer.sharedMaterial);
 
             if (!isWater && HasUsefulBaseTexture(renderer.sharedMaterial))
             {
@@ -414,25 +412,6 @@ namespace DaHilg
             material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
             material.DisableKeyword("_ALPHATEST_ON");
             material.renderQueue = (int)RenderQueue.Geometry;
-        }
-
-        static void ConfigureRoadMaterial(Material material)
-        {
-            if (material == null) return;
-            // Non-destructive guard (see ConfigureOpaqueMaterial) + idempotent via set.
-            if (!Application.isPlaying) return;
-            if (!s_ConfiguredRoadMaterials.Add(material)) return;
-
-            // Render coplanar road/paved surfaces a few queue slots after terrain so they
-            // win the depth tie in-engine (the GLB carries no polygonOffset). Keep within
-            // the Geometry batch so sorting/batching is unaffected.
-            int target = (int)RenderQueue.Geometry + 5;
-            if (material.renderQueue < target) material.renderQueue = target;
-
-            // Roads/paved ground are seen from the underside on slopes; disable culling so
-            // they don't disappear when the camera dips below the surface.
-            if (material.HasProperty("_Cull")) material.SetInt("_Cull", (int)CullMode.Off);
-            material.doubleSidedGI = true;
         }
 
         static bool ContainsAny(string value, params string[] needles)
