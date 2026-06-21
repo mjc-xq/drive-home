@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Da Hilg Unity</title>
     <link rel="shortcut icon" href="TemplateData/favicon.ico">
     <link rel="stylesheet" href="TemplateData/style.css">
@@ -51,7 +51,99 @@
         }
       }
 
+      window.__dahilg = {
+        hudTapCount: 0,
+        hudCommandCount: 0,
+        hudErrors: [],
+        lastHudPayload: null,
+        lastHudCommand: null,
+        unityReady: false
+      };
+      let unityInstanceRef = null;
+      let lastHudTapKey = '';
+      let lastHudTapTime = 0;
+
+      function rememberHudError(error) {
+        window.__dahilg.hudErrors.push(String(error && error.message ? error.message : error));
+        if (window.__dahilg.hudErrors.length > 12) window.__dahilg.hudErrors.shift();
+      }
+
+      function compactCommandFromTap(x, y, width) {
+        if (y < 0 || y > 76 || width <= 1) return null;
+        const mobileScale = width < 900;
+        const scale = mobileScale ? 0.62 : 1;
+        const rightInset = mobileScale ? 8 : 18;
+        const fromRight = width - x - rightInset;
+        if (fromRight < 0) return null;
+        const action = 90 * scale;
+        const level = 96 * scale;
+        const player = 106 * scale;
+        const camera = 100 * scale;
+        if (fromRight > action + level + player + camera) return null;
+        if (fromRight <= action) return 'actions';
+        if (fromRight <= action + level) return 'level';
+        if (fromRight <= action + level + player) return 'player';
+        return 'camera';
+      }
+
+      function sendHudCommand(command) {
+        if (!unityInstanceRef || !command) return false;
+        try {
+          unityInstanceRef.SendMessage('DaHilgHUD', 'HandleWebHudCommand', command);
+          window.__dahilg.hudCommandCount += 1;
+          window.__dahilg.lastHudCommand = command;
+          return true;
+        } catch (error) {
+          rememberHudError(error);
+          return false;
+        }
+      }
+
+      function sendHudTap(clientX, clientY, source) {
+        if (!unityInstanceRef || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 1 || rect.height <= 1) return;
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+        const tapKey = `${Math.round(x)},${Math.round(y)}`;
+        const now = performance.now();
+        if (tapKey === lastHudTapKey && now - lastHudTapTime < 80) return;
+        lastHudTapKey = tapKey;
+        lastHudTapTime = now;
+
+        focusCanvas();
+        const command = compactCommandFromTap(x, y, rect.width);
+        if (command && sendHudCommand(command)) return;
+
+        const payload = [x, y, rect.width, rect.height]
+          .map((value) => Number(value).toFixed(2))
+          .join(',');
+        try {
+          unityInstanceRef.SendMessage('DaHilgHUD', 'HandleWebTouchTap', payload);
+          window.__dahilg.hudTapCount += 1;
+          window.__dahilg.lastHudPayload = `${source || 'touch'}:${payload}`;
+        } catch (error) {
+          rememberHudError(error);
+        }
+      }
+
       canvas.addEventListener('pointerdown', focusCanvas);
+      function handleHudTouchStart(event) {
+        if (event.changedTouches && event.changedTouches.length) {
+          const touch = event.changedTouches[0];
+          sendHudTap(touch.clientX, touch.clientY, 'touchstart');
+        }
+      }
+      function handleHudPointerDown(event) {
+        if (event.pointerType === 'touch') {
+          sendHudTap(event.clientX, event.clientY, 'pointerdown');
+        }
+      }
+      canvas.addEventListener('touchstart', handleHudTouchStart, { passive: true });
+      canvas.addEventListener('pointerdown', handleHudPointerDown, { passive: true });
+      document.addEventListener('touchstart', handleHudTouchStart, { capture: true, passive: true });
+      document.addEventListener('pointerdown', handleHudPointerDown, { capture: true, passive: true });
 
       function unityShowBanner(msg, type) {
         const warningBanner = document.querySelector('#unity-warning');
@@ -90,6 +182,9 @@
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
+          unityInstanceRef = unityInstance;
+          window.__dahilg.unityInstance = unityInstance;
+          window.__dahilg.unityReady = true;
           document.querySelector('#unity-loading-bar').style.display = 'none';
           if (unityInstance.Module && unityInstance.Module.WebGLInput) {
             unityInstance.Module.WebGLInput._stickyCursorLock = false;
