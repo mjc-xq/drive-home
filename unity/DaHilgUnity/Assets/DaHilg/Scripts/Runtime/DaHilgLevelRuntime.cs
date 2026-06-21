@@ -15,8 +15,23 @@ namespace DaHilg
         const float k_SpawnGroundSkin = 0.08f;
         static readonly int s_BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int s_ColorId = Shader.PropertyToID("_Color");
+        // URP/Built-in surface property ids for the terrain detail-normal + window-glass pass.
+        // Both pipelines name these the same on their Lit/Standard shaders; all writes are guarded
+        // by Material.HasProperty so a foreign glTFast shader without a slot is simply skipped.
+        static readonly int s_DetailNormalMapId = Shader.PropertyToID("_DetailNormalMap");
+        static readonly int s_DetailNormalMapScaleId = Shader.PropertyToID("_DetailNormalMapScale");
+        static readonly int s_DetailAlbedoMapId = Shader.PropertyToID("_DetailAlbedoMap");
+        static readonly int s_MetallicId = Shader.PropertyToID("_Metallic");
+        static readonly int s_SmoothnessId = Shader.PropertyToID("_Smoothness");
+        static readonly int s_GlossinessId = Shader.PropertyToID("_Glossiness");
         static readonly HashSet<Collider> s_LevelColliders = new HashSet<Collider>();
         static readonly HashSet<Material> s_ConfiguredVegetationMaterials = new HashSet<Material>();
+        static readonly HashSet<Material> s_DetailNormaledTerrainMaterials = new HashSet<Material>();
+        static readonly HashSet<Material> s_ConfiguredGlassMaterials = new HashSet<Material>();
+        // Renderers of the SVFacade_page* photo-overlay nodes — toggled as a group by
+        // SetFacadesVisible (mirrors the web showFacades). Default visible (photo mode on).
+        static readonly List<Renderer> s_FacadeRenderers = new List<Renderer>();
+        static Texture2D s_DetailNormalTexture;
         static readonly RaycastHit[] s_GroundHits = new RaycastHit[64];
         static readonly RaycastHit[] s_SphereHits = new RaycastHit[32];
 
@@ -27,7 +42,8 @@ namespace DaHilg
             "dahill",
             "canyon",
             "stanton",
-            "meemaw"
+            "meemaw",
+            "xq"
         };
 
         // CPU-side buffers from the active streamed import; disposed when the next level loads so
@@ -172,6 +188,9 @@ namespace DaHilg
         {
             if (level == null) return;
             s_LevelColliders.Clear();
+            // New level load: forget the previous level's facade overlay renderers (they belong to
+            // a now-destroyed root). Repopulated below as we walk this level's meshes.
+            s_FacadeRenderers.Clear();
 
             MeshFilter[] filters = level.GetComponentsInChildren<MeshFilter>(true);
 
@@ -243,6 +262,25 @@ namespace DaHilg
                 }
 
                 TuneLevelSurface(filter, lower, isWater, isCollisionProxy, levelScale);
+
+                // Single-surface rendering passes (mirror the web Level.jsx tuning):
+                //   - the welded 'Terrain' material gets a tiling detail-normal so asphalt/concrete
+                //     read as a surface (not flat paint) at the driving camera;
+                //   - window-glass nodes get a glassy (low-roughness/metallic) material;
+                //   - SVFacade_page* photo-overlay renderers are collected for SetFacadesVisible
+                //     (left visible by default — photo mode on).
+                if (!isCollisionProxy)
+                {
+                    string fname = filter.name;
+                    if (lower.StartsWith("terrain")) ApplyTerrainDetailNormal(filter);
+                    if (lower.Contains("window")) ApplyGlassSurface(filter);
+                    if (fname.StartsWith("SVFacade", StringComparison.OrdinalIgnoreCase)
+                        && filter.TryGetComponent(out Renderer facadeRenderer))
+                    {
+                        s_FacadeRenderers.Add(facadeRenderer);
+                    }
+                }
+
                 filter.gameObject.isStatic = true;
             }
 
@@ -412,6 +450,112 @@ namespace DaHilg
             material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
             material.DisableKeyword("_ALPHATEST_ON");
             material.renderQueue = (int)RenderQueue.Geometry;
+        }
+
+        // ---- single-surface render passes (mirror src/da-hilg/level/Level.jsx) ----------------
+
+        // Detail-normal on the welded 'Terrain' material. The single-surface ground bakes
+        // roads/sidewalks/curbs as a FLAT painted texture, so at the driving camera the asphalt
+        // and concrete read as paper. A tiling secondary detail-normal (modest scale) restores a
+        // surface micro-relief so they look like a real ground plane. Built-in Standard and URP Lit
+        // both expose _DetailNormalMap/_DetailNormalMapScale + the _DETAIL_MULX2 keyword; all writes
+        // are HasProperty-guarded so a shader without the slot is skipped (never throws). Per-material
+        // once (the shared Terrain material is configured a single time per session).
+        static void ApplyTerrainDetailNormal(MeshFilter filter)
+        {
+            if (!Application.isPlaying) return;   // never persist into the imported project asset
+            if (!filter.TryGetComponent(out Renderer renderer)) return;
+            Material material = renderer.sharedMaterial;
+            if (material == null || !s_DetailNormaledTerrainMaterials.Add(material)) return;
+            if (!material.HasProperty(s_DetailNormalMapId)) return;
+
+            material.SetTexture(s_DetailNormalMapId, GetDetailNormalTexture());
+            if (material.HasProperty(s_DetailNormalMapScaleId)) material.SetFloat(s_DetailNormalMapScaleId, 0.5f);
+            // Secondary UV tiling: repeat the detail map densely over the big ground so the
+            // micro-relief is fine-grained, not stretched. The detail set uses UV0 by default.
+            material.SetTextureScale(s_DetailNormalMapId, new Vector2(120f, 120f));
+            // A neutral detail-albedo (mid-grey) so _DETAIL_MULX2 doesn't tint the ground when the
+            // keyword turns on (MULX2 multiplies by 2*detailAlbedo; 0.5 grey == identity).
+            if (material.HasProperty(s_DetailAlbedoMapId) && material.GetTexture(s_DetailAlbedoMapId) == null)
+            {
+                material.SetTexture(s_DetailAlbedoMapId, Texture2D.grayTexture);
+            }
+            material.EnableKeyword("_DETAIL_MULX2");
+            material.EnableKeyword("_NORMALMAP");
+        }
+
+        // Glassy material for window nodes (name contains 'window'): low roughness + some metalness,
+        // like the web (roughness 0.2 / metalness 0.45). Built-in Standard uses _Metallic/_Glossiness,
+        // URP Lit uses _Metallic/_Smoothness; set whichever the shader exposes. Per-material once.
+        static void ApplyGlassSurface(MeshFilter filter)
+        {
+            if (!Application.isPlaying) return;
+            if (!filter.TryGetComponent(out Renderer renderer)) return;
+            Material material = renderer.sharedMaterial;
+            if (material == null || !s_ConfiguredGlassMaterials.Add(material)) return;
+
+            if (material.HasProperty(s_MetallicId)) material.SetFloat(s_MetallicId, 0.45f);
+            if (material.HasProperty(s_SmoothnessId)) material.SetFloat(s_SmoothnessId, 0.8f);   // URP (1 - roughness)
+            if (material.HasProperty(s_GlossinessId)) material.SetFloat(s_GlossinessId, 0.8f);   // Built-in Standard
+        }
+
+        // Lazily build a small tiling detail-normal texture (a soft, isotropic bump) once. A
+        // procedural map avoids shipping an art asset and tiles cleanly via _DetailNormalMap scale.
+        static Texture2D GetDetailNormalTexture()
+        {
+            if (s_DetailNormalTexture != null) return s_DetailNormalTexture;
+
+            const int size = 64;
+            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, true, true)
+            {
+                name = "DaHilgTerrainDetailNormal",
+                wrapMode = TextureWrapMode.Repeat,
+                filterMode = FilterMode.Bilinear,
+            };
+
+            // Build a height field from two phase-shifted sine ridges, derive the normal from its
+            // finite-difference gradient, and encode it tangent-space (xyz -> 0.5+0.5). Subtle
+            // amplitude so the asphalt/concrete gets tooth without looking embossed.
+            const float amp = 0.35f;
+            float Height(int x, int y)
+            {
+                float u = (x / (float)size) * Mathf.PI * 2f;
+                float v = (y / (float)size) * Mathf.PI * 2f;
+                return Mathf.Sin(u * 3f) * 0.5f + Mathf.Sin(v * 3f + 1.7f) * 0.5f
+                    + Mathf.Sin((u + v) * 5f) * 0.25f;
+            }
+
+            Color32[] pixels = new Color32[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float dx = (Height((x + 1) % size, y) - Height((x - 1 + size) % size, y)) * amp;
+                    float dy = (Height(x, (y + 1) % size) - Height(x, (y - 1 + size) % size)) * amp;
+                    Vector3 n = new Vector3(-dx, -dy, 1f).normalized;
+                    pixels[y * size + x] = new Color32(
+                        (byte)Mathf.Clamp(Mathf.RoundToInt((n.x * 0.5f + 0.5f) * 255f), 0, 255),
+                        (byte)Mathf.Clamp(Mathf.RoundToInt((n.y * 0.5f + 0.5f) * 255f), 0, 255),
+                        (byte)Mathf.Clamp(Mathf.RoundToInt((n.z * 0.5f + 0.5f) * 255f), 0, 255),
+                        255);
+                }
+            }
+            tex.SetPixels32(pixels);
+            tex.Apply(true, false);
+            s_DetailNormalTexture = tex;
+            return tex;
+        }
+
+        // Runtime toggle for the SVFacade_page* photo overlays (mirrors the web showFacades). ON
+        // (default) the Street-View photos cover the windowed-stucco walls; OFF reveals the walls
+        // underneath (no geometry vanishes). No-op when no facade overlays are present in the level.
+        public static void SetFacadesVisible(bool visible)
+        {
+            for (int i = 0; i < s_FacadeRenderers.Count; i++)
+            {
+                Renderer renderer = s_FacadeRenderers[i];
+                if (renderer != null) renderer.enabled = visible;
+            }
         }
 
         static bool ContainsAny(string value, params string[] needles)

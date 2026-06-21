@@ -33,7 +33,8 @@ namespace DaHilg.Editor
             "dahill",
             "canyon",
             "stanton",
-            "meemaw"
+            "meemaw",
+            "xq"
         };
         static readonly string[] s_CharacterAnimationStates =
         {
@@ -301,7 +302,7 @@ namespace DaHilg.Editor
             ...attributes,
             alpha: false,
             premultipliedAlpha: false,
-            preserveDrawingBuffer: true
+            preserveDrawingBuffer: false
           };
         }
         return getCanvasContext(contextType, attributes);
@@ -313,8 +314,9 @@ namespace DaHilg.Editor
         }
       }
 
-      document.addEventListener('pointerlockchange', () => window.setTimeout(releasePointerLock, 0));
-      document.addEventListener('webkitpointerlockchange', () => window.setTimeout(releasePointerLock, 0));
+      // NOTE: do NOT auto-release pointer lock on pointerlockchange — that cancelled the
+      // right-drag mouse-look on desktop the instant Unity acquired the lock. The input router
+      // locks on right-hold and releases on right-up; the browser frees the lock on Esc.
 
       function focusCanvas() {
         try {
@@ -455,11 +457,13 @@ namespace DaHilg.Editor
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
         productVersion: '1.2',
-        webglContextAttributes: { alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 2 },
+        webglContextAttributes: { alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 2 },
         showBanner: unityShowBanner
       };
 
-      config.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+      // Cap the framebuffer hard on mobile: a 3x retina iPhone at DPR 1.75 renders ~3x the pixels
+      // and OOM-crashes Safari. DPR 1 on touch devices is a large memory saving; desktop keeps 1.75.
+      config.devicePixelRatio = __dahilgTouch ? 1 : Math.min(window.devicePixelRatio || 1, 1.75);
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
@@ -620,7 +624,7 @@ body {
             }
 
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Characters"), "*.glb", "drew", "cece", "mike", "kelli");
-            CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Levels"), "*.glb", "level", "canyon", "stanton", "meemaw");
+            CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Levels"), "*.glb", "level", "canyon", "stanton", "meemaw", "xq");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art"), "*.glb", "sun3d");
             CopyFiles(Path.Combine(source, "anims"), Path.Combine(Application.dataPath, "DaHilg/Art/Animations"), "*.glb");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Data"), "*.json");
@@ -1116,6 +1120,7 @@ body {
                 BuildLevel("canyon", "Canyon Middle", "Castro Valley", "canyon", "canyon.meta", "canyon.minimap", animalControllers),
                 BuildLevel("stanton", "Stanton Elementary", "Castro Valley", "stanton", "stanton.meta", "stanton.minimap", animalControllers),
                 BuildLevel("meemaw", "Meemaw's", "Castro Valley", "meemaw", "meemaw.meta", "meemaw.minimap", animalControllers),
+                BuildLevel("xq", "XQ", "807 Broadway, Oakland", "xq", "xq.meta", "xq.minimap", animalControllers),
                 BuildInteriorLevel()
             };
         }

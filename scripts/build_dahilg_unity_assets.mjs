@@ -42,6 +42,7 @@ const glbs = [
   'kelli.glb',
   'mike.glb',
   'meemaw.glb',
+  'xq.glb',
   'sun3d.glb',
   'anims/attack.glb',
   'anims/cheer.glb',
@@ -75,6 +76,8 @@ const passthrough = [
   'stanton.minimap.json',
   'meemaw.meta.json',
   'meemaw.minimap.json',
+  'xq.meta.json',
+  'xq.minimap.json',
   'sun.png',
 ];
 
@@ -130,6 +133,10 @@ function filterInstanceAttribute(accessor, keepRows) {
 // We uniformly thin (keep ~1 in N everywhere to preserve coverage) and only clear
 // a small radius around the house/origin so the player isn't standing inside a trunk.
 async function trimUnityLevelVegetation(doc, rel) {
+  // Only the tree-rich neighborhood/school levels get GPU-instance thinning. xq (807 Broadway,
+  // an urban building plot) may carry no instanced trees — and trimUnityLevelVegetation throws
+  // on 0 surviving instances — so it is intentionally excluded (its editor-import copy keeps
+  // whatever vegetation it has; the STREAMED runtime copy is the untouched public/da-hilg GLB).
   if (!['level.glb', 'canyon.glb', 'stanton.glb', 'meemaw.glb'].includes(rel)) return;
 
   // Uniform spatial thinning factor: keep ~1 in keepEvery instances. Tuned so the
@@ -214,3 +221,54 @@ for (const rel of passthrough) {
 }
 
 console.log(`Unity Da Hilg assets written to ${path.relative(ROOT, OUT_DIR)}`);
+
+// ---- StreamingAssets + Data staging for the STREAMED levels ----------------------------
+// The 4 (now 5) outdoor levels stream at runtime via glTFast from StreamingAssets, loading the
+// COMPRESSED public/da-hilg/<glb>.glb (meshopt+KTX2) — NOT the decoded editor-import copy above.
+// Stage each compressed GLB as StreamingAssets/<slug>.glb (the runtime resolves it by SLUG via
+// DaHilgLevelRuntime.StreamGlbUrl), and copy its sidecar meta/minimap into DaHilg/Data so the
+// level profile + minimap + spawns resolve. This mirrors DaHilgProjectBuilder.StageStreamingLevelGlb
+// so a plain `node build_dahilg_unity_assets.mjs` (no Unity editor) already lands every streamed
+// GLB + its data in the project — Unity's build re-stages idempotently. Single-surface files carry
+// the SAME node names + meta fields (offset/groundY/houseCenter/houseBox/spawns/npcSpawns/pavedMask),
+// so they sync unchanged. The .paved_mask.png is web-grass-occlusion ONLY — Unity never reads it,
+// so it is intentionally NOT copied into StreamingAssets (it would bloat the WebGL build with an
+// unused asset); the mask stays in public/da-hilg/ for the web runtime.
+//
+// slug : in-game id + StreamingAssets/<slug>.glb (DaHilgLevelRuntime keys off this)
+// glb  : public/da-hilg/<glb>.glb basename (dahill's master is named "level")
+// meta : public/da-hilg/<meta>.json + <meta>.minimap.json basename (dahill's is "level"/"minimap")
+const STREAMED_LEVELS = [
+  { slug: 'dahill',  glb: 'level',   meta: 'level',   minimap: 'minimap'         },
+  { slug: 'canyon',  glb: 'canyon',  meta: 'canyon',  minimap: 'canyon.minimap'  },
+  { slug: 'stanton', glb: 'stanton', meta: 'stanton', minimap: 'stanton.minimap' },
+  { slug: 'meemaw',  glb: 'meemaw',  meta: 'meemaw',  minimap: 'meemaw.minimap'  },
+  { slug: 'xq',      glb: 'xq',      meta: 'xq',      minimap: 'xq.minimap'      },
+];
+const STREAMING_DIR = path.join(ROOT, 'unity', 'DaHilgUnity', 'Assets', 'StreamingAssets');
+const DATA_DIR = path.join(ROOT, 'unity', 'DaHilgUnity', 'Assets', 'DaHilg', 'Data');
+mkdirSync(STREAMING_DIR, { recursive: true });
+mkdirSync(DATA_DIR, { recursive: true });
+
+let stagedCount = 0;
+for (const lv of STREAMED_LEVELS) {
+  const glbSrc = SRC(`${lv.glb}.glb`);
+  if (!existsSync(glbSrc)) {
+    console.warn(`stream: skip ${lv.slug} — missing public/da-hilg/${lv.glb}.glb (not built yet?)`);
+    continue;
+  }
+  const glbDst = path.join(STREAMING_DIR, `${lv.slug}.glb`);
+  copyFileSync(glbSrc, glbDst);
+  stagedCount++;
+  let extras = '';
+
+  // meta JSON -> DaHilg/Data/<meta>.json (BuildLevel reads offset/groundY/spawns from this)
+  const metaSrc = SRC(`${lv.meta}.meta.json`);
+  if (existsSync(metaSrc)) { copyFileSync(metaSrc, path.join(DATA_DIR, `${lv.meta}.meta.json`)); extras += ' +meta'; }
+  // minimap JSON -> DaHilg/Data/<minimap>.json (optional; xq has none yet)
+  const minimapSrc = SRC(`${lv.minimap}.json`);
+  if (existsSync(minimapSrc)) { copyFileSync(minimapSrc, path.join(DATA_DIR, `${lv.minimap}.json`)); extras += ' +minimap'; }
+
+  console.log(`stream: ${lv.slug}.glb ${(statSync(glbDst).size / 1e6).toFixed(2)} MB <- public/da-hilg/${lv.glb}.glb${extras}`);
+}
+console.log(`StreamingAssets staged ${stagedCount}/${STREAMED_LEVELS.length} streamed level GLB(s) -> ${path.relative(ROOT, STREAMING_DIR)}`);
