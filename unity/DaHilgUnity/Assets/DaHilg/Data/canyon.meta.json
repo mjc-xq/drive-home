@@ -1,26 +1,26 @@
 {
-  "source": "canyon-middle-school-property.glb",
+  "source": "canyon-single.glb",
   "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
   "offset": [
     -72.31,
-    61.48,
+    61.055,
     -1.945
   ],
-  "groundY": 61.48,
+  "groundY": 61.055,
   "houseCenter": [
     -72.31,
-    119.52,
+    119.518,
     -1.945
   ],
   "houseBox": {
     "min": [
       -40.64,
-      55.181,
+      55.604,
       -23.235
     ],
     "max": [
       40.64,
-      60.899,
+      61.322,
       23.235
     ]
   },
@@ -72,5 +72,16 @@
       0.05,
       18
     ]
-  ]
+  ],
+  "pavedMask": "canyon.paved_mask.png",
+  "pavedMaskRect": {
+    "min": [
+      -287.69,
+      -356.055
+    ],
+    "size": [
+      720,
+      718
+    ]
+  }
 }

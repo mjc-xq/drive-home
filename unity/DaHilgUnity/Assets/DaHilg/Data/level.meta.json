@@ -1,26 +1,26 @@
 {
-  "source": "1840-dahill-property.glb",
+  "source": "dahill-single.glb",
   "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
   "offset": [
     -0.095,
-    33.105,
+    32.98,
     -0.695
   ],
-  "groundY": 33.105,
+  "groundY": 32.98,
   "houseCenter": [
     -0.095,
-    49.019,
+    49.026,
     -0.695
   ],
   "houseBox": {
     "min": [
       -12.155,
-      13.45,
+      13.615,
       -9.315
     ],
     "max": [
       12.155,
-      18.377,
+      18.477,
       9.315
     ]
   },
@@ -72,5 +72,16 @@
       0.05,
       18
     ]
-  ]
+  ],
+  "pavedMask": "level.paved_mask.png",
+  "pavedMaskRect": {
+    "min": [
+      -599.905,
+      -599.305
+    ],
+    "size": [
+      1198,
+      1198
+    ]
+  }
 }
