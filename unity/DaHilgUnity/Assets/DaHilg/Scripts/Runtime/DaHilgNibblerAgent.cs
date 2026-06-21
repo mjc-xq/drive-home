@@ -11,6 +11,7 @@ namespace DaHilg
         enum NibblerState
         {
             Chase,
+            Windup,
             Lunge,
             Climb,
             Attached,
@@ -39,6 +40,7 @@ namespace DaHilg
         NibblerState m_State;
         Vector3 m_Velocity;
         Vector3 m_LungeStart;
+        Vector3 m_LungeTarget;
         Vector3 m_AttachBaseLocal;
         float m_AttachY;
         float m_AttachTargetY;
@@ -161,8 +163,10 @@ namespace DaHilg
 
             switch (m_State)
             {
+                case NibblerState.Windup:
+                    return TickWindup(player, settings, dt);
                 case NibblerState.Lunge:
-                    return TickLunge(player, dt);
+                    return TickLunge(player, settings, dt);
                 case NibblerState.Climb:
                     return TickClimb(player, settings, dt);
                 case NibblerState.Attached:
@@ -259,31 +263,72 @@ namespace DaHilg
 
         void StartLunge(DaHilgActor player, DaHilgGameSettings settings)
         {
+            // Enter a brief WIND-UP first: a readable squash tell the player can roll/strafe-juke
+            // before the ballistic lunge actually fires.
             Attached = false;
-            m_State = NibblerState.Lunge;
+            m_State = NibblerState.Windup;
             m_StateTime = 0f;
-            m_LungeStart = Root.transform.position;
-            m_LungeDuration = 0.28f + m_Seed * 0.16f;
             ChooseAttachAnchor(player, settings);
             m_AttachY = k_ClingBottom;
-            if (m_Controller.enabled) m_Controller.enabled = false;
+            FaceBody(player, 1f);
             Play("Jump", 0.05f);
         }
 
-        bool TickLunge(DaHilgActor player, float dt)
+        bool TickWindup(DaHilgActor player, DaHilgGameSettings settings, float dt)
+        {
+            // Telegraph: squash/bulge so the commit is visible. Hold position (the controller stays
+            // enabled but un-moved) so a kiting player can step out of the strike.
+            float u = Mathf.Clamp01(m_StateTime / 0.18f);
+            Root.transform.localScale = Vector3.one * m_Scale * (1f + 0.15f * Mathf.Sin(u * Mathf.PI));
+            FaceBody(player, dt);
+            if (u >= 1f) BeginBallisticLunge(player);
+            return false;
+        }
+
+        void BeginBallisticLunge(DaHilgActor player)
+        {
+            // Capture the strike point in WORLD space NOW — if the player dodges, we arc to empty air.
+            m_State = NibblerState.Lunge;
+            m_StateTime = 0f;
+            m_LungeDuration = 0.30f + m_Seed * 0.12f;
+            m_LungeStart = Root.transform.position;
+            m_LungeTarget = m_Player.TransformPoint(new Vector3(m_AttachBaseLocal.x, m_AttachY, m_AttachBaseLocal.z));
+            Root.transform.localScale = Vector3.one * m_Scale;
+            if (!m_Controller.enabled) m_Controller.enabled = true;
+            Play("Jump", 0.04f);
+        }
+
+        bool TickLunge(DaHilgActor player, DaHilgGameSettings settings, float dt)
         {
             float u = Mathf.Clamp01(m_StateTime / Mathf.Max(0.05f, m_LungeDuration));
-            Vector3 target = m_Player.TransformPoint(new Vector3(m_AttachBaseLocal.x, m_AttachY, m_AttachBaseLocal.z));
-            Root.transform.position = Vector3.Lerp(m_LungeStart, target, Smooth01(u)) + Vector3.up * Mathf.Sin(u * Mathf.PI) * k_LungeArc;
+            // Ballistic arc toward the CAPTURED launch point (not homing). Move via the controller
+            // so the lunge respects geometry.
+            Vector3 desiredPos = Vector3.Lerp(m_LungeStart, m_LungeTarget, Smooth01(u)) + Vector3.up * Mathf.Sin(u * Mathf.PI) * k_LungeArc;
+            if (m_Controller.enabled) m_Controller.Move(desiredPos - Root.transform.position);
+            else Root.transform.position = desiredPos;
             FaceBody(player, dt);
 
-            if (u >= 1f)
+            // Per-frame grab: if we actually reach the player's CURRENT body, latch on early.
+            Vector3 toPlayer = player.FeetPosition + Vector3.up * (player.BodyHeight * 0.5f) - Root.transform.position;
+            float planar = new Vector2(toPlayer.x, toPlayer.z).magnitude;
+            if (planar <= settings.NibblerAttachDistance + k_AttachPad
+                && Root.transform.position.y <= player.FeetPosition.y + player.BodyHeight + 0.2f)
             {
+                if (m_Controller.enabled) m_Controller.enabled = false;
                 Attached = true;
                 m_State = NibblerState.Climb;
                 m_StateTime = 0f;
                 Play("Climb", 0.08f);
                 return true;
+            }
+
+            if (u >= 1f)
+            {
+                // WHIFF — the player juked out of the strike. Recover and chase again.
+                m_State = NibblerState.Chase;
+                m_StateTime = 0f;
+                m_JumpCooldown = 0.6f + m_Seed * 0.3f;
+                Play(m_RunClip, 0.1f);
             }
             return false;
         }
