@@ -76,16 +76,20 @@ function turnAngle(p0, p1, p2) {
   c = Math.max(-1, Math.min(1, c));
   return Math.acos(c);                                    // 0 = straight, pi = U-turn
 }
-// Only smooth a vertex whose turn angle is in [8deg, 100deg]: leave near-straight
-// runs and ~square junction corners alone so grids/corners stay crisp.
+// Only smooth a vertex whose turn angle is in [lo, hi] (default [8deg, 100deg]): leave
+// near-straight runs and ~square junction corners alone so grids/corners stay crisp.
+// The skunkworks road network passes a wider gate (roads {lo:6,hi:135}, walk boundaries
+// {lo:4,hi:160}) for smoother connected shapes; legacy callers pass no opts -> unchanged.
 const LO = 8 * Math.PI / 180, HI = 100 * Math.PI / 180;
-export function smoothLine(lw) {
+export function smoothLine(lw, opts = {}) {
+  const lo = opts.lo != null ? opts.lo * Math.PI / 180 : LO;
+  const hi = opts.hi != null ? opts.hi * Math.PI / 180 : HI;
   if (lw.length < 3) return lw.map(p => [p[0], p[1]]);
   // decide per-interior-vertex whether it should be rounded
   const round = new Array(lw.length).fill(false);
   for (let i = 1; i < lw.length - 1; i++) {
     const a = turnAngle(lw[i - 1], lw[i], lw[i + 1]);
-    round[i] = a >= LO && a <= HI;
+    round[i] = a >= lo && a <= hi;
   }
   const out = [[lw[0][0], lw[0][1]]];
   for (let i = 0; i < lw.length - 1; i++) {
@@ -895,4 +899,99 @@ export function joinSidewalkRuns(runs, roadSegs, thresh = 8) {
     }
   }
   return runs;
+}
+
+// =====================================================================================
+// SKUNKWORKS shared primitives — PROMOTED here so the single-textured-terrain pipeline's
+// welded curb GEOMETRY (curb_relief.mjs) and the painted curb/lane/crosswalk BANDS
+// (feature_atlas.mjs / road_network.mjs) import ONE byte-identical source of truth.
+// (Previously offsetLine was a local const in export_property_glb.mjs:1029 and the legacy
+//  stylized exporter; the duplicates could desync. These are pure 2D, no THREE, no lift.)
+// =====================================================================================
+
+// Offset a polyline along its LEFT normal by d, with a mitre clamp so curbs don't pinch /
+// self-cross on sharp corners (offset scaled by 1/max(0.35, cos(halfTurn))). Identical to
+// the legacy inline offsetLine — the single source of truth for every curb/sidewalk offset.
+export function offsetLine(lw, d) {
+  return lw.map((p, k) => {
+    const a = lw[Math.max(0, k - 1)], b = lw[Math.min(lw.length - 1, k + 1)];
+    let ax = p[0] - a[0], az = p[1] - a[1], bx = b[0] - p[0], bz = b[1] - p[1];
+    const la = Math.hypot(ax, az) || 1, lb = Math.hypot(bx, bz) || 1;
+    ax /= la; az /= la; bx /= lb; bz /= lb;
+    let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+    const cosHalf = Math.sqrt(Math.max(0, (1 + (ax * bx + az * bz)) / 2));   // cos(halfTurn)
+    const m = d / Math.max(0.35, cosHalf);
+    return [p[0] - dz * m, p[1] + dx * m];                                   // left normal (-dz, dx)
+  });
+}
+
+// Curb offset CENTRELINES per road, in WORLD XZ — the SINGLE source consumed by BOTH the
+// welded curb geometry (curb_relief) and the painted curb band (feature atlas), so the
+// raised top row and the concrete band register exactly. One entry per road side.
+//   roads: scene.roads;  w2: ENU->world;  opts.clipHalf: optional Liang-Barsky patch clip.
+// Offset = spec.width/2 + 0.3 (identical to export_property_glb.mjs:1185-1186).
+export function curbLinesFromRoads(roads, w2, opts = {}) {
+  const half = opts.clipHalf;
+  const out = [];
+  for (const r of roads || []) {
+    const pl = r.p || r; if (!Array.isArray(pl) || pl.length < 2) continue;
+    const spec = roadSpec(r);
+    if (spec.isService) continue;                                  // driveways/aisles: no curb
+    const lw = pl.map(([e, n]) => w2(e, n));
+    const pieces = Number.isFinite(half) ? clipPolylineToBox(lw, half) : [lw];
+    for (let piece of pieces) {
+      piece = smoothLine(piece, { lo: 6, hi: 135 });
+      if (piece.length < 2) continue;
+      const d = spec.width / 2 + 0.3;
+      out.push({ line: offsetLine(piece, d), side: 1, spec, road: r });
+      out.push({ line: offsetLine(piece, -d), side: -1, spec, road: r });
+    }
+  }
+  return out;
+}
+
+// Dashed centre-line as pure-2D quad RINGS (no terrain/lift) along a smoothed centreline.
+// halfW = half the painted line width; skip(mx,mz) suppresses dashes through junctions.
+// Returns [[ [x,z]x4 ], ...] for the rasterizer to fill. 3 m on / 3.5 m off by default.
+export function centreDashes(lw, halfW, skip = null, on = 3.0, off = 3.5) {
+  const rings = []; let draw = true, acc = 0;
+  for (let k = 1; k < lw.length; k++) {
+    const a = lw[k - 1], b = lw[k]; let dx = b[0] - a[0], dz = b[1] - a[1];
+    const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
+    let t = 0;
+    while (t < seg - 1e-6) {
+      const len = Math.min((draw ? on : off) - acc, seg - t);
+      const mx = a[0] + dx * (t + len / 2), mz = a[1] + dz * (t + len / 2);
+      if (draw && !(skip && skip(mx, mz))) {
+        const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
+        rings.push([[x0 + nx * halfW, z0 + nz * halfW], [x0 - nx * halfW, z0 - nz * halfW],
+                    [x1 - nx * halfW, z1 - nz * halfW], [x1 + nx * halfW, z1 + nz * halfW]]);
+      }
+      t += len; acc += len;
+      if (acc >= (draw ? on : off) - 1e-6) { draw = !draw; acc = 0; }
+    }
+  }
+  return rings;
+}
+
+// Zebra crosswalk as pure-2D bar RINGS along a crossing line spanning `width` (curb-to-curb).
+// Bars run ALONG the path (classic zebra), 0.6 m bar / 0.6 m gap. Returns quad rings.
+export function zebraCrosswalk(line, width, bar = 0.6, gap = 0.6) {
+  const rings = []; const hw = width / 2; let draw = true, acc = 0;
+  for (let k = 1; k < line.length; k++) {
+    const a = line[k - 1], b = line[k]; let dx = b[0] - a[0], dz = b[1] - a[1];
+    const seg = Math.hypot(dx, dz) || 1; dx /= seg; dz /= seg; const nx = -dz, nz = dx;
+    let t = 0;
+    while (t < seg - 1e-6) {
+      const len = Math.min((draw ? bar : gap) - acc, seg - t);
+      if (draw) {
+        const x0 = a[0] + dx * t, z0 = a[1] + dz * t, x1 = a[0] + dx * (t + len), z1 = a[1] + dz * (t + len);
+        rings.push([[x0 + nx * hw, z0 + nz * hw], [x0 - nx * hw, z0 - nz * hw],
+                    [x1 - nx * hw, z1 - nz * hw], [x1 + nx * hw, z1 + nz * hw]]);
+      }
+      t += len; acc += len;
+      if (acc >= (draw ? bar : gap) - 1e-6) { draw = !draw; acc = 0; }
+    }
+  }
+  return rings;
 }
