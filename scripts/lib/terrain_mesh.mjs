@@ -180,7 +180,10 @@ export function buildTerrainMesh({ D, geo, opts = {} }) {
 
   // ---- world-planar UVs per region ---------------------------------------------------
   // core triangles -> ±texCoreHalf box; far triangles -> full DEM rect (aerial bed).
-  const coreUV = (x, z) => [(x + texCoreHalf) / (2 * texCoreHalf), (z + texCoreHalf) / (2 * texCoreHalf)];
+  // BOTH map the REAL DEM rect -> [0,1] so the ground texture covers the actual terrain extent on
+  // EVERY level (the old ±texCoreHalf core UV stretched/misaligned the aerial on the smaller school
+  // levels whose DEM rect is ±230..±360, not ±600). The ground bake uses coreBox = demRect to match.
+  const coreUV = (x, z) => [(x - X0) / (X1 - X0), (z - Z0) / (Z1 - Z0)];
   const farUV = (x, z) => [(x - X0) / (X1 - X0), (z - Z0) / (Z1 - Z0)];
 
   // ---- terrainAt: point-in-triangle over the EMITTED triangles (uniform-grid accel) ---

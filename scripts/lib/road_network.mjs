@@ -728,7 +728,7 @@ function buildDriveways(mapSurfaces, env) {
 export function buildRoadNetwork(scene, mapSurfaces, env) {
   mapSurfaces = mapSurfaces || {};
   const C = scene.center || [20.91, 35.17];
-  const demRect = { x0: -600, x1: 600, z0: -600, z1: 600 };
+  const demRect = env.demRect || { x0: -600, x1: 600, z0: -600, z1: 600 };
   const meta = { center: C, demRect, zOrder: ['asphalt', 'driveway', 'concrete-sidewalk', 'curb', 'crosswalk', 'paint'] };
 
   // --- graph + roads
