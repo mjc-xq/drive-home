@@ -37,15 +37,15 @@ export function ktx2Encoder() {
 /** Encode one PNG file to KTX2 with mipmaps using the chosen encoder. */
 function encodeOne(encoder, inPng, outKtx) {
   if (encoder === 'basisu') {
-    // ETC1S, mipmaps, max quality 255 (1..255). basisu treats input as sRGB by default.
-    // ETC1S keeps disk small while transcoding to GPU-compressed formats (8x less VRAM
-    // than RGBA). For near-lossless facades, swap to `-uastc` (see ASSET_PIPELINE.md).
-    execFileSync('basisu', ['-ktx2', '-mipmap', '-q', '255', '-output_file', outKtx, inPng], {
+    // UASTC (near-lossless 4x4) + RDO + KTX2 zstd supercompression. ETC1S badly desaturated /
+    // washed out the photographic content (Street View facades + aerial ground); UASTC keeps the
+    // colour. RDO (-uastc_rdo_l) + zstd (-ktx2_zstd) keep the disk size reasonable. sRGB by default.
+    execFileSync('basisu', ['-ktx2', '-uastc', '-uastc_rdo_l', '1.0', '-mipmap', '-output_file', outKtx, inPng], {
       stdio: 'ignore',
     });
   } else {
-    // toktx fallback: ETC1S (basis-lz) with mipmaps.
-    execFileSync('toktx', ['--genmipmap', '--encode', 'etc1s', '--qlevel', '255', outKtx, inPng], {
+    // toktx fallback: UASTC + zstd supercompression.
+    execFileSync('toktx', ['--genmipmap', '--encode', 'uastc', '--zcmp', '18', outKtx, inPng], {
       stdio: 'ignore',
     });
   }
