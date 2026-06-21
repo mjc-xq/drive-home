@@ -402,6 +402,13 @@ namespace DaHilg
             return true;
         }
 
+        public bool CrushByMelee(Vector3 from)
+        {
+            if (!Active) return false;
+            Crush(from);
+            return true;
+        }
+
         void Crush(Vector3 from)
         {
             Attached = false;

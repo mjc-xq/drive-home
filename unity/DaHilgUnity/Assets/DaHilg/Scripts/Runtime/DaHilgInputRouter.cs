@@ -11,6 +11,7 @@ namespace DaHilg
         bool m_TouchRun;
         bool m_TouchJumpQueued;
         bool m_TouchRollQueued;
+        bool m_TouchAttackQueued;
         int m_TouchEmoteQueued = -1;
 
         public Vector2 Move { get; private set; }
@@ -18,6 +19,7 @@ namespace DaHilg
         public bool RunHeld { get; private set; }
         public bool JumpPressed { get; private set; }
         public bool RollPressed { get; private set; }
+        public bool AttackPressed { get; private set; }
         public bool InteractPressed { get; private set; }
         public bool SwitchPressed { get; private set; }
         public bool PreviousSwitchPressed { get; private set; }
@@ -36,6 +38,7 @@ namespace DaHilg
         {
             JumpPressed = false;
             RollPressed = false;
+            AttackPressed = false;
             InteractPressed = false;
             SwitchPressed = false;
             PreviousSwitchPressed = false;
@@ -62,6 +65,7 @@ namespace DaHilg
                 RunHeld = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
                 JumpPressed = keyboard.spaceKey.wasPressedThisFrame;
                 RollPressed = keyboard.fKey.wasPressedThisFrame || keyboard.rKey.wasPressedThisFrame;
+                AttackPressed = keyboard.qKey.wasPressedThisFrame;
                 InteractPressed = keyboard.eKey.wasPressedThisFrame;
                 SwitchPressed = keyboard.tabKey.wasPressedThisFrame;
                 PreviousSwitchPressed = keyboard.backquoteKey.wasPressedThisFrame;
@@ -84,6 +88,8 @@ namespace DaHilg
             Mouse mouse = Mouse.current;
             if (mouse != null)
             {
+                if (mouse.leftButton.wasPressedThisFrame) AttackPressed = true;
+
                 if (mouse.rightButton.wasPressedThisFrame)
                 {
                     Cursor.lockState = CursorLockMode.Locked;
@@ -121,6 +127,7 @@ namespace DaHilg
                 RunHeld = RunHeld || gamepad.leftStickButton.isPressed || gamepad.leftTrigger.ReadValue() > 0.45f;
                 JumpPressed = JumpPressed || gamepad.buttonSouth.wasPressedThisFrame;
                 RollPressed = RollPressed || gamepad.buttonEast.wasPressedThisFrame || gamepad.rightTrigger.wasPressedThisFrame;
+                AttackPressed = AttackPressed || gamepad.buttonNorth.wasPressedThisFrame;
                 InteractPressed = InteractPressed || gamepad.buttonWest.wasPressedThisFrame;
                 SwitchPressed = SwitchPressed || gamepad.rightShoulder.wasPressedThisFrame;
                 PreviousSwitchPressed = PreviousSwitchPressed || gamepad.leftShoulder.wasPressedThisFrame;
@@ -155,6 +162,12 @@ namespace DaHilg
             {
                 RollPressed = true;
                 m_TouchRollQueued = false;
+            }
+
+            if (m_TouchAttackQueued)
+            {
+                AttackPressed = true;
+                m_TouchAttackQueued = false;
             }
 
             if (m_TouchEmoteQueued >= 0)
@@ -194,6 +207,11 @@ namespace DaHilg
         public void QueueTouchRoll()
         {
             m_TouchRollQueued = true;
+        }
+
+        public void QueueTouchAttack()
+        {
+            m_TouchAttackQueued = true;
         }
 
         public void QueueTouchEmote(int index)
