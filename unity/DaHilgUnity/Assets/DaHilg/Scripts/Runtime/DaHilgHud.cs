@@ -125,7 +125,8 @@ namespace DaHilg
             DaHilgActor actor = m_Manager.ActiveActor;
             m_Title.text = m_Manager.CurrentLevel != null ? m_Manager.CurrentLevel.Label : "Da Hilg";
             m_Mode.text = m_Manager.Mode == DaHilgGameMode.Nibblers ? "NIBBLERS" : "GREET";
-            m_Score.text = m_Manager.Score.ToString("000");
+            float combo = m_Manager.ComboMultiplier;
+            m_Score.text = m_Manager.Score.ToString("000") + (combo > 1.01f ? "  x" + combo.ToString("0.#") : "");
             if (m_Manager.Mode == DaHilgGameMode.Nibblers)
             {
                 int riders = actor.AttachedNibblers;
@@ -135,7 +136,7 @@ namespace DaHilg
                     float drain = Mathf.Min(m_Manager.Settings.NibblerHealthDrainCap, riders * m_Manager.Settings.NibblerHealthDrainPerAttached);
                     m_Attached.text = riders + " riders  ·  -" + drain.ToString("0.0") + " HP/s";
                 }
-                else m_Attached.text = "clear";
+                else m_Attached.text = "BANK " + m_Manager.Banked + "  ·  BEST " + m_Manager.HighScore;
             }
             else m_Attached.text = m_Manager.HasWon() ? "all greeted" : "family nearby";
             m_State.text = actor.Label + " · " + Mathf.RoundToInt(actor.Health) + "%";
@@ -150,6 +151,7 @@ namespace DaHilg
             UpdateTopCompactLabel(actor, health);
 
             if (m_Manager.IsPaused()) m_Prompt.text = "Paused";
+            else if (m_Manager.ShowSafeBanner) m_Prompt.text = "SAFE  ·  banked +" + m_Manager.LastBank;
             else if (m_Manager.Mode == DaHilgGameMode.Greet && m_Manager.NearbyGreetable != null) m_Prompt.text = "E greet " + m_Manager.NearbyGreetable.Label;
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.PlayerInSafeZone()) m_Prompt.text = "Safe zone";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.LastRollCrushCount > 0) m_Prompt.text = "Crushed " + m_Manager.LastRollCrushCount + " nibblers";

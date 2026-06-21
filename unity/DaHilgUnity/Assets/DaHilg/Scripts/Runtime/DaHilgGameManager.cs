@@ -48,7 +48,19 @@ namespace DaHilg
         public DaHilgCameraRig CameraRig;
         public DaHilgHud Hud;
         public DaHilgGameMode Mode { get; private set; }
-        public int Score { get; private set; }
+        public int Score { get; private set; } // at-risk score this sortie (banked at safe zones)
+        int m_Banked;
+        int m_HighScore;
+        float m_Combo = 1f;
+        float m_ComboUntil;
+        bool m_WasInSafe;
+        float m_SafeBannerUntil;
+        int m_LastBank;
+        public int Banked => m_Banked;
+        public int HighScore => m_HighScore;
+        public float ComboMultiplier => Time.time < m_ComboUntil ? m_Combo : 1f;
+        public bool ShowSafeBanner => Time.time < m_SafeBannerUntil;
+        public int LastBank => m_LastBank;
         public IReadOnlyList<DaHilgActor> Actors => m_Actors;
         public IReadOnlyList<DaHilgNibblerAgent> Nibblers => m_Nibblers;
         public IReadOnlyList<DaHilgAnimalAgent> Animals => m_Animals;
@@ -76,6 +88,7 @@ namespace DaHilg
 
         void Start()
         {
+            m_HighScore = PlayerPrefs.GetInt("DaHilgHighScore", 0);
             if (Settings == null)
             {
                 Debug.LogError("[DaHilg] Missing game settings.");
@@ -647,6 +660,24 @@ namespace DaHilg
             bool danger = !safe && PlayerInDangerZone();
             if (m_ActiveActor == null) return;
 
+            // Bank the at-risk score the moment you reach safety — the "one more run" payoff.
+            bool inSafeZone = PlayerInSafeZone();
+            if (inSafeZone && !m_WasInSafe && Score > 0)
+            {
+                m_LastBank = Score;
+                m_Banked += Score;
+                Score = 0;
+                m_Combo = 1f; m_ComboUntil = 0f;
+                m_SafeBannerUntil = Time.time + 2.2f;
+                if (m_Banked > m_HighScore)
+                {
+                    m_HighScore = m_Banked;
+                    PlayerPrefs.SetInt("DaHilgHighScore", m_HighScore);
+                    PlayerPrefs.Save();
+                }
+            }
+            m_WasInSafe = inSafeZone;
+
             if (danger) MarkPlayer();
 
             if (safe)
@@ -681,6 +712,9 @@ namespace DaHilg
                     ShedAttached(5);
                     m_BuriedLoad = Mathf.Max(0f, m_BuriedLoad - 1.6f);
                     m_Struggle = 0f;
+                    // The stake: clawing out of a pin costs unbanked score + breaks the combo.
+                    Score = Mathf.Max(0, Score - 25);
+                    m_Combo = 1f; m_ComboUntil = 0f;
                 }
             }
             else
@@ -727,8 +761,7 @@ namespace DaHilg
             m_LastRollCrushCount = Mode == DaHilgGameMode.Nibblers ? CrushNibblersByRoll() : 0;
             if (m_LastRollCrushCount > 0)
             {
-                Score += m_LastRollCrushCount * Mathf.Max(1, Settings.RollCrushScore);
-                m_CrushedNibblerTotal += m_LastRollCrushCount;
+                AwardCrush(m_LastRollCrushCount);
                 CrushImpact(m_LastRollCrushCount);
                 m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
                 AttachedNibblerCount = CountAttachedNibblers();
@@ -780,8 +813,7 @@ namespace DaHilg
             }
             if (crushed > 0)
             {
-                Score += crushed * Mathf.Max(1, Settings.RollCrushScore);
-                m_CrushedNibblerTotal += crushed;
+                AwardCrush(crushed);
                 CrushImpact(crushed);
                 m_AttachFlashUntil = Time.time + Settings.AttachmentFlashDuration;
                 AttachedNibblerCount = CountAttachedNibblers();
@@ -827,6 +859,18 @@ namespace DaHilg
                 if (m_Nibblers[i].TryCrushByRoll(m_ActiveActor, center, side, radius, omni, Settings)) crushed++;
             }
             return crushed;
+        }
+
+        // Crushes feed an at-risk score with a decaying combo on consecutive pops (banked at safe
+        // zones). A fat clear (>=8) gets a flat bonus — no runaway multiplier that inverts the game.
+        void AwardCrush(int count)
+        {
+            if (count <= 0) return;
+            m_Combo = Time.time < m_ComboUntil ? Mathf.Min(5f, m_Combo + 0.5f) : 1f;
+            m_ComboUntil = Time.time + 2.5f;
+            Score += Mathf.RoundToInt(count * Mathf.Max(1, Settings.RollCrushScore) * m_Combo);
+            if (count >= 8) Score += 50;
+            m_CrushedNibblerTotal += count;
         }
 
         // Count-scaled crush firework: shake + FOV punch. A 12+ clear is a full-power finale.
