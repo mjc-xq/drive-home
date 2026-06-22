@@ -16,6 +16,8 @@ namespace DaHilg
 
         readonly Label m_Title;
         readonly Label m_Legend;
+        readonly VisualElement m_MapArea;   // holds the solid road texture (bg) + Painter2D markers (content)
+        Texture2D m_RoadTex;
         DaHilgGameManager m_Manager;
         DaHilgLevelProfile m_Profile;
         MinimapData m_Data;
@@ -61,7 +63,16 @@ namespace DaHilg
             m_Legend.style.display = DisplayStyle.None; // clean: green=safe / white=you is self-evident; no alarming legend
             Add(m_Legend);
 
-            generateVisualContent += OnGenerateVisualContent;
+            // The map area is a child so its background-image (the baked solid-road texture) draws UNDER
+            // its own Painter2D content (creek + actor dots). A parent's generateVisualContent always
+            // draws below its children, so the road has to live on the same element as the markers.
+            m_MapArea = new VisualElement { pickingMode = PickingMode.Ignore };
+            m_MapArea.style.position = Position.Absolute;
+            m_MapArea.style.left = 10; m_MapArea.style.right = 10;
+            m_MapArea.style.top = 22; m_MapArea.style.bottom = 22;
+            m_MapArea.style.backgroundColor = new Color(0.06f, 0.07f, 0.09f, 0.85f);
+            m_MapArea.generateVisualContent += OnGenerateVisualContent;
+            Add(m_MapArea);
         }
 
         public void SetManager(DaHilgGameManager manager)
@@ -73,28 +84,52 @@ namespace DaHilg
                 m_Profile = profile;
                 m_Data = MinimapData.FromProfile(profile);
                 m_Title.text = profile != null ? "MAP · " + profile.Label.ToUpperInvariant() : "MAP";
+                RebuildRoadTexture();
             }
 
             MarkDirtyRepaint();
+            m_MapArea?.MarkDirtyRepaint();
+        }
+
+        // Bake the 1-bit road occupancy grid into a solid-street texture once per level (point-filtered
+        // so streets stay crisp). Assigned as the map area's background so it sits under the markers.
+        void RebuildRoadTexture()
+        {
+            if (m_RoadTex != null) { UnityEngine.Object.Destroy(m_RoadTex); m_RoadTex = null; }
+            if (m_Data == null || m_Data.FillN <= 0 || m_Data.FillRoad == null) { m_MapArea.style.backgroundImage = new StyleBackground(); return; }
+
+            int n = m_Data.FillN;
+            byte[] bits = m_Data.FillRoad;
+            Texture2D tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp };
+            Color32 road = new Color32(150, 156, 165, 255);
+            Color32 clear = new Color32(0, 0, 0, 0);
+            Color32[] px = new Color32[n * n];
+            for (int row = 0; row < n; row++)
+            {
+                // Texture2D row 0 = bottom; the grid row 0 = minZ which maps to the map's bottom -> direct.
+                for (int col = 0; col < n; col++)
+                {
+                    int cell = row * n + col;
+                    bool set = (bits[cell >> 3] & (1 << (cell & 7))) != 0;
+                    px[row * n + col] = set ? road : clear;
+                }
+            }
+            tex.SetPixels32(px);
+            tex.Apply(false, false);
+            m_RoadTex = tex;
+            m_MapArea.style.backgroundImage = new StyleBackground(tex);
         }
 
         void OnGenerateVisualContent(MeshGenerationContext context)
         {
-            Rect full = contentRect;
-            if (full.width <= 20f || full.height <= 20f) return;
-
-            Painter2D painter = context.painter2D;
-            FillRect(painter, full, new Color(0.03f, 0.04f, 0.06f, 0.88f));
-
-            Rect mapRect = new Rect(full.xMin + 10f, full.yMin + 22f, full.width - 20f, Mathf.Max(20f, full.height - 44f));
-            FillRect(painter, mapRect, new Color(0.06f, 0.07f, 0.09f, 0.55f));
-
+            // This draws on the MAP AREA child; the solid road network is its background texture, so here
+            // we only paint the creek + zones + actors ON TOP of those streets (Google-Maps style).
+            Rect mapRect = new Rect(0f, 0f, m_MapArea.contentRect.width, m_MapArea.contentRect.height);
+            if (mapRect.width <= 20f || mapRect.height <= 20f) return;
             if (m_Data == null || !m_Data.Valid) return;
 
-            // Google-Maps style: the street network is the hero — bright, clear roads on a dark field.
-            DrawSegments(painter, mapRect, m_Data.Walk, new Color(0.48f, 0.51f, 0.55f, 0.28f), 0.7f);
-            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.28f, 0.60f, 0.92f, 0.92f), 2.4f); // blue creek under roads
-            DrawSegments(painter, mapRect, m_Data.Road, new Color(0.88f, 0.90f, 0.94f, 0.92f), 1.7f);
+            Painter2D painter = context.painter2D;
+            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.28f, 0.60f, 0.92f, 0.95f), 2.6f); // blue creek
 
             if (m_Profile != null)
             {
@@ -261,6 +296,8 @@ namespace DaHilg
         sealed class MinimapData
         {
             public Rect Bounds;
+            public int FillN;            // road-fill grid resolution (0 = none)
+            public byte[] FillRoad;      // packed 1-bit road occupancy grid, row-major (row 0 = minZ)
             public List<Segment> Road = new List<Segment>();
             public List<Segment> Drive = new List<Segment>();
             public List<Segment> Walk = new List<Segment>();
@@ -284,6 +321,8 @@ namespace DaHilg
                 float maxX = ExtractFloat(json, "maxX", profile.PlayBounds.max.x);
                 float maxZ = ExtractFloat(json, "maxZ", profile.PlayBounds.max.z);
                 data.Bounds = new Rect(minX, minZ, Mathf.Max(1f, maxX - minX), Mathf.Max(1f, maxZ - minZ));
+                data.FillN = Mathf.RoundToInt(ExtractFloat(json, "fillN", 0f));
+                data.FillRoad = ExtractBase64(json, "fillRoad");
                 data.Road = ExtractSegments(json, "road");
                 data.Drive = ExtractSegments(json, "drive");
                 data.Walk = ExtractSegments(json, "walk");
@@ -301,6 +340,14 @@ namespace DaHilg
                     return value;
                 }
                 return fallback;
+            }
+
+            static byte[] ExtractBase64(string json, string key)
+            {
+                Match match = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([A-Za-z0-9+/=]*)\"");
+                if (!match.Success) return null;
+                try { return Convert.FromBase64String(match.Groups[1].Value); }
+                catch { return null; }
             }
 
             static List<Segment> ExtractSegments(string json, string key)

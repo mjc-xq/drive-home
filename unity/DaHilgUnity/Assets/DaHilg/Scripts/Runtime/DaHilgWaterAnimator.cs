@@ -8,6 +8,7 @@ namespace DaHilg
         static readonly int s_MainTexStId = Shader.PropertyToID("_MainTex_ST");
         static readonly int s_BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int s_ColorId = Shader.PropertyToID("_Color");
+        static readonly int s_EmissionId = Shader.PropertyToID("_EmissionColor");
 
         Renderer m_Renderer;
         MaterialPropertyBlock m_Block;
@@ -47,16 +48,26 @@ namespace DaHilg
         void Update()
         {
             if (m_Renderer == null || m_Block == null) return;
-            if (!m_HasBaseMapSt && !m_HasMainTexSt) return;
-
-            m_Offset.x += Time.deltaTime * 0.025f;
-            m_Offset.y += Time.deltaTime * 0.012f;
-            m_Tiling.z = m_Offset.x;
-            m_Tiling.w = m_Offset.y;
 
             m_Renderer.GetPropertyBlock(m_Block);
-            if (m_HasBaseMapSt) m_Block.SetVector(s_BaseMapStId, m_Tiling);
-            if (m_HasMainTexSt) m_Block.SetVector(s_MainTexStId, m_Tiling);
+
+            // Scroll the texture if the material has one (real flow on textured water).
+            if (m_HasBaseMapSt || m_HasMainTexSt)
+            {
+                m_Offset.x += Time.deltaTime * 0.025f;
+                m_Offset.y += Time.deltaTime * 0.012f;
+                m_Tiling.z = m_Offset.x;
+                m_Tiling.w = m_Offset.y;
+                if (m_HasBaseMapSt) m_Block.SetVector(s_BaseMapStId, m_Tiling);
+                if (m_HasMainTexSt) m_Block.SetVector(s_MainTexStId, m_Tiling);
+            }
+
+            // The creek water is a flat, textureless surface — a moving emission shimmer makes it read
+            // as live, flowing water instead of a static blue slab (two offset sines = rippling sparkle).
+            float shimmer = 0.5f + 0.35f * Mathf.Sin(Time.time * 1.4f) + 0.15f * Mathf.Sin(Time.time * 2.7f + 1.3f);
+            Color glow = Color.Lerp(new Color(0.04f, 0.16f, 0.28f), new Color(0.12f, 0.34f, 0.52f), Mathf.Clamp01(shimmer));
+            m_Block.SetColor(s_EmissionId, glow);
+
             m_Renderer.SetPropertyBlock(m_Block);
         }
     }
