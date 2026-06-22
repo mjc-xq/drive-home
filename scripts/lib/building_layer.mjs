@@ -124,7 +124,11 @@ export function buildBuildingLayer({
   // SVFacade_page{N} mesh per page (so the runtime toggles them as a group). PROUD_OVERLAY sits
   // in FRONT of the window trim (which pushes out to ~0.12 m) so the photo covers the windows when
   // ON and the windowed stucco shows when the overlay is hidden.
-  const PROUD_OVERLAY = 0.17;
+  // BAKED facade: the photo is the wall's OWN surface, flush (offset 0), not a quad floating in
+  // front. emitRing SKIPS the stucco face under a photo'd edge and suppresses the procedural
+  // grid/trim there, so the Street-View crop IS the baked wall texture — no float, no z-fight, no
+  // panel hanging past a corner. (Photo mode is no longer a runtime toggle; it's baked in.)
+  const PROUD_OVERLAY = 0.0;
   const overlayByPage = new Map();
   const overlayBucket = (page) => {
     let b = overlayByPage.get(page);
@@ -145,8 +149,9 @@ export function buildBuildingLayer({
     // crop_v = the wall V-band [cv0 (top of photo, near eave) .. cv1 (ground)] the photo actually
     // covers after ROOF_TRIM. Cap the quad TOP at that band so a roof-trimmed photo isn't stretched
     // up to the eave (M3) — the wall above the photo shows the windowed stucco underneath.
-    const cv = rect.crop_v || [0, 1];
-    const ytTop = yt - cv[0] * (yt - base);
+    // The crop is ROOF-TRIMMED to pure wall (ground->eave), so map it across the FULL wall quad
+    // (foot..eave): the photo IS the wall now (no stucco underneath), so there must be no gap.
+    const ytTop = yt;
     const A = [xi + nx * o, ybi, zi + nz * o], B = [xj + nx * o, ybj, zj + nz * o];
     const Cc = [xj + nx * o, ytTop, zj + nz * o], Dd = [xi + nx * o, ytTop, zi + nz * o];
     const { u0, v0, u1, v1 } = rect;
@@ -309,14 +314,14 @@ export function buildBuildingLayer({
     const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
     const hero = isHero(ib);
     let dist = 0;
-    for (let i = 0; i < ring.length; i++) {              // walls (ALWAYS stucco)
+    for (let i = 0; i < ring.length; i++) {              // walls
       const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
       const seg = Math.hypot(xj - xi, zj - zi);
-      pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
-      // HERO wall with a packed atlas crop for this edge -> ALSO emit a removable photo overlay
-      // quad proud of the (windowed) stucco wall, grouped by atlas page for the runtime toggle.
+      // HERO wall with a packed atlas crop -> BAKE the photo as this wall's surface (flush, opaque)
+      // and emit NO stucco underneath (the photo is the wall). Other edges get windowed stucco.
       const rect = hero ? rectByWall[`b${ib}_e${i}`] : null;
       if (rect) emitOverlayQuad(xi, zi, xj, zj, yt, base, cen, rect);
+      else pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
       dist += seg;
     }
     // flat eave cap (triangulated footprint at the eave height)
@@ -406,11 +411,12 @@ export function buildBuildingLayer({
   //
   // emitFacadeShellDetails — corner/edge trim, header/sill bands, and faint siding course lines.
   // Perf gate: skips short/low walls (L<1.4 || wallH<2.1) so ~1600 buildings + sheds stay sane.
-  function emitFacadeShellDetails(ring, base, wallH, D) {
+  function emitFacadeShellDetails(ring, base, wallH, D, isHeroEdge) {
     if (!D) return;
     const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
     const yBase = base + 0.12, yTop = base + wallH - 0.16;
     for (let i = 0; i < ring.length; i++) {
+      if (isHeroEdge && isHeroEdge(i)) continue;   // baked-photo wall: no proud trim over the photo
       const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
       const L = Math.hypot(bx - ax, bz - az);
       if (L < 1.4 || wallH < 2.1) continue;
@@ -442,11 +448,14 @@ export function buildBuildingLayer({
   // window grid skips L<2.4 || wallH<2.7.
   function emitFacadeDetails(ring, base, wallH, D, opts = {}) {
     if (!D) return;
-    emitFacadeShellDetails(ring, base, wallH, D);
+    // A photo'd (hero) edge gets NO procedural trim/grid — the baked Street-View photo is the wall.
+    const isHeroEdge = (opts.ib != null) ? (i) => !!rectByWall[`b${opts.ib}_e${i}`] : null;
+    emitFacadeShellDetails(ring, base, wallH, D, isHeroEdge);
     if (opts.autoWindows === false) return;
     const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
     const yt = base + wallH;
     for (let i = 0; i < ring.length; i++) {
+      if (isHeroEdge && isHeroEdge(i)) continue;   // baked-photo wall: skip the procedural window grid
       const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
       const L = Math.hypot(bx - ax, bz - az);
       if (L < 2.4 || wallH < 2.7) continue;
@@ -581,7 +590,7 @@ export function buildBuildingLayer({
     buildingCollision.push({ ring: houseRing, base, h: houseWallH });
     emitted++;
     // facade detail: shell trim/siding only (no auto grid); the cues add the street-facing windows.
-    emitFacadeDetails(houseRing, base, houseWallH, hD, { house: true, autoWindows: false });
+    emitFacadeDetails(houseRing, base, houseWallH, hD, { house: true, autoWindows: false, ib: houseIdx });
     if (!isSchool) emitOwnerHouseFacadeCues(houseRing, houseWallH, hD);
     // house walls: a single stucco bucket (the photo, if any, is a separate SVFacade overlay).
     hW.stucco.material = stuccoMaterial(houseIdx);
@@ -625,7 +634,7 @@ export function buildBuildingLayer({
     buildingCollision.push({ ring: emittedRing, base, h });
     // facade detail: window grid on EVERY wall edge (+ shell trim). Windows live UNDER the photo
     // overlay, so a hero wall keeps its grid (shown when photo mode is OFF). No per-edge skip.
-    emitFacadeDetails(emittedRing, base, h, bD, {});
+    emitFacadeDetails(emittedRing, base, h, bD, { ib });
     if (localW.stucco.pos.length) stuccoBuckets.push(localW.stucco);
     roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
     emitted++;
@@ -645,11 +654,11 @@ export function buildBuildingLayer({
   addB(simpleMesh(bD.trim, 0xd2c9b8, 'Buildings_window_trim'));
   addB(simpleMesh(bD.glass, 0x203342, 'Buildings_windows'));
 
-  // ---- toggleable Street-View photo OVERLAY (one mesh per atlas page) --------------------
-  // All hero-wall photo quads for atlas page N go into ONE node 'SVFacade_page{N}' with material
-  // 'FacadeAtlasOverlay_page{N}_mat' (the exporter attaches facade.pages[N] JPEG by that name), so
-  // the runtime can flip every 'SVFacade*' node together to turn photo mode on/off. The quads sit
-  // PROUD of the always-present windowed-stucco wall; hiding them reveals the windows underneath.
+  // ---- BAKED Street-View photo walls (one mesh per atlas page) --------------------------
+  // All hero-wall photo quads for atlas page N go into ONE node 'Buildings_facade_page{N}' with
+  // material 'FacadeAtlasOverlay_page{N}_mat' (the exporter attaches facade.pages[N] JPEG by name).
+  // The quads sit FLUSH on the wall (stucco skipped underneath, grid/trim suppressed) so the photo
+  // IS the baked wall texture — always shown, not a runtime toggle.
   for (const [page, b] of [...overlayByPage.entries()].sort((a, c) => a[0] - c[0])) {
     if (!b.pos.length) continue;
     const g = new THREE.BufferGeometry();
@@ -657,8 +666,8 @@ export function buildBuildingLayer({
     g.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
     g.computeVertexNormals();
     const mesh = new THREE.Mesh(g, overlayMaterial(page));
-    mesh.name = `SVFacade_page${page}`;
-    mesh.userData = { source: 'Google Street View Static', overlay: true, page };
+    mesh.name = `Buildings_facade_page${page}`;
+    mesh.userData = { source: 'Google Street View Static', baked: true, page };
     scene.add(mesh);
   }
 
