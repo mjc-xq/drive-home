@@ -166,7 +166,7 @@ function dedupeSegments(segs, grid = 0.25) {
 // -------------------------------------------------------------------------------------
 // Extract each layer, accumulate global XZ bounds.
 // -------------------------------------------------------------------------------------
-const layers = { road: [], drive: [], walk: [], curb: [], line: [] };
+const layers = { road: [], drive: [], walk: [], curb: [], line: [], creek: [] };
 const bounds = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity };
 const grow = (x, z) => {
   bounds.minX = Math.min(bounds.minX, x); bounds.maxX = Math.max(bounds.maxX, x);
@@ -196,6 +196,20 @@ for (const { name, layer } of LAYERS) {
 const r2 = (n) => Math.round(n * 100) / 100;
 const half = Math.max(Math.abs(bounds.minX), Math.abs(bounds.maxX), Math.abs(bounds.minZ), Math.abs(bounds.maxZ));
 const worldHalfExtent = Math.ceil(half);
+
+// Creek line-art (blue water). The creek runs well past the property, so growing the map bounds to
+// fit it would zoom the whole neighborhood out — instead CLIP creek segments to the road-derived
+// worldHalfExtent and never grow bounds from them. Boundary edges of the riverbed = the water silhouette.
+const creekNode = nodeByName('Creek_SanLorenzo') || nodeByName('Creek_Banks');
+if (creekNode && creekNode.getMesh()) {
+  const cseg = dedupeSegments(boundaryEdges(readWorldTris(creekNode)), 0.8);
+  const inB = (x, z) => Math.abs(x) <= worldHalfExtent && Math.abs(z) <= worldHalfExtent;
+  const cclip = cseg.filter((s) => inB(s[0], s[1]) && inB(s[2], s[3]));
+  layers.creek.push(...cclip);
+  console.log(`  Creek_SanLorenzo   -> creek   ${cclip.length} segs (clipped to ±${worldHalfExtent} m)`);
+} else {
+  console.warn('  ! Creek mesh not found — no creek on this minimap');
+}
 
 const minimap = {
   source: cfg.src,

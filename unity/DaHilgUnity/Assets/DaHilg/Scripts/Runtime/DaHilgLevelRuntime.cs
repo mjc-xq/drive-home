@@ -50,6 +50,7 @@ namespace DaHilg
         // switching levels frees the previous GLB's memory (the instantiated GameObjects are owned
         // by the caller's level root and destroyed alongside it).
         static GltfImport s_ActiveImport;
+        static GltfImport s_ActiveOverlayImport;
 
         public static bool IsStreamedLevel(string slug)
         {
@@ -91,6 +92,7 @@ namespace DaHilg
         // Dispose the previously streamed import's CPU buffers. Safe to call when none is active.
         public static void ReleaseStreamedImport()
         {
+            if (s_ActiveOverlayImport != null) { s_ActiveOverlayImport.Dispose(); s_ActiveOverlayImport = null; }
             if (s_ActiveImport == null) return;
             s_ActiveImport.Dispose();
             s_ActiveImport = null;
@@ -123,6 +125,26 @@ namespace DaHilg
                 s_ActiveImport = import;
                 ApplyLevelOffset(root, profile);
                 PrepareLevelColliders(root);
+
+                // Layer the vegetation/water overlay (creek + instanced trees/grass that the
+                // single-surface env drops) on top, parented UNDER root so it inherits the same
+                // offset. Optional: a missing/failed overlay just leaves the bare env.
+                GameObject overlayRoot = new GameObject("Overlay");
+                overlayRoot.transform.SetParent(root.transform, false);
+                Task<GltfImport> overlayTask = LoadStreamedGltfAsync(profile.Slug + "_overlay", overlayRoot.transform);
+                while (!overlayTask.IsCompleted) yield return null;
+                GltfImport overlayImport = overlayTask.IsFaulted ? null : overlayTask.Result;
+                if (overlayImport != null)
+                {
+                    s_ActiveOverlayImport = overlayImport;
+                    PrepareLevelColliders(overlayRoot, addColliders: false); // visual only: animates water, tunes trees/grass
+                    GroundVegetationOverlay(overlayRoot); // snap trees/grass onto the re-grounded env (they keep the master's hilly heights)
+                }
+                else if (overlayRoot != null)
+                {
+                    UnityEngine.Object.Destroy(overlayRoot);
+                }
+
                 onReady?.Invoke(root);
                 yield break;
             }
@@ -184,13 +206,18 @@ namespace DaHilg
             level.transform.position = -profile.LevelOffset;
         }
 
-        public static void PrepareLevelColliders(GameObject level)
+        public static void PrepareLevelColliders(GameObject level, bool addColliders = true)
         {
             if (level == null) return;
-            s_LevelColliders.Clear();
-            // New level load: forget the previous level's facade overlay renderers (they belong to
-            // a now-destroyed root). Repopulated below as we walk this level's meshes.
-            s_FacadeRenderers.Clear();
+            if (addColliders)
+            {
+                // Fresh level load: reset the collider + facade registries (the previous level's
+                // entries belong to a now-destroyed root). The vegetation overlay reuses this method
+                // with addColliders=false and must NOT wipe these — clearing the level-collider
+                // registry (read at line ~659 for the ground check) makes actors fall through.
+                s_LevelColliders.Clear();
+                s_FacadeRenderers.Clear();
+            }
 
             MeshFilter[] filters = level.GetComponentsInChildren<MeshFilter>(true);
 
@@ -217,7 +244,10 @@ namespace DaHilg
                 bool isCollisionProxy = lower.StartsWith("collision_");
                 bool isTreeCollision = isCollisionProxy && lower.Contains("trees");
                 bool isWater = lower.Contains("water") || lower.Contains("creek") || lower.Contains("river");
-                bool useCollider = hasCollisionProxy ? isCollisionProxy && !isTreeCollision : !isWater;
+                // The vegetation/water overlay is VISUAL ONLY — the single-surface env owns collision.
+                // (Baking MeshColliders on the merged trees/grass made a 2M-tri collider that ejected
+                //  the player.) addColliders=false => tune materials + animate water, add no colliders.
+                bool useCollider = addColliders && (hasCollisionProxy ? isCollisionProxy && !isTreeCollision : !isWater);
 
                 if (isCollisionProxy && filter.TryGetComponent(out Renderer renderer))
                 {
@@ -261,7 +291,7 @@ namespace DaHilg
                     filter.gameObject.AddComponent<DaHilgWaterAnimator>();
                 }
 
-                TuneLevelSurface(filter, lower, isWater, isCollisionProxy, levelScale);
+                TuneLevelSurface(filter, lower, isWater, isCollisionProxy, levelScale, addColliders);
 
                 // Single-surface rendering passes (mirror the web Level.jsx tuning):
                 //   - the welded 'Terrain' material gets a tiling detail-normal so asphalt/concrete
@@ -337,7 +367,7 @@ namespace DaHilg
             return Mathf.Max(1f, span / k_ReferenceLevelSpan);
         }
 
-        static void TuneLevelSurface(MeshFilter filter, string lowerName, bool isWater, bool isCollisionProxy, float levelScale)
+        static void TuneLevelSurface(MeshFilter filter, string lowerName, bool isWater, bool isCollisionProxy, float levelScale, bool cullOverhang)
         {
             if (isCollisionProxy) return;
             if (!filter.TryGetComponent(out Renderer renderer) || renderer.sharedMaterial == null) return;
@@ -347,7 +377,7 @@ namespace DaHilg
             bool isVegetation = ContainsAny(key, "tree_", "trees", "grassclump", "grass_wind", "shrub", "shrubs", "reeds");
             if (isVegetation)
             {
-                TuneVegetationSurface(renderer, ContainsAny(key, "tree_", "trees"), levelScale);
+                TuneVegetationSurface(renderer, ContainsAny(key, "tree_", "trees"), levelScale, cullOverhang);
                 return;
             }
 
@@ -389,7 +419,36 @@ namespace DaHilg
             return false;
         }
 
-        static void TuneVegetationSurface(Renderer renderer, bool isTree, float levelScale)
+        // The vegetation overlay keeps the rich master's vertex heights (placed on the original hilly
+        // terrain, y 33->94), but the single-surface env was re-grounded/flattened — so trees float
+        // ~12m and grass ~20m above the new ground (off the top of the view => "no trees/grass").
+        // Raycast each plant's base onto the env ground collider and snap it down. Creek/banks/rocks
+        // are the riverbed surface itself — never lift them.
+        static void GroundVegetationOverlay(GameObject overlayRoot)
+        {
+            if (overlayRoot == null) return;
+            Renderer[] rends = overlayRoot.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < rends.Length; i++)
+            {
+                Renderer r = rends[i];
+                if (r == null) continue;
+                string lower = r.gameObject.name.ToLowerInvariant();
+                if (lower.Contains("creek") || lower.Contains("water") || lower.Contains("river")
+                    || lower.Contains("bank") || lower.Contains("rock")) continue;
+                bool isVeg = lower.Contains("tree") || lower.Contains("grass") || lower.Contains("clump")
+                             || lower.Contains("shrub") || lower.Contains("reed") || lower.Contains("bush");
+                if (!isVeg) continue;
+                Bounds b = r.bounds;
+                Vector3 worldBase = new Vector3(b.center.x, b.min.y, b.center.z);
+                if (TryFindGround(worldBase, out RaycastHit hit, 60f, 140f))
+                {
+                    float dy = hit.point.y - worldBase.y;
+                    if (dy < -0.05f || dy > 0.5f) r.transform.position += new Vector3(0f, dy + 0.02f, 0f);
+                }
+            }
+        }
+
+        static void TuneVegetationSurface(Renderer renderer, bool isTree, float levelScale, bool cullOverhang)
         {
             // Trees cast shadows (grounds them in the scene); billboards still skip
             // receiving shadows to avoid lighting artifacts on flat cards.
@@ -402,7 +461,11 @@ namespace DaHilg
                 ConfigureOpaqueMaterial(material);
             }
 
-            if (isTree && IsOverhangingTreeRenderer(renderer, levelScale))
+            // The overhang cull (absolute-y thresholds tuned for the baked env, whose ground sits
+            // near y=0 after its huge span inflates levelScale) WRONGLY hides EVERY overlay tree:
+            // this level's ground is at y~33 and the overlay's levelScale is small, so max.y>18*s
+            // fires for all of them. The overlay's trees are curated — never overhang-cull them.
+            if (cullOverhang && isTree && IsOverhangingTreeRenderer(renderer, levelScale))
             {
                 renderer.enabled = false;
                 return;

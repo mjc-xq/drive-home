@@ -46,6 +46,7 @@ namespace DaHilg
         string m_CurrentAnim;
         float m_EmoteUntil;
         float m_RollUntil;
+        float m_InvulnUntil;
         float m_RollStartedAt;
         float m_NextRollAt;
         float m_RollSide = 1f;
@@ -75,6 +76,7 @@ namespace DaHilg
         public float Speed { get; private set; }
         public bool WasJumpStartedThisFrame { get; private set; }
         public bool Rolling => Time.time < m_RollUntil;
+        public bool Invulnerable => Time.time < m_InvulnUntil;
         public float RollSideSign => m_RollSide >= 0f ? 1f : -1f;
 
         public void Initialize(DaHilgCharacterSlot slot, RuntimeAnimatorController animatorController, DaHilgGameSettings settings)
@@ -235,6 +237,7 @@ namespace DaHilg
             m_RollDirection = push.sqrMagnitude > 0.001f ? push.normalized : side;
             m_RollStartedAt = now;
             m_RollUntil = now + Mathf.Max(0.2f, settings.RollDuration);
+            m_InvulnUntil = now + Mathf.Max(0.6f, settings.RollDuration); // i-frames: the roll is a real escape
             m_NextRollAt = now + settings.RollCooldown; // honest cooldown (the old Max() clamp ate any value < 0.93)
             m_JumpQueuedTime = -100f;
             m_EmoteUntil = 0f;
@@ -273,6 +276,7 @@ namespace DaHilg
         public void TakeHit(Vector3 fromPos, float damage, float knockback, bool heavy, float now)
         {
             if (Health <= 0f) return;
+            if (Invulnerable) return; // roll i-frames: a flop dodges the hit
 
             Health = Mathf.Max(0f, Health - damage);
 

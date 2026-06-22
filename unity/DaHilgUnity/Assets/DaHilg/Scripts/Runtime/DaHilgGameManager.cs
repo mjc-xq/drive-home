@@ -15,6 +15,9 @@ namespace DaHilg
         const float k_BuriedFallT = 2.6f;  // crawl-only gate
         const float k_BuriedStopT = 5.6f;  // pinned (heavy trudge) gate
         const float k_BuriedMax = 7.2f;    // meter ceiling
+        const float k_DrainGrace = 1.2f;   // a fresh pile bleeds no HP for this long (brief contact is safe)
+        const float k_DrainRamp = 3.0f;    // then the drain eases in over this many seconds
+        float m_PileSince = -1f;           // when the current attached pile began (-1 = none)
         float m_BuriedLoad;
         float m_Struggle;
 
@@ -348,6 +351,7 @@ namespace DaHilg
 
             if (DaHilgLevelRuntime.IsStreamedLevel(slug))
             {
+                CameraRig?.SetMode(DaHilgCameraMode.ThirdPerson); // outdoor levels use the 3rd-person boom
                 m_LevelLoading = true;
                 StartCoroutine(DaHilgLevelRuntime.LoadStreamedLevel(m_CurrentLevel, root =>
                 {
@@ -371,6 +375,9 @@ namespace DaHilg
             DaHilgLevelRuntime.ApplyLevelOffset(level, m_CurrentLevel);
             m_LevelRoot = level.transform;
             DaHilgLevelRuntime.PrepareLevelColliders(level);
+            // The baked interior (house) is a small room — the 3rd-person boom jams the deoccluder and
+            // clips through walls ("unusable"). First-person sits at the eyes and reads cleanly indoors.
+            CameraRig?.SetMode(DaHilgCameraMode.FirstPerson);
             Debug.Log("[DaHilg] Level loaded: " + m_CurrentLevel.Slug + ".");
             onComplete?.Invoke();
         }
@@ -414,9 +421,10 @@ namespace DaHilg
                     // Face the street: the direction from the house (greet safe zone) out to the spawn.
                     Vector3 houseCenter = m_CurrentLevel != null && m_CurrentLevel.GreetSafeZones.Length > 0
                         ? m_CurrentLevel.GreetSafeZones[0].Center : Vector3.zero;
-                    Vector3 toStreet = grounded - houseCenter; toStreet.y = 0f;
-                    float spawnYaw = toStreet.sqrMagnitude > 0.01f
-                        ? Quaternion.LookRotation(toStreet.normalized, Vector3.up).eulerAngles.y : 0f;
+                    // Spawn on the street looking AT the house (house ahead, street behind you).
+                    Vector3 toHouse = houseCenter - grounded; toHouse.y = 0f;
+                    float spawnYaw = toHouse.sqrMagnitude > 0.01f
+                        ? Quaternion.LookRotation(toHouse.normalized, Vector3.up).eulerAngles.y : 0f;
                     actor.Teleport(grounded, spawnYaw);
                 }
                 else
@@ -780,10 +788,21 @@ namespace DaHilg
             }
             m_LastAttachedCount = attached;
 
-            if (!safe && attached > 0)
+            // Survivable swarm: a fresh pile has a grace window then the drain RAMPS in (brief contact
+            // is safe; sustained burial gets dangerous) — not instant death. A roll's i-frames pause it.
+            if (safe || attached == 0)
             {
-                float drain = Mathf.Min(Settings.NibblerHealthDrainCap, attached * Settings.NibblerHealthDrainPerAttached);
-                m_ActiveActor.Health = Mathf.Max(0f, m_ActiveActor.Health - drain * dt);
+                m_PileSince = -1f;
+            }
+            else
+            {
+                if (m_PileSince < 0f) m_PileSince = Time.time;
+                if (!m_ActiveActor.Invulnerable)
+                {
+                    float ramp = Mathf.Clamp01((Time.time - m_PileSince - k_DrainGrace) / k_DrainRamp);
+                    float drain = Mathf.Min(Settings.NibblerHealthDrainCap, attached * Settings.NibblerHealthDrainPerAttached) * ramp;
+                    m_ActiveActor.Health = Mathf.Max(0f, m_ActiveActor.Health - drain * dt);
+                }
             }
         }
 
@@ -793,6 +812,8 @@ namespace DaHilg
             if (!m_ActiveActor.StartFallRoll(Input.Move, CameraRig != null ? CameraRig.Yaw : 0f, Settings, Time.time)) return;
 
             m_LastRollAt = Time.time;
+            // Flop = panic escape: fling off a big chunk of the attached pile in one roll.
+            if (AttachedNibblerCount > 0) ShedAttached(Mathf.Clamp(Mathf.RoundToInt(0.6f * AttachedNibblerCount), 5, AttachedNibblerCount));
             m_LastRollCrushCount = Mode == DaHilgGameMode.Nibblers ? CrushNibblersByRoll() : 0;
             if (m_LastRollCrushCount > 0)
             {

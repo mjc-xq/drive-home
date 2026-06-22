@@ -181,9 +181,9 @@
 
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb?v=8decff466a3a0ae',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decff466a3a0ae',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decff466a3a0ae',
+        dataUrl: 'Build/da-hilg.data.unityweb?v=8ded00e83a52f78',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded00e83a52f78',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded00e83a52f78',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -198,7 +198,7 @@
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8decff466a3a0ae';
+      script.src = 'Build/da-hilg.loader.js?v=8ded00e83a52f78';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
