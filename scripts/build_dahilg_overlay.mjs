@@ -83,6 +83,7 @@ for (const { out, master } of MASTERS) {
         };
         const house = gather(/house_walls|^house$/i);
         const roads = gather(/^roads?$/i);
+        const walls = gather(/wall/i);   // ALL building walls (house + neighbours) for camera clearance
         // PCA of the house footprint (XZ): the long axis runs along the facade; the FRONT faces
         // perpendicular to it. Score each perpendicular side by road mass in a 60deg cone and pick the
         // side with the real street (so a side/back road never wins).
@@ -102,7 +103,10 @@ for (const { out, master } of MASTERS) {
         // at real clearance, out in front of the facade.
         const CLEAR = 11;                                   // metres of open ground wanted in front
         const wallReach = (nx, nz) => { let mx = 0; for (const p of house) { const pr = (p[0]-cx)*nx + (p[1]-cz)*nz; if (pr > mx) mx = pr; } return mx; };
-        const wallClear = (x, z) => { let m = Infinity; for (const p of house) { const d = Math.hypot(p[0]-x, p[1]-z); if (d < m) m = d; } return m; };
+        // Clearance to the NEAREST of ANY building wall (not just the target house) — keeps the spawn out
+        // of narrow gaps beside a neighbour, so the 3rd-person camera behind the player isn't walled in.
+        const clearPts = walls.length ? walls : house;
+        const wallClear = (x, z) => { let m = Infinity; for (const p of clearPts) { const d = Math.hypot(p[0]-x, p[1]-z); if (d < m) m = d; } return m; };
 
         let chosen = null, chosenN = null, viaFront = false, bestScore = -1;
         for (const [nx,nz] of normals) {

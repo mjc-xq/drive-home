@@ -247,7 +247,10 @@ namespace DaHilg
                 // Walls must be SOLID even with a collision proxy (the building proxy floats ~1.5m off
                 // the ground, so you could walk under/through walls). Doors stay collider-free = walkable.
                 bool isDoor = lower.Contains("door");
-                bool isSolidWall = !isDoor && (lower.EndsWith("_walls") || lower.EndsWith("_roof") || lower.EndsWith("_roofs"));
+                // Only WALLS are solid. Roofs were also solid, but the camera deoccluder then collided
+                // with the dense overhanging eaves and jammed a wall across the screen at spawn (you
+                // can't reach a roof anyway, so dropping its collider has no gameplay cost).
+                bool isSolidWall = !isDoor && lower.EndsWith("_walls");
                 // The vegetation/water overlay is VISUAL ONLY — the single-surface env owns collision.
                 // (Baking MeshColliders on the merged trees/grass made a 2M-tri collider that ejected
                 //  the player.) addColliders=false => tune materials + animate water, add no colliders.
