@@ -24,6 +24,9 @@ MonoBehaviour:
   - {x: 0, y: 0.05, z: 26.9}
   - {x: 30.425, y: 0.05, z: 0}
   - {x: -30.425, y: 0.05, z: -2}
+  HasPlayerSpawnYaw: 1
+  PlayerSpawnYaw: 111.5
+  WaterHeightOffset: 0.24
   NpcSpawns:
   - {x: 33.425, y: 0.05, z: 29.9}
   - {x: -33.425, y: 0.05, z: 29.9}

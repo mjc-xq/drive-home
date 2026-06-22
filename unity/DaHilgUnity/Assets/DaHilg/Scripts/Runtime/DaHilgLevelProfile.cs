@@ -29,6 +29,9 @@ namespace DaHilg
         public TextAsset Minimap;
         public Vector3 LevelOffset;
         public Vector3[] PlayerSpawns = Array.Empty<Vector3>();
+        public bool HasPlayerSpawnYaw;
+        public float PlayerSpawnYaw;
+        public float WaterHeightOffset = 0.24f;
         public Vector3[] NpcSpawns = Array.Empty<Vector3>();
         public DaHilgBoxZone[] GreetSafeZones = Array.Empty<DaHilgBoxZone>();
         public DaHilgBoxZone[] NibblerSafeZones = Array.Empty<DaHilgBoxZone>();

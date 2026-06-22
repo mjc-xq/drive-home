@@ -8,6 +8,8 @@ namespace DaHilg
     {
         const float k_StartShieldSeconds = 3f;
         const float k_StuckTime = 0.6f;
+        const float k_OutdoorNpcWanderRadius = 8f;
+        const float k_OutdoorNpcLeashRadius = 24f;
 
         // Buried-TIME overwhelm: a tier-weighted load that builds while you're piled and bleeds
         // when light, so being swarmed is a felt 2-3s arc with a GUARANTEED thrash-out — never a
@@ -44,9 +46,13 @@ namespace DaHilg
         float m_AttachFlashUntil;
         float m_LastRollAt = -999f;
         float m_PendingMeleeHitAt = -1f;
+        float m_LastMeleeAt = -999f;
+        int m_LastMeleeHits;
+        int m_LastMeleeCrushes;
         int m_LastAttachedCount;
         int m_LastRollCrushCount;
         int m_CrushedNibblerTotal;
+        DaHilgProceduralGrass m_ProceduralGrass;
         bool m_Paused;
         bool m_Won;
 
@@ -84,6 +90,9 @@ namespace DaHilg
         public float RollCooldownRemaining => m_ActiveActor != null ? m_ActiveActor.RollCooldownRemaining(Time.time) : 0f;
         public float RollCooldown01 => Settings != null ? Mathf.Clamp01(1f - RollCooldownRemaining / Mathf.Max(0.1f, Settings.RollCooldown)) : 1f;
         public int LastRollCrushCount => Time.time - m_LastRollAt <= 1.25f ? m_LastRollCrushCount : 0;
+        public int LastMeleeHits => Time.time - m_LastMeleeAt <= 1.1f ? m_LastMeleeHits : 0;
+        public int LastMeleeCrushes => Time.time - m_LastMeleeAt <= 1.1f ? m_LastMeleeCrushes : 0;
+        public bool LastMeleeMiss => Time.time - m_LastMeleeAt <= 0.65f && m_LastMeleeHits == 0;
         public int CrushedNibblerTotal => m_CrushedNibblerTotal;
         bool StartShieldActive => Mode == DaHilgGameMode.Nibblers && Time.time - m_ModeStartedAt < k_StartShieldSeconds;
 
@@ -217,6 +226,7 @@ namespace DaHilg
                 CameraRig.SnapToTarget();                    // clean cut behind the player (no spawn wall-pin)
             }
             for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].SetPlayer(m_ActiveActor.transform);
+            RefreshProceduralGrassTarget();
         }
 
         public void CycleActor(int direction)
@@ -358,6 +368,7 @@ namespace DaHilg
                 {
                     m_LevelRoot = root != null ? root.transform : null;
                     m_LevelLoading = false;
+                    RefreshProceduralGrassTarget();
                     Debug.Log("[DaHilg] Streamed level ready: " + m_CurrentLevel.Slug + " (root=" + (root != null) + ").");
                     onComplete?.Invoke();
                 }));
@@ -376,6 +387,7 @@ namespace DaHilg
             DaHilgLevelRuntime.ApplyLevelOffset(level, m_CurrentLevel);
             m_LevelRoot = level.transform;
             DaHilgLevelRuntime.PrepareLevelColliders(level);
+            RefreshProceduralGrassTarget();
             // The baked interior (house) is a small room — the 3rd-person boom jams the deoccluder and
             // clips through walls ("unusable"). First-person sits at the eyes and reads cleanly indoors.
             CameraRig?.SetMode(DaHilgCameraMode.FirstPerson);
@@ -419,14 +431,7 @@ namespace DaHilg
                 Vector3 grounded = DaHilgLevelRuntime.GroundSpawn(spawn);
                 if (slot.Id == Settings.DefaultCharacterId)
                 {
-                    // Face the street: the direction from the house (greet safe zone) out to the spawn.
-                    Vector3 houseCenter = m_CurrentLevel != null && m_CurrentLevel.GreetSafeZones.Length > 0
-                        ? m_CurrentLevel.GreetSafeZones[0].Center : Vector3.zero;
-                    // Spawn on the street looking AT the house (house ahead, street behind you).
-                    Vector3 toHouse = houseCenter - grounded; toHouse.y = 0f;
-                    float spawnYaw = toHouse.sqrMagnitude > 0.01f
-                        ? Quaternion.LookRotation(toHouse.normalized, Vector3.up).eulerAngles.y : 0f;
-                    actor.Teleport(grounded, spawnYaw);
+                    actor.Teleport(grounded, ResolveSpawnYaw(grounded));
                 }
                 else
                 {
@@ -436,6 +441,36 @@ namespace DaHilg
                 m_Actors.Add(actor);
             }
             Debug.Log("[DaHilg] Actors spawned: " + m_Actors.Count + ".");
+        }
+
+        float ResolveSpawnYaw(Vector3 groundedSpawn)
+        {
+            if (m_CurrentLevel != null && m_CurrentLevel.HasPlayerSpawnYaw)
+            {
+                return Mathf.Repeat(m_CurrentLevel.PlayerSpawnYaw, 360f);
+            }
+
+            Vector3 homeCenter = m_CurrentLevel != null && m_CurrentLevel.GreetSafeZones.Length > 0
+                ? m_CurrentLevel.GreetSafeZones[0].Center
+                : Vector3.zero;
+            Vector3 fromHome = groundedSpawn - homeCenter;
+            fromHome.y = 0f;
+            return fromHome.sqrMagnitude > 0.01f
+                ? Quaternion.LookRotation(fromHome.normalized, Vector3.up).eulerAngles.y
+                : 0f;
+        }
+
+        void RefreshProceduralGrassTarget()
+        {
+            bool outdoor = m_CurrentLevel != null && m_CurrentLevel.Slug != "house";
+            if (!outdoor || m_ActiveActor == null)
+            {
+                if (m_ProceduralGrass != null) m_ProceduralGrass.SetTarget(null);
+                return;
+            }
+
+            if (m_ProceduralGrass == null) m_ProceduralGrass = gameObject.AddComponent<DaHilgProceduralGrass>();
+            m_ProceduralGrass.SetTarget(m_ActiveActor.transform);
         }
 
         void TickNpc(DaHilgActor actor, float dt)
@@ -852,7 +887,7 @@ namespace DaHilg
             if (a == null) return;
 
             Vector3 fwd = Quaternion.Euler(0f, a.FacingYaw, 0f) * Vector3.forward;
-            float reach = a.BodyRadius + 1.8f;
+            float reach = a.BodyRadius + 2.35f;
             int hits = 0;
 
             for (int i = 0; i < m_Actors.Count; i++)
@@ -900,6 +935,11 @@ namespace DaHilg
                 Score += 1;
                 hits++;
             }
+
+            m_LastMeleeAt = Time.time;
+            m_LastMeleeHits = hits;
+            m_LastMeleeCrushes = crushed;
+            if (hits > 0) CameraRig?.Punch(0.05f + 0.015f * Mathf.Min(hits, 6), 1.4f + 0.45f * Mathf.Min(hits, 6));
         }
 
         static bool InMeleeCone(Vector3 origin, Vector3 forward, float reach, Vector3 targetPos)
@@ -908,7 +948,7 @@ namespace DaHilg
             to.y = 0f;
             float d = to.magnitude;
             if (d > reach || d <= 0.01f) return false;
-            return Vector3.Dot(to / d, forward) >= 0.25f;
+            return Vector3.Dot(to / d, forward) >= -0.05f;
         }
 
         int CrushNibblersByRoll()
@@ -1043,6 +1083,16 @@ namespace DaHilg
         // Outdoor NPC: drift gently within a small radius of its spawn, idle/wander only — no chasing.
         void TickHomebodyNpc(DaHilgActor actor, float now, float dt)
         {
+            Vector3 fromHome = actor.FeetPosition - actor.Home;
+            fromHome.y = 0f;
+            if (fromHome.magnitude > k_OutdoorNpcLeashRadius)
+            {
+                Vector3 leashTarget = actor.Home + fromHome.normalized * k_OutdoorNpcWanderRadius;
+                actor.WanderTarget = DaHilgLevelRuntime.GroundSpawn(leashTarget);
+                actor.NpcState = DaHilgNpcState.Wander;
+                actor.StateUntil = now + 10f;
+            }
+
             Vector3 toWander = actor.WanderTarget - actor.FeetPosition; toWander.y = 0f;
             if (actor.NpcState == DaHilgNpcState.Wander && toWander.magnitude >= 1.0f && now < actor.StateUntil)
             {
@@ -1057,10 +1107,10 @@ namespace DaHilg
             }
             else if (now >= actor.StateUntil) // idle/cooldown elapsed -> pick a new nearby spot
             {
-                Vector2 r = UnityEngine.Random.insideUnitCircle * 4.5f; // stay close to spawn
+                Vector2 r = UnityEngine.Random.insideUnitCircle * k_OutdoorNpcWanderRadius; // stay findable near spawn
                 actor.WanderTarget = DaHilgLevelRuntime.GroundSpawn(actor.Home + new Vector3(r.x, 0f, r.y));
                 actor.NpcState = DaHilgNpcState.Wander;
-                actor.StateUntil = now + 6f;
+                actor.StateUntil = now + 8f;
             }
             actor.StepNpc(Vector3.zero, false, Settings, dt, now);
         }

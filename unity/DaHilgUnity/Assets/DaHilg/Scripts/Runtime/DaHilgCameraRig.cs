@@ -90,7 +90,7 @@ namespace DaHilg
                 }
             }
 
-            EnsureCinemachine();
+            EnsureCinemachine(settings);
             Mode = settings.DefaultCameraMode;
             CameraPreset preset = PresetFor(Mode, settings);
             Pitch = Mode == DaHilgCameraMode.High ? 42f : Mathf.Clamp(Pitch, preset.MinPitch, preset.MaxPitch);
@@ -100,7 +100,7 @@ namespace DaHilg
             ApplyPreset(preset, 0f);
         }
 
-        void EnsureCinemachine()
+        void EnsureCinemachine(DaHilgGameSettings settings)
         {
             if (m_Camera == null) m_Camera = GetComponent<Camera>();
             m_Brain = GetComponent<CinemachineBrain>();
@@ -129,12 +129,12 @@ namespace DaHilg
             m_ThirdPersonFollow = m_VirtualCamera.GetComponent<CinemachineThirdPersonFollow>();
             if (m_ThirdPersonFollow == null) m_ThirdPersonFollow = m_VirtualCamera.gameObject.AddComponent<CinemachineThirdPersonFollow>();
 #if CINEMACHINE_PHYSICS
-            ConfigureCameraObstacleHandling();
+            ConfigureCameraObstacleHandling(settings);
 #endif
         }
 
 #if CINEMACHINE_PHYSICS
-        void ConfigureCameraObstacleHandling()
+        void ConfigureCameraObstacleHandling(DaHilgGameSettings settings)
         {
             if (m_VirtualCamera == null || m_ThirdPersonFollow == null) return;
 
@@ -144,9 +144,9 @@ namespace DaHilg
                 Enabled = true,
                 CollisionFilter = defaultLayers,
                 IgnoreTag = "Player",
-                CameraRadius = 0.32f,
-                DampingIntoCollision = 0.05f,
-                DampingFromCollision = 0.34f
+                CameraRadius = 0.18f,
+                DampingIntoCollision = 0.03f,
+                DampingFromCollision = 0.11f
             };
 
             m_Deoccluder = m_VirtualCamera.GetComponent<CinemachineDeoccluder>();
@@ -155,21 +155,21 @@ namespace DaHilg
             m_Deoccluder.IgnoreTag = "Player";
             // Keep a real gap even when fully occluded so the camera never plasters a wall across the
             // whole screen (the "spawned into a wall" feeling) — you always still see the character.
-            m_Deoccluder.MinimumDistanceFromTarget = 1.35f;
+            m_Deoccluder.MinimumDistanceFromTarget = Mathf.Clamp(settings != null ? settings.ThirdPersonMinDistance : 0.82f, 0.62f, 0.9f);
             m_Deoccluder.AvoidObstacles = new CinemachineDeoccluder.ObstacleAvoidance
             {
                 Enabled = true,
                 DistanceLimit = 0f,
                 MinimumOcclusionTime = 0f,
-                CameraRadius = 0.34f,
+                CameraRadius = 0.18f,
                 // Pull the camera toward the player whenever anything occludes the view (instead of
                 // orbiting to preserve distance, which jams/clips in tight rooms + near buildings).
                 // Keeps the player visible in EVERY camera mode + level.
                 Strategy = CinemachineDeoccluder.ObstacleAvoidance.ResolutionStrategy.PullCameraForward,
-                MaximumEffort = 5,
-                SmoothingTime = 0.04f,
-                Damping = 0.30f,
-                DampingWhenOccluded = 0.08f,
+                MaximumEffort = 3,
+                SmoothingTime = 0.02f,
+                Damping = 0.12f,
+                DampingWhenOccluded = 0.025f,
                 UseFollowTarget = new CinemachineDeoccluder.ObstacleAvoidance.FollowTargetSettings
                 {
                     Enabled = true,
@@ -179,13 +179,13 @@ namespace DaHilg
 
             m_Decollider = m_VirtualCamera.GetComponent<CinemachineDecollider>();
             if (m_Decollider == null) m_Decollider = m_VirtualCamera.gameObject.AddComponent<CinemachineDecollider>();
-            m_Decollider.CameraRadius = 0.30f;
+            m_Decollider.CameraRadius = 0.18f;
             m_Decollider.Decollision = new CinemachineDecollider.DecollisionSettings
             {
                 Enabled = true,
                 ObstacleLayers = defaultLayers,
-                Damping = 0.22f,
-                SmoothingTime = 0.04f,
+                Damping = 0.1f,
+                SmoothingTime = 0.02f,
                 UseFollowTarget = new CinemachineDecollider.DecollisionSettings.FollowTargetSettings
                 {
                     Enabled = true,
@@ -197,7 +197,7 @@ namespace DaHilg
                 Enabled = true,
                 TerrainLayers = defaultLayers,
                 MaximumRaycast = 5f,
-                Damping = 0.18f
+                Damping = 0.12f
             };
         }
 #endif
@@ -310,6 +310,24 @@ namespace DaHilg
             m_ThirdPersonFollow.VerticalArmLength = m_CurrentArm;
             m_ThirdPersonFollow.CameraSide = preset.CameraSide;
             m_ThirdPersonFollow.Damping = preset.Damping;
+#if CINEMACHINE_PHYSICS
+            bool avoidObstacles = Mode != DaHilgCameraMode.FirstPerson;
+            CinemachineThirdPersonFollow.ObstacleSettings followObstacles = m_ThirdPersonFollow.AvoidObstacles;
+            followObstacles.Enabled = avoidObstacles;
+            m_ThirdPersonFollow.AvoidObstacles = followObstacles;
+            if (m_Deoccluder != null)
+            {
+                CinemachineDeoccluder.ObstacleAvoidance avoidance = m_Deoccluder.AvoidObstacles;
+                avoidance.Enabled = avoidObstacles;
+                m_Deoccluder.AvoidObstacles = avoidance;
+            }
+            if (m_Decollider != null)
+            {
+                CinemachineDecollider.DecollisionSettings decollision = m_Decollider.Decollision;
+                decollision.Enabled = avoidObstacles;
+                m_Decollider.Decollision = decollision;
+            }
+#endif
         }
 
         static CameraPreset PresetFor(DaHilgCameraMode mode, DaHilgGameSettings settings)

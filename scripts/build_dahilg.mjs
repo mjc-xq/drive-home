@@ -33,7 +33,7 @@
  *   4. Re-run: node scripts/build_dahilg.mjs
  */
 import { execSync } from 'node:child_process';
-import { statSync, existsSync, readFileSync } from 'node:fs';
+import { statSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -83,6 +83,50 @@ function sh(cmd, env) {
 }
 function mb(p) { try { return (statSync(path.join(ROOT, p)).size / 1e6).toFixed(1) + ' MB'; } catch { return 'missing'; } }
 function banner(s) { console.log(`\n${'='.repeat(70)}\n▶ ${s}\n${'='.repeat(70)}`); }
+
+function splitUnityDataBundle() {
+  const buildDir = path.join(ROOT, 'public/unity/da-hilg/Build');
+  const dataName = 'da-hilg.data.unityweb';
+  const dataPath = path.join(buildDir, dataName);
+  if (!existsSync(dataPath)) return;
+
+  for (const file of readdirSync(buildDir)) {
+    if (file.startsWith(dataName + '.part')) unlinkSync(path.join(buildDir, file));
+  }
+
+  const data = readFileSync(dataPath);
+  const chunkSize = 4 * 1024 * 1024;
+  const chunks = [];
+  for (let offset = 0, index = 0; offset < data.length; offset += chunkSize, index++) {
+    const file = `${dataName}.part${index}`;
+    writeFileSync(path.join(buildDir, file), data.subarray(offset, Math.min(offset + chunkSize, data.length)));
+    chunks.push(file);
+  }
+  unlinkSync(dataPath);
+
+  const indexPath = path.join(ROOT, 'public/unity/da-hilg/index.html');
+  let html = readFileSync(indexPath, 'utf8');
+  const version = html.match(/dataUrl:\s*'Build\\/da-hilg\\.data\\.unityweb\\?v=([^']+)'/)?.[1] || Date.now().toString(36);
+  const partUrls = chunks.map(file => `Build/${file}?v=${version}`);
+  html = html.replace(
+    /dataUrl:\s*'Build\\/da-hilg\\.data\\.unityweb\\?v=[^']+'/,
+    `dataUrl: '',\n        dataParts: ${JSON.stringify(partUrls)}`
+  );
+  html = html.replace(
+    "      const script = document.createElement('script');",
+    `      async function assembleUnityDataUrl(partUrls) {\n        const buffers = [];\n        for (const partUrl of partUrls) {\n          const response = await fetch(partUrl, { cache: 'no-store' });\n          if (!response.ok) throw new Error('Failed to load Unity data chunk ' + partUrl + ' (' + response.status + ')');\n          buffers.push(await response.arrayBuffer());\n        }\n        const blobUrl = URL.createObjectURL(new Blob(buffers, { type: 'application/octet-stream' }));\n        window.__dahilg.dataBlobUrl = blobUrl;\n        return blobUrl;\n      }\n\n      const script = document.createElement('script');`
+  );
+  html = html.replace(
+    "      script.onload = () => {\n        createUnityInstance(canvas, config, (progress) => {",
+    "      script.onload = async () => {\n        try {\n          config.dataUrl = await assembleUnityDataUrl(config.dataParts);\n        } catch (dataErr) {\n          rememberHudError(dataErr);\n          alert(dataErr.message || dataErr);\n          return;\n        }\n        createUnityInstance(canvas, config, (progress) => {"
+  );
+  html = html.replace(
+    "          window.__dahilg.unityReady = true;\n          document.querySelector('#unity-loading-bar').style.display = 'none';",
+    "          window.__dahilg.unityReady = true;\n          if (window.__dahilg.dataBlobUrl) { URL.revokeObjectURL(window.__dahilg.dataBlobUrl); window.__dahilg.dataBlobUrl = null; }\n          document.querySelector('#unity-loading-bar').style.display = 'none';"
+  );
+  writeFileSync(indexPath, html);
+  console.log(`  split data.unityweb into ${chunks.length} chunks (${(data.length / 1e6).toFixed(1)} MB total).`);
+}
 
 // ---- stages ---------------------------------------------------------------
 function stageExport() {
@@ -142,7 +186,8 @@ function stageUnityBuild() {
   if (!log.includes('Exiting batchmode successfully') || !existsSync(data)) {
     die('Unity build failed (no success marker or missing data.unityweb — see unity-build.log)');
   }
-  console.log('  Unity build verified (success marker + data.unityweb present).');
+  splitUnityDataBundle();
+  console.log('  Unity build verified (success marker present; data.unityweb split for deploy upload).');
 }
 
 // ---- run ------------------------------------------------------------------
@@ -155,6 +200,6 @@ banner('DONE');
 console.log(`elapsed: ${((Date.now() - t0) / 1000 / 60).toFixed(1)} min`);
 if (stages.includes('assets')) for (const l of levels) console.log(`  public/da-hilg/${l.glb}.glb  ${mb(`public/da-hilg/${l.glb}.glb`)}`);
 if (stages.includes('unitybuild')) {
-  console.log(`  data.unityweb  ${mb('public/unity/da-hilg/Build/da-hilg.data.unityweb')}`);
+  console.log(`  data.unityweb parts  ${mb('public/unity/da-hilg/Build/da-hilg.data.unityweb.part0')} first chunk`);
   for (const l of levels.filter(x => x.streamed)) console.log(`  StreamingAssets/${l.slug}.glb  ${mb(`public/unity/da-hilg/StreamingAssets/${l.slug}.glb`)}`);
 }

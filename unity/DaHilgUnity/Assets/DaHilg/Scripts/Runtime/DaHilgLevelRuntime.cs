@@ -24,6 +24,11 @@ namespace DaHilg
         static readonly int s_MetallicId = Shader.PropertyToID("_Metallic");
         static readonly int s_SmoothnessId = Shader.PropertyToID("_Smoothness");
         static readonly int s_GlossinessId = Shader.PropertyToID("_Glossiness");
+        static readonly int s_SurfaceId = Shader.PropertyToID("_Surface");
+        static readonly int s_BlendId = Shader.PropertyToID("_Blend");
+        static readonly int s_SrcBlendId = Shader.PropertyToID("_SrcBlend");
+        static readonly int s_DstBlendId = Shader.PropertyToID("_DstBlend");
+        static readonly int s_ZWriteId = Shader.PropertyToID("_ZWrite");
         static readonly HashSet<Collider> s_LevelColliders = new HashSet<Collider>();
         static readonly HashSet<Material> s_ConfiguredVegetationMaterials = new HashSet<Material>();
         static readonly HashSet<Material> s_DetailNormaledTerrainMaterials = new HashSet<Material>();
@@ -138,7 +143,7 @@ namespace DaHilg
                 {
                     s_ActiveOverlayImport = overlayImport;
                     PrepareLevelColliders(overlayRoot, addColliders: false); // visual only: animates water, tunes trees/grass
-                    GroundVegetationOverlay(overlayRoot); // snap trees/grass onto the re-grounded env (they keep the master's hilly heights)
+                    GroundVegetationOverlay(overlayRoot, profile.WaterHeightOffset); // snap trees/grass/water onto the re-grounded env
                 }
                 else if (overlayRoot != null)
                 {
@@ -245,8 +250,9 @@ namespace DaHilg
                 bool isTreeCollision = isCollisionProxy && lower.Contains("trees");
                 // Only the actual water SURFACE is water. Creek_Banks/Rocks/Reeds also contain "creek"
                 // but must NOT get the blue water tint + flow animator (that's why the banks read teal).
-                bool isWater = (lower.Contains("water") || lower.Contains("creek") || lower.Contains("river"))
-                               && !lower.Contains("bank") && !lower.Contains("rock") && !lower.Contains("reed");
+                bool isWater = (lower.Contains("water") || lower.Contains("creek_sanlorenzo") || lower.Contains("river"))
+                               && !lower.Contains("bank") && !lower.Contains("rock") && !lower.Contains("reed")
+                               && !lower.Contains("flowline") && !lower.Contains("flow_line") && !lower.Contains("line");
                 // Walls must be SOLID even with a collision proxy (the building proxy floats ~1.5m off
                 // the ground, so you could walk under/through walls). Doors stay collider-free = walkable.
                 bool isDoor = lower.Contains("door");
@@ -424,7 +430,7 @@ namespace DaHilg
             MaterialPropertyBlock block = new MaterialPropertyBlock();
             renderer.GetPropertyBlock(block);
             Color tint = isWater
-                ? new Color(0.20f, 0.52f, 0.82f, 0.92f)
+                ? new Color(0.16f, 0.55f, 0.92f, 0.96f)
                 : (isRoad ? new Color(0.22f, 0.23f, 0.22f, 1f) : new Color(0.28f, 0.40f, 0.22f, 1f));
 
             if (renderer.sharedMaterial.HasProperty(s_BaseColorId)) block.SetColor(s_BaseColorId, tint);
@@ -434,11 +440,29 @@ namespace DaHilg
             if (isWater)
             {
                 Material wm = renderer.sharedMaterial;
+                ConfigureWaterMaterial(wm);
                 wm.EnableKeyword("_EMISSION");
                 wm.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
-                if (wm.HasProperty("_EmissionColor")) wm.SetColor("_EmissionColor", new Color(0.05f, 0.20f, 0.34f));
+                if (wm.HasProperty("_EmissionColor")) wm.SetColor("_EmissionColor", new Color(0.07f, 0.28f, 0.46f));
             }
             renderer.SetPropertyBlock(block);
+        }
+
+        static void ConfigureWaterMaterial(Material material)
+        {
+            if (material == null || !Application.isPlaying) return;
+
+            material.SetOverrideTag("RenderType", "Transparent");
+            if (material.HasProperty(s_SurfaceId)) material.SetFloat(s_SurfaceId, 1f);
+            if (material.HasProperty(s_BlendId)) material.SetFloat(s_BlendId, 0f);
+            if (material.HasProperty(s_SrcBlendId)) material.SetInt(s_SrcBlendId, (int)BlendMode.SrcAlpha);
+            if (material.HasProperty(s_DstBlendId)) material.SetInt(s_DstBlendId, (int)BlendMode.OneMinusSrcAlpha);
+            if (material.HasProperty(s_ZWriteId)) material.SetInt(s_ZWriteId, 0);
+            if (material.HasProperty(s_MetallicId)) material.SetFloat(s_MetallicId, 0.02f);
+            if (material.HasProperty(s_SmoothnessId)) material.SetFloat(s_SmoothnessId, 0.86f);
+            if (material.HasProperty(s_GlossinessId)) material.SetFloat(s_GlossinessId, 0.86f);
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.renderQueue = (int)RenderQueue.Transparent + 20;
         }
 
         static bool HasUsefulBaseTexture(Material material)
@@ -455,7 +479,7 @@ namespace DaHilg
         // ~12m and grass ~20m above the new ground (off the top of the view => "no trees/grass").
         // Raycast each plant's base onto the env ground collider and snap it down. Creek/banks/rocks
         // are the riverbed surface itself — never lift them.
-        static void GroundVegetationOverlay(GameObject overlayRoot)
+        static void GroundVegetationOverlay(GameObject overlayRoot, float waterHeightOffset)
         {
             if (overlayRoot == null) return;
             Renderer[] rends = overlayRoot.GetComponentsInChildren<Renderer>(true);
@@ -470,6 +494,9 @@ namespace DaHilg
                 // trees did, which is why it reads as a tiny puddle instead of a creek in its bed.
                 bool isCreek = lower.Contains("creek") || lower.Contains("water") || lower.Contains("river")
                                || lower.Contains("bank") || lower.Contains("rock");
+                bool isWaterSurface = (lower.Contains("creek_sanlorenzo") || lower.Contains("water") || lower.Contains("river"))
+                                      && !lower.Contains("bank") && !lower.Contains("rock") && !lower.Contains("reed")
+                                      && !lower.Contains("flowline") && !lower.Contains("flow_line") && !lower.Contains("line");
                 if (!isVeg && !isCreek) continue;
                 Bounds b = r.bounds;
                 Vector3 worldBase = new Vector3(b.center.x, b.min.y, b.center.z);
@@ -478,7 +505,8 @@ namespace DaHilg
                 if (TryFindGround(worldBase, out RaycastHit hit, 90f, 400f))
                 {
                     float dy = hit.point.y - worldBase.y;
-                    if (dy < -0.05f || dy > 0.05f) r.transform.position += new Vector3(0f, dy + 0.02f, 0f);
+                    float lift = isWaterSurface ? Mathf.Max(0.06f, waterHeightOffset) : 0.03f;
+                    if (isWaterSurface || dy < -0.05f || dy > 0.05f) r.transform.position += new Vector3(0f, dy + lift, 0f);
                 }
             }
         }

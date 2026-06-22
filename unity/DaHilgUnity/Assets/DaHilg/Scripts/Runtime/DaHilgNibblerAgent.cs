@@ -79,9 +79,11 @@ namespace DaHilg
             // MULTIPLY the GLB's native import scale (~0.01) by 0.32 — never overwrite it with an absolute
             // 0.32 (which made them ~32x giant) — so a nibbler is a true fraction of the real human size.
             Root = new GameObject("Nibbler_" + index.ToString("00"));
+            SetLayerRecursive(Root, LayerMask.NameToLayer("Ignore Raycast"));
             m_NibblerRoot = parent;
             Root.transform.SetParent(parent, false);
             GameObject visual = Object.Instantiate(prefab, Root.transform);
+            SetLayerRecursive(visual, LayerMask.NameToLayer("Ignore Raycast"));
             visual.transform.localPosition = Vector3.zero;
             m_VisualT = visual.transform;
             m_BaseScale = m_VisualT.localScale;
@@ -122,6 +124,16 @@ namespace DaHilg
             // wrapper; the old "Armature" lookup returned its parent → clip paths didn't resolve → T-pose.
             Transform root = FindTransformWithDirectChild(visualRoot, "Hips");
             return root != null ? root : visualRoot;
+        }
+
+        static void SetLayerRecursive(GameObject root, int layer)
+        {
+            if (root == null || layer < 0) return;
+            root.layer = layer;
+            for (int i = 0; i < root.transform.childCount; i++)
+            {
+                SetLayerRecursive(root.transform.GetChild(i).gameObject, layer);
+            }
         }
 
         static Transform FindTransformWithDirectChild(Transform parent, string childName)

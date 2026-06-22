@@ -114,7 +114,11 @@ export function setMeshVisible(scene, name, visible) {
 function makeWaterMaterial({ shallow, deep, flowDir, flowSpeed }) {
   return new THREE.ShaderMaterial({
     transparent: true,
+    depthTest: true,
     depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
     side: THREE.DoubleSide,
     uniforms: {
       uTime: { value: 0 },
@@ -123,7 +127,7 @@ function makeWaterMaterial({ shallow, deep, flowDir, flowSpeed }) {
       uFlowDir: { value: new THREE.Vector2(flowDir[0], flowDir[1]) },
       uFlowSpeed: { value: flowSpeed },
       uSunDir: { value: new THREE.Vector3(0.4, 0.85, 0.3).normalize() },
-      uOpacity: { value: 0.82 },
+      uOpacity: { value: 0.88 },
     },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
@@ -211,8 +215,8 @@ export function CreekWater({
   scene,
   flowDir = [1, 0],
   flowSpeed = 0.06,
-  shallow = '#7fd6c4',
-  deep = '#1b6e7a',
+  shallow = '#8bdfff',
+  deep = '#0f5f8e',
 }) {
   const material = useMemo(
     () => makeWaterMaterial({ shallow, deep, flowDir, flowSpeed }),
