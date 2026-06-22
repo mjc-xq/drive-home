@@ -90,19 +90,14 @@ namespace DaHilg
             {
                 if (mouse.leftButton.wasPressedThisFrame) AttackPressed = true;
 
-                if (mouse.rightButton.wasPressedThisFrame)
+                bool rightLookHeld = mouse.rightButton.isPressed;
+                if (rightLookHeld)
                 {
-                    Cursor.lockState = CursorLockMode.Locked;
-                    Cursor.visible = false;
-                }
-
-                bool pointerLocked = Cursor.lockState == CursorLockMode.Locked;
-                if (pointerLocked)
-                {
-                    LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
-                }
-                else if (mouse.rightButton.isPressed)
-                {
+                    if (Cursor.lockState != CursorLockMode.Locked)
+                    {
+                        Cursor.lockState = CursorLockMode.Locked;
+                        Cursor.visible = false;
+                    }
                     LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
                 }
                 else if (Cursor.lockState != CursorLockMode.None)
@@ -146,6 +141,7 @@ namespace DaHilg
             {
                 if (Mathf.Abs(m_TouchMove.x) > Mathf.Abs(keyboardMove.x)) keyboardMove.x = m_TouchMove.x;
                 if (Mathf.Abs(m_TouchMove.y) > Mathf.Abs(keyboardMove.y)) keyboardMove.y = m_TouchMove.y;
+                if (m_TouchMove.sqrMagnitude > 0.82f * 0.82f) RunHeld = true;
             }
 
             if (keyboardMove.sqrMagnitude > 1f) keyboardMove.Normalize();

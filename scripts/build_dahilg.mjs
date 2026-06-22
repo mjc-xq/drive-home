@@ -150,7 +150,14 @@ function stageExport() {
        { ALLOW_UNSTAMPED_SV_FACADES: '1' });
   }
 }
-function stageAssets() { banner('ASSETS — atlas + meshopt + KTX2'); sh('npm run build:dahilg-assets'); sh('node scripts/build_dahilg_overlay.mjs'); }
+function stageAssets() {
+  banner('ASSETS — atlas + meshopt + KTX2 + minimaps');
+  sh('npm run build:dahilg-assets');
+  for (const l of levels.filter(x => x.streamed)) {
+    sh(`node scripts/build_minimap.mjs ${l.slug}`);
+  }
+  sh('node scripts/build_dahilg_overlay.mjs');
+}
 function stageUnitySrc() { banner('UNITY SOURCE — decode meshopt for editor import'); sh('node scripts/build_dahilg_unity_assets.mjs'); }
 function stageUnityBuild() {
   if (macTarget) {

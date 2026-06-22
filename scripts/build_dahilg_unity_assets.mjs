@@ -292,6 +292,12 @@ for (const lv of STREAMED_LEVELS) {
   stagedCount++;
   let extras = '';
 
+  const overlaySrc = SRC(`${lv.glb}_overlay.glb`);
+  if (existsSync(overlaySrc)) {
+    copyFileSync(overlaySrc, path.join(STREAMING_DIR, `${lv.slug}_overlay.glb`));
+    extras += ' +overlay';
+  }
+
   // meta JSON -> DaHilg/Data/<meta>.json (BuildLevel reads offset/groundY/spawns from this)
   const metaSrc = SRC(`${lv.meta}.meta.json`);
   if (existsSync(metaSrc)) { copyFileSync(metaSrc, path.join(DATA_DIR, `${lv.meta}.meta.json`)); extras += ' +meta'; }

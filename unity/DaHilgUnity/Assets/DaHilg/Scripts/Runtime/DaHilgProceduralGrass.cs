@@ -119,6 +119,7 @@ namespace DaHilg
                 Vector3 sample = center + new Vector3(Mathf.Cos(angle) * dist, 0f, Mathf.Sin(angle) * dist);
                 if (!DaHilgLevelRuntime.TryFindGround(sample, out RaycastHit hit, 80f, 220f, 8f)) continue;
                 if (hit.normal.y < 0.68f || IsRejectedSurface(hit)) continue;
+                if (DaHilgLevelRuntime.IsGeneratedPavedOrWater(hit.point)) continue;
 
                 float yaw = Hash01(seed, attempt * 5 + 4) * Mathf.PI * 2f;
                 float height = Mathf.Lerp(0.30f, 0.68f, Hash01(seed, attempt * 5 + 5));

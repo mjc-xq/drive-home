@@ -1,12 +1,11 @@
-// Build the 2D minimap line-art (roads/driveways/sidewalks/curbs/lines) for Da Hilg.
+// Build the 2D minimap surface masks (roads/driveways/sidewalks/curbs/lines/water) for Da Hilg.
 //
 // Reads the SOURCE level export (exports/1840-dahill-property-trees.glb — the SAME export
 // build_dahilg_assets.mjs bakes the runtime level + level.meta.json from) — NOT public/
 // da-hilg/level.glb, whose mesh names are stripped — extracts the named road meshes (all TRIANGLES),
 // projects their vertices to RECENTERED XZ (subtract the same offset the asset build computes
-// for level.meta.json), runs BOUNDARY-EDGE extraction per mesh (undirected edges used by
-// exactly one triangle => crisp silhouette outlines), and emits a compact set of 2D segments
-// per layer to public/da-hilg/minimap.json.
+// for level.meta.json), rasterizes each named paved/water mesh into separate compact 1-bit masks,
+// keeps the creek edge strokes, and emits public/da-hilg/minimap.json.
 //
 // Run:  node scripts/build_minimap.mjs   (or: npm run build:minimap)
 import { NodeIO, Logger } from '@gltf-transform/core';
@@ -167,8 +166,8 @@ function dedupeSegments(segs, grid = 0.25) {
 // Extract each layer, accumulate global XZ bounds.
 // -------------------------------------------------------------------------------------
 const layers = { road: [], drive: [], walk: [], curb: [], line: [], creek: [] };
+const fillTrisByLayer = { road: [], drive: [], walk: [], curb: [], line: [], water: [] };
 const bounds = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity };
-const fillTris = [];
 const grow = (x, z) => {
   bounds.minX = Math.min(bounds.minX, x); bounds.maxX = Math.max(bounds.maxX, x);
   bounds.minZ = Math.min(bounds.minZ, z); bounds.maxZ = Math.max(bounds.maxZ, z);
@@ -183,17 +182,17 @@ for (const { name, layer } of LAYERS) {
     continue;
   }
   const tris = readWorldTris(node);
-  if (layer === 'road' || layer === 'drive') {
-    for (const tri of tris) fillTris.push(tri);
+  if (fillTrisByLayer[layer]) {
+    for (const tri of tris) fillTrisByLayer[layer].push(tri);
   }
   const raw = boundaryEdges(tris);
   // 0.5 m dedup grid: the minimap renders at a few hundred px across ~414 m, so sub-0.5 m
   // detail is invisible. This merges the dense co-located ribbon edges and roughly halves
   // the JSON without degrading the visible outline.
   const segs = dedupeSegments(raw, 0.5);
-  // Grow bounds from every road feature, but DON'T store the boundary segments: the solid road FILL
-  // (rasterised below) now renders the streets. Storing 112k stipple segments bloated the JSON to
-  // 2.5MB and is what read as "dots, not streets". Only the creek stays as a stroke (blue water).
+  // Grow bounds from every road feature, but DON'T store the paved boundary segments: the solid
+  // source masks below now render streets/sidewalks/paint as surfaces. Storing 112k outline
+  // fragments bloated the JSON and read as "dots, not streets". Creek stays as a stroke.
   for (const s of segs) { grow(s[0], s[1]); grow(s[2], s[3]); }
   console.log(`  ${name.padEnd(18)} -> ${layer.padEnd(6)}  ${tris.length} tris -> ${raw.length} boundary -> ${segs.length} segs (fill)`);
 }
@@ -208,25 +207,31 @@ const worldHalfExtent = Math.ceil(half);
 // worldHalfExtent and never grow bounds from them. Boundary edges of the riverbed = the water silhouette.
 const creekNode = nodeByName('Creek_SanLorenzo') || nodeByName('Creek_Banks');
 if (creekNode && creekNode.getMesh()) {
-  const cseg = dedupeSegments(boundaryEdges(readWorldTris(creekNode)), 0.8);
+  const creekTris = readWorldTris(creekNode);
+  const cseg = dedupeSegments(boundaryEdges(creekTris), 0.8);
   const inB = (x, z) => x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ;
   const cclip = cseg.filter((s) => inB(s[0], s[1]) && inB(s[2], s[3]));
   layers.creek.push(...cclip);
+  fillTrisByLayer.water.push(...creekTris.filter((t) => {
+    const xs = [t[0], t[2], t[4]];
+    const zs = [t[1], t[3], t[5]];
+    return Math.max(...xs) >= bounds.minX && Math.min(...xs) <= bounds.maxX
+        && Math.max(...zs) >= bounds.minZ && Math.min(...zs) <= bounds.maxZ;
+  }));
   console.log(`  Creek_SanLorenzo   -> creek   ${cclip.length} segs (clipped to ±${worldHalfExtent} m)`);
 } else {
   console.warn('  ! Creek mesh not found — no creek on this minimap');
 }
 
 // -------------------------------------------------------------------------------------
-// FILLED road mass (Google-Maps style solid streets). Boundary-edge strokes alone render as a
-// dotted stipple; instead rasterise every road/driveway triangle into an N x N occupancy grid
-// over the map extent, dilate so thin roads stay continuous, and ship a packed 1-bit bitmap
-// the HUD bakes into a single road texture (one draw, no per-segment stipple).
-const FILL_N = 256;
-const fillGrid = new Uint8Array(FILL_N * FILL_N);
-{
-  // Map cells over the SAME bounds the HUD's WorldToMap uses (col<-x in [minX,maxX], row<-z in
-  // [minZ,maxZ]) so the baked road texture lines up exactly with the creek strokes + actor dots.
+// FILLED map masks (Google-Maps style solid streets). Boundary-edge strokes alone render as a
+// dotted stipple; instead rasterise each source mesh into a separate N x N occupancy grid over the
+// map extent. Unity then bakes these masks into a layered road/sidewalk/paint texture and also uses
+// them for in-world paved/water overlays.
+const FILL_N = 384;
+
+function rasterizeFill(tris, dilateRadius = 1) {
+  const fillGrid = new Uint8Array(FILL_N * FILL_N);
   const bw = Math.max(1e-3, bounds.maxX - bounds.minX), bh = Math.max(1e-3, bounds.maxZ - bounds.minZ);
   const toGrid = (x, z) => [
     (x - bounds.minX) / bw * FILL_N,
@@ -236,7 +241,7 @@ const fillGrid = new Uint8Array(FILL_N * FILL_N);
   const mark = (cx, cz) => {
     if (cx >= 0 && cx < FILL_N && cz >= 0 && cz < FILL_N) fillGrid[cz * FILL_N + cx] = 1;
   };
-  for (const t of fillTris) {
+  for (const t of tris) {
     const [ax, ay] = toGrid(t[0], t[1]);
     const [bx, by] = toGrid(t[2], t[3]);
     const [cx, cy] = toGrid(t[4], t[5]);
@@ -256,33 +261,53 @@ const fillGrid = new Uint8Array(FILL_N * FILL_N);
       }
     }
   }
-  // Dilate by 1 cell so 1-cell-wide roads read as continuous ribbons, not a dotted line.
-  const src = fillGrid.slice();
-  for (let z = 0; z < FILL_N; z++) for (let x = 0; x < FILL_N; x++) {
-    if (!src[z * FILL_N + x]) continue;
-    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-      const nx = x + dx, nz = z + dz;
-      if (nx >= 0 && nx < FILL_N && nz >= 0 && nz < FILL_N) fillGrid[nz * FILL_N + nx] = 1;
+
+  // Dilate small/thin features so they stay continuous after HUD scaling.
+  for (let pass = 0; pass < dilateRadius; pass++) {
+    const src = fillGrid.slice();
+    for (let z = 0; z < FILL_N; z++) for (let x = 0; x < FILL_N; x++) {
+      if (!src[z * FILL_N + x]) continue;
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, nz = z + dz;
+        if (nx >= 0 && nx < FILL_N && nz >= 0 && nz < FILL_N) fillGrid[nz * FILL_N + nx] = 1;
+      }
     }
   }
+
+  const packed = new Uint8Array(Math.ceil(FILL_N * FILL_N / 8));
+  let cells = 0;
+  for (let i = 0; i < fillGrid.length; i++) if (fillGrid[i]) { packed[i >> 3] |= (1 << (i & 7)); cells++; }
+  return { b64: Buffer.from(packed).toString('base64'), cells };
 }
-const packed = new Uint8Array(Math.ceil(FILL_N * FILL_N / 8));
-let fillCells = 0;
-for (let i = 0; i < fillGrid.length; i++) if (fillGrid[i]) { packed[i >> 3] |= (1 << (i & 7)); fillCells++; }
-const fillRoadB64 = Buffer.from(packed).toString('base64');
-console.log(`  road fill: ${fillCells} / ${FILL_N * FILL_N} cells set (${FILL_N}x${FILL_N} grid)`);
+
+const fillMasks = {
+  road: rasterizeFill(fillTrisByLayer.road, 1),
+  drive: rasterizeFill(fillTrisByLayer.drive, 1),
+  walk: rasterizeFill(fillTrisByLayer.walk, 1),
+  curb: rasterizeFill(fillTrisByLayer.curb, 1),
+  line: rasterizeFill(fillTrisByLayer.line, 1),
+  water: rasterizeFill(fillTrisByLayer.water, 0),
+};
+for (const [name, mask] of Object.entries(fillMasks)) {
+  console.log(`  ${name.padEnd(5)} fill: ${mask.cells} / ${FILL_N * FILL_N} cells set (${FILL_N}x${FILL_N} grid)`);
+}
+const fillCells = Object.values(fillMasks).reduce((sum, mask) => sum + mask.cells, 0);
 
 const minimap = {
   source: cfg.src,
-  note: 'Recentered XZ line-art for the minimap. Coords = world XZ minus offset[0]/offset[2]. ' +
-        'Boundary-edge outlines (edges used by exactly one triangle). Segments are [x1,z1,x2,z2]. ' +
-        'fillRoad = base64 of a fillN x fillN 1-bit road occupancy grid (row-major, bit i = cell i), ' +
-        'cell (col,row) spans world [-worldHalfExtent..+worldHalfExtent] in X (col) and Z (row).',
+  note: 'Recentered XZ minimap masks. Coords = world XZ minus offset[0]/offset[2]. ' +
+        'Boundary-edge creek segments are [x1,z1,x2,z2]. fillRoad/fillDrive/fillWalk/fillCurb/fillLine/fillWater ' +
+        '= base64 of fillN x fillN 1-bit occupancy grids (row-major, bit i = cell i), mapped over bounds.',
   worldHalfExtent,
   bounds: { minX: r2(bounds.minX), minZ: r2(bounds.minZ), maxX: r2(bounds.maxX), maxZ: r2(bounds.maxZ) },
   offset: offset.map(r2),
   fillN: FILL_N,
-  fillRoad: fillRoadB64,
+  fillRoad: fillMasks.road.b64,
+  fillDrive: fillMasks.drive.b64,
+  fillWalk: fillMasks.walk.b64,
+  fillCurb: fillMasks.curb.b64,
+  fillLine: fillMasks.line.b64,
+  fillWater: fillMasks.water.b64,
   layers,
 };
 writeFileSync(OUT, JSON.stringify(minimap) + '\n');
@@ -293,8 +318,8 @@ writeFileSync(OUT, JSON.stringify(minimap) + '\n');
 console.log('\n=== ASSERTIONS ===');
 let totalSegs = 0;
 for (const [k, v] of Object.entries(layers)) totalSegs += v.length;
-if (totalSegs === 0 && fillCells === 0) throw new Error('minimap: no road fill AND no segments produced.');
-console.log(`  [pass] ${totalSegs} segments + ${fillCells} road-fill cells`);
+if (totalSegs === 0 && fillCells === 0) throw new Error('minimap: no fill masks AND no segments produced.');
+console.log(`  [pass] ${totalSegs} segments + ${fillCells} fill cells`);
 
 // every named mesh found (warn-not-fail if one is missing, per spec).
 if (missing.length) console.warn(`  ! WARNING: missing meshes (non-fatal): ${missing.join(', ')}`);

@@ -7,8 +7,8 @@ runtime code, older three.js engine work, and one-off content notes.
 ## Start here
 
 - `docs/dahilg-unity-level-review-2026-06-22.md` - Current Unity checkpoint. Read this first for
-  what went wrong, what was fixed in the June 22 pass, remaining content problems, deployment
-  notes, and the practical Unity level-editing workflow.
+  what went wrong, what was fixed in the June 22 pass, generated surface/minimap overlays,
+  remaining content problems, deployment notes, and the practical Unity level-editing workflow.
 - `docs/HANDOFF.md` - Older broad handoff for engine gotchas, asset loading, coordinate frames,
   collision, Draco/WebGL pitfalls, and verification discipline. Some sections describe the earlier
   three.js build, so treat the Unity review as newer when the two conflict.
@@ -53,8 +53,9 @@ runtime code, older three.js engine work, and one-off content notes.
 
 ## Quick choices
 
-- Need to fix water, minimap, camera deocclusion, mobile performance, spawn, melee, or current
-  Unity playability? Start with `docs/dahilg-unity-level-review-2026-06-22.md`.
+- Need to fix water, minimap masks, generated road/sidewalk overlays, camera deocclusion, mobile
+  performance, spawn, melee, or current Unity playability? Start with
+  `docs/dahilg-unity-level-review-2026-06-22.md`.
 - Need to fix ugly/missing streets, sidewalks, fences, creek bed, building facades, or raw level
   fidelity? Read `docs/dahilg-neighborhood-export.md`, then `docs/neighborhood-glb-export-spec.md`,
   then `docs/geo-export-layers.md`.

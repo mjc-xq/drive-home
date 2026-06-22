@@ -85,10 +85,10 @@
     ]
   },
   "streetSpawn": [
-    -1.29,
+    25.66,
     0.05,
-    78.8
+    72.48
   ],
-  "facing": 359.1,
-  "waterHeightOffset": 0.24
+  "facing": 19.5,
+  "waterHeightOffset": 0.1
 }

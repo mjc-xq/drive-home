@@ -1201,8 +1201,8 @@ body {
             profile.HasPlayerSpawnYaw = TryExtractFloat(json, "facing", out float facing);
             profile.PlayerSpawnYaw = profile.HasPlayerSpawnYaw ? facing : 0f;
             profile.WaterHeightOffset = TryExtractFloat(json, "waterHeightOffset", out float waterHeightOffset)
-                ? Mathf.Max(0f, waterHeightOffset)
-                : 0.24f;
+                ? Mathf.Clamp(waterHeightOffset, 0.045f, 0.16f)
+                : 0.1f;
             if (npcSpawns.Length == 0)
             {
                 npcSpawns = new[]
