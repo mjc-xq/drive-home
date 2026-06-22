@@ -78,9 +78,12 @@ export function makeBuildingColor(pick) {
     return c.map(clamp01);
   };
   const roofColor = (ib) => {
-    if (RCOL[ib]) return liftLuma(RCOL[ib], 0.48);
+    // Lower shadow-lift floor (was 0.48 — washed real dark shingle roofs to a uniform light gray);
+    // 0.34 keeps dark gray/charcoal/terracotta roofs at their true value so roofs read as varied
+    // material, not a pale sheet. Still lifts genuinely black (deep-shadow) samples off zero.
+    if (RCOL[ib]) return liftLuma(RCOL[ib], 0.34);
     const src = ROOFP[(Math.imul((ib | 0) + 1, 2654435761) >>> 0) % ROOFP.length];
-    return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.40), 0.48, seededColor(ROOF_PALETTE, ib));
+    return liftLuma(mix3(src, seededColor(ROOF_PALETTE, ib), 0.40), 0.34, seededColor(ROOF_PALETTE, ib));
   };
   return { wallColor, roofColor };
 }
