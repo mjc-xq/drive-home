@@ -907,6 +907,41 @@ const CHAR_QUANT = {
 const SIMPLIFY_VERT_THRESHOLD = 40000;     // only decimate bodies heavier than this
 const CHAR_SIMPLIFY = { targetTris: 30000, error: 0.02, minRatio: 0.10 };
 const charSrcBytes = {};
+// Lift a skinned character so its lowest foot/toe JOINT sits at y=0. Mixamo/Meshy bodies
+// export with the rig ORIGIN at the hips (feet ~1 m BELOW the origin); the runtimes place the
+// body assuming feet-at-origin, so without this the character sinks ~1 m underground. We move
+// the scene root node(s) up — three.js and Unity honor the root translate per the glTF skinning
+// spec (Blender's re-import rebinds and won't show it, so verify in-engine, not in Blender).
+function groundSkinnedRig(doc, label) {
+  const root = doc.getRoot();
+  const scene = root.listScenes()[0];
+  if (!scene) return;
+  const joints = new Set();
+  for (const sk of root.listSkins()) for (const j of sk.listJoints()) joints.add(j);
+  if (!joints.size) return;
+  const m4trs = (t, q, s) => {
+    const [x, y, z, w] = q, x2 = x + x, y2 = y + y, z2 = z + z;
+    const xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2, [sx, sy, sz] = s;
+    return [(1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0, (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0, (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0, t[0], t[1], t[2], 1];
+  };
+  const m4mul = (a, b) => {
+    const o = new Array(16);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    return o;
+  };
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  let minY = Infinity, lowest = '';
+  const walk = (n, parent) => {
+    const w = m4mul(parent, m4trs(n.getTranslation(), n.getRotation(), n.getScale()));
+    if (joints.has(n) && w[13] < minY) { minY = w[13]; lowest = n.getName(); }
+    for (const c of n.listChildren()) walk(c, w);
+  };
+  for (const n of scene.listChildren()) walk(n, I);
+  if (!isFinite(minY) || Math.abs(minY) < 1e-4) return;
+  for (const n of scene.listChildren()) { const t = n.getTranslation(); n.setTranslation([t[0], t[1] - minY, t[2]]); }
+  console.log(`    grounded ${label}: lowest foot joint '${lowest}' ${minY.toFixed(3)} m -> feet at y=0`);
+}
+
 for (const { out, src } of CHARS) {
   if (!existsSync(SRC(src))) {
     // The Mixamo body (src/assets/<id>-mx.glb) is produced by the optional FBX-convert step
@@ -920,6 +955,8 @@ for (const { out, src } of CHARS) {
   const doc = await io.read(SRC(src));
   // Remove ALL animation clips — shipped separately.
   for (const a of doc.getRoot().listAnimations()) a.dispose();
+  // Put the FEET at the origin so the rig stands ON the ground (not sunk ~1 m).
+  groundSkinnedRig(doc, out);
   // Gate decimation by source vertex count: only the heavy adult bodies cross the threshold;
   // cece/drew stay untouched. Simplify runs INSIDE meshoptPipeline (after weld, before quantize).
   const { verts: srcVerts } = countTris(doc);
