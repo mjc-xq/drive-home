@@ -54,6 +54,10 @@ namespace DaHilg
         public DaHilgLevelProfile[] Levels = Array.Empty<DaHilgLevelProfile>();
         public DaHilgCharacterSlot[] Characters = Array.Empty<DaHilgCharacterSlot>();
         public RuntimeAnimatorController CharacterAnimator;
+        // Nibbler swarm body (drew) shares the canonical skeleton with the players but uses its own
+        // controller (7 states) and prefab. Nullable for backward compatibility with older assets.
+        public RuntimeAnimatorController NibblerAnimator;
+        public GameObject NibblerPrefab;
 
         [Header("Defaults")]
         public string DefaultLevelSlug = "dahill";

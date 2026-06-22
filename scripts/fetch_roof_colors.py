@@ -15,9 +15,19 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-S = json.load(open(os.path.join(ROOT, "src/assets/scene.json")))
-A = json.load(open(os.path.join(ROOT, "exports/google_aerial.json")))
-img = Image.open(os.path.join(ROOT, "exports/google_aerial.jpg")).convert("RGB")
+
+
+def _abs(p):
+    return p if os.path.isabs(p) else os.path.join(ROOT, p)
+
+
+# Level inputs via env (shares the BCOL_* interface used by fetch_building_colors.py so the
+# orchestrator can set one pair of vars per level); falls back to dahill at the repo root.
+SCENE_PATH = _abs(os.environ.get("RCOL_SCENE") or os.environ.get("BCOL_SCENE") or "src/assets/scene.json")
+OUT_DIR = _abs(os.environ.get("RCOL_OUT") or os.environ.get("BCOL_OUT") or "exports")
+S = json.load(open(SCENE_PATH))
+A = json.load(open(os.path.join(OUT_DIR, "google_aerial.json")))
+img = Image.open(os.path.join(OUT_DIR, "google_aerial.jpg")).convert("RGB")
 W, H = img.size
 arr = np.asarray(img, dtype=np.float32)
 E0, E1, Nt, Nb = A["E0"], A["E1"], A["Nt"], A["Nb"]
@@ -58,5 +68,6 @@ for ib, b in enumerate(S["buildings"]):
     lin = srgb_to_lin(med)
     out[str(ib)] = [round(float(v), 4) for v in lin]
 
-json.dump(out, open(os.path.join(ROOT, "exports/buildings_roof_color.json"), "w"), separators=(",", ":"))
-print(f"  sampled real roof colours for {len(out)} buildings -> exports/buildings_roof_color.json")
+_outp = os.path.join(OUT_DIR, "buildings_roof_color.json")
+json.dump(out, open(_outp, "w"), separators=(",", ":"))
+print(f"  sampled real roof colours for {len(out)} buildings -> {os.path.relpath(_outp, ROOT)}")

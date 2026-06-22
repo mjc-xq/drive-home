@@ -168,7 +168,11 @@ if (S.creek && Array.isArray(S.creek.p) && S.creek.p.length > 1) {
   if (before - S.buildings.length) console.log(`creek exclusion: dropped ${before - S.buildings.length} building(s) in the creek channel`);
 }
 
-const { wallColor, roofColor } = makeBuildingColor(pick);
+// Colour sidecars load from THIS level's dir ONLY (never the root pick() fallback): a missing
+// per-level colour file must yield {} -> tasteful fallback palette, NOT another level's colour map.
+// (That cross-contamination is exactly why meemaw/xq rendered with dahill's stale 108-entry file.)
+const pickColor = (name) => R(SET.dir, name);
+const { wallColor, roofColor } = makeBuildingColor(pickColor);
 const isSchool = S.meta?.kind === 'school-region-export';
 const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terrain.demRect, isSchool, wallColor, roofColor, facade, ROOT,
   roadLines: network.surfaces.filter(s => s.kind === 'asphalt' && s.centerline).map(s => s.centerline), dropOffPatch: SET.dropOffPatch });

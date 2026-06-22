@@ -6,6 +6,9 @@ namespace DaHilg
     public sealed class DaHilgNibblerAgent
     {
         static readonly List<DaHilgNibblerAgent> s_Active = new List<DaHilgNibblerAgent>(32);
+        // One warning per missing state per session so a wrong/unwired nibbler controller (e.g. a
+        // Crawl/Bite/Climb clip that never got converted) surfaces in the log instead of silently no-oping.
+        static readonly HashSet<string> s_WarnedMissingState = new HashSet<string>();
 
         enum NibblerState
         {
@@ -67,8 +70,12 @@ namespace DaHilg
             m_Scale = scale;
             m_Index = index;
             m_Seed = Mathf.Repeat(Mathf.Sin((index + 1) * 12.9898f) * 43758.5453f, 1f);
-            m_RunClip = index % 4 == 3 ? "Walk" : "Run";
-            m_ClingClip = index % 3 == 0 ? "Attack" : "Hit";
+            // Nibbler swarm = zombie body: ground locomotion is the zombie CRAWL; a 1-in-4 seed keeps a
+            // little RUN variety so the swarm doesn't read as one looped clip. ATTACHED nibblers BITE
+            // (the player's flesh) instead of the old player Attack/Hit. These names map to the nibbler
+            // controller's distinct state set (Idle/Run/Crawl/Climb/Bite/Jump/Knockdown).
+            m_RunClip = index % 4 == 3 ? "Run" : "Crawl";
+            m_ClingClip = "Bite";
 
             // Controller root stays UNSCALED; the character is a CHILD that we scale. This matches the
             // player (capsule in metres on a scale-1 transform + native-scaled visual child) and avoids
@@ -109,6 +116,10 @@ namespace DaHilg
             m_Animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms; // don't animate the off-screen swarm
             m_Animator.speed = 0.86f + m_Seed * 0.46f;
             if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
+
+            WarnIfStateMissing("Crawl");
+            WarnIfStateMissing("Bite");
+            WarnIfStateMissing("Climb");
 
             Root.SetActive(false);
         }
@@ -397,7 +408,7 @@ namespace DaHilg
             Vector3 rest = DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale);
             // Slide from the grab pose to the bone-local rest spot (the "climb on" settle), in bone space.
             Root.transform.localPosition = Vector3.MoveTowards(Root.transform.localPosition, rest, (m_ClimbSpeed + 0.6f) * dt);
-            Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, Quaternion.identity, 1f - Mathf.Exp(-14f * dt));
+            Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, ClingLocalRotation(player, m_AttachedParent), 1f - Mathf.Exp(-14f * dt));
             Play("Climb", 0.12f);
             if (Vector3.Distance(Root.transform.localPosition, rest) < 0.01f) { m_State = NibblerState.Attached; m_StateTime = 0f; }
             return true;
@@ -420,7 +431,7 @@ namespace DaHilg
             Vector3 gravLocal = m_AttachedParent.InverseTransformDirection(Vector3.down) * 0.01f;
             Vector3 bob = gravLocal * (0.5f + 0.5f * Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index));
             Root.transform.localPosition = Vector3.Lerp(Root.transform.localPosition, rest + bob, 1f - Mathf.Exp(-18f * dt));
-            Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, Quaternion.identity, 1f - Mathf.Exp(-10f * dt));
+            Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, ClingLocalRotation(player, m_AttachedParent), 1f - Mathf.Exp(-10f * dt));
             Play(m_ClingClip, 0.16f);
             return true;
         }
@@ -642,6 +653,26 @@ namespace DaHilg
             Root.transform.rotation = Quaternion.Slerp(Root.transform.rotation, target, 1f - Mathf.Exp(-22f * dt));
         }
 
+        // While clinging, orient the nibbler FEET-TOWARD-BODY (its up/head points radially OUTWARD
+        // from the player's vertical axis) so it grips the surface like a climbing creature — on the
+        // back, chest, hip or leg alike — instead of snapping to the attach bone's arbitrary local
+        // axis (which differs per bone on the Mixamo rig). Computed in WORLD, returned in the parent
+        // bone's local space so it composes with the childed transform.
+        Quaternion ClingLocalRotation(DaHilgActor player, Transform bone)
+        {
+            float h = Mathf.Clamp(Root.transform.position.y - player.FeetPosition.y, 0.1f, Mathf.Max(0.2f, player.BodyHeight));
+            Vector3 axisPoint = player.FeetPosition + Vector3.up * h;
+            Vector3 outward = Root.transform.position - axisPoint;
+            outward.y *= 0.25f; // mostly horizontal — hug the roughly cylindrical torso
+            if (outward.sqrMagnitude < 1e-4f) outward = -(Quaternion.Euler(0f, player.FacingYaw, 0f) * Vector3.forward);
+            outward.Normalize();
+            Vector3 forward = Vector3.Cross(outward, Vector3.up);
+            if (forward.sqrMagnitude < 1e-4f) forward = Vector3.Cross(outward, Vector3.forward);
+            forward.Normalize();
+            Quaternion world = Quaternion.LookRotation(forward, outward); // up = outward => head out, feet on body
+            return Quaternion.Inverse(bone.rotation) * world;
+        }
+
         void Play(string state, float fade)
         {
             if (m_Animator == null || m_Anim == state) return;
@@ -650,6 +681,17 @@ namespace DaHilg
             {
                 m_Animator.CrossFade(hash, fade);
                 m_Anim = state;
+            }
+        }
+
+        void WarnIfStateMissing(string state)
+        {
+            if (m_Animator == null || m_Animator.runtimeAnimatorController == null) return;
+            if (m_Animator.HasState(0, Animator.StringToHash("Base Layer." + state))) return;
+            if (s_WarnedMissingState.Add(state))
+            {
+                Debug.LogWarning("[DaHilgNibblerAgent] Nibbler controller is missing state '" + state
+                    + "' — that motion will no-op (check the nibbler animator / converted clip).");
             }
         }
 

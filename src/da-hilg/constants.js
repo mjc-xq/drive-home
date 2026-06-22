@@ -6,10 +6,12 @@
 import { currentLevel } from './level/levels.js';
 
 // ── Characters ──────────────────────────────────────────────────────────────
+// Roster source of truth: config/dahilg-roster.json (cece=player default, mike/kelli=players,
+// drew=nibbler). All four family members are active again (new Mixamo rigs for everyone).
 export const CHARACTERS = ['mike', 'kelli', 'cece', 'drew'];
 export const CHARACTER_LABELS = { mike: 'Mike', kelli: 'Kelli', cece: 'Cece', drew: 'Drew' };
 // Optional one-line flavor for HUD tiles.
-export const CHARACTER_BLURB = { mike: 'Dad', kelli: 'Mom', cece: 'Kid', drew: 'Kid' };
+export const CHARACTER_BLURB = { mike: 'Dad', kelli: 'Mom', cece: 'Kid', drew: 'Zombie' };
 
 // Optimized, meshopt-compressed assets served from public/da-hilg/ (stable URLs).
 export const CHARACTER_URL = {

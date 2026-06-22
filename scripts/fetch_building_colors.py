@@ -41,10 +41,13 @@ import geo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-PLACES = {"dahill", "canyon-middle-school", "stanton-elementary"}
+PLACES = {"dahill", "canyon-middle-school", "stanton-elementary", "meemaw", "xq"}
 
-# --- place resolution (place arg optional + position-agnostic vs the radius) ---
-PLACE = "dahill"
+# --- level resolution -------------------------------------------------------
+# Preferred: the env-var interface (mirrors fetch_sv_facades.py) so EVERY level fetches into its
+# OWN sidecar dir and reads its OWN scene origin — no level is hardcoded. BCOL_SCENE / BCOL_OUT may
+# be absolute or relative to ROOT. Falls back to the legacy positional `place` arg for back-compat.
+PLACE = os.environ.get("BCOL_PLACE", "dahill")
 rest = []
 for a in sys.argv[1:]:
     if a in PLACES:
@@ -52,7 +55,15 @@ for a in sys.argv[1:]:
     else:
         rest.append(a)
 
-if PLACE == "dahill":
+
+def _abs(p):
+    return p if os.path.isabs(p) else os.path.join(ROOT, p)
+
+
+if os.environ.get("BCOL_SCENE"):
+    SCENE_PATH = _abs(os.environ["BCOL_SCENE"])
+    OUT_DIR = _abs(os.environ.get("BCOL_OUT", os.path.dirname(SCENE_PATH)))
+elif PLACE == "dahill":
     SCENE_PATH = os.path.join(ROOT, "src", "assets", "scene.json")
     OUT_DIR = os.path.join(ROOT, "exports")
 else:

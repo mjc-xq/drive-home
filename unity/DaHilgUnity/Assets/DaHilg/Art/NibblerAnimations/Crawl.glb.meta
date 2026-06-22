@@ -1,12 +1,12 @@
 fileFormatVersion: 2
-guid: 92edf880c2b29453e9970245247f4c71
+guid: f055ae1c51a0242ab9787b69de9d4d14
 ScriptedImporter:
   internalIDToNameTable: []
   externalObjects: {}
   serializedVersion: 2
-  userData:
-  assetBundleName:
-  assetBundleVariant:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
   script: {fileID: 11500000, guid: 715df9372183c47e389bb6e19fbc3b52, type: 3}
   editorImportSettings:
     generateSecondaryUVSet: 0
@@ -25,14 +25,4 @@ ScriptedImporter:
     lightIntensityFactor: 1
     sceneObjectCreation: 2
   assetDependencies: []
-  reportItems:
-  - type: 0
-    code: 37
-    messages:
-    - meshoptimizer decompression for Unity
-    - EXT_meshopt_compression
-  - type: 0
-    code: 37
-    messages:
-    - KTX for Unity
-    - KHR_texture_basisu
+  reportItems: []

@@ -21,6 +21,7 @@ namespace DaHilg.Editor
         const string k_ScenePath = k_Root + "/Scenes/DaHilg.unity";
         const string k_SettingsPath = k_SettingsDir + "/DaHilgGameSettings.asset";
         const string k_ControllerPath = k_SettingsDir + "/DaHilgCharacter.controller";
+        const string k_NibblerControllerPath = k_SettingsDir + "/DaHilgNibbler.controller";
         const string k_CharacterControllerDir = k_SettingsDir + "/CharacterControllers";
         const string k_AnimalControllerDir = k_SettingsDir + "/AnimalControllers";
         const string k_PanelSettingsPath = k_Root + "/UI/DaHilgPanelSettings.asset";
@@ -52,6 +53,160 @@ namespace DaHilg.Editor
             "Stumble",
             "Climb"
         };
+        // The nibbler swarm body (drew) shares the canonical skeleton + the shared motion library, but
+        // exposes its own smaller state set. Player & nibbler reuse state NAMES (Idle/Run/Crawl/Climb)
+        // so their clip OUTPUTS live in separate folders (Art/Animations vs Art/NibblerAnimations).
+        static readonly string[] s_NibblerAnimationStates =
+        {
+            "Idle",
+            "Run",
+            "Crawl",
+            "Climb",
+            "Bite",
+            "Jump",
+            "Knockdown"
+        };
+
+        // Build-time roster, read from config/dahilg-roster.json (the single source of truth shared by
+        // the JS, web, and Unity build agents). Role=="player" rows populate s_Characters; the single
+        // Role=="nibbler" row populates s_NibblerCharacterId.
+        [Serializable]
+        struct CharacterDef
+        {
+            public string Id;
+            public string Label;
+            public string Blurb;
+            public Color Accent;
+            public float YawOffset;
+            public bool IsDefault;
+            public string Role;
+        }
+
+        // JSON mirrors of config/dahilg-roster.json for JsonUtility.FromJson. accent is a [r,g,b] array,
+        // which JsonUtility can't map to Color directly, so it is parsed as float[] and converted.
+        [Serializable]
+        class RosterJson
+        {
+            public RosterCharacterJson[] characters;
+        }
+
+        [Serializable]
+        class RosterCharacterJson
+        {
+            public string id;
+            public string body;
+            public string role;
+            public bool isDefault;
+            public string label;
+            public string blurb;
+            public float[] accent;
+            public float yawOffset;
+        }
+
+        static CharacterDef[] s_CharactersCache;
+        static string s_NibblerCharacterIdCache;
+
+        static CharacterDef[] s_Characters
+        {
+            get
+            {
+                EnsureRosterLoaded();
+                return s_CharactersCache;
+            }
+        }
+
+        static string s_NibblerCharacterId
+        {
+            get
+            {
+                EnsureRosterLoaded();
+                return s_NibblerCharacterIdCache;
+            }
+        }
+
+        static string DefaultCharacterId()
+        {
+            CharacterDef[] characters = s_Characters;
+            for (int i = 0; i < characters.Length; i++)
+            {
+                if (characters[i].IsDefault) return characters[i].Id;
+            }
+            return characters.Length > 0 ? characters[0].Id : "cece";
+        }
+
+        static void EnsureRosterLoaded()
+        {
+            if (s_CharactersCache != null) return;
+
+            // Application.dataPath = <repo>/unity/DaHilgUnity/Assets, so the repo root (which holds
+            // config/) is THREE levels up — matching the repoRoot computation used elsewhere in this
+            // file (parent of parent of the Unity project dir). Two "../" would land in unity/config.
+            string rosterPath = Path.GetFullPath(Path.Combine(Application.dataPath, "../../../config/dahilg-roster.json"));
+            if (!File.Exists(rosterPath))
+            {
+                throw new FileNotFoundException("Da Hilg roster manifest not found.", rosterPath);
+            }
+
+            RosterJson roster = JsonUtility.FromJson<RosterJson>(File.ReadAllText(rosterPath));
+            if (roster == null || roster.characters == null || roster.characters.Length == 0)
+            {
+                throw new InvalidOperationException("Da Hilg roster manifest is empty: " + rosterPath);
+            }
+
+            List<CharacterDef> players = new List<CharacterDef>();
+            string nibblerId = null;
+            for (int i = 0; i < roster.characters.Length; i++)
+            {
+                RosterCharacterJson c = roster.characters[i];
+                if (string.IsNullOrEmpty(c.id) || string.IsNullOrEmpty(c.role))
+                {
+                    throw new InvalidOperationException("Da Hilg roster row " + i + " is missing id or role.");
+                }
+
+                Color accent = c.accent != null && c.accent.Length >= 3
+                    ? new Color(c.accent[0], c.accent[1], c.accent[2])
+                    : Color.white;
+                CharacterDef def = new CharacterDef
+                {
+                    Id = c.id,
+                    Label = c.label,
+                    Blurb = c.blurb,
+                    Accent = accent,
+                    YawOffset = c.yawOffset,
+                    IsDefault = c.isDefault,
+                    Role = c.role
+                };
+
+                if (string.Equals(c.role, "player", StringComparison.OrdinalIgnoreCase))
+                {
+                    players.Add(def);
+                }
+                else if (string.Equals(c.role, "nibbler", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (nibblerId != null)
+                    {
+                        throw new InvalidOperationException("Da Hilg roster defines more than one nibbler character.");
+                    }
+                    nibblerId = c.id;
+                }
+                else
+                {
+                    throw new InvalidOperationException("Da Hilg roster row '" + c.id + "' has unknown role '" + c.role + "'.");
+                }
+            }
+
+            if (players.Count == 0)
+            {
+                throw new InvalidOperationException("Da Hilg roster defines no player characters.");
+            }
+            if (string.IsNullOrEmpty(nibblerId))
+            {
+                throw new InvalidOperationException("Da Hilg roster defines no nibbler character.");
+            }
+
+            s_CharactersCache = players.ToArray();
+            s_NibblerCharacterIdCache = nibblerId;
+        }
         static readonly HashSet<string> s_GroundedHipClips = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "Idle",
@@ -89,9 +244,10 @@ namespace DaHilg.Editor
             SyncSourceAssets();
             SyncSupplementalSourceAssets();
             Dictionary<string, AnimatorController> controllers = BuildAnimatorControllers();
+            AnimatorController nibblerController = BuildNibblerController();
             Dictionary<string, AnimatorController> animalControllers = BuildAnimalControllers();
             DaHilgLevelProfile[] levels = BuildLevelProfiles(animalControllers);
-            DaHilgGameSettings settings = BuildSettings(levels, controllers);
+            DaHilgGameSettings settings = BuildSettings(levels, controllers, nibblerController);
             BuildScene(settings);
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -647,10 +803,16 @@ body {
                 throw new DirectoryNotFoundException("Unity source asset bridge did not produce " + source);
             }
 
-            CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Characters"), "*.glb", "drew", "cece", "mike", "kelli");
+            // The character allowlist is the roster's player ids PLUS the nibbler id (cece + mike +
+            // drew). kelli is retired: not in the allowlist, so it is neither copied in nor kept.
+            string[] characterIds = CharacterAllowlist();
+            string charactersDir = Path.Combine(Application.dataPath, "DaHilg/Art/Characters");
+            CopyFiles(source, charactersDir, "*.glb", characterIds);
+            PruneGlb(charactersDir, characterIds);
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Levels"), "*.glb", "level", "canyon", "stanton", "meemaw", "xq");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art"), "*.glb", "sun3d");
             CopyFiles(Path.Combine(source, "anims"), Path.Combine(Application.dataPath, "DaHilg/Art/Animations"), "*.glb");
+            CopyFiles(Path.Combine(source, "nibbler-anims"), Path.Combine(Application.dataPath, "DaHilg/Art/NibblerAnimations"), "*.glb");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Data"), "*.json");
             CopyFiles(source, Path.Combine(Application.dataPath, "DaHilg/Art/Textures"), "sun.png");
             AssetDatabase.Refresh();
@@ -709,6 +871,34 @@ body {
             Debug.Log("[DaHilg] Supplemental source assets synced.");
         }
 
+        // The full set of character GLB basenames that belong in Art/Characters: the roster's player
+        // ids plus the single nibbler id. Drives both the copy-in allowlist and the prune.
+        static string[] CharacterAllowlist()
+        {
+            CharacterDef[] players = s_Characters;
+            string[] ids = new string[players.Length + 1];
+            for (int i = 0; i < players.Length; i++) ids[i] = players[i].Id;
+            ids[players.Length] = s_NibblerCharacterId;
+            return ids;
+        }
+
+        // Delete any *.glb in a folder whose basename is not in the allowlist (plus its .meta), so a
+        // retired character (e.g. kelli) self-cleans from Art/Characters on the next sync.
+        static void PruneGlb(string dir, string[] allowlist)
+        {
+            if (!Directory.Exists(dir)) return;
+            HashSet<string> keep = new HashSet<string>(allowlist, StringComparer.OrdinalIgnoreCase);
+            foreach (string file in Directory.GetFiles(dir, "*.glb"))
+            {
+                string name = Path.GetFileNameWithoutExtension(file);
+                if (keep.Contains(name)) continue;
+                File.Delete(file);
+                string meta = file + ".meta";
+                if (File.Exists(meta)) File.Delete(meta);
+                Debug.Log("[DaHilg] Pruned retired character GLB: " + Path.GetFileName(file));
+            }
+        }
+
         static void EnsureFolders()
         {
             string[] folders =
@@ -719,6 +909,7 @@ body {
                 k_Root + "/Art/Levels",
                 k_Root + "/Art/Animals",
                 k_Root + "/Art/Animations",
+                k_Root + "/Art/NibblerAnimations",
                 k_Root + "/Data",
                 k_Root + "/Scenes",
                 k_Root + "/Scripts",
@@ -742,31 +933,48 @@ body {
 
         static Dictionary<string, AnimatorController> BuildAnimatorControllers()
         {
-            Dictionary<string, AnimationClip> clips = LoadAnimationClips();
+            Dictionary<string, AnimationClip> clips = LoadAnimationClips(k_Root + "/Art/Animations");
             Dictionary<string, AnimatorController> controllers = new Dictionary<string, AnimatorController>();
-            string[] characterIds = { "mike", "kelli", "cece", "drew" };
+            CharacterDef[] characters = s_Characters;
+            string defaultId = DefaultCharacterId();
 
             for (int i = 0; i < s_CharacterAnimationStates.Length; i++)
             {
                 AssetDatabase.DeleteAsset(k_GeneratedAnimationDir + "/" + s_CharacterAnimationStates[i] + ".anim");
             }
 
-            for (int i = 0; i < characterIds.Length; i++)
+            for (int i = 0; i < characters.Length; i++)
             {
-                string id = characterIds[i];
+                string id = characters[i].Id;
                 GameObject targetPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Characters/" + id + ".glb");
                 if (targetPrefab == null)
                 {
                     throw new InvalidOperationException("Missing Da Hilg character prefab for animation retargeting: " + id + ".");
                 }
 
-                string controllerPath = id == "cece"
+                string controllerPath = id == defaultId
                     ? k_ControllerPath
                     : k_CharacterControllerDir + "/" + id + ".controller";
-                controllers[id] = BuildAnimatorController(id, targetPrefab, clips, controllerPath);
+                // Players source from the shared player clip dict (Art/Animations).
+                controllers[id] = BuildAnimatorController(id, targetPrefab, clips, controllerPath, s_CharacterAnimationStates, k_Root + "/Art/Animations");
             }
 
             return controllers;
+        }
+
+        // The nibbler swarm body (drew) reuses the canonical skeleton + the shared motion library but
+        // its clips are namespaced under Art/NibblerAnimations and it exposes only the 7 nibbler states.
+        static AnimatorController BuildNibblerController()
+        {
+            string id = s_NibblerCharacterId;
+            GameObject targetPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Characters/" + id + ".glb");
+            if (targetPrefab == null)
+            {
+                throw new InvalidOperationException("Missing Da Hilg nibbler prefab for animation retargeting: " + id + ".");
+            }
+
+            Dictionary<string, AnimationClip> clips = LoadAnimationClips(k_Root + "/Art/NibblerAnimations");
+            return BuildAnimatorController(id, targetPrefab, clips, k_NibblerControllerPath, s_NibblerAnimationStates, k_Root + "/Art/NibblerAnimations");
         }
 
         static Dictionary<string, AnimatorController> BuildAnimalControllers()
@@ -827,7 +1035,7 @@ body {
             return null;
         }
 
-        static AnimatorController BuildAnimatorController(string characterId, GameObject targetPrefab, Dictionary<string, AnimationClip> clips, string controllerPath)
+        static AnimatorController BuildAnimatorController(string characterId, GameObject targetPrefab, Dictionary<string, AnimationClip> clips, string controllerPath, string[] states, string sourceDir)
         {
             AnimatorController controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
             if (controller == null)
@@ -839,13 +1047,13 @@ body {
             ClearStates(machine);
 
             AnimatorState idle = null;
-            for (int i = 0; i < s_CharacterAnimationStates.Length; i++)
+            for (int i = 0; i < states.Length; i++)
             {
-                string stateName = s_CharacterAnimationStates[i];
+                string stateName = states[i];
                 AnimatorState state = machine.AddState(stateName, new Vector3(260f, 60f + i * 48f, 0f));
                 if (clips.TryGetValue(stateName.ToLowerInvariant(), out AnimationClip clip))
                 {
-                    state.motion = RetargetAnimationClip(characterId, stateName, clip, targetPrefab);
+                    state.motion = RetargetAnimationClip(characterId, stateName, clip, targetPrefab, sourceDir);
                 }
                 state.writeDefaultValues = true;
                 if (stateName == "Idle") idle = state;
@@ -868,10 +1076,10 @@ body {
             }
         }
 
-        static Dictionary<string, AnimationClip> LoadAnimationClips()
+        static Dictionary<string, AnimationClip> LoadAnimationClips(string dir)
         {
             Dictionary<string, AnimationClip> clips = new Dictionary<string, AnimationClip>();
-            string[] guids = AssetDatabase.FindAssets("t:AnimationClip", new[] { k_Root + "/Art/Animations" });
+            string[] guids = AssetDatabase.FindAssets("t:AnimationClip", new[] { dir });
             foreach (string guid in guids)
             {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
@@ -889,13 +1097,19 @@ body {
             return clips;
         }
 
-        static AnimationClip RetargetAnimationClip(string characterId, string stateName, AnimationClip source, GameObject targetPrefab)
+        static AnimationClip RetargetAnimationClip(string characterId, string stateName, AnimationClip source, GameObject targetPrefab, string sourceDir)
         {
-            GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Animations/" + stateName.ToLowerInvariant() + ".glb");
+            GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(sourceDir + "/" + stateName.ToLowerInvariant() + ".glb");
             if (sourcePrefab == null)
             {
-                throw new InvalidOperationException("Missing source animation rig for " + stateName + ".");
+                throw new InvalidOperationException("Missing source animation rig for " + stateName + " in " + sourceDir + ".");
             }
+
+            // The animation binding root = the node whose DIRECT child is "Hips" (the Armature wrapper
+            // on re-exported rigs). Curve paths are authored RELATIVE to it and therefore start at
+            // "Hips" — exactly what the runtime's ResolveAnimatorRoot expects (it puts the Animator on
+            // this same node). Computing paths from this root, not the GLB root, keeps the prefix off.
+            Transform boneRoot = FindTransformWithDirectChild(targetPrefab.transform, "Hips") ?? targetPrefab.transform;
 
             string assetPath = k_GeneratedAnimationDir + "/" + characterId + "_" + stateName + ".anim";
             AnimationClip clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(assetPath);
@@ -966,7 +1180,12 @@ body {
                 if (curves[0] == null || curves[1] == null || curves[2] == null || curves[3] == null) continue;
 
                 AnimationCurve[] retargeted = RetargetRotationCurves(curves, sourceBone.localRotation, targetBone.localRotation);
-                string path = RetargetBindingPath(pair.Key);
+                // Bind to the RESOLVED target bone's path (not the source path). The old code passed the
+                // source path through, so DONOR clips (whose rig differs from cece/mike/drew) bound to
+                // non-existent Mixamo paths and only the legs animated. Deriving the path from the bone
+                // that TryFindRetargetBones actually resolved guarantees the curve lands on a real bone.
+                string path = RetargetBindingPathFromBone(boneRoot, targetBone);
+                AssertTargetPathExists(boneRoot, path, characterId, stateName);
                 SetTransformCurves(clip, path, "m_LocalRotation.", retargeted);
             }
 
@@ -978,7 +1197,8 @@ body {
                 if (curves[0] == null || curves[1] == null || curves[2] == null) continue;
 
                 AnimationCurve[] retargeted = RetargetHipPositionCurves(stateName, curves, sourceBone.localPosition, targetBone.localPosition);
-                string path = RetargetBindingPath(pair.Key);
+                string path = RetargetBindingPathFromBone(boneRoot, targetBone);
+                AssertTargetPathExists(boneRoot, path, characterId, stateName);
                 SetTransformCurves(clip, path, "m_LocalPosition.", retargeted);
             }
 
@@ -992,7 +1212,30 @@ body {
             string boneName = LastPathSegment(sourcePath);
             sourceBone = FindDeepChild(sourceRoot, boneName);
             targetBone = FindDeepChild(targetRoot, boneName);
+            if (targetBone == null)
+            {
+                string alias = CanonicalBoneAlias(boneName);
+                if (alias != null) targetBone = FindDeepChild(targetRoot, alias);
+            }
             return sourceBone != null && targetBone != null;
+        }
+
+        // Legacy DONOR rigs (dad.glb / family-anims.glb / jack-hartmann.glb — non-Mixamo) name the
+        // trunk Spine/Spine01/Spine02/neck; the canonical shared Mixamo skeleton uses
+        // Spine/Spine1/Spine2/Neck. Map donor trunk names onto the canonical bone so donor-sourced
+        // states (Jump/Wave/Cheer/Stumble) drive the full mid/upper back + neck instead of shipping
+        // with a frozen torso. (Spine and Head already match by name.)
+        static string CanonicalBoneAlias(string name)
+        {
+            switch (name)
+            {
+                case "Spine01": return "Spine1";
+                case "Spine02": return "Spine2";
+                case "Spine03": return "Spine2";
+                case "neck": return "Neck";
+                case "Neck01": return "Neck";
+                default: return null;
+            }
         }
 
         static AnimationCurve[] RetargetRotationCurves(AnimationCurve[] sourceCurves, Quaternion sourceRest, Quaternion targetRest)
@@ -1119,10 +1362,34 @@ body {
             }
         }
 
-        static string RetargetBindingPath(string path)
+        // Curve binding path for a resolved target bone, RELATIVE to boneRoot (the animation binding
+        // root = the node whose direct child is "Hips"). Walks bone.parent up to — but EXCLUDING —
+        // boneRoot, joining names with '/'. e.g. for <Armature>/Hips/Spine/Spine2 this yields
+        // "Hips/Spine/Spine2" — paths START at "Hips" (no "Armature/" prefix), matching both
+        // FindAnimationBindingRoot here and the runtime's ResolveAnimatorRoot.
+        static string RetargetBindingPathFromBone(Transform boneRoot, Transform bone)
         {
-            const string prefix = "Armature/";
-            return path.StartsWith(prefix, StringComparison.Ordinal) ? path.Substring(prefix.Length) : path;
+            List<string> parts = new List<string>();
+            Transform current = bone;
+            while (current != null && current != boneRoot)
+            {
+                parts.Add(current.name);
+                current = current.parent;
+            }
+            parts.Reverse();
+            return string.Join("/", parts);
+        }
+
+        // Hard guard against the silently-frozen-torso class of bug: a retargeted curve must address a
+        // real transform under boneRoot, or the clip would write to nowhere and ship broken.
+        static void AssertTargetPathExists(Transform boneRoot, string path, string characterId, string stateName)
+        {
+            if (boneRoot.Find(path) == null)
+            {
+                throw new InvalidOperationException("Da Hilg retarget produced a dangling curve path for "
+                    + characterId + " " + stateName + ": '" + path + "' resolves to no transform under "
+                    + boneRoot.name + ".");
+            }
         }
 
         static bool IsHipsPath(string path)
@@ -1334,7 +1601,7 @@ body {
             };
         }
 
-        static DaHilgGameSettings BuildSettings(DaHilgLevelProfile[] levels, Dictionary<string, AnimatorController> controllers)
+        static DaHilgGameSettings BuildSettings(DaHilgLevelProfile[] levels, Dictionary<string, AnimatorController> controllers, AnimatorController nibblerController)
         {
             DaHilgGameSettings settings = AssetDatabase.LoadAssetAtPath<DaHilgGameSettings>(k_SettingsPath);
             if (settings == null)
@@ -1343,9 +1610,10 @@ body {
                 AssetDatabase.CreateAsset(settings, k_SettingsPath);
             }
 
+            string defaultId = DefaultCharacterId();
             settings.Levels = levels;
-            settings.CharacterAnimator = controllers.TryGetValue("cece", out AnimatorController defaultController) ? defaultController : null;
-            settings.DefaultCharacterId = "cece";
+            settings.CharacterAnimator = controllers.TryGetValue(defaultId, out AnimatorController defaultController) ? defaultController : null;
+            settings.DefaultCharacterId = defaultId;
             settings.DefaultLevelSlug = "dahill";
             settings.DefaultMode = DaHilgGameMode.Nibblers;
             settings.DefaultCameraMode = DaHilgCameraMode.ThirdPerson;
@@ -1374,13 +1642,28 @@ body {
             settings.RollCrushRadius = 1.38f;
             settings.RollCrushBodyHeight = 1.08f;
             settings.RollCrushScore = 35;
-            settings.Characters = new[]
+            // Selectable players come straight from the roster (cece + mike). drew is NOT a player slot;
+            // it is the nibbler swarm body, wired separately below.
+            CharacterDef[] players = s_Characters;
+            DaHilgCharacterSlot[] slots = new DaHilgCharacterSlot[players.Length];
+            for (int i = 0; i < players.Length; i++)
             {
-                Character("mike", "Mike", "Dad", new Color(0.36f, 0.68f, 1f), 0f, controllers),
-                Character("kelli", "Kelli", "Mom", new Color(1f, 0.67f, 0.35f), 0f, controllers),
-                Character("cece", "Cece", "Kid", new Color(1f, 0.45f, 0.76f), 0f, controllers),
-                Character("drew", "Drew", "Kid", new Color(0.42f, 1f, 0.58f), 0f, controllers)
-            };
+                CharacterDef def = players[i];
+                slots[i] = Character(def.Id, def.Label, def.Blurb, def.Accent, def.YawOffset, controllers);
+            }
+            settings.Characters = slots;
+
+            // Nibbler swarm body: its own controller (7 states) + prefab. The runtime agent reads these.
+            settings.NibblerAnimator = nibblerController;
+            settings.NibblerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_Root + "/Art/Characters/" + s_NibblerCharacterId + ".glb");
+            if (settings.NibblerAnimator == null)
+            {
+                throw new InvalidOperationException("Da Hilg nibbler animator controller was not built.");
+            }
+            if (settings.NibblerPrefab == null)
+            {
+                throw new InvalidOperationException("Da Hilg nibbler prefab is missing: " + s_NibblerCharacterId + ".glb.");
+            }
             EditorUtility.SetDirty(settings);
             return settings;
         }
@@ -1628,14 +1911,21 @@ body {
             {
                 DaHilgCharacterSlot slot = settings.Characters[i];
                 if (slot.Prefab == null) continue;
-                ValidateAnimatorController(slot.Id, slot.AnimatorController != null ? slot.AnimatorController : settings.CharacterAnimator);
+                ValidateAnimatorController(slot.Id, slot.AnimatorController != null ? slot.AnimatorController : settings.CharacterAnimator, s_CharacterAnimationStates);
                 checkedControllers++;
             }
 
             if (checkedControllers == 0) throw new InvalidOperationException("No Da Hilg character animation controllers were checked.");
-            ValidateCharacterPrefabAnimationBindings(settings);
 
-            Debug.Log("[DaHilg] Character animations validated for " + checkedControllers + " controllers and " + s_CharacterAnimationStates.Length + " states.");
+            // The nibbler (drew) is not a Characters slot, so verify its 7-state controller + prefab here.
+            if (settings.NibblerAnimator == null) throw new InvalidOperationException("Da Hilg nibbler animator controller is missing.");
+            if (settings.NibblerPrefab == null) throw new InvalidOperationException("Da Hilg nibbler prefab is missing.");
+            ValidateAnimatorController(s_NibblerCharacterId, settings.NibblerAnimator, s_NibblerAnimationStates);
+
+            ValidateCharacterPrefabAnimationBindings(settings);
+            ValidateNibblerPrefabAnimationBindings(settings);
+
+            Debug.Log("[DaHilg] Character animations validated for " + checkedControllers + " controllers and " + s_CharacterAnimationStates.Length + " states (+ nibbler " + s_NibblerAnimationStates.Length + " states).");
         }
 
         static void ValidateAnimalAnimationAssets()
@@ -1673,7 +1963,7 @@ body {
             Debug.Log("[DaHilg] Animal animations validated for " + checkedAnimals + " spawn groups.");
         }
 
-        static AnimatorStateMachine ValidateAnimatorController(string owner, RuntimeAnimatorController runtimeController)
+        static AnimatorStateMachine ValidateAnimatorController(string owner, RuntimeAnimatorController runtimeController, string[] requiredStates)
         {
             AnimatorController controller = runtimeController as AnimatorController;
             if (controller == null) throw new InvalidOperationException("Da Hilg animation controller was not built for " + owner + ".");
@@ -1690,9 +1980,9 @@ body {
             animator.runtimeAnimatorController = controller;
             try
             {
-                for (int i = 0; i < s_CharacterAnimationStates.Length; i++)
+                for (int i = 0; i < requiredStates.Length; i++)
                 {
-                    string stateName = s_CharacterAnimationStates[i];
+                    string stateName = requiredStates[i];
                     AnimatorState state = FindAnimatorState(machine, stateName);
                     if (state == null)
                     {
@@ -1793,6 +2083,77 @@ body {
 
             if (checkedCharacters == 0) throw new InvalidOperationException("No Da Hilg character prefabs were checked for animation bindings.");
             Debug.Log("[DaHilg] Character prefab animation bindings validated for " + checkedCharacters + " characters.");
+        }
+
+        // The nibbler (drew) is not in Settings.Characters, so ValidateCharacterPrefabAnimationBindings
+        // skips it. Verify its locomotion still moves real bones: a Run-or-Crawl clip on its controller
+        // must rotate sampled bones by > 2deg between two clip times (the same frozen-torso guard).
+        static void ValidateNibblerPrefabAnimationBindings(DaHilgGameSettings settings)
+        {
+            if (settings.NibblerPrefab == null) throw new InvalidOperationException("Da Hilg nibbler prefab is missing.");
+            AnimatorController controller = settings.NibblerAnimator as AnimatorController;
+            if (controller == null) throw new InvalidOperationException("Da Hilg nibbler animation controller is missing.");
+
+            AnimatorStateMachine machine = controller.layers[0].stateMachine;
+            string moveState = null;
+            AnimationClip moveClip = null;
+            string[] moveCandidates = { "Run", "Crawl" };
+            for (int i = 0; i < moveCandidates.Length; i++)
+            {
+                AnimatorState state = FindAnimatorState(machine, moveCandidates[i]);
+                if (state != null && state.motion is AnimationClip clip)
+                {
+                    moveState = moveCandidates[i];
+                    moveClip = clip;
+                    break;
+                }
+            }
+            if (moveClip == null) throw new InvalidOperationException(s_NibblerCharacterId + " nibbler Run/Crawl animation clip is missing.");
+
+            GameObject character = PrefabUtility.InstantiatePrefab(settings.NibblerPrefab) as GameObject;
+            if (character == null) character = UnityEngine.Object.Instantiate(settings.NibblerPrefab);
+            character.name = "NibblerAnimationValidation_" + s_NibblerCharacterId;
+
+            try
+            {
+                Transform bindingRoot = FindAnimationBindingRoot(character.transform, moveClip);
+                Animator animator = bindingRoot.GetComponent<Animator>();
+                if (animator == null) animator = bindingRoot.gameObject.AddComponent<Animator>();
+                animator.applyRootMotion = false;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                animator.runtimeAnimatorController = controller;
+
+                float t1 = 0.2f;
+                float t2 = 0.65f;
+                int hash = Animator.StringToHash("Base Layer." + moveState);
+                animator.Rebind();
+                animator.Update(0f);
+                animator.Play(hash, 0, t1);
+                animator.Update(0f);
+                Quaternion[] q1 = CaptureBoneRotations(bindingRoot);
+                animator.Play(hash, 0, t2);
+                animator.Update(0f);
+                Quaternion[] q2 = CaptureBoneRotations(bindingRoot);
+                float maxAngle = 0f;
+                for (int j = 0; j < q1.Length && j < q2.Length; j++)
+                {
+                    maxAngle = Mathf.Max(maxAngle, Quaternion.Angle(q1[j], q2[j]));
+                }
+
+                if (maxAngle < 2f)
+                {
+                    throw new InvalidOperationException(s_NibblerCharacterId + " nibbler " + moveState
+                        + " clip did not move sampled bones from binding root "
+                        + TransformPath(character.transform, bindingRoot) + ". Max sampled angle: "
+                        + maxAngle.ToString("0.###") + ".");
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(character);
+            }
+
+            Debug.Log("[DaHilg] Nibbler prefab animation bindings validated (" + moveState + ").");
         }
 
         static void ValidateGroundedEmoteFooting(string owner, Transform bindingRoot, Animator animator, AnimatorStateMachine machine)

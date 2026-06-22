@@ -166,12 +166,15 @@ namespace DaHilg
 
         // Back-weighted, off-center bone slots (WORLD-metre offsets) so a swarm distributes over the
         // WHOLE body — back/head/shoulders/hips/legs/feet — not piled on the front face. Bone names are
-        // verified to exist in all character GLBs (no Chest/Neck).
+        // the stripped Mixamo standard skeleton; Spine=belt, Spine2=chest, LeftLeg=shin
+        // (LeftUpLeg=thigh, unused). The two upper-back/shoulder-height anchors target Spine2 (chest)
+        // so the swarm rides the torso, not the pelvis; a Spine1 (mid-torso) fills the gap between.
         static readonly (string bone, Vector3 off)[] k_BoneSpec =
         {
             ("Spine",     new Vector3( 0.00f, 0.05f, -0.10f)),
-            ("Spine",     new Vector3( 0.11f, 0.02f, -0.06f)),
-            ("Spine",     new Vector3(-0.11f, 0.02f, -0.06f)),
+            ("Spine1",    new Vector3( 0.00f, 0.06f, -0.09f)),
+            ("Spine2",    new Vector3( 0.11f, 0.02f, -0.06f)),
+            ("Spine2",    new Vector3(-0.11f, 0.02f, -0.06f)),
             ("Head",      new Vector3( 0.00f, 0.11f,  0.01f)),
             ("Head",      new Vector3( 0.07f, 0.05f, -0.05f)),
             ("LeftShoulder",  new Vector3(-0.03f, 0.02f, -0.02f)),
@@ -187,13 +190,28 @@ namespace DaHilg
             ("RightFoot", new Vector3( 0.02f, 0.03f, -0.02f)),
         };
 
+        // One warning per missing bone per session so a rig that lacks an expected anchor (e.g. a
+        // re-export that dropped Spine2) surfaces in the log instead of silently shrinking the swarm spread.
+        static readonly HashSet<string> s_WarnedMissingBone = new HashSet<string>();
+
         BoneAnchor[] BuildNibblerBones(Transform visualRoot)
         {
+            // Anchors are authored for a ~1.7m rig; scale the WORLD-metre offsets by the real body height
+            // so they track a taller/shorter Mixamo rig (e.g. a 1.9m dad) instead of clustering low.
+            float heightScale = m_BodyHeight / 1.7f;
             List<BoneAnchor> list = new List<BoneAnchor>(k_BoneSpec.Length);
             for (int i = 0; i < k_BoneSpec.Length; i++)
             {
                 Transform b = FindDeepChild(visualRoot, k_BoneSpec[i].bone);
-                if (b != null) list.Add(new BoneAnchor { Bone = b, LocalOffset = k_BoneSpec[i].off });
+                if (b != null)
+                {
+                    list.Add(new BoneAnchor { Bone = b, LocalOffset = k_BoneSpec[i].off * heightScale });
+                }
+                else if (s_WarnedMissingBone.Add(k_BoneSpec[i].bone))
+                {
+                    Debug.LogWarning("[DaHilgActor] Rig is missing bone '" + k_BoneSpec[i].bone
+                        + "' — that nibbler anchor is dropped (check the character GLB skeleton).");
+                }
             }
             if (list.Count == 0)
             {

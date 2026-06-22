@@ -22,17 +22,27 @@ import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
 import { ktx2CompressDoc } from './lib/ktx2_pass.mjs';
 import { atlasFacades } from './atlas_facades.mjs';
-import { mkdirSync, statSync, existsSync, copyFileSync } from 'node:fs';
+import { mkdirSync, statSync, existsSync, copyFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, ...p);
+
+// ---- ROSTER MANIFEST: single source of truth for the character set ------------------
+// config/dahilg-roster.json lists the three dahilg characters (cece/mike/drew) with their
+// Mixamo body GLB, role (player|nibbler), default flag, and HUD label/blurb/accent. The
+// JS asset pipeline, the C# Unity build, and the web menu all read THIS file so the roster
+// is defined in exactly one place. We derive the character mesh build list (CHARS) and the
+// summary stat filter from it below.
+const ROSTER = JSON.parse(readFileSync(SRC('config', 'dahilg-roster.json'), 'utf8'));
+const CHARACTERS = ROSTER.characters;
 // OUT_DIR is env-overridable so a targeted rebuild (e.g. one level after a facade re-fetch) can
 // write to a scratch dir and copy back only the file it changed — avoiding churn on the other
 // (LFS-tracked) GLBs. Default = the shipped public/da-hilg.
 const OUT_DIR = process.env.DAHILG_OUT || SRC('public', 'da-hilg');
-const ANIM_DIR = path.join(OUT_DIR, 'anims');
+const ANIM_DIR = path.join(OUT_DIR, 'anims');                 // PLAYER motion outputs
+const NIBBLER_ANIM_DIR = path.join(OUT_DIR, 'nibbler-anims'); // NIBBLER motion outputs (distinct namespace)
 const OUT = (...p) => path.join(OUT_DIR, ...p);
 
 // ---- IO: register BOTH meshopt + draco so we can READ draco sources and WRITE meshopt ----
@@ -54,6 +64,7 @@ await MeshoptSimplifier.ready;
 
 mkdirSync(OUT_DIR, { recursive: true });
 mkdirSync(ANIM_DIR, { recursive: true });
+mkdirSync(NIBBLER_ANIM_DIR, { recursive: true });
 
 const mb = (bytes) => (bytes / 1e6).toFixed(2) + ' MB';
 const written = [];          // { path, bytes } for the final summary
@@ -540,51 +551,122 @@ for (const lv of LEVELS) {
 // -------------------------------------------------------------------------------------
 console.log('\n[2/4] anims (clip-only GLBs)');
 
-// Canonical clip table: key -> { src, clip, stripRootXZ }
-// Most clips now come from the shared family-anims.glb. The four character rigs share
-// these 24 Mixamo-style bone NAMES, but their Meshy/local rest transforms are not all
-// identical; runtime binding retargets rotations by rest-pose delta before creating
-// AnimationActions. Build-time still strips unsafe foreign translations/scale.
-const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';
-// jack-hartmann.glb shares the SAME 24 bone names as family-anims/dad, so its clips bind
-// to the shared rig with no remap — we source the cleaner locomotion + the new
-// climb/crawl/stumble/hit/knockdown set from it.
-const JACK_ANIMS = 'src/assets/jack-hartmann.glb';
-const ANIMS = [
-  { key: 'idle',  src: 'src/assets/anim/drew-idle.glb', clip: 'Armature|Boxing_Warmup|baselayer' },
-  // walk/run now come from jack-hartmann (cleaner gait than the old Flirty_Strut). Both
-  // travel forward, so stripRootXZ pins them in place — the capsule drives world position.
-  { key: 'walk',  src: JACK_ANIMS,                      clip: 'Walking',                  stripRootXZ: true },
-  { key: 'run',   src: JACK_ANIMS,                      clip: 'Running',                  stripRootXZ: true },
-  { key: 'jump',  src: 'src/assets/dad.glb',            clip: '360_Power_Spin_Jump' },
-  { key: 'dance', src: FAMILY_ANIMS,                    clip: 'Love_You_Pop_Dance' },
-  { key: 'wave',  src: FAMILY_ANIMS,                    clip: 'Agree_Gesture' },
-  { key: 'cheer', src: FAMILY_ANIMS,                    clip: 'Cheer_with_Both_Hands_Up' },
-  // Aggressive clip the Nibbler swarm rides while clinging — a downward ground slam.
-  { key: 'attack', src: FAMILY_ANIMS,                   clip: 'Charged_Ground_Slam' },
-  // --- jack-hartmann gameplay clips (nibblers / downed player) ---
-  // climb: the player scaling a wall with nibblers clinging — authored in-place, loops.
-  { key: 'climb',     src: JACK_ANIMS, clip: 'Climb_Left_with_Both_Limbs_inplace' },
-  // crawl: the downed player crawling forward — loops; pin XZ so the capsule drives position.
-  { key: 'crawl',     src: JACK_ANIMS, clip: 'Climb_Right_with_Both_Limbs',        stripRootXZ: true },
-  // stumble: an off-balance walk — loops; pin XZ so the capsule drives position.
-  { key: 'stumble',   src: JACK_ANIMS, clip: 'Stumble_Walk',                       stripRootXZ: true },
-  // hit: a one-shot flinch — played anchored, keep its (in-place) authored motion.
-  { key: 'hit',       src: JACK_ANIMS, clip: 'Hit_Reaction' },
-  // knockdown: a one-shot fall — played anchored, keep its authored fall motion.
-  { key: 'knockdown', src: JACK_ANIMS, clip: 'Knock_Down' },
+// ---- SHARED MOTION LIBRARY ----------------------------------------------------------
+// CORE PRINCIPLE: ALL characters share ONE canonical (Mixamo, plain-name) skeleton, so
+// motions are a SHARED, REUSABLE pool — any clip binds to any character. The library is
+// the union of the converted per-character contribution clips (cece-mx-anims, mike-mx-anims,
+// drew-mx-anims) plus a few surviving legacy DONOR GLBs for gap states. The role-based maps
+// below PICK from this pool and emit ONE shared output per state into a role-namespaced
+// output dir (anims/ for players, nibbler-anims/ for nibblers). Player & nibbler share state
+// NAMES (Idle/Run/Climb/...), so the separate output folders keep their files from colliding
+// — that is OUTPUT namespacing, NOT library siloing.
+//
+// Shared-library source GLBs (each character's converted contribution). These are produced
+// by the optional FBX-convert step (build_dahilg.mjs --convert); the motion maps reference
+// them by path. DONOR GLBs are the surviving legacy clip sources used for gap states.
+const CECE_ANIMS = 'src/assets/anim/cece-mx-anims.glb';
+const MIKE_ANIMS = 'src/assets/anim/mike-mx-anims.glb';
+const DREW_ANIMS = 'src/assets/anim/drew-mx-anims.glb';
+const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';   // DONOR (Wave/Cheer)
+const DAD_DONOR = 'src/assets/dad.glb';                    // DONOR (Jump)
+const JACK_DONOR = 'src/assets/jack-hartmann.glb';         // DONOR (Stumble)
+
+// PLAYER motion map (13 states) — shared by cece AND mike. state -> { src, clip, stripRootXZ, noLoop }.
+// `noLoop`/`loop` are recorded for downstream (Unity controller authoring) but do not change the
+// build output; this stage only writes the clip channels. stripRootXZ pins in-place locomotion.
+const PLAYER_ANIMS = [
+  { key: 'Idle',      src: CECE_ANIMS, clip: 'Idle' },
+  { key: 'Walk',      src: CECE_ANIMS, clip: 'Catwalk_Walk',              stripRootXZ: true, loop: true },
+  { key: 'Run',       src: DREW_ANIMS, clip: 'Goofy_Running',            stripRootXZ: true, loop: true },
+  { key: 'Jump',      src: DAD_DONOR,  clip: '360_Power_Spin_Jump',                         noLoop: true },
+  { key: 'Dance',     src: CECE_ANIMS, clip: 'Breakdance_1990',                              loop: true },
+  { key: 'Wave',      src: FAMILY_ANIMS, clip: 'Agree_Gesture',                              noLoop: true },
+  { key: 'Cheer',     src: FAMILY_ANIMS, clip: 'Cheer_with_Both_Hands_Up',                   noLoop: true },
+  { key: 'Attack',    src: MIKE_ANIMS, clip: 'Punching',                                     noLoop: true },
+  { key: 'Hit',       src: CECE_ANIMS, clip: 'Standing_Death_Left_01_v2',                    noLoop: true },
+  { key: 'Stumble',   src: JACK_DONOR, clip: 'Stumble_Walk',             stripRootXZ: true, loop: true },
+  { key: 'Knockdown', src: CECE_ANIMS, clip: 'Fallen_Idle',                                  noLoop: true },
+  { key: 'Crawl',     src: DREW_ANIMS, clip: 'Crawling',                 stripRootXZ: true, loop: true },
+  { key: 'Climb',     src: DREW_ANIMS, clip: 'Climbing',                                     loop: true },
 ];
 
-// Load dad's skeleton bone names once — assertion (B) checks every clip channel binds
-// to one of these (the shared rig means clips retarget to any character with no remap).
-const dadDoc = await io.read(SRC('src/assets/dad.glb'));
-const dadBones = new Set(dadDoc.getRoot().listSkins()[0].listJoints().map((j) => j.getName()));
-console.log(`  dad rig: ${dadBones.size} bones`);
+// NIBBLER motion map (7 states) — drew (the zombie swarm body). Separate OUTPUT folder so
+// Idle/Run/Climb/Jump/Knockdown don't collide with the player set of the same name; the
+// SOURCE motions are still the same shared pool.
+const NIBBLER_ANIMS = [
+  { key: 'Idle',      src: CECE_ANIMS, clip: 'Idle' },
+  { key: 'Run',       src: DREW_ANIMS, clip: 'Running_Crawl',            stripRootXZ: true, loop: true },
+  { key: 'Crawl',     src: DREW_ANIMS, clip: 'Zombie_Crawl',            stripRootXZ: true, loop: true },
+  { key: 'Climb',     src: DREW_ANIMS, clip: 'Climbing',                                     loop: true },
+  { key: 'Bite',      src: DREW_ANIMS, clip: 'Zombie_Biting',                                loop: true },
+  { key: 'Jump',      src: DAD_DONOR,  clip: '360_Power_Spin_Jump',                         noLoop: true },
+  { key: 'Knockdown', src: CECE_ANIMS, clip: 'Fallen_Idle',                                  noLoop: true },
+];
+
+// ---- self-check (step 5): assert every role-namespaced motion output exists -----------
+// Exported so build_dahilg.mjs can re-verify before launching Unity, AND run inline at the
+// tail of section [2/4]. Fails fast in JS (here) BEFORE the slow Unity batchmode build.
+export function assertAnimOutputsExist() {
+  const missing = [];
+  for (const a of PLAYER_ANIMS) {
+    const p = path.join(ANIM_DIR, `${a.key.toLowerCase()}.glb`);
+    if (!existsSync(p)) missing.push(path.relative(ROOT, p));
+  }
+  for (const a of NIBBLER_ANIMS) {
+    const p = path.join(NIBBLER_ANIM_DIR, `${a.key.toLowerCase()}.glb`);
+    if (!existsSync(p)) missing.push(path.relative(ROOT, p));
+  }
+  if (missing.length) {
+    throw new Error(
+      `SELF-CHECK FAILED: ${missing.length} motion output(s) missing (expected ` +
+      `${PLAYER_ANIMS.length} player + ${NIBBLER_ANIMS.length} nibbler GLBs): ${missing.join(', ')}`,
+    );
+  }
+  console.log(`  self-check OK: ${PLAYER_ANIMS.length} player + ${NIBBLER_ANIMS.length} nibbler motion GLBs present`);
+}
+
+// ---- per-source rig joints (for assertion B), cached ---------------------------------
+// Assertion (B) checks every surviving clip channel binds to a bone that actually exists in
+// the rig the clip CAME FROM (a Mixamo library clip from <id>-mx-anims.glb retargets to that
+// id's <id>-mx.glb joints; a DONOR clip uses the donor GLB's own joints). For each source clip
+// GLB we resolve its companion rig and load its skin joint names ONCE. Mapping:
+//   <id>-mx-anims.glb -> <id>-mx.glb (the converted Mixamo body for that id)
+//   any other (donor) GLB -> the donor GLB itself (it carries its own skinned mesh + skin)
+const CORE_BONES = new Set([
+  'Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head',
+  'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
+  'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand',
+  'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot',
+]);
+// Never PRE-STRIP these even if a particular rig is missing a leaf — they carry the trunk
+// motion and stripping one would tear the retarget at the waist/neck.
+const NEVER_PRESTRIP = new Set(['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck']);
+
+const rigJointsCache = new Map();   // sourceGLB rel path -> Set<boneName>
+function rigGlbForSource(src) {
+  // src/assets/anim/<id>-mx-anims.glb -> src/assets/<id>-mx.glb
+  const m = /\/anim\/([a-z0-9]+)-mx-anims\.glb$/i.exec(src);
+  if (m) return `src/assets/${m[1]}-mx.glb`;
+  return src;   // donor: the GLB carries its own skin
+}
+async function rigJoints(src) {
+  const rigGlb = rigGlbForSource(src);
+  if (rigJointsCache.has(rigGlb)) return rigJointsCache.get(rigGlb);
+  const doc = await io.read(SRC(rigGlb));
+  const skin = doc.getRoot().listSkins()[0];
+  if (!skin) {
+    throw new Error(`rig source "${rigGlb}" (for clips in ${src}) has no skin — cannot resolve target bones for assertion (B).`);
+  }
+  const set = new Set(skin.listJoints().map((j) => j.getName()));
+  rigJointsCache.set(rigGlb, set);
+  return set;
+}
 
 // Build one clip-only GLB. Strategy: read the source fresh, drop every animation except
 // the chosen one, rename it to the canonical key, then strip ALL meshes/skins so only the
 // node hierarchy that the channels target remains, then prune + meshopt + write.
-async function buildAnim({ key, src, clip, stripRootXZ }) {
+//   - outDir: ANIM_DIR (player) or NIBBLER_ANIM_DIR (nibbler) — output namespacing.
+async function buildAnim({ key, src, clip, stripRootXZ, outDir = ANIM_DIR }) {
   const doc = await io.read(SRC(src));
   const root = doc.getRoot();
 
@@ -597,6 +679,32 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   // Drop the other clips.
   for (const a of root.listAnimations()) if (a !== target) a.dispose();
   target.setName(key);
+
+  // Resolve the target bone set PER CLIP = the joints of the rig the channels live in (this
+  // clip's own source character's *-mx.glb, or the donor GLB's own skin). Used both to
+  // PRE-STRIP leaf-only channels below and by assertion (B).
+  const targetBones = await rigJoints(src);
+
+  // -------- PRE-STRIP foreign-leaf channels --------
+  // Different rigs carry different finger/thumb/*_End leaves (cece=33, mike=41 w/ thumbs,
+  // drew~33). A clip may animate a leaf bone that exists in ITS source rig's joint list but
+  // the assertion target rig lacks (harmless — name-binding drops absent ones at runtime).
+  // Drop rotation/position channels whose target bone is NOT in targetBones so assertion (B)
+  // stays clean across the mixed leaf sets — but NEVER strip the core trunk bones (Hips/Spine/
+  // Spine1/Spine2/Neck): stripping one would tear the retarget. We only pre-strip leaves.
+  let preStripped = 0;
+  for (const ch of target.listChannels()) {
+    const node = ch.getTargetNode();
+    const nm = node ? node.getName() : null;
+    if (!nm || targetBones.has(nm) || NEVER_PRESTRIP.has(nm)) continue;
+    const sampler = ch.getSampler();
+    ch.dispose();
+    if (sampler && sampler.listParents().filter((p) => p.propertyType !== 'Root').length === 0) {
+      sampler.dispose();
+    }
+    preStripped++;
+  }
+  if (preStripped) console.log(`    ${key}: pre-stripped ${preStripped} foreign-leaf channel(s) not in the clip's rig joints`);
 
   // -------- SKIN-SAFE RETARGET: drop unsafe translation + scale channels --------
   // The clips are shared across all 4 characters by bone NAME (no remap). A Mixamo clip
@@ -667,17 +775,20 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   // meshopt the (tiny, mesh-free) doc so it carries EXT_meshopt_compression like the rest.
   await doc.transform(meshopt({ encoder: MeshoptEncoder, level: 'high' }));
 
-  // Assertion (B): every channel target node name must exist in dad's bone set.
+  // Assertion (B): every surviving channel target node name must exist in THIS CLIP's rig
+  // joint set (the source character's *-mx.glb joints, or the donor GLB's own skin). After
+  // the foreign-leaf pre-strip above this should be 0; any remaining mismatch is a real
+  // structural break (a core bone renamed or a clip targeting a node the rig never had).
   let unmatched = 0;
   const channels = target.listChannels();
   for (const ch of channels) {
     const node = ch.getTargetNode();
     const nm = node ? node.getName() : '(null)';
-    if (!dadBones.has(nm)) unmatched++;
+    if (!targetBones.has(nm)) unmatched++;
   }
   if (unmatched !== 0) {
     throw new Error(`ASSERTION (B) FAILED: anim "${key}" has ${unmatched} channel(s) ` +
-      `targeting nodes outside dad's rig — named-bone retarget would break.`);
+      `targeting nodes outside its source rig (${rigGlbForSource(src)}) — named-bone retarget would break.`);
   }
 
   // Assertion (C): NO bone but Hips may keep a translation channel, and NO scale channel
@@ -700,26 +811,32 @@ async function buildAnim({ key, src, clip, stripRootXZ }) {
   }
   console.log(`    ${key}: ${channels.length} channels, 0 unmatched, only Hips translates, no scale (skin-safe)`);
 
-  await writeAndVerify(doc, path.join(ANIM_DIR, `${key}.glb`), { label: `anim:${key}` });
+  // Lowercase the on-disk filename: the Unity builder loads the source rig as
+  // <state>.ToLowerInvariant()+".glb", so a TitleCase file breaks the nibbler/player rig load
+  // on a case-sensitive filesystem (Linux/CI). Keep the in-GLB clip name as-is (key).
+  await writeAndVerify(doc, path.join(outDir, `${key.toLowerCase()}.glb`), { label: `anim:${key}` });
 }
 
-for (const a of ANIMS) await buildAnim(a);
+// PLAYER set (shared by cece + mike) -> public/da-hilg/anims/<State>.glb
+console.log('  -- player motion set (anims/) --');
+for (const a of PLAYER_ANIMS) await buildAnim({ ...a, outDir: ANIM_DIR });
+// NIBBLER set (drew) -> public/da-hilg/nibbler-anims/<State>.glb  (distinct output namespace)
+console.log('  -- nibbler motion set (nibbler-anims/) --');
+for (const a of NIBBLER_ANIMS) await buildAnim({ ...a, outDir: NIBBLER_ANIM_DIR });
+
+// ---- FAST SELF-CHECK (step 5): all role-namespaced outputs exist before any Unity launch.
+// Fails in JS HERE, not 30 min into the Unity batchmode build, if a state's GLB is missing.
+assertAnimOutputsExist();
 
 // -------------------------------------------------------------------------------------
 // 3) CHARACTERS: 4 meshes, meshopt + webp, ALL embedded animation clips REMOVED
 //    (we ship anims separately). Skinned-safe quantization.
 // -------------------------------------------------------------------------------------
-console.log('\n[3/4] characters (mike, kelli, cece, drew)');
-const CHARS = [
-  // Mike now uses the NEW jack-hartmann body (~11.6k verts vs dad's ~128k), SAME 24 bone
-  // names — a clean small rig that fixes the floating-torso/waist break. It is under the
-  // 40k-vert SIMPLIFY_VERT_THRESHOLD so decimation is skipped; the shared clips still bind.
-  { out: 'mike.glb',  src: 'src/assets/jack-hartmann.glb' },
-  { out: 'kelli.glb', src: 'src/assets/mom.glb' },
-  // Cece now uses the NEW low-poly Meshy body (~5.6k verts vs the old ~128k), same 24 bone names.
-  { out: 'cece.glb',  src: 'src/assets/cece-meshy.glb' },
-  { out: 'drew.glb',  src: 'src/assets/drew-meshy.glb' },
-];
+console.log(`\n[3/4] characters (${CHARACTERS.map((c) => c.id).join(', ')})`);
+// CHARS is DERIVED from the roster manifest: OUTPUT basename stays the stable web id
+// (<id>.glb -> public/da-hilg/cece.glb etc.) while the SOURCE is the converted Mixamo body
+// (<body> = src/assets/<id>-mx.glb). All three rigs share the one canonical Mixamo skeleton.
+const CHARS = CHARACTERS.map((c) => ({ out: `${c.id}.glb`, src: c.body }));
 // Skinned-safe quantization: do NOT over-quantize the 1.7 m rig (feet slide otherwise).
 const CHAR_QUANT = {
   quantizePosition: 14,
@@ -743,6 +860,13 @@ const SIMPLIFY_VERT_THRESHOLD = 40000;     // only decimate bodies heavier than 
 const CHAR_SIMPLIFY = { targetTris: 30000, error: 0.02, minRatio: 0.10 };
 const charSrcBytes = {};
 for (const { out, src } of CHARS) {
+  if (!existsSync(SRC(src))) {
+    // The Mixamo body (src/assets/<id>-mx.glb) is produced by the optional FBX-convert step
+    // (build_dahilg.mjs --convert). If it's absent, skip this character rather than hard-fail
+    // — mirrors the LEVELS missing-source handling.
+    console.warn(`  ! skip missing character source: ${src} (run build_dahilg.mjs --convert to generate it)`);
+    continue;
+  }
   console.log(`  ${out} <- ${src}`);
   charSrcBytes[out] = statSync(SRC(src)).size;
   const doc = await io.read(SRC(src));
@@ -894,20 +1018,28 @@ for (const { path: p, bytes } of written) {
   console.log(`  ${path.relative(ROOT, p).padEnd(34)} ${mb(bytes).padStart(10)}`);
 }
 
+// Coarse "vs sources" figure. The anim source bytes are the UNION of the player+nibbler
+// motion-map source GLBs (counted once each; many states share the same source clip GLB).
+const animSrcSet = new Set([...PLAYER_ANIMS, ...NIBBLER_ANIMS].map((x) => x.src));
+const animSrcBytes = [...animSrcSet]
+  .filter((s) => existsSync(SRC(s)))
+  .reduce((a, s) => a + statSync(SRC(s)).size, 0);
 const totalSrc =
   levelSrcBytes +
   Object.values(charSrcBytes).reduce((a, b) => a + b, 0) +
-  ANIMS.reduce((a, x) => a + statSync(SRC(x.src)).size, 0);
-// (anim sources double-count dad/cece reads, but that's fine — it's a coarse "vs sources"
-//  figure; the meaningful reduction is level + 4 chars which dominate.)
+  animSrcBytes;
+void totalSrc;   // coarse figure; the meaningful reduction is level + chars below
+// hero = the level + the roster character bodies; derive the id match from the manifest.
+const heroIds = CHARACTERS.map((c) => c.id);
+const heroRe = new RegExp(`^level\\.glb$|^(?:${heroIds.join('|')})\\.glb$`);
 const heroSrc = levelSrcBytes + Object.values(charSrcBytes).reduce((a, b) => a + b, 0);
 const heroOut = written
-  .filter((w) => /level\.glb$|mike|kelli|cece|drew/.test(path.basename(w.path)))
+  .filter((w) => heroRe.test(path.basename(w.path)))
   .reduce((a, w) => a + w.bytes, 0);
 
 console.log(`\n  total output (incl. anims + meta): ${mb(totalOut)}`);
-console.log(`  level + 4 chars:  sources ${mb(heroSrc)} -> outputs ${mb(heroOut)}  ` +
-  `(${(100 * (1 - heroOut / heroSrc)).toFixed(1)}% smaller)`);
+console.log(`  level + ${heroIds.length} chars:  sources ${mb(heroSrc)} -> outputs ${mb(heroOut)}  ` +
+  `(${heroSrc ? (100 * (1 - heroOut / heroSrc)).toFixed(1) : '0.0'}% smaller)`);
 
 console.log('\n  meta: offset=[' + meta.offset.join(', ') + '] groundY=' + meta.groundY +
   ' houseCenter=[' + meta.houseCenter.join(', ') + ']');
