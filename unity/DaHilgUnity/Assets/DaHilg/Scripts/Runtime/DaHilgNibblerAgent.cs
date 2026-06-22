@@ -47,6 +47,10 @@ namespace DaHilg
         Vector3 m_AttachBaseLocal;
         float m_AttachY;
         float m_AttachTargetY;
+        Transform m_NibblerRoot;        // the pool root we live under when free (not attached)
+        int m_BoneSlot;                 // which player bone slot this nibbler clings to
+        Transform m_AttachedParent;     // the player bone we're childed to (null when free)
+        int m_AttachGen;                // player.VisualGeneration at attach (detects a re-rig/char switch)
         float m_StateTime;
         float m_LungeDuration;
         float m_JumpCooldown;
@@ -75,6 +79,7 @@ namespace DaHilg
             // MULTIPLY the GLB's native import scale (~0.01) by 0.32 — never overwrite it with an absolute
             // 0.32 (which made them ~32x giant) — so a nibbler is a true fraction of the real human size.
             Root = new GameObject("Nibbler_" + index.ToString("00"));
+            m_NibblerRoot = parent;
             Root.transform.SetParent(parent, false);
             GameObject visual = Object.Instantiate(prefab, Root.transform);
             visual.transform.localPosition = Vector3.zero;
@@ -132,7 +137,28 @@ namespace DaHilg
 
         public void SetPlayer(Transform player)
         {
+            // Character switch rebuilds the player's rig — drop off the old (now-dead) bones cleanly.
+            if (m_AttachedParent != null && player != m_Player)
+            {
+                ReparentToWorld();
+                Scatter(m_Player != null ? m_Player.position : Root.transform.position);
+            }
             m_Player = player;
+        }
+
+        // Childed to a player bone -> back under the pool root at our current world pose, upright,
+        // own scale restored, ready to resume ground AI. Every attach exit funnels through this.
+        void ReparentToWorld()
+        {
+            if (m_AttachedParent == null) return;
+            Vector3 worldPos = Root.transform.position;
+            float yaw = Root.transform.eulerAngles.y;
+            Root.transform.SetParent(m_NibblerRoot, true);
+            Root.transform.position = worldPos;
+            Root.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+            Root.transform.localScale = Vector3.one; // undo the bone counter-scale
+            m_VisualT.localScale = m_AppliedScale;
+            m_AttachedParent = null;
         }
 
         public void Spawn(Vector3 position)
@@ -154,6 +180,7 @@ namespace DaHilg
 
         public void Despawn()
         {
+            ReparentToWorld();
             Active = false;
             Attached = false;
             s_Active.Remove(this);
@@ -335,6 +362,7 @@ namespace DaHilg
                 && Root.transform.position.y <= player.FeetPosition.y + player.BodyHeight + 0.2f)
             {
                 if (m_Controller.enabled) m_Controller.enabled = false;
+                AttachToBone(player); // the player becomes this nibbler's surface from here
                 Attached = true;
                 m_State = NibblerState.Climb;
                 m_StateTime = 0f;
@@ -355,42 +383,51 @@ namespace DaHilg
 
         bool TickClimb(DaHilgActor player, DaHilgGameSettings settings, float dt)
         {
-            m_AttachY = Mathf.MoveTowards(m_AttachY, m_AttachTargetY, m_ClimbSpeed * dt);
-            PositionOnBody(player, settings, dt);
+            if (m_AttachedParent == null) { m_State = NibblerState.Chase; return false; }
+            DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
+            Vector3 rest = DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale);
+            // Slide from the grab pose to the bone-local rest spot (the "climb on" settle), in bone space.
+            Root.transform.localPosition = Vector3.MoveTowards(Root.transform.localPosition, rest, (m_ClimbSpeed + 0.6f) * dt);
+            Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, Quaternion.identity, 1f - Mathf.Exp(-14f * dt));
             Play("Climb", 0.12f);
-            if (Mathf.Abs(m_AttachY - m_AttachTargetY) < 0.02f)
-            {
-                m_State = NibblerState.Attached;
-                m_StateTime = 0f;
-            }
+            if (Vector3.Distance(Root.transform.localPosition, rest) < 0.01f) { m_State = NibblerState.Attached; m_StateTime = 0f; }
             return true;
         }
 
         bool TickAttached(DaHilgActor player, DaHilgGameSettings settings, float dt)
         {
-            PositionOnBody(player, settings, dt);
+            // Childed to the bone -> Unity carries us with the animated body (move/fall/jump/bend/emote)
+            // for free. Drop off cleanly if the rig was rebuilt (character switch) or the bone vanished.
+            if (m_AttachedParent == null || player.VisualGeneration != m_AttachGen)
+            {
+                ReparentToWorld();
+                Scatter(player.FeetPosition);
+                return false;
+            }
+            DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
+            Vector3 rest = DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale);
+            // Gravity-cling: a small "downward" (world) bias projected to bone-local so they hug the body
+            // and a fast bend tugs them onto the surface instead of flinging them off.
+            Vector3 gravLocal = m_AttachedParent.InverseTransformDirection(Vector3.down) * 0.01f;
+            Vector3 bob = gravLocal * (0.5f + 0.5f * Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index));
+            Root.transform.localPosition = Vector3.Lerp(Root.transform.localPosition, rest + bob, 1f - Mathf.Exp(-18f * dt));
+            Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, Quaternion.identity, 1f - Mathf.Exp(-10f * dt));
             Play(m_ClingClip, 0.16f);
             return true;
         }
 
-        void PositionOnBody(DaHilgActor player, DaHilgGameSettings settings, float dt)
+        // Child the nibbler to the chosen player BONE so the player becomes its surface: the animated
+        // bone carries it through move/fall/jump/bend/emote for free. Counter the bone's world scale so
+        // the nibbler keeps its own size (the load-bearing gotcha — bones live under the scaled visual).
+        void AttachToBone(DaHilgActor player)
         {
-            bool pronePile = player.AttachedNibblers >= settings.OverwhelmDown;
-            Vector3 local = m_AttachBaseLocal;
-            if (pronePile)
-            {
-                float angle = (m_Index % k_ClingAngularSlots) / (float)k_ClingAngularSlots * Mathf.PI * 2f + m_Seed;
-                float ring = 0.22f + (m_Index / k_ClingAngularSlots) * 0.12f;
-                local = new Vector3(Mathf.Cos(angle) * ring, 0.14f + (m_Index % 3) * 0.14f, 0.35f + Mathf.Sin(angle) * ring);
-            }
-            else
-            {
-                float bob = Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index) * 0.008f;
-                local = new Vector3(local.x, m_AttachY + bob, local.z);
-            }
-
-            Root.transform.position = m_Player.TransformPoint(local);
-            FaceBody(player, dt);
+            DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
+            m_AttachedParent = a.Bone;
+            m_AttachGen = player.VisualGeneration;
+            Root.transform.SetParent(a.Bone, true); // keep current world pose (no pop); slide in TickClimb
+            Vector3 ls = a.Bone.lossyScale;
+            Root.transform.localScale = new Vector3(1f / Mathf.Max(1e-4f, ls.x), 1f / Mathf.Max(1e-4f, ls.y), 1f / Mathf.Max(1e-4f, ls.z));
+            m_VisualT.localScale = m_AppliedScale;
         }
 
         void TickScatter(DaHilgActor player, DaHilgGameSettings settings, float dt)
@@ -436,6 +473,7 @@ namespace DaHilg
         public void Scatter(Vector3 from)
         {
             if (!Active) return;
+            ReparentToWorld(); // un-child from the player bone FIRST so ground AI resumes at our world pose
             m_VisualT.localScale = m_AppliedScale; // clear any Windup squash leak
             Attached = false;
             m_State = NibblerState.Scatter;
@@ -491,6 +529,7 @@ namespace DaHilg
 
         void Crush(Vector3 from)
         {
+            ReparentToWorld(); // un-child from the player bone FIRST
             Attached = false;
             m_State = NibblerState.Crushed;
             m_StateTime = 0f;
@@ -556,16 +595,16 @@ namespace DaHilg
 
         void ChooseAttachAnchor(DaHilgActor player, DaHilgGameSettings settings)
         {
-            // Distribute by a live count of nibblers already on the body so simultaneous
-            // lunges claim distinct consecutive slots instead of reusing pooled indices.
-            int slot = CountAttachedSlots();
-            int col = slot % k_ClingAngularSlots;
-            int layer = slot / k_ClingAngularSlots;
-            float angle = (col / (float)k_ClingAngularSlots) * Mathf.PI * 2f + layer * 2.39996f + (m_Seed - 0.5f) * 0.6f;
-            float heightFrac = Mathf.Repeat((col + layer * 0.5f + m_Seed) / k_ClingAngularSlots, 1f);
-            float radius = Mathf.Max(player.BodyRadius, settings.PlayerRadius) + 0.02f + layer * k_ClingLayerStep;
-            m_AttachBaseLocal = new Vector3(Mathf.Cos(angle) * radius, k_ClingBottom, Mathf.Sin(angle) * radius);
-            m_AttachTargetY = Mathf.Lerp(k_ClingBottom, Mathf.Min(k_ClingTop, player.BodyHeight), heightFrac);
+            // Pick a distinct body BONE slot (live count so simultaneous lunges spread over the whole
+            // body — back/head/shoulders/hips/legs/feet — not piled on the front face).
+            m_BoneSlot = CountAttachedSlots();
+            DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
+            // The lunge homes to this bone's CURRENT world spot, expressed in the player-root frame so
+            // the existing ballistic-lunge math (BeginBallisticLunge/TickLunge) is unchanged.
+            Vector3 boneWorld = a.Bone.TransformPoint(DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale));
+            m_AttachBaseLocal = player.transform.InverseTransformPoint(boneWorld);
+            m_AttachY = m_AttachBaseLocal.y;
+            m_AttachTargetY = m_AttachBaseLocal.y;
             m_ClimbSpeed = 0.62f + m_Seed * 0.38f;
         }
 

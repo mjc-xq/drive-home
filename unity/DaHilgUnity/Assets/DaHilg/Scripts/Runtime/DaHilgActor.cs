@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace DaHilg
@@ -30,6 +31,11 @@ namespace DaHilg
         Transform m_VisualRoot;
         Transform m_LeftFoot;
         Transform m_RightFoot;
+
+        // Animated skinned-mesh bones nibblers cling to (so they ride the real body: move/fall/bend/emote).
+        public struct BoneAnchor { public Transform Bone; public Vector3 LocalOffset; }
+        BoneAnchor[] m_NibblerBones;
+        public int VisualGeneration { get; private set; } // bumped each Initialize so attached nibblers detect a re-rig
         Animator m_Animator;
         RuntimeAnimatorController m_AnimatorController;
         DaHilgGameSettings m_Settings;
@@ -110,6 +116,8 @@ namespace DaHilg
                 m_Animator = animatorRoot.GetComponent<Animator>();
                 m_LeftFoot = FindDeepChild(visual.transform, "LeftFoot");
                 m_RightFoot = FindDeepChild(visual.transform, "RightFoot");
+                m_NibblerBones = BuildNibblerBones(visual.transform);
+                VisualGeneration++;
                 if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
                 foreach (Animator childAnimator in visual.GetComponentsInChildren<Animator>(true))
                 {
@@ -155,6 +163,60 @@ namespace DaHilg
             }
             return null;
         }
+
+        // Back-weighted, off-center bone slots (WORLD-metre offsets) so a swarm distributes over the
+        // WHOLE body — back/head/shoulders/hips/legs/feet — not piled on the front face. Bone names are
+        // verified to exist in all character GLBs (no Chest/Neck).
+        static readonly (string bone, Vector3 off)[] k_BoneSpec =
+        {
+            ("Spine",     new Vector3( 0.00f, 0.05f, -0.10f)),
+            ("Spine",     new Vector3( 0.11f, 0.02f, -0.06f)),
+            ("Spine",     new Vector3(-0.11f, 0.02f, -0.06f)),
+            ("Head",      new Vector3( 0.00f, 0.11f,  0.01f)),
+            ("Head",      new Vector3( 0.07f, 0.05f, -0.05f)),
+            ("LeftShoulder",  new Vector3(-0.03f, 0.02f, -0.02f)),
+            ("RightShoulder", new Vector3( 0.03f, 0.02f, -0.02f)),
+            ("LeftArm",   new Vector3(-0.04f, 0.00f, -0.02f)),
+            ("RightArm",  new Vector3( 0.04f, 0.00f, -0.02f)),
+            ("Hips",      new Vector3( 0.00f, 0.00f, -0.13f)),
+            ("Hips",      new Vector3( 0.12f, 0.00f,  0.00f)),
+            ("Hips",      new Vector3(-0.12f, 0.00f,  0.00f)),
+            ("LeftLeg",   new Vector3(-0.03f, 0.00f, -0.02f)),
+            ("RightLeg",  new Vector3( 0.03f, 0.00f, -0.02f)),
+            ("LeftFoot",  new Vector3(-0.02f, 0.03f, -0.02f)),
+            ("RightFoot", new Vector3( 0.02f, 0.03f, -0.02f)),
+        };
+
+        BoneAnchor[] BuildNibblerBones(Transform visualRoot)
+        {
+            List<BoneAnchor> list = new List<BoneAnchor>(k_BoneSpec.Length);
+            for (int i = 0; i < k_BoneSpec.Length; i++)
+            {
+                Transform b = FindDeepChild(visualRoot, k_BoneSpec[i].bone);
+                if (b != null) list.Add(new BoneAnchor { Bone = b, LocalOffset = k_BoneSpec[i].off });
+            }
+            if (list.Count == 0)
+            {
+                Transform h = FindDeepChild(visualRoot, "Hips") ?? visualRoot;
+                list.Add(new BoneAnchor { Bone = h, LocalOffset = Vector3.zero });
+            }
+            return list.ToArray();
+        }
+
+        public int NibblerBoneCount => m_NibblerBones != null ? m_NibblerBones.Length : 0;
+
+        public BoneAnchor GetNibblerBone(int slot)
+        {
+            int n = m_NibblerBones != null && m_NibblerBones.Length > 0 ? m_NibblerBones.Length : 1;
+            if (m_NibblerBones == null || m_NibblerBones.Length == 0)
+                return new BoneAnchor { Bone = m_VisualRoot != null ? m_VisualRoot : transform, LocalOffset = Vector3.zero };
+            return m_NibblerBones[((slot % n) + n) % n];
+        }
+
+        // Divide a bone-local offset by the bone's lossyScale so WORLD-metre offsets land correctly
+        // regardless of the rig's import scale.
+        public static Vector3 DivScale(Vector3 v, Vector3 s) =>
+            new Vector3(v.x / Mathf.Max(1e-4f, s.x), v.y / Mathf.Max(1e-4f, s.y), v.z / Mathf.Max(1e-4f, s.z));
 
         public void SetRole(DaHilgActorRole role, float now)
         {

@@ -135,7 +135,9 @@ namespace DaHilg
             if (m_Deoccluder == null) m_Deoccluder = m_VirtualCamera.gameObject.AddComponent<CinemachineDeoccluder>();
             m_Deoccluder.CollideAgainst = defaultLayers;
             m_Deoccluder.IgnoreTag = "Player";
-            m_Deoccluder.MinimumDistanceFromTarget = 0.42f;
+            // Keep a real gap even when fully occluded so the camera never plasters a wall across the
+            // whole screen (the "spawned into a wall" feeling) — you always still see the character.
+            m_Deoccluder.MinimumDistanceFromTarget = 1.35f;
             m_Deoccluder.AvoidObstacles = new CinemachineDeoccluder.ObstacleAvoidance
             {
                 Enabled = true,
