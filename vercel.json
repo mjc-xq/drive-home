@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "git lfs install && git lfs pull && npm run build",
   "rewrites": [
     { "source": "/drive", "destination": "/index.html" },
     { "source": "/drive/", "destination": "/index.html" },
