@@ -3,10 +3,10 @@
   "note": "Recenter: subtract `offset` from level world coords to center XZ at origin and put ground at y≈0. Level GLB geometry is UNMODIFIED — apply offset at runtime.",
   "offset": [
     -0.095,
-    32.98,
+    33.073,
     -0.695
   ],
-  "groundY": 32.98,
+  "groundY": 33.073,
   "houseCenter": [
     -0.095,
     49.026,
@@ -15,12 +15,12 @@
   "houseBox": {
     "min": [
       -12.155,
-      13.615,
+      13.522,
       -9.315
     ],
     "max": [
       12.155,
-      18.477,
+      18.385,
       9.315
     ]
   },

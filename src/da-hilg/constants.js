@@ -122,7 +122,7 @@ export const SMOOTH_BOOM = 7;            // collision ease-out: glide back to fu
 
 // ── Animation ───────────────────────────────────────────────────────────────
 export const IDLE_SPEED_EPS = 0.15;      // below this horizontal speed → idle
-export const RUN_ANIM_THRESH = 4.5;      // at/above → run clip (between WALK 3.2 and RUN 6)
+export const RUN_ANIM_THRESH = 6.4;      // at/above → run clip; midpoint of WALK_SPEED 4.6 & RUN_SPEED 8.2 (was 4.5, BELOW walk speed → walk clip never played)
 export const FADE_LOCO = 0.18;
 export const FADE_IDLE = 0.2;
 export const FADE_JUMP = 0.1;

@@ -686,7 +686,9 @@ namespace DaHilg
                 return;
             }
 
-            if (Speed > 4.5f)
+            // Run only above the midpoint of walk/run speed; below it (incl. normal WalkSpeed)
+            // play Walk. A fixed 4.5 threshold sat BELOW WalkSpeed (4.6) so walking always ran.
+            if (Speed > (settings.WalkSpeed + settings.RunSpeed) * 0.5f)
             {
                 SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.RunSpeed), 0.78f, 1.28f), dt);
                 PlayAnim("Run", 0.16f);

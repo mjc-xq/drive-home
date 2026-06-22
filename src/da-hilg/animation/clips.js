@@ -73,6 +73,18 @@ function findNamedObject(root, name) {
   return root?.getObjectByName?.(name) || null;
 }
 
+// Legacy DONOR clip rigs (dad/family-anims/jack-hartmann — Jump/Wave/Cheer/Stumble) name the
+// trunk Spine/Spine01/Spine02/neck; the canonical shared Mixamo skeleton uses Spine/Spine1/
+// Spine2/Neck. Without this map those torso/neck tracks find no target bone and are skipped,
+// shipping a frozen mid-back + neck on the family bodies (mirrors the Unity builder's alias).
+const DONOR_BONE_ALIAS = {
+  Spine01: 'Spine1',
+  Spine02: 'Spine2',
+  Spine03: 'Spine2',
+  neck: 'Neck',
+  Neck01: 'Neck',
+};
+
 /**
  * Clone a shared Mixamo clip into the subset safe to retarget across the family rigs.
  * Bone rotations carry the motion. Non-Hips position tracks carry source bind offsets
@@ -139,12 +151,22 @@ export function retargetSkinSafeClip(clip, sourceRoot, targetRoot, targetKey = '
   const deltaQ = new THREE.Quaternion();
   const sourceRestP = new THREE.Vector3();
   const targetRestP = new THREE.Vector3();
+  const dropTracks = new Set();
 
   for (const track of safe.tracks) {
     const name = trackNodeName(track.name);
     const sourceNode = findNamedObject(sourceRoot, name);
-    const targetNode = findNamedObject(targetRoot, name);
-    if (!sourceNode || !targetNode) continue;
+    let targetNode = findNamedObject(targetRoot, name);
+    if (!targetNode && DONOR_BONE_ALIAS[name]) {
+      const canon = DONOR_BONE_ALIAS[name];
+      targetNode = findNamedObject(targetRoot, canon);
+      // Rename the track to the canonical bone so THREE.PropertyBinding binds it at runtime —
+      // otherwise the retargeted values point at a non-existent 'Spine01' and the torso freezes.
+      if (targetNode) track.name = track.name.replace(name, canon);
+    }
+    // Drop tracks that bind to NO target bone (foreign fingers/leaves: *HandThumb*, head_end,
+    // headfront): leaving them makes THREE warn 'No target node found' and animates nothing.
+    if (!sourceNode || !targetNode) { dropTracks.add(track); continue; }
 
     if (track.name.endsWith('.quaternion')) {
       sourceRestInvQ.copy(sourceNode.quaternion).invert();
@@ -180,6 +202,7 @@ export function retargetSkinSafeClip(clip, sourceRoot, targetRoot, targetKey = '
     }
   }
 
+  if (dropTracks.size) safe.tracks = safe.tracks.filter((t) => !dropTracks.has(t));
   safe.resetDuration();
   RETARGETED_CLIP_CACHE.set(cacheKey, safe);
   return safe;

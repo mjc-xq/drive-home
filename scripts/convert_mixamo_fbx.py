@@ -278,6 +278,54 @@ def apply_armature_rotation(arm):
     bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
 
+def ground_rig_to_feet(arm):
+    """Lift the whole rig so its lowest mesh point (the soles) sits at Z=0, then bake the
+    translation. The runtime/web place the model assuming the GLB ORIGIN is at the FEET
+    (feet at body y=0), but Mixamo/Meshy bodies often export with the origin at the HIPS
+    (~1 m above the soles), which sinks the character ~1 m underground. This restores the
+    feet-at-origin convention the engines expect. Returns the lift applied (m)."""
+    if bpy.context.object is not None and bpy.context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.view_layer.update()
+
+    def lowest_z():
+        # Measure the SKELETON-DEFORMED mesh (depsgraph), not the undeformed bound_box: the
+        # mesh object origin sits at the hips here, so its bind bbox reads ~0 while the rig
+        # the skeleton actually poses reaches ~-1 m. Only the deformed Z reflects the feet.
+        dg = bpy.context.evaluated_depsgraph_get()
+        mn = None
+        for o in bpy.data.objects:
+            if o.type != 'MESH':
+                continue
+            ev = o.evaluated_get(dg)
+            m = ev.to_mesh()
+            mw = ev.matrix_world
+            for v in m.vertices:
+                z = (mw @ v.co).z
+                if mn is None or z < mn:
+                    mn = z
+            ev.to_mesh_clear()
+        return mn
+
+    minz = lowest_z()
+    print(f"[convert]   ground: pre-lift lowest mesh Z = {minz}", flush=True)
+    if minz is None or abs(minz) < 1e-4:
+        return 0.0
+    # Move the whole rig UP so the soles reach Z=0. Translate the armature (the mesh follows
+    # as its child/deform), then bake into both so the exported root stays identity.
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in bpy.data.objects:
+        if o.type in ('ARMATURE', 'MESH'):
+            o.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    arm.location.z -= minz
+    bpy.context.view_layer.update()
+    bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+    bpy.context.view_layer.update()
+    print(f"[convert]   ground: post-lift lowest mesh Z = {lowest_z()} (lifted {-minz:.3f} m)", flush=True)
+    return -minz
+
+
 # ---------------------------------------------------------------------------
 # MESH PASS
 # ---------------------------------------------------------------------------
@@ -306,6 +354,9 @@ def do_mesh_pass(mesh_fbx, character_id, out_dir):
     # Stand the rig up: bake out the import's [90,0,0] object rotation so the glTF root is
     # identity (otherwise every character ships face-up on its back).
     apply_armature_rotation(armature)
+    # Put the FEET at the origin (y=0): the engines place the body assuming feet-at-origin,
+    # but these rigs export with the origin at the hips -> feet ~1 m underground without this.
+    lift = ground_rig_to_feet(armature)
 
     rh = rest_height(armature)
     if not (1.4 <= rh <= 2.2):
