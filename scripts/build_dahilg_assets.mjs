@@ -28,7 +28,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, ...p);
-const OUT_DIR = SRC('public', 'da-hilg');
+// OUT_DIR is env-overridable so a targeted rebuild (e.g. one level after a facade re-fetch) can
+// write to a scratch dir and copy back only the file it changed — avoiding churn on the other
+// (LFS-tracked) GLBs. Default = the shipped public/da-hilg.
+const OUT_DIR = process.env.DAHILG_OUT || SRC('public', 'da-hilg');
 const ANIM_DIR = path.join(OUT_DIR, 'anims');
 const OUT = (...p) => path.join(OUT_DIR, ...p);
 
@@ -78,7 +81,12 @@ const LEVELS = [
   { src: 'stanton-single.glb',  out: 'stanton', metaSource: 'stanton-single.glb',  pavedMaskSrc: 'stanton-elementary/_ground/paved_mask.png' },
   { src: 'meemaw-single.glb',   out: 'meemaw',  metaSource: 'meemaw-single.glb',   pavedMaskSrc: 'meemaw/_ground/paved_mask.png' },
   { src: 'xq-single.glb',       out: 'xq',      metaSource: 'xq-single.glb',       pavedMaskSrc: 'xq/_ground/paved_mask.png' },
-];
+].filter((lv) => {
+  // DAHILG_ONLY=xq[,canyon...] restricts the LEVELS build (and meta pass) to the named outputs —
+  // a targeted rebuild after re-exporting one level, so the others' GLBs aren't rewritten.
+  const only = process.env.DAHILG_ONLY;
+  return !only || only.split(',').map((s) => s.trim()).includes(lv.out);
+});
 
 // ---- texture compression step (webp, per-class cap, q80) with a graceful fallback ----
 // textureCompress can throw if sharp can't decode an image; per the spec we WARN and
@@ -872,7 +880,8 @@ for (const lv of LEVELS) {
     continue;
   }
   const m = await buildLevelMeta(lv, levelPavedMask[lv.out]);
-  if (lv.out === 'level') meta = m;   // dahill drives the summary
+  if (lv.out === 'level' || !meta) meta = m;   // dahill drives the summary; fall back to the first
+                                               // built level so a DAHILG_ONLY=<other> run still prints
 }
 
 // =====================================================================================
