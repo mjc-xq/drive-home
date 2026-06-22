@@ -172,20 +172,33 @@ def main():
     # live). FIXED distance so large levels still get a real close-up; camera clearly above the
     # target so the framing stays upright (no track-quat flip).
     gz = mins.z
-    # EYE-LEVEL close-ups: stand a ~1.6 m person a short distance from the core and look nearly level
-    # (target just below eye height) so facades + ground FILL the frame instead of 60-80% empty sky.
+    top = maxs.z + 20.0
+    # Seat eye-level cameras on the ACTUAL ground (raycast straight down), NOT the global min Z — on
+    # hilly levels the terrain rises toward the centre, so anchoring to min Z buried the camera below
+    # grade (washed-out floating frames). Raycast finds the real surface height at each spot.
+    def ground_z(x, y, fallback):
+        deps = bpy.context.evaluated_depsgraph_get()
+        hit, loc, *_ = bpy.context.scene.ray_cast(deps, mathutils.Vector((x, y, top)), mathutils.Vector((0, 0, -1)))
+        return loc.z if hit else fallback
+    cgz = ground_z(center.x, center.y, gz)        # ground at the scene centre (the eye target)
+    # EYE-LEVEL close-ups: a ~1.6 m person a short distance from the core, looking nearly level, so
+    # facades + ground FILL the frame instead of empty sky.
     for name, ang, cd in [("close1", 35, 18.0), ("close2", 215, 18.0), ("close3", 120, 26.0)]:
         a = math.radians(ang)
-        loc = mathutils.Vector((center.x + cd * math.cos(a), center.y + cd * math.sin(a), gz + 1.6))
-        tgt = mathutils.Vector((center.x, center.y, gz + 1.4))
+        camx, camy = center.x + cd * math.cos(a), center.y + cd * math.sin(a)
+        eg = ground_z(camx, camy, cgz)            # ground under the camera's own feet
+        loc = mathutils.Vector((camx, camy, eg + 1.6))
+        tgt = mathutils.Vector((center.x, center.y, cgz + 1.4))
         views.append((name, loc, tgt))
     # zoomed top-down on the content centre: best view for INTERSECTION z-fighting + curb/crosswalk detail
     views.append(("topcore", mathutils.Vector((center.x, center.y, gz + 90.0)), mathutils.Vector((center.x, center.y, gz))))
     # low oblique street-level sweeps to catch road JUNCTIONS, curb thickness, and dashes at a grazing angle
     for name, ang in [("street1", 70), ("street2", 250)]:
         a = math.radians(ang)
-        loc = mathutils.Vector((center.x + 26.0 * math.cos(a), center.y + 26.0 * math.sin(a), gz + 1.7))
-        views.append((name, loc, mathutils.Vector((center.x, center.y, gz + 1.4))))
+        camx, camy = center.x + 26.0 * math.cos(a), center.y + 26.0 * math.sin(a)
+        eg = ground_z(camx, camy, cgz)
+        loc = mathutils.Vector((camx, camy, eg + 1.7))
+        views.append((name, loc, mathutils.Vector((center.x, center.y, cgz + 1.4))))
 
     for name, loc, tgt in views:
         co.location = loc
