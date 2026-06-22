@@ -23,9 +23,13 @@ import sharp from 'sharp';
 
 // ---- tunables (commented; conservative so we fill REAL gaps, not spam yards/driveways) ----
 const MIN_LOT_AREA = 150;       // m² — below this it's a shed/sliver, not a house lot
-const MAX_LOT_AREA = 2000;      // m² — above this it's an estate/field/parking, skip (avoid false +)
-const ROOF_BLOB_MIN = 55;       // m² — a contiguous roof region must be at least this big to count
-const ROOF_FILL_MIN = 0.16;     // ≥16% of the lot interior must read roof-like (gates bare/yard lots)
+const MAX_LOT_AREA = 9000;      // m² — big hill lots DO hold real houses; the absolute roof-BLOB-area
+                                //       gate (not lot fraction) rejects open fields, so allow large
+                                //       lots (was 2000 → silently dropped ~11 real dahill hill houses)
+const ROOF_BLOB_MIN = 40;       // m² — a contiguous roof region must be at least this big to count
+const ROOF_FILL_MIN = 0.12;     // ≥12% of the lot interior must read roof-like (was .16); also
+                                //       BYPASSED for big lots in detectRoofRect (a house is a small
+                                //       fraction of a big lot, so the fraction gate is wrong there)
 const SAMPLE_STEP = 0.6;        // m — aerial sample spacing inside a lot (≈0.6 m, finer than a roof)
 const INSET = 0.7;              // m — shrink the fitted footprint off the lot line so it never pokes
 const DEFAULT_H = 6.0;          // m — residential wall height when no neighbor median is available
@@ -165,13 +169,29 @@ export async function fillMissingBuildings({ S, parcels, aerialPath, aerialBound
       else grid[j * nx + i] = 1;
     }
     if (!lotCells) return null;
-    if (roofCells / lotCells < ROOF_FILL_MIN) return null;       // mostly yard/asphalt — not a house
-    // largest 4-connected component of roof cells (iterative flood fill)
+    const lotArea = lotCells * SAMPLE_STEP * SAMPLE_STEP;
+    // Big lots: a real house is only a small fraction of the lot, so the lot-fraction gate is the
+    // wrong test there — rely on the absolute roof-BLOB-area gate below. Small lots keep the
+    // fraction gate to reject bare/yard parcels.
+    const fillMin = lotArea > 1200 ? 0 : ROOF_FILL_MIN;
+    if (roofCells / lotCells < fillMin) return null;             // mostly yard/asphalt — not a house
+    // morphological CLOSE: heal 1-cell gaps in the roof mask (tree-canopy limbs split one real roof
+    // into sub-blobs) by promoting an in-lot non-roof cell with >=2 roof neighbours to roof. Edge
+    // cells have <2 roof neighbours so the outer boundary stays ~intact while interior holes fill.
+    const closed = grid.slice();
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      const k = j * nx + i; if (grid[k] !== 1) continue;
+      let rn = 0;
+      if (i > 0 && grid[k - 1] === 2) rn++; if (i < nx - 1 && grid[k + 1] === 2) rn++;
+      if (j > 0 && grid[k - nx] === 2) rn++; if (j < nz - 1 && grid[k + nx] === 2) rn++;
+      if (rn >= 2) closed[k] = 2;
+    }
+    // largest 4-connected component of roof cells (iterative flood fill) on the CLOSED mask
     const seen = new Uint8Array(nx * nz);
     let best = null, bestN = 0;
     const stack = [];
     for (let s = 0; s < grid.length; s++) {
-      if (grid[s] !== 2 || seen[s]) continue;
+      if (closed[s] !== 2 || seen[s]) continue;
       stack.length = 0; stack.push(s); seen[s] = 1;
       const comp = [];
       while (stack.length) {
@@ -179,7 +199,7 @@ export async function fillMissingBuildings({ S, parcels, aerialPath, aerialBound
         const ci = k % nx, cj = (k / nx) | 0;
         const nbrs = [k - 1, k + 1, k - nx, k + nx];
         if (ci === 0) nbrs[0] = -1; if (ci === nx - 1) nbrs[1] = -1;
-        for (const m of nbrs) { if (m < 0 || m >= grid.length || seen[m] || grid[m] !== 2) continue; seen[m] = 1; stack.push(m); }
+        for (const m of nbrs) { if (m < 0 || m >= closed.length || seen[m] || closed[m] !== 2) continue; seen[m] = 1; stack.push(m); }
       }
       if (comp.length > bestN) { bestN = comp.length; best = comp; }
     }
