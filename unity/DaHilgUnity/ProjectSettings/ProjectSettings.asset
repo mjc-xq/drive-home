@@ -169,6 +169,7 @@ PlayerSettings:
   androidMaxAspectRatio: 2.4
   androidMinAspectRatio: 1
   applicationIdentifier:
+    Standalone: com.dahilg.unity
     WebGL: com.dahilg.unity
   buildNumber:
     Standalone: 0

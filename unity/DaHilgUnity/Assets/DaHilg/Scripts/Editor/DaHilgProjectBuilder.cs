@@ -1023,8 +1023,8 @@ body {
             }
 
             AnimatorStateMachine machine = controller.layers[0].stateMachine;
-            ClearStates(machine);
-            AnimatorState move = machine.AddState("Move", new Vector3(260f, 80f, 0f));
+            PrepareAnimatorStateMachine(machine, new[] { "Move" });
+            AnimatorState move = UpsertAnimatorState(machine, "Move", new Vector3(260f, 80f, 0f));
             move.motion = clip;
             move.writeDefaultValues = true;
             machine.defaultState = move;
@@ -1054,18 +1054,17 @@ body {
             }
 
             AnimatorStateMachine machine = controller.layers[0].stateMachine;
-            ClearStates(machine);
+            PrepareAnimatorStateMachine(machine, states);
 
             AnimatorState idle = null;
             for (int i = 0; i < states.Length; i++)
             {
                 string stateName = states[i];
-                AnimatorState state = machine.AddState(stateName, new Vector3(260f, 60f + i * 48f, 0f));
+                AnimatorState state = UpsertAnimatorState(machine, stateName, new Vector3(260f, 60f + i * 48f, 0f));
                 AnimationClip clip = ResolveSourceClip(characterId, stateName, clips);
-                if (clip != null)
-                {
-                    state.motion = RetargetAnimationClip(characterId, stateName, clip, targetPrefab, sourceDir);
-                }
+                state.motion = clip != null
+                    ? RetargetAnimationClip(characterId, stateName, clip, targetPrefab, sourceDir)
+                    : null;
                 state.writeDefaultValues = true;
                 if (stateName == "Idle") idle = state;
             }
@@ -1108,15 +1107,58 @@ body {
             }
         }
 
-        static void ClearStates(AnimatorStateMachine machine)
+        static void PrepareAnimatorStateMachine(AnimatorStateMachine machine, string[] requiredStates)
         {
+            HashSet<string> required = new HashSet<string>(requiredStates, StringComparer.Ordinal);
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (ChildAnimatorState state in machine.states)
             {
-                machine.RemoveState(state.state);
+                AnimatorState animatorState = state.state;
+                if (animatorState == null
+                    || !required.Contains(animatorState.name)
+                    || !seen.Add(animatorState.name))
+                {
+                    if (animatorState != null) machine.RemoveState(animatorState);
+                }
             }
             foreach (ChildAnimatorStateMachine child in machine.stateMachines)
             {
-                machine.RemoveStateMachine(child.stateMachine);
+                if (child.stateMachine != null) machine.RemoveStateMachine(child.stateMachine);
+            }
+        }
+
+        static AnimatorState UpsertAnimatorState(AnimatorStateMachine machine, string stateName, Vector3 position)
+        {
+            ChildAnimatorState[] states = machine.states;
+            for (int i = 0; i < states.Length; i++)
+            {
+                AnimatorState state = states[i].state;
+                if (state == null || state.name != stateName) continue;
+
+                ChildAnimatorState child = states[i];
+                child.position = position;
+                states[i] = child;
+                machine.states = states;
+                ResetAnimatorState(state, stateName);
+                return state;
+            }
+
+            AnimatorState created = machine.AddState(stateName, position);
+            ResetAnimatorState(created, stateName);
+            return created;
+        }
+
+        static void ResetAnimatorState(AnimatorState state, string stateName)
+        {
+            state.name = stateName;
+            state.speed = 1f;
+            state.cycleOffset = 0f;
+            state.writeDefaultValues = true;
+
+            AnimatorStateTransition[] transitions = state.transitions;
+            for (int i = 0; i < transitions.Length; i++)
+            {
+                state.RemoveTransition(transitions[i]);
             }
         }
 
