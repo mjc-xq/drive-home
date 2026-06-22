@@ -48,27 +48,28 @@ def load_key():
 
 
 KEY = load_key()
-# OpenAI gpt-4o-mini vision: cheap, paid quota (Gemini free tier 429s on batch). detail:low keeps
-# each crop ~tens of tokens so a few thousand grades cost only a few dollars.
-MODEL = os.environ.get("FF_MODEL", "gpt-4o-mini")
+# OpenAI vision grader. Default gpt-5-mini at reasoning_effort=low — an eval against hand-labelled
+# crops showed that WITH THE STRICT PROMPT BELOW it rejects ALL the egregious junk (cars, street
+# signs, trees, fences, blur) that gpt-4o-mini/4.1-mini let through, while keeping genuine walls.
+# detail:low keeps each crop cheap. (Gemini free tier 429s on batch, so OpenAI.)
+MODEL = os.environ.get("FF_MODEL", "gpt-5-mini")
 MIN_Q = float(os.environ.get("FF_MIN_QUALITY", "0.6"))
 WORKERS = int(os.environ.get("FF_WORKERS", "12"))
 MANIFEST = os.environ.get("FF_MANIFEST") or sys.exit("set FF_MANIFEST")
 DIR = os.environ.get("FF_DIR") or os.path.dirname(MANIFEST)
 
 PROMPT = (
-    "This is a cropped Google Street View image intended to be used as a TEXTURE on a "
-    "building's front wall in a 3D game. Grade whether it actually shows a clean building "
-    "facade. Respond ONLY with JSON: "
-    '{"is_facade": <bool>, "quality": <0..1>, "dominant": "<one of: building_wall, '
-    'street_sign, utility_pole, vehicle, tree_foliage, fence_hedge, sky, road_ground, '
-    'blur_privacy, mixed_clutter>"}. '
-    "is_facade is TRUE only if the image is MOSTLY a clear, in-focus building wall/facade "
-    "(siding, stucco, brick, windows, doors, or a garage) seen roughly head-on, such that "
-    "pasting it on a wall would look like a real building. is_facade is FALSE if the image "
-    "is dominated by a street sign, utility pole, parked car, tree/bushes, fence/hedge, sky, "
-    "road or ground, is heavily blurred/privacy-blurred, or is so cluttered/oblique you "
-    "cannot read it as a flat wall. quality reflects how crisp, head-on, and wall-filling it is."
+    "You are selecting Google Street View crops to BAKE as the front-wall texture of a building in "
+    "a 3D game. Be STRICT: a bad bake looks terrible, so when in doubt REJECT. Respond ONLY with JSON "
+    '{"is_facade": <bool>, "quality": <0..1>, "dominant": "<one of: building_wall, street_sign, '
+    'utility_pole, vehicle, tree_foliage, fence_hedge, sky, road_ground, person, blur_privacy, '
+    'mixed_clutter>"}. '
+    "is_facade is TRUE only if ALL hold: (1) a building wall/facade (siding, stucco, brick, windows, "
+    "door, or garage) FILLS most of the frame; (2) it is sharp and in focus; (3) it is viewed roughly "
+    "head-on, not steeply angled. is_facade is FALSE if a car/truck, street sign, pole, tree/bush/hedge, "
+    "fence, sky, lawn/road, or person occupies a prominent part of the frame, OR the building is "
+    "distant/small, blurry, privacy-blurred, or strongly oblique. quality = how sharp, head-on, and "
+    "wall-filling it is."
 )
 
 
@@ -76,13 +77,19 @@ def classify(img_path):
     with open(img_path, "rb") as f:
         data = base64.b64encode(f.read()).decode()
     body = {
-        "model": MODEL, "temperature": 0,
+        "model": MODEL,
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": PROMPT},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}", "detail": "low"}},
         ]}],
     }
+    # gpt-5* are reasoning models: they reject the default temperature and use reasoning_effort
+    # (low = enough to judge a facade without burning tokens). Older chat models take temperature=0.
+    if MODEL.startswith("gpt-5"):
+        body["reasoning_effort"] = os.environ.get("FF_EFFORT", "low")
+    else:
+        body["temperature"] = 0
     req = urllib.request.Request("https://api.openai.com/v1/chat/completions",
                                 data=json.dumps(body).encode(),
                                 headers={"Content-Type": "application/json",
@@ -90,7 +97,7 @@ def classify(img_path):
     last = None
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=120) as r:
                 resp = json.loads(r.read())
             return json.loads(resp["choices"][0]["message"]["content"])
         except Exception as e:  # transient 429/5xx/network — back off and retry

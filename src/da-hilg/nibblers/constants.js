@@ -215,3 +215,23 @@ export const NIBBLER_TINTS = [
 // ── Minimap ─────────────────────────────────────────────────────────────────
 export const MINIMAP_VIEW_RADIUS = 80;    // meters shown around the player
 export const MINIMAP_SIZE_PX = 180;
+
+// ── Attached-nibbler render (npcPool S_ATTACHED branch) ──────────────────────
+// A clinging nibbler must read as a creature GRIPPING the player's body, not a tiny
+// person standing in mid-air beside it. The model is the ~1.70 m family rig with its
+// origin at its FEET, so a few render-side adjustments press it ONTO the surface:
+//   • shrink it a touch so a hugging pile sits tight against the 0.30 m capsule,
+//   • drop the group by half the scaled body height so the TORSO centers on the
+//     anchor band (feet-on-anchor leaves the body floating above the head),
+//   • orient belly-IN / head-UP (the climb pose) — see publishToNpcPool.
+export const NIBBLER_BODY_HALF = 0.85;    // rig half-height (m, pre-scale; ~1.70 m rig)
+export const ATTACHED_SCALE_MUL = 0.82;   // attached nibblers render a bit smaller so the pile hugs
+
+// ── Climb-on settle (a freshly-attached nibbler visibly climbs ONTO you) ─────
+// For the first CLIMB_SETTLE_T seconds after attaching, ease the rendered body up
+// from below + slightly outward toward its final body anchor (and force the climb
+// clip) so it reads as climbing on, not snapping. Driven by the existing stateT[i]
+// (reset to 0 on attach), so it stays free over the SoA — no extra arrays.
+export const CLIMB_SETTLE_T = 0.32;       // seconds of climb-on ease
+export const CLIMB_SETTLE_DROP = 0.9;     // start this far below the anchor (×scaled height)
+export const CLIMB_SETTLE_OUT = 0.18;     // start this far radially-out from the anchor (m)

@@ -115,7 +115,10 @@ export function stepMotion(actor, intent, ctx) {
   kcc.computeColliderMovement(
     collider,
     _desired,
-    rapier.QueryFilterFlags.EXCLUDE_SENSORS | rapier.QueryFilterFlags.EXCLUDE_KINEMATIC,
+    // Collide with the OTHER kinematic actor capsules (family NPCs) so you can't walk THROUGH
+    // them — the KCC auto-excludes the collider it's moving, so this only adds the others.
+    // (Sensors stay excluded so greet/zone triggers still pass through.)
+    rapier.QueryFilterFlags.EXCLUDE_SENSORS,
     undefined,
     undefined,
   );

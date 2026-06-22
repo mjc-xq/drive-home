@@ -94,15 +94,23 @@ function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
 export function buildBuildingLayer({
   THREE, scene, S, w2, terrainAt, demRect, isSchool,
   wallColor, roofColor, facade, ROOT, roadLines = [], dropOffPatch = false,
+  photorealFootprints = new Set(),
 }) {
   // dropOffPatch: REMOVE any building whose footprint isn't fully inside the terrain patch instead
   // of clipping it to the edge. Off by default (suburban levels keep the missing-buildings clip so
   // edge houses aren't lost); on for dense downtown levels (xq) where a half-clipped building reads
   // as a sliced box hanging off the terrain edge.
+  // photorealFootprints: Set of building indices (ib) whose massing is COVERED by a Google-photoreal
+  // mesh added separately as 'Buildings_photoreal' (xq high-rise towers). For these we SKIP the
+  // extruded visual walls/roofs/facade overlay (the photoreal mesh is the visual) but STILL emit the
+  // Collision_Buildings prism so the player can't walk through the tower. Empty for every other level.
   const ShapeUtils = (THREE && THREE.ShapeUtils) || ShapeUtilsHost.ShapeUtils;
   const rectByWall = (facade && facade.rectByWall) || {};
+  const openingsByWall = (facade && facade.openingsByWall) || {};
   const heroSet = (facade && facade.heroBuildings) || new Set();
   const isHero = (ib) => (heroSet.has ? heroSet.has(ib) : (Array.isArray(heroSet) && heroSet.includes(ib)));
+  const isPhotoreal = (ib) => (photorealFootprints.has ? photorealFootprints.has(ib)
+    : (Array.isArray(photorealFootprints) && photorealFootprints.includes(ib)));
 
   // ---- per-page OVERLAY material (one removable photo layer per atlas page) --------------
   // The photo is NOT the wall texture — it is a SEPARATE quad proud of the (always-present)
@@ -303,12 +311,91 @@ export function buildBuildingLayer({
     W.uv.push(...uvs);
   }
 
+  // ---- SV-DETECTED door/window/garage geometry (real 3D openings) -----------------------
+  // emitDetectedOpenings — for an edge whose detector returned `openings` (in openingsByWall keyed
+  // 'b{ib}_e{edge}'), emit REAL recessed/proud 3D openings onto the wall quad so a photo'd hero wall
+  // has DEPTH (recessed glass, a door slab, a garage panel) instead of a flat baked photo. Each
+  // opening rect is normalised on the crop: x in [0,1] along the edge from corner A (ring[edge]) to
+  // corner B; y in [0,1] from the EAVE (y=0, height base+wallH) to the GROUND (y=1, per-corner
+  // terrain foot). We map that band onto the wall and emit a few cheap quads per opening into the
+  // shared detail buckets (`out.glass`/`out.trim` = Buildings_windows/Buildings_window_trim;
+  // `out.door`/`out.doorTrim` = Doors/Doors_trim; `out.garage`/`out.garageTrim` = GarageDoors/
+  // GarageDoor_trim). Openings are clamped to the wall interior (inset from corners/eave/ground).
+  // No-op when the edge has no detected openings -> backward-safe.
+  function emitDetectedOpenings(ring, base, wallH, ib, edge, out) {
+    if (!out) return;
+    const ops = openingsByWall[`b${ib}_e${edge}`];
+    if (!Array.isArray(ops) || !ops.length) return;
+    const n = ring.length;
+    const [ax, az] = ring[edge], [bx, bz] = ring[(edge + 1) % n];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 1.2) return;
+    const ex = (bx - ax) / L, ez = (bz - az) / L;
+    const cen = ring.reduce((a, [x, z]) => [a[0] + x / n, a[1] + z / n], [0, 0]);
+    let nx = -ez, nz = ex;
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if ((mx - cen[0]) * nx + (mz - cen[1]) * nz < 0) { nx = -nx; nz = -nz; }
+    const yt = base + wallH;                                   // eave (y normalised = 0)
+    // per-corner ground feet (matches pushWallFace/emitOverlayQuad foot placement)
+    const yMin = base - MAX_FOUNDATION;
+    const footA = Math.max(yMin, Math.min(yt - 0.1, terrainAt(ax, az) - WALL_EMBED));
+    const footB = Math.max(yMin, Math.min(yt - 0.1, terrainAt(bx, bz) - WALL_EMBED));
+    // height of the wall band at along-edge fraction f (lerp the two corner feet to the eave)
+    const yAtV = (f, v) => { const foot = footA + (footB - footA) * f; return yt + (foot - yt) * v; };
+    const EDGE_INSET = 0.18;                                   // keep openings off the corners
+    for (const op of ops) {
+      const kind = op.kind || 'window';
+      // along-edge span [s0,s1] (m from corner A); clamp inside the wall interior
+      let s0 = Math.min(op.x0, op.x1) * L, s1 = Math.max(op.x0, op.x1) * L;
+      s0 = Math.max(EDGE_INSET, Math.min(L - EDGE_INSET, s0));
+      s1 = Math.max(EDGE_INSET, Math.min(L - EDGE_INSET, s1));
+      if (s1 - s0 < 0.25) continue;
+      const fMid = ((s0 + s1) / 2) / L;
+      // vertical band: v0=top (toward eave), v1=bottom (toward ground); clamp inside foot..eave
+      let v0 = Math.min(op.y0, op.y1), v1 = Math.max(op.y0, op.y1);
+      v0 = Math.max(0.04, Math.min(0.96, v0));
+      v1 = Math.max(0.04, Math.min(0.99, v1));
+      if (kind === 'door' || kind === 'garage') v1 = 0.998;   // doors/garages reach the ground
+      if (v1 - v0 < 0.06) continue;
+      const yTop = yAtV(fMid, v0), yBot = yAtV(fMid, v1);
+      if (yTop - yBot < 0.2) continue;
+      if (kind === 'door') {
+        // dark door slab + a proud jamb/lintel frame
+        const jw = 0.10;
+        pushWallRect(out.doorTrim, ax, az, ex, ez, nx, nz, s0 - jw, s0, yBot, yTop + 0.08, 0.10);
+        pushWallRect(out.doorTrim, ax, az, ex, ez, nx, nz, s1, s1 + jw, yBot, yTop + 0.08, 0.10);
+        pushWallRect(out.doorTrim, ax, az, ex, ez, nx, nz, s0 - jw, s1 + jw, yTop, yTop + 0.08, 0.10);
+        pushWallRect(out.door, ax, az, ex, ez, nx, nz, s0, s1, yBot, yTop, 0.04);   // slab, slightly proud
+      } else if (kind === 'garage') {
+        // wide panel + frame + a few horizontal panel reveals
+        const jw = 0.12;
+        pushWallRect(out.garageTrim, ax, az, ex, ez, nx, nz, s0 - jw, s1 + jw, yBot - 0.03, yTop + 0.10, 0.095);
+        pushWallRect(out.garage, ax, az, ex, ez, nx, nz, s0, s1, yBot, yTop, 0.12);
+        const panels = 3;
+        for (let p = 1; p <= panels; p++) {
+          const y = yBot + (yTop - yBot) * p / (panels + 1);
+          pushWallRect(out.garageTrim, ax, az, ex, ez, nx, nz, s0 + 0.05, s1 - 0.05, y - 0.025, y + 0.025, 0.135);
+        }
+      } else {
+        // window: recessed glass (pushed ~0.06 m IN from the wall) + a thin proud trim surround
+        pushWallRect(out.trim, ax, az, ex, ez, nx, nz, s0 - 0.10, s1 + 0.10, yBot - 0.10, yTop + 0.10, 0.08);
+        pushWallRect(out.glass, ax, az, ex, ez, nx, nz, s0, s1, yBot, yTop, -0.06);   // recessed glass
+        pushWallRect(out.trim, ax, az, ex, ez, nx, nz, (s0 + s1) / 2 - 0.025, (s0 + s1) / 2 + 0.025, yBot + 0.05, yTop - 0.05, 0.10); // mullion
+      }
+    }
+  }
+  // does this edge of building ib carry detected openings? (procedural grid skips it)
+  const hasDetectedOpenings = (ib, edge) => {
+    const ops = openingsByWall[`b${ib}_e${edge}`];
+    return Array.isArray(ops) && ops.length > 0;
+  };
+
   // ---- emit one ring (walls + flat eave cap + overhang + roof shells) -------------------
   // W = { stucco: {pos,uv} } — EVERY wall in EVERY orientation is procedural windowed stucco
   // (tinted by wallColor(ib)); the photo is NOT the wall texture. Rf = { pos } roof triangles.
   // ib = building index. A HERO wall that has a packed atlas crop ALSO emits a SEPARATE photo
   // overlay quad (into overlayByPage) proud of the stucco wall — toggled at runtime, windows under.
-  function emitRing(ring, base, wallH, roofRects, ib, W, Rf, allRings) {
+  function emitRing(ring, base, wallH, roofRects, ib, W, Rf, allRings, D) {
     if (ring.length > 1 && ring[0][0] === ring.at(-1)[0] && ring[0][1] === ring.at(-1)[1]) ring.pop();
     const yt = base + wallH;
     const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
@@ -322,6 +409,9 @@ export function buildBuildingLayer({
       const rect = hero ? rectByWall[`b${ib}_e${i}`] : null;
       if (rect) emitOverlayQuad(xi, zi, xj, zj, yt, base, cen, rect);
       else pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
+      // REAL detected openings (recessed glass / door slab / garage panel) sit ON/just-in-front of
+      // the wall — emitted on ANY edge that has them (hero or not), giving photo'd walls depth.
+      emitDetectedOpenings(ring, base, wallH, ib, i, D);
       dist += seg;
     }
     // flat eave cap (triangulated footprint at the eave height)
@@ -456,6 +546,9 @@ export function buildBuildingLayer({
     const yt = base + wallH;
     for (let i = 0; i < ring.length; i++) {
       if (isHeroEdge && isHeroEdge(i)) continue;   // baked-photo wall: skip the procedural window grid
+      // an edge with REAL detected openings gets its 3D door/window/garage geometry instead of the
+      // generic procedural grid — skip the grid here so they don't overlap (fallback only otherwise).
+      if (opts.ib != null && hasDetectedOpenings(opts.ib, i)) continue;
       const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
       const L = Math.hypot(bx - ax, bz - az);
       if (L < 2.4 || wallH < 2.7) continue;
@@ -582,7 +675,9 @@ export function buildBuildingLayer({
   // owner-house facade detail bucket (its own meshes): the shell trim/siding from emitFacadeDetails
   // PLUS the front-door/window cues. The grid itself is suppressed (autoWindows:false) — the cues
   // place a door + real windows facing the street instead of a generic punched grid.
-  const hD = { glass: [], trim: [], siding: [] };
+  // door/doorTrim/garage/garageTrim carry the SV-detected 3D openings (feed Doors/Doors_trim/
+  // GarageDoors/GarageDoor_trim meshes, same nodes as the per-building Doors loop).
+  const hD = { glass: [], trim: [], siding: [], door: [], doorTrim: [], garage: [], garageTrim: [] };
   if (houseIdx >= 0) {
     const houseB = S.buildings[houseIdx];
     let ring = houseB.p.map(([e, n]) => w2(e, n));
@@ -590,30 +685,36 @@ export function buildBuildingLayer({
     if (cr) { if (cr.length !== ring.length) clipped++; ring = cr; }
     houseWallH = wallHeight(houseB);
     const base = buildingBase(ring);
-    houseRing = emitRing(ring, base, houseWallH, houseB.r, houseIdx, hW, hRf, buildingPolys);
+    const houseIsPhotoreal = isPhotoreal(houseIdx);   // covered by Buildings_photoreal -> collision only
+    houseRing = emitRing(ring, base, houseWallH, houseIsPhotoreal ? null : houseB.r,
+      houseIdx, houseIsPhotoreal ? { stucco: { pos: [], uv: [] } } : hW, houseIsPhotoreal ? { pos: [] } : hRf,
+      buildingPolys, houseIsPhotoreal ? null : hD);
     buildingPolys.push(houseRing); ringToIb.set(houseRing, houseIdx);
     buildingCollision.push({ ring: houseRing, base, h: houseWallH });
     emitted++;
-    // facade detail: shell trim/siding only (no auto grid); the cues add the street-facing windows.
-    emitFacadeDetails(houseRing, base, houseWallH, hD, { house: true, autoWindows: false, ib: houseIdx });
-    if (!isSchool) emitOwnerHouseFacadeCues(houseRing, houseWallH, hD);
-    // house walls: a single stucco bucket (the photo, if any, is a separate SVFacade overlay).
-    hW.stucco.material = stuccoMaterial(houseIdx);
-    const hwMesh = wallMeshFromBuckets([hW.stucco], 'House_walls');
-    if (hwMesh) scene.add(hwMesh);
-    const hrMesh = roofMeshFromGroups(hRf.pos, [[0, hRf.pos.length / 3, roofColor(houseIdx)]], 'House_roof');
-    if (hrMesh) scene.add(hrMesh);
-    // owner-house facade detail meshes (legacy node names + colours)
-    const addH = (m) => { if (m) scene.add(m); };
-    addH(simpleMesh(hD.siding, 0xbcb4a4, 'House_siding_lines'));
-    addH(simpleMesh(hD.trim, 0xd8d0bd, 'House_window_trim'));
-    addH(simpleMesh(hD.glass, 0x223647, 'House_windows'));
+    if (!houseIsPhotoreal) {
+      // facade detail: shell trim/siding only (no auto grid); the cues add the street-facing windows.
+      emitFacadeDetails(houseRing, base, houseWallH, hD, { house: true, autoWindows: false, ib: houseIdx });
+      if (!isSchool) emitOwnerHouseFacadeCues(houseRing, houseWallH, hD);
+      // house walls: a single stucco bucket (the photo, if any, is a separate SVFacade overlay).
+      hW.stucco.material = stuccoMaterial(houseIdx);
+      const hwMesh = wallMeshFromBuckets([hW.stucco], 'House_walls');
+      if (hwMesh) scene.add(hwMesh);
+      const hrMesh = roofMeshFromGroups(hRf.pos, [[0, hRf.pos.length / 3, roofColor(houseIdx)]], 'House_roof');
+      if (hrMesh) scene.add(hrMesh);
+      // owner-house facade detail meshes (legacy node names + colours)
+      const addH = (m) => { if (m) scene.add(m); };
+      addH(simpleMesh(hD.siding, 0xbcb4a4, 'House_siding_lines'));
+      addH(simpleMesh(hD.trim, 0xd8d0bd, 'House_window_trim'));
+      addH(simpleMesh(hD.glass, 0x223647, 'House_windows'));
+    }
   }
 
   // ---- other buildings -----------------------------------------------------------------
   const bRf = { pos: [] };
   // SHARED facade detail bucket for every non-owner building — one mesh per kind at the end.
-  const bD = { glass: [], trim: [], siding: [] };
+  // door/doorTrim/garage/garageTrim carry the SV-detected 3D openings (Doors/GarageDoors meshes).
+  const bD = { glass: [], trim: [], siding: [], door: [], doorTrim: [], garage: [], garageTrim: [] };
   // per-building wall groups: each building gets its own stucco material slot (its real paint).
   const stuccoBuckets = [];   // [{pos, uv, material}] one per building (always-present stucco walls)
   const roofGroups = [];      // [start, count, col]
@@ -631,10 +732,21 @@ export function buildBuildingLayer({
     ring = cr;
     const base = buildingBase(ring);
     const h = wallHeight(b);
+    // PHOTOREAL tower: its massing is the separately-added Buildings_photoreal mesh — emit NO extruded
+    // walls/roof/facade for it, but DO record collision so the player can't walk through the tower.
+    // We still need a watertight ring + base/h for the Collision_Buildings prism below.
+    if (isPhotoreal(ib)) {
+      let pr = ring.slice();
+      if (pr.length > 1 && pr[0][0] === pr.at(-1)[0] && pr[0][1] === pr.at(-1)[1]) pr.pop();
+      buildingPolys.push(pr); ringToIb.set(pr, ib);
+      buildingCollision.push({ ring: pr, base, h });
+      emitted++;
+      return;
+    }
     // emit this building's walls into a FRESH per-building stucco bucket so each keeps its own paint
     const localW = { stucco: { pos: [], uv: [], material: stuccoMaterial(ib) } };
     const rs = bRf.pos.length / 3;
-    const emittedRing = emitRing(ring, base, h, b.r, ib, localW, bRf, buildingPolys);
+    const emittedRing = emitRing(ring, base, h, b.r, ib, localW, bRf, buildingPolys, bD);
     buildingPolys.push(emittedRing); ringToIb.set(emittedRing, ib);
     buildingCollision.push({ ring: emittedRing, base, h });
     // facade detail: window grid on EVERY wall edge (+ shell trim). Windows live UNDER the photo
@@ -736,11 +848,13 @@ export function buildBuildingLayer({
       }
     });
     const add = (m) => { if (m) scene.add(m); };
-    add(simpleMesh(dwPos, DOORCOL, 'Doors'));
-    add(simpleMesh(doorTrim, 0xd2c9b8, 'Doors_trim'));
+    // SV-DETECTED openings (from emitDetectedOpenings, both house hD + buildings bD) feed the SAME
+    // door/garage nodes so they share materials with the procedural entrances. Concatenated here.
+    add(simpleMesh(dwPos.concat(hD.door, bD.door), DOORCOL, 'Doors'));
+    add(simpleMesh(doorTrim.concat(hD.doorTrim, bD.doorTrim), 0xd2c9b8, 'Doors_trim'));
     add(simpleMesh(doorGlass, 0x203342, 'Doors_transom'));
-    add(simpleMesh(garageTrim, 0xd8d0bd, 'GarageDoor_trim'));
-    add(simpleMesh(garagePos, 0x5e6266, 'GarageDoors'));
+    add(simpleMesh(garageTrim.concat(hD.garageTrim, bD.garageTrim), 0xd8d0bd, 'GarageDoor_trim'));
+    add(simpleMesh(garagePos.concat(hD.garage, bD.garage), 0x5e6266, 'GarageDoors'));
   }
 
   // ---- Collision_Buildings (extruded footprint prisms, per-corner terrain feet) ---------

@@ -43,9 +43,17 @@ function fadeFor(key) {
   return FADE_LOCO;
 }
 
+// Monotonic per-bind index → a stable, well-spread seed for the next NPC's locomotion
+// desync. NibblerNpcs already phase-offsets each mixer + jitters the CLING emotes by
+// slot; this carries the SAME idea to WALK/RUN/IDLE so a moving/standing horde varies
+// its cadence too (no synchronized clone army), with NO new assets.
+let _bindSeq = 0;
+
 /**
  * Bind one mixer's clip actions from a loaded clip map. The pool loops EVERY clip
  * (the horde emotes continuously) and slows the bouncy idle the same as the family.
+ * Locomotion + idle get a stable per-NPC rate jitter so the crowd doesn't move in
+ * lockstep (the cling emotes are already jittered per slot in NibblerNpcs).
  * @param {THREE.AnimationMixer} mixer
  * @param {Record<string, {clip?: THREE.AnimationClip, sourceRoot?: THREE.Object3D}|undefined>} clipByKey
  * @param {THREE.Object3D} targetRoot this NPC clone/root
@@ -55,6 +63,9 @@ function fadeFor(key) {
 export function bindNpcActions(mixer, clipByKey, targetRoot, character) {
   /** @type {Record<string, THREE.AnimationAction>} */
   const actions = {};
+  // Stable 0..1 seed for THIS NPC's locomotion cadence (golden-ratio stride spreads
+  // successive binds evenly instead of clustering).
+  const seed = (_bindSeq++ * 0.61803398875) % 1;
   for (const key of ['idle', 'walk', 'run', 'climb', 'attack', 'dance']) {
     const source = clipByKey[key];
     const sourceClip = source?.clip;
@@ -63,7 +74,14 @@ export function bindNpcActions(mixer, clipByKey, targetRoot, character) {
     const action = mixer.clipAction(clip);
     action.setLoop(THREE.LoopRepeat, Infinity); // force-loop all horde moods
     action.clampWhenFinished = false;
-    if (key === 'idle') action.timeScale = IDLE_TIMESCALE;
+    // Per-NPC locomotion/idle rate jitter (±~9%) so movement isn't monotonous. Idle keeps
+    // its calmed IDLE_TIMESCALE base; walk/run jitter around 1.0. The cling emotes
+    // (climb/attack/dance) are jittered separately per slot in NibblerNpcs — leave them.
+    if (key === 'idle') {
+      action.timeScale = IDLE_TIMESCALE * (1 + (seed - 0.5) * 0.18);
+    } else if (key === 'walk' || key === 'run') {
+      action.timeScale = 1 + (seed - 0.5) * 0.18;
+    }
     actions[key] = action;
   }
   return actions;

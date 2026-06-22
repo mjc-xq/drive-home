@@ -37,6 +37,21 @@ export const ANIM_URL = {
   hit: '/da-hilg/anims/hit.glb',
   knockdown: '/da-hilg/anims/knockdown.glb',
 };
+
+// Per-character animation OVERRIDES (append-only). The build emits anims/<id>_<state>.glb
+// from each character's OWN motion library (see PLAYER_OVERRIDES in build_dahilg_assets.mjs),
+// so cece/mike/kelli visibly differ from the shared default. Only the states a character
+// actually plays at runtime are wired here; the animation system prefers an actor's own
+// override for a state and falls back to the shared ANIM_URL clip when none exists. Keyed
+// by character id, then by canonical state key (must match an entry in CLIP_KEYS).
+export const ANIM_OVERRIDE_URL = {
+  cece: { dance: '/da-hilg/anims/cece_dance.glb' },
+  mike: { dance: '/da-hilg/anims/mike_dance.glb' },
+  kelli: {
+    idle: '/da-hilg/anims/kelli_idle.glb',
+    walk: '/da-hilg/anims/kelli_walk.glb',
+  },
+};
 // The SELECTED level's assets (see level/levels.js). Only this level's files are ever
 // fetched; switching levels reloads the page, so levels never coexist in memory.
 export const LEVEL_URL = currentLevel.glb;
@@ -189,6 +204,18 @@ export const COLORS = {
   hudGlass: 'rgba(8,10,14,.66)',
   hudLine: 'rgba(255,255,255,.18)',
 };
+
+// ── Family-NPC punch (playful, non-lethal melee shove) ───────────────────────
+// A punch (F / left-click) now also affects the full-size family NPCs the player
+// can bump into: any OTHER actor caught in the forward cone gets a brief outward
+// KNOCKBACK impulse + a short STAGGER during which it stops chasing and reels away
+// from the punch. Reach/cone mirror the nibbler punch (nibblers/constants
+// PUNCH_RANGE / PUNCH_HALF_ANGLE) so the swing feels consistent. Stays playful:
+// they pop back, stumble, then resume wandering. Greet (E) is untouched.
+export const NPC_PUNCH_RANGE = 2.0;        // forward reach to catch a family NPC (m) ~= nibbler PUNCH_RANGE
+export const NPC_PUNCH_HALF_ANGLE = 1.0;   // forward cone half-angle (rad, ~57°) — matches nibbler punch
+export const NPC_PUNCH_KNOCKBACK = 8.5;    // outward velocity impulse applied to the hit NPC (m/s)
+export const NPC_PUNCH_STAGGER_MS = 520;   // ms the NPC reels (no chase) and keeps backing off the punch
 
 // ── Reserved for the Nibblers mode (inert in the framework) ─────────────────
 // The framework ships these hooks so Nibblers layers on without a rewrite.

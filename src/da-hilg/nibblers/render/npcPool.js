@@ -16,14 +16,24 @@
 // there is NO second useFrame. The pool entries are registered by NibblerNpcs on mount.
 
 import * as THREE from 'three';
-import { MAX_NIBBLERS, NIBBLER_NPC_CHAR_IX, S_DESPAWN, S_ATTACHED } from '../constants.js';
-import { MODEL_FACING_OFFSET } from '../../constants.js';
-import { px, py, pz, heading, scale, state, clip } from '../swarm/swarmState.js';
+import {
+  MAX_NIBBLERS,
+  NIBBLER_NPC_CHAR_IX,
+  S_DESPAWN,
+  S_ATTACHED,
+  CLIP_ATTACK,
+  NIBBLER_BODY_HALF,
+  ATTACHED_SCALE_MUL,
+  CLIMB_SETTLE_T,
+  CLIMB_SETTLE_DROP,
+  CLIMB_SETTLE_OUT,
+} from '../constants.js';
+import { px, py, pz, heading, scale, state, clip, stateT } from '../swarm/swarmState.js';
 import { setNpcClip, advanceNpc } from './npcAnim.js';
 
 // Reused scratch for the on-body cling orientation (no per-frame allocation).
-const _up = new THREE.Vector3();      // model up = radial-out from the player's rig axis
-const _fwd = new THREE.Vector3();     // local +Z basis; visible front is local -Z
+const _up = new THREE.Vector3();      // local +Y (head) — points UP the body
+const _fwd = new THREE.Vector3();     // local +Z (face/belly) — pressed radially INWARD
 const _right = new THREE.Vector3();
 const _basis = new THREE.Matrix4();
 
@@ -87,34 +97,61 @@ export function publishToNpcPool(dt) {
     if (!g.visible) g.visible = true;
 
     // Position: SoA holds feet pos; the clone's own group sits at feet already, so we
-    // place the root group directly at the slot's feet.
+    // place the root group directly at the slot's feet (attachment.js already wrote the
+    // body-surface anchor into px/py/pz for ATTACHED slots).
     g.position.set(px[i], py[i], pz[i]);
     const s = scale[i];
-    g.scale.set(s, s, s);
 
     if (state[i] === S_ATTACHED) {
-      // CLING ON the body: the player's body is the ground and gravity points at its
-      // central rig axis, so the nibbler's UP is the radial-out direction from that axis
-      // (its feet press onto the body surface). `heading` faces the axis (inward), so the
-      // radial-out unit vector is (-sin, -cos). Forward = "up the body" (toward the head),
-      // i.e. world-up projected into the tangent plane (== world-up since up is horizontal).
+      // CLING ON the body like a creature gripping a tree trunk — belly-in, head up:
+      //   • local +Z (face/belly) presses radially INWARD toward the body axis,
+      //   • local +Y (head) points UP the body (world up),
+      // so the visible body lies ON the surface rather than juts out beside the player.
+      // attachment.js faces `heading` at the body center (inward), so radial-OUT is
+      // (-sin h, -cos h) and radial-IN is its negation.
       const h = heading[i];
-      _up.set(-Math.sin(h), 0, -Math.cos(h)).normalize();
-      // The mesh's authored front is -Z, so to make the nibbler FACE UP the body (head
-      // toward the player's head, climbing up) we target +Z at world-DOWN.
-      _fwd.set(0, -1, 0);
-      _right.crossVectors(_fwd, _up).normalize(); // x = forward × up
-      _fwd.crossVectors(_up, _right).normalize(); // re-orthogonalize forward
-      // Build a rotation whose columns are (right, up, forward): three's lookAt-style
-      // basis maps local +X/+Y/+Z onto these world axes.
+      const radOutX = -Math.sin(h);
+      const radOutZ = -Math.cos(h);
+      _fwd.set(-radOutX, 0, -radOutZ).normalize(); // belly faces radially inward
+      _up.set(0, 1, 0);                            // head up the body
+      _right.crossVectors(_up, _fwd).normalize();
+      _up.crossVectors(_fwd, _right).normalize();  // re-orthogonalize
       _basis.makeBasis(_right, _up, _fwd);
       g.quaternion.setFromRotationMatrix(_basis);
-    } else {
-      // Free-standing on the ground: upright, yaw to travel/look direction (+ the model's
-      // authored-forward offset, same convention as stepMotion).
-      g.quaternion.identity();
-      g.rotation.set(0, heading[i] + MODEL_FACING_OFFSET, 0);
+
+      // Shrink a touch so the pile hugs the 0.30 m capsule, then drop by half the scaled
+      // body height so the TORSO (not the feet) centers on the anchor band — otherwise a
+      // feet-on-anchor body floats above the player's head.
+      const sAtt = s * ATTACHED_SCALE_MUL;
+      g.scale.set(sAtt, sAtt, sAtt);
+      g.position.y -= NIBBLER_BODY_HALF * sAtt;
+
+      // Climb-on settle: for the first CLIMB_SETTLE_T s after attaching, ease the body up
+      // from below + slightly outward into the anchor so it visibly CLIMBS on (instead of
+      // snapping). stateT[i] is reset to 0 on attach, so this is free over the SoA.
+      const settle = 1 - Math.min(1, stateT[i] / CLIMB_SETTLE_T); // 1 → 0
+      if (settle > 0) {
+        const e2 = settle * settle; // ease-out as it arrives
+        g.position.y -= CLIMB_SETTLE_DROP * NIBBLER_BODY_HALF * sAtt * e2;
+        g.position.x += radOutX * CLIMB_SETTLE_OUT * e2;
+        g.position.z += radOutZ * CLIMB_SETTLE_OUT * e2;
+        setNpcClip(e, CLIP_ATTACK); // force the climb clip during the climb-on beat
+      } else {
+        setNpcClip(e, clip[i]);
+      }
+      advanceNpc(e, dt);
+      continue;
     }
+
+    g.scale.set(s, s, s);
+    // Free-standing on the ground: upright, yaw to face travel direction. The swarm
+    // computes heading = atan2(velX, velZ); a +Z-authored mesh rotated by that angle
+    // already points its FRONT along (velX, velZ) — its travel dir — so we DON'T add
+    // MODEL_FACING_OFFSET here (the family's heading uses atan2(-velX,-velZ) and DOES add
+    // the offset; both end up facing forward — adding it on top of the swarm's heading was
+    // the 180° "walking backwards" flip).
+    g.quaternion.identity();
+    g.rotation.set(0, heading[i], 0);
 
     // Pick + cross-fade the clip for this slot's SoA clip band, then tick the mixer.
     setNpcClip(e, clip[i]);

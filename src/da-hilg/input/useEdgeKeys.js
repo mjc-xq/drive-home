@@ -23,6 +23,7 @@ import { cycleSwitch } from '../systems/switchSystem.js';
 import { requestGreet } from '../systems/greetSystem.js';
 import { requestEmote, requestPunch } from '../systems/animationSystem.js';
 import { playerPunch } from '../nibblers/systems/punchSystem.js';
+import { playerPunchFamily } from '../systems/familyPunch.js';
 
 // Keys whose browser defaults we must suppress so the game owns them.
 const PREVENT_CODES = new Set([
@@ -57,8 +58,10 @@ function buildCtxLite() {
 function doPunch() {
   const player = activePlayer();
   if (!player) return;
+  const ctx = buildCtxLite();
   requestPunch(player);            // brief one-shot 'attack' clip on the player rig
-  playerPunch(buildCtxLite());     // knock clingers off + free chasers in front (no-op in greet mode)
+  playerPunch(ctx);                // knock clingers off + free chasers in front (no-op in greet mode)
+  playerPunchFamily(ctx);          // shove + stagger any full-size family NPC caught in the forward cone
 }
 
 /** Install the window keydown handler for the edge verbs. Mount once. */
