@@ -65,6 +65,20 @@ FOV_MIN, FOV_MAX = 35.0, 90.0
 CAM_EYE = 2.5   # Street View camera eye height above the road (m)
 WALL_PAD = 0.6  # extra metres above the eave kept in the crop so the roof line reads
 
+# --- wide-wall multi-tile capture ----------------------------------------
+# The SV Static API caps a single image at 640 px wide, so a wide wall (downtown
+# frontage / high-rise base up to ~90 m) captured in ONE shot is only ~7-20 px/m
+# — well under the facade atlas's 40 px/m quality gate, so it's rejected and the
+# building stays stucco. Fix: split a wide wall into N adjacent tiles, each PANNED
+# from the SAME pano (one camera -> no lighting/parallax seam) with a narrow fov so
+# each tile spends its 640 px on ~TILE_MAX_M of wall, then stitch left->right. A 90 m
+# wall -> 7-8 tiles -> ~50 px/m at real resolution (no melty photo). Narrow walls
+# (<= TILE_MAX_M) take N=1 and are byte-identical to the previous single-shot path.
+TARGET_PPM = 50.0                 # aim comfortably above the atlas 40 px/m gate
+TILE_MAX_M = IMG_W / TARGET_PPM    # ~12.8 m of wall per 640 px tile
+MAX_TILES = 8                      # bound API cost; walls > ~100 m cap here
+TILE_FOV_MIN = 12.0                # SV-static fov floor for a zoomed-in tile
+
 
 def scene_fingerprint(scene):
     def r2(v):
@@ -140,6 +154,16 @@ def metadata(lat, lon):
     return json.loads(fetch(url))
 
 
+def _valid_jpeg(data):
+    """A flaky download can be truncated; PIL then crashes when the bytes are later re-encoded
+    during the tile stitch. Force a full decode up front so we can reject + re-fetch bad bytes."""
+    try:
+        Image.open(io.BytesIO(data)).load()
+        return True
+    except Exception:
+        return False
+
+
 def fetch_image(lat, lon, heading, fov, pitch):
     params = {
         "size": f"{IMG_W}x{IMG_H}",
@@ -155,11 +179,18 @@ def fetch_image(lat, lon, heading, fov, pitch):
     h = hashlib.sha1(ckey.encode()).hexdigest()[:16]
     cached = os.path.join(CACHE, f"sv_{h}.jpg")
     if os.path.exists(cached) and os.path.getsize(cached) > 1000:
-        return open(cached, "rb").read(), True
+        data = open(cached, "rb").read()
+        if _valid_jpeg(data):
+            return data, True
+        try:                       # truncated cache from an earlier flaky fetch — drop + re-fetch
+            os.remove(cached)
+        except OSError:
+            pass
     url = "https://maps.googleapis.com/maps/api/streetview?" + urllib.parse.urlencode(params)
     data = fetch(url)
     os.makedirs(CACHE, exist_ok=True)
-    open(cached, "wb").write(data)
+    if _valid_jpeg(data):          # only cache COMPLETE images so a bad fetch can't poison the cache
+        open(cached, "wb").write(data)
     return data, False
 
 
@@ -183,11 +214,14 @@ def main():
         r = b.get("r")
         return (max(2.4, H * 0.8) if (r and len(r)) else H) + 0.5
 
-    def crop_to_wall(jpg, d, fov, wallH, wallW):
+    def crop_to_wall(jpg, d, fov, wallH, wallW, wall_ang=None):
         """Crop the SV image to EXACTLY the front-wall rectangle so the panel shows ONLY the
         wall face (no roof, no sky, no neighbours): horizontally to the wall's angular width
         centred on the camera heading, vertically from ground (y=0) to the eave (y=wallH) under
-        the pinhole model. The crop then maps 1:1 onto the wall quad (no roof pad)."""
+        the pinhole model. The crop then maps 1:1 onto the wall quad (no roof pad).
+        `wall_ang` (deg) overrides the horizontal angular width — a multi-tile capture passes the
+        tile SEGMENT's angular span (which is foreshortened on oblique end tiles) instead of the
+        head-on width derived from wallW."""
         fov_v = 2.0 * math.degrees(math.atan(math.tan(math.radians(fov / 2.0)) * IMG_H / IMG_W))
 
         def vrow(y):
@@ -202,7 +236,8 @@ def main():
         v_top = max(0.5, vrow(wallH * 0.68))   # conservative eave — keeps roof OFF the wall
         v_bot = vrow(0.0)                       # ground
         # horizontal: wall is centred on the heading and spans this fraction of the H-fov
-        wall_ang = 2.0 * math.degrees(math.atan((wallW / 2.0) / d))
+        if wall_ang is None:
+            wall_ang = 2.0 * math.degrees(math.atan((wallW / 2.0) / d))
         frac = min(1.0, wall_ang / fov)
         u_lo, u_hi = 0.5 - frac / 2.0, 0.5 + frac / 2.0
         im = Image.open(io.BytesIO(jpg)).convert("RGB")
@@ -214,6 +249,52 @@ def main():
         buf = io.BytesIO()
         crop.save(buf, format="JPEG", quality=90)
         return buf.getvalue()
+
+    def _angdiff(a, b):
+        return (a - b + 180.0) % 360.0 - 180.0   # signed degrees in (-180, 180]
+
+    def capture_wall(P, lat, lon, A, B, wallW, wallH, d_mid, heading_mid, fov_mid):
+        """Return (crop_jpeg_bytes, n_tiles, all_cached). For a wall wider than TILE_MAX_M, pan
+        the SAME pano across the wall in N adjacent tiles and stitch them left->right (A->B), so
+        the captured wall gets ~TARGET_PPM px/m instead of being squeezed into one 640 px frame.
+        N==1 reproduces the previous single-shot path exactly (narrow walls unchanged)."""
+        n = max(1, min(MAX_TILES, int(math.ceil(wallW / TILE_MAX_M))))
+        if n == 1:
+            data, cached = fetch_image(lat, lon, heading_mid, fov_mid, PITCH)
+            return crop_to_wall(data, d_mid, fov_mid, wallH, wallW), 1, cached
+        Ax, Az = A
+        Bx, Bz = B
+        Pen = world_to_en(*P)
+        crops = []
+        all_cached = True
+        for k in range(n):
+            t0, t1 = k / n, (k + 1) / n
+            sAx, sAz = Ax + t0 * (Bx - Ax), Az + t0 * (Bz - Az)
+            sBx, sBz = Ax + t1 * (Bx - Ax), Az + t1 * (Bz - Az)
+            sMx, sMz = (sAx + sBx) / 2.0, (sAz + sBz) / 2.0
+            sA_en, sB_en, sM_en = world_to_en(sAx, sAz), world_to_en(sBx, sBz), world_to_en(sMx, sMz)
+            bA = math.degrees(math.atan2(sA_en[0] - Pen[0], sA_en[1] - Pen[1]))
+            bB = math.degrees(math.atan2(sB_en[0] - Pen[0], sB_en[1] - Pen[1]))
+            seg_ang = abs(_angdiff(bA, bB))                       # tile's angular span from P
+            hdg = math.degrees(math.atan2(sM_en[0] - Pen[0], sM_en[1] - Pen[1])) % 360.0
+            fov_t = max(TILE_FOV_MIN, min(FOV_MAX, seg_ang * 1.06))   # frame the segment + 6% pad
+            d_t = math.hypot(P[0] - sMx, P[1] - sMz) or 1.0
+            data, cached = fetch_image(lat, lon, hdg, fov_t, PITCH)
+            all_cached = all_cached and cached
+            crops.append(crop_to_wall(data, d_t, fov_t, wallH, wallW, wall_ang=seg_ang))
+        # stitch: normalise every tile to a common height, concat in A->B order
+        ims = [Image.open(io.BytesIO(c)).convert("RGB") for c in crops]
+        Hc = max(im.height for im in ims)
+        ims = [im.resize((max(2, int(round(im.width * Hc / im.height))), Hc)) for im in ims]
+        Wt = sum(im.width for im in ims)
+        canvas = Image.new("RGB", (Wt, Hc))
+        x = 0
+        for im in ims:
+            canvas.paste(im, (x, 0))
+            x += im.width
+        out = io.BytesIO()
+        canvas.save(out, format="JPEG", quality=90)
+        return out.getvalue(), n, all_cached
 
     # road segments in world XZ
     roadsegs = []
@@ -324,11 +405,14 @@ def main():
             heading = math.degrees(math.atan2(Men[0] - Pen[0], Men[1] - Pen[1])) % 360.0
             fov = max(FOV_MIN, min(FOV_MAX, 2.0 * math.degrees(math.atan((wallW / 2.0) / d))))
 
-            data, cached = fetch_image(lat, lon, heading, fov, PITCH)
+            wallH = wall_height(b)
+            try:
+                cropped, n_tiles, cached = capture_wall(P, lat, lon, A, B, wallW, wallH, d, heading, fov)
+            except Exception as _e:   # a corrupt tile or transient failure skips THIS wall, never the run
+                print(f"  b{ib} e{i}: capture failed ({type(_e).__name__}) skip")
+                continue
             n_cache += cached
             n_fetch += (not cached)
-            wallH = wall_height(b)
-            cropped = crop_to_wall(data, d, fov, wallH, wallW)
             # skip facades whose crop is too DARK — deep-shadow / north-facing walls render as black
             # panels; they fall back to the clean stylized wall colour instead.
             _g = Image.open(io.BytesIO(cropped)).convert("L")
@@ -379,7 +463,7 @@ def main():
             )
             tag = "cache" if cached else "fetch"
             print(
-                f"  b{ib} e{i}: w={wallW:4.1f} d={d:4.1f} hdg={heading:5.1f} fov={fov:4.1f} [{tag}] {meta.get('date','?')}"
+                f"  b{ib} e{i}: w={wallW:4.1f} d={d:4.1f} hdg={heading:5.1f} fov={fov:4.1f} x{n_tiles} [{tag}] {meta.get('date','?')}"
             )
 
     json.dump(

@@ -48,7 +48,7 @@ const SETS = {
   canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
   stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
-  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq' },
+  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true },
 };
 const SET = SETS[LEVEL] || SETS.dahill;
 const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
@@ -171,7 +171,7 @@ if (S.creek && Array.isArray(S.creek.p) && S.creek.p.length > 1) {
 const { wallColor, roofColor } = makeBuildingColor(pick);
 const isSchool = S.meta?.kind === 'school-region-export';
 const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terrain.demRect, isSchool, wallColor, roofColor, facade, ROOT,
-  roadLines: network.surfaces.filter(s => s.kind === 'asphalt' && s.centerline).map(s => s.centerline) });
+  roadLines: network.surfaces.filter(s => s.kind === 'asphalt' && s.centerline).map(s => s.centerline), dropOffPatch: SET.dropOffPatch });
 console.log(`buildings: emitted=${bres.counts.emitted} skipped=${bres.counts.skipped} clipped=${bres.counts.clipped} (drop ${(100 * bres.counts.skipped / Math.max(1, bres.counts.emitted + bres.counts.skipped)).toFixed(1)}%)`);
 
 const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys });

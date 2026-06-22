@@ -93,8 +93,12 @@ function pushWallRect(pos, ax, az, ex, ez, nx, nz, s0, s1, y0, y1, off = 0.09) {
 
 export function buildBuildingLayer({
   THREE, scene, S, w2, terrainAt, demRect, isSchool,
-  wallColor, roofColor, facade, ROOT, roadLines = [],
+  wallColor, roofColor, facade, ROOT, roadLines = [], dropOffPatch = false,
 }) {
+  // dropOffPatch: REMOVE any building whose footprint isn't fully inside the terrain patch instead
+  // of clipping it to the edge. Off by default (suburban levels keep the missing-buildings clip so
+  // edge houses aren't lost); on for dense downtown levels (xq) where a half-clipped building reads
+  // as a sliced box hanging off the terrain edge.
   const ShapeUtils = (THREE && THREE.ShapeUtils) || ShapeUtilsHost.ShapeUtils;
   const rectByWall = (facade && facade.rectByWall) || {};
   const heroSet = (facade && facade.heroBuildings) || new Set();
@@ -605,8 +609,11 @@ export function buildBuildingLayer({
     if (!b.p || b.p.length < 3) return;
     let ring = b.p.map(([e, n]) => w2(e, n));
     const cr = clipPolyToRect(ring, demRect);
-    if (!cr) { skipped++; return; }            // fully outside the DEM rect -> skip (only these)
-    if (cr.length !== ring.length) clipped++;  // partially clipped (the missing-buildings fix)
+    if (!cr) { skipped++; return; }            // fully outside the DEM rect -> skip
+    if (cr.length !== ring.length) {           // footprint crosses the patch edge
+      if (dropOffPatch) { skipped++; return; } // downtown: remove it entirely (no sliced edge boxes)
+      clipped++;                               // suburban: keep the in-patch part (missing-buildings fix)
+    }
     ring = cr;
     const base = buildingBase(ring);
     const h = wallHeight(b);
