@@ -32,6 +32,8 @@ namespace DaHilg
         readonly Animator m_Animator;
         readonly CharacterController m_Controller;
         readonly float m_Scale;
+        Vector3 m_BaseScale = Vector3.one;
+        Vector3 m_AppliedScale = Vector3.one;
         readonly int m_Index;
         readonly float m_Seed;
         readonly string m_RunClip;
@@ -68,16 +70,24 @@ namespace DaHilg
 
             Root = Object.Instantiate(prefab, parent);
             Root.name = "Nibbler_" + index.ToString("00");
-            Root.transform.localScale = Vector3.one * scale;
+            // The prefab carries the GLB's native import scale (~0.01). MULTIPLY it — never overwrite —
+            // so a nibbler is a FRACTION of the real human (0.32 of it), not an absolute world scale.
+            // Overwriting turned 0.32 into ~32x the intended size => building-tall, ground-sunk nibblers.
+            m_BaseScale = Root.transform.localScale;
+            m_AppliedScale = m_BaseScale * scale;
+            Root.transform.localScale = m_AppliedScale;
 
+            // The capsule lives on the scaled Root, so its LOCAL dims divide out the native scale to
+            // land at ~1.7*scale metres in world space (and sit ON the ground, not sunk below it).
+            float inv = m_BaseScale.y > 1e-5f ? 1f / m_BaseScale.y : 1f;
             m_Controller = Root.AddComponent<CharacterController>();
-            m_Controller.height = 1.7f * scale;
-            m_Controller.radius = 0.3f * scale;
-            m_Controller.center = new Vector3(0f, 0.85f * scale, 0f);
-            m_Controller.stepOffset = 0.15f;
+            m_Controller.height = 1.7f * inv;
+            m_Controller.radius = 0.3f * inv;
+            m_Controller.center = new Vector3(0f, 0.85f * inv, 0f);
+            m_Controller.stepOffset = 0.15f * inv;
             m_Controller.slopeLimit = 55f;
             m_Controller.minMoveDistance = 0f;
-            m_Controller.skinWidth = Mathf.Max(0.01f, m_Controller.radius * 0.2f);
+            m_Controller.skinWidth = Mathf.Max(0.01f, m_Controller.radius * 0.08f);
             m_Controller.enableOverlapRecovery = true;
 
             Transform animatorRoot = ResolveAnimatorRoot(Root.transform);
@@ -128,7 +138,7 @@ namespace DaHilg
             if (!s_Active.Contains(this)) s_Active.Add(this);
             m_State = NibblerState.Chase;
             Root.SetActive(true);
-            Root.transform.localScale = Vector3.one * m_Scale;
+            Root.transform.localScale = m_AppliedScale;
             Root.transform.position = position;
             Root.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
             m_Controller.enabled = true;
@@ -285,7 +295,7 @@ namespace DaHilg
             // Telegraph: squash/bulge so the commit is visible. Hold position (the controller stays
             // enabled but un-moved) so a kiting player can step out of the strike.
             float u = Mathf.Clamp01(m_StateTime / 0.18f);
-            Root.transform.localScale = Vector3.one * m_Scale * (1f + 0.15f * Mathf.Sin(u * Mathf.PI));
+            Root.transform.localScale = m_AppliedScale * (1f + 0.15f * Mathf.Sin(u * Mathf.PI));
             FaceBody(player, dt);
             if (u >= 1f) BeginBallisticLunge(player);
             return false;
@@ -299,7 +309,7 @@ namespace DaHilg
             m_LungeDuration = 0.30f + m_Seed * 0.12f;
             m_LungeStart = Root.transform.position;
             m_LungeTarget = m_Player.TransformPoint(new Vector3(m_AttachBaseLocal.x, m_AttachY, m_AttachBaseLocal.z));
-            Root.transform.localScale = Vector3.one * m_Scale;
+            Root.transform.localScale = m_AppliedScale;
             if (!m_Controller.enabled) m_Controller.enabled = true;
             Play("Jump", 0.04f);
         }
@@ -422,7 +432,7 @@ namespace DaHilg
         public void Scatter(Vector3 from)
         {
             if (!Active) return;
-            Root.transform.localScale = Vector3.one * m_Scale; // clear any Windup squash leak
+            Root.transform.localScale = m_AppliedScale; // clear any Windup squash leak
             Attached = false;
             m_State = NibblerState.Scatter;
             m_StateTime = 0f;
@@ -514,7 +524,7 @@ namespace DaHilg
             // Pop: punch to 1.3x, then ease fully to 0 over ~0.30s while tumbling.
             float u = Mathf.Clamp01(m_StateTime / 0.30f);
             float pop = u < 0.12f ? Mathf.Lerp(1f, 1.3f, u / 0.12f) : Mathf.Lerp(1.3f, 0f, (u - 0.12f) / 0.88f);
-            Root.transform.localScale = Vector3.one * m_Scale * pop;
+            Root.transform.localScale = m_AppliedScale * pop;
             Root.transform.Rotate(Vector3.up, m_CrushSpin * dt, Space.World);
             if (m_StateTime > 0.30f) Despawn();
         }
