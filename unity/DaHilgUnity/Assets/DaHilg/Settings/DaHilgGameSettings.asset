@@ -34,6 +34,13 @@ MonoBehaviour:
     Accent: {r: 0.36, g: 0.68, b: 1, a: 1}
     VisualYawOffset: 0
     AnimatorController: {fileID: 9100000, guid: 356f520c3bfc74ff1a17777e1915b702, type: 2}
+  - Id: kelli
+    Label: Kelli
+    Blurb: Mom
+    Prefab: {fileID: 6635245195314443262, guid: df09f7492a9ed4c4e96a616072b96d5b, type: 3}
+    Accent: {r: 1, g: 0.67, b: 0.35, a: 1}
+    VisualYawOffset: 0
+    AnimatorController: {fileID: 9100000, guid: 80e4667c77ce242bfb416d1d849dede1, type: 2}
   CharacterAnimator: {fileID: 9100000, guid: 9e5cb70ce4eab4aa0a686eede89e7973, type: 2}
   NibblerAnimator: {fileID: 9100000, guid: 49221b2c228e242f499c3ff3b525024f, type: 2}
   NibblerPrefab: {fileID: 6635245195314443262, guid: d272ee557b3d641be828a72806e202b9, type: 3}

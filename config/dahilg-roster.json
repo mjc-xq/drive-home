@@ -1,8 +1,11 @@
 {
   "characters": [
-    { "id":"cece","body":"src/assets/cece-mx.glb","role":"player","isDefault":true,"label":"Cece","blurb":"Kid","accent":[1,0.45,0.76],"yawOffset":0 },
-    { "id":"mike","body":"src/assets/mike-mx.glb","role":"player","isDefault":false,"label":"Mike","blurb":"Dad","accent":[0.36,0.68,1],"yawOffset":0 },
-    { "id":"kelli","body":"src/assets/kelli-mx.glb","role":"player","isDefault":false,"label":"Kelli","blurb":"Mom","accent":[1,0.67,0.35],"yawOffset":0 },
+    { "id":"cece","body":"src/assets/cece-mx.glb","role":"player","isDefault":true,"label":"Cece","blurb":"Kid","accent":[1,0.45,0.76],"yawOffset":0,
+      "clips":{ "attack":"Boxing", "attack2":"Fist_Fight_B", "attack3":"Brutal_Assassination", "dance":"Breakdance_1990" } },
+    { "id":"mike","body":"src/assets/mike-mx.glb","role":"player","isDefault":false,"label":"Mike","blurb":"Dad","accent":[0.36,0.68,1],"yawOffset":0,
+      "clips":{ "attack":"Punching", "attack2":"Punching", "attack3":"Punching", "dance":"Hip_Hop_Dancing" } },
+    { "id":"kelli","body":"src/assets/kelli-mx.glb","role":"player","isDefault":false,"label":"Kelli","blurb":"Mom","accent":[1,0.67,0.35],"yawOffset":0,
+      "clips":{ "idle":"Nervously_Look_Around", "walk":"Female_Locomotion_Pose", "attack":"Jump_Attack", "attack2":"Jump_Attack", "attack3":"Jump_Attack", "hit":"Female_Laying_Pose", "knockdown":"Female_Laying_Pose" } },
     { "id":"drew","body":"src/assets/drew-mx.glb","role":"nibbler","isDefault":false,"label":"Drew","blurb":"Zombie","accent":[0.42,1,0.58],"yawOffset":0 }
   ]
 }

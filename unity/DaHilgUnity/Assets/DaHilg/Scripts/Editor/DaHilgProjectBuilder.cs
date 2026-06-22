@@ -47,6 +47,8 @@ namespace DaHilg.Editor
             "Wave",
             "Cheer",
             "Attack",
+            "Attack2",
+            "Attack3",
             "Hit",
             "Knockdown",
             "Crawl",
@@ -228,13 +230,16 @@ namespace DaHilg.Editor
             "Attack",
             "Hit"
         };
+        // Emote/idle states whose feet should stay planted near the ground. Dance and Attack are
+        // intentionally EXCLUDED: expressive Mixamo clips (Breakdance drops to the floor, Jump
+        // Attack leaves the ground) legitimately move vertically. Mis-rooted clips are still
+        // caught by the Run-movement check, the skin-safe Hips-only-translation pass, and the
+        // post-write bind assertion — this list only guards the should-stay-grounded states.
         static readonly string[] s_FootPinnedClips =
         {
             "Idle",
-            "Dance",
             "Wave",
             "Cheer",
-            "Attack"
         };
 
         [MenuItem("Da Hilg/Rebuild Unity Scene")]
@@ -1051,7 +1056,15 @@ body {
             {
                 string stateName = states[i];
                 AnimatorState state = machine.AddState(stateName, new Vector3(260f, 60f + i * 48f, 0f));
-                if (clips.TryGetValue(stateName.ToLowerInvariant(), out AnimationClip clip))
+                // Prefer a per-character signature clip ("<id>_<state>") drawn from that character's own
+                // library; fall back to the shared default ("<state>") when no override was emitted. The
+                // nibbler controller passes "drew" but has no overrides, so it falls through to the base key.
+                string overrideKey = characterId.ToLowerInvariant() + "_" + stateName.ToLowerInvariant();
+                if (!clips.TryGetValue(overrideKey, out AnimationClip clip))
+                {
+                    clips.TryGetValue(stateName.ToLowerInvariant(), out clip);
+                }
+                if (clip != null)
                 {
                     state.motion = RetargetAnimationClip(characterId, stateName, clip, targetPrefab, sourceDir);
                 }
@@ -1099,10 +1112,15 @@ body {
 
         static AnimationClip RetargetAnimationClip(string characterId, string stateName, AnimationClip source, GameObject targetPrefab, string sourceDir)
         {
-            GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(sourceDir + "/" + stateName.ToLowerInvariant() + ".glb");
+            // Derive the source rig from the clip's OWN GLB (the asset it was loaded from) rather than a
+            // re-derived lowercased "<sourceDir>/<state>.glb" path. This is case-filesystem-agnostic and
+            // resolves the exact GLB behind both shared-default and per-character override clips (whose
+            // filenames are "<id>_<state>.glb"), fixing the latent case-sensitive-CI rig-load blocker.
+            string srcPath = AssetDatabase.GetAssetPath(source);
+            GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(srcPath);
             if (sourcePrefab == null)
             {
-                throw new InvalidOperationException("Missing source animation rig for " + stateName + " in " + sourceDir + ".");
+                throw new InvalidOperationException("Missing source animation rig for " + stateName + " at " + srcPath + ".");
             }
 
             // The animation binding root = the node whose DIRECT child is "Hips" (the Armature wrapper
