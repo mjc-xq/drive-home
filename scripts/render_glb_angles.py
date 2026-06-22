@@ -91,16 +91,16 @@ def setup_world_and_sun():
     world.use_nodes = True
     bg = world.node_tree.nodes.get("Background")
     if bg:
-        bg.inputs[0].default_value = (0.78, 0.84, 0.95, 1.0)  # bright sky ambient FILL
-        bg.inputs[1].default_value = 2.4                       # strong ambient so shadows aren't pure black
+        bg.inputs[0].default_value = (0.80, 0.86, 0.96, 1.0)  # sky ambient FILL
+        bg.inputs[1].default_value = 1.15                      # calmer ambient so grazing ground/walls don't blow to white
     # EEVEE-Next doesn't reliably apply world ambient as diffuse FILL without a light probe, so
     # surfaces not hit by a sun render black. Light from MULTIPLE directions (key + 3 fills incl.
     # one from below) so every face gets diffuse and true material colour shows in QA.
     for i, (energy, rx, rz) in enumerate([
-        (2.2, 58, -32),   # key
-        (1.1, 60, 150),   # fill back
-        (1.1, 62, 60),    # fill side
-        (0.7, 130, -100), # under-fill (lights downward-facing faces)
+        (1.5, 58, -32),   # key
+        (0.7, 60, 150),   # fill back
+        (0.7, 62, 60),    # fill side
+        (0.45, 130, -100),# under-fill (lights downward-facing faces)
     ]):
         sd = bpy.data.lights.new(f"Sun{i}", "SUN")
         sd.energy = energy
@@ -134,6 +134,15 @@ def render_to(path):
             continue
     try:
         sc.eevee.taa_render_samples = 16
+    except Exception:
+        pass
+    try:
+        # Show the REAL baked albedo for QA — AgX (the EEVEE default) desaturates + compresses
+        # highlights, which made the textured ground/roofs read as a pale wash. Standard + a touch
+        # of negative exposure keeps grazing surfaces from blowing out while preserving true colour.
+        sc.view_settings.view_transform = "Standard"
+        sc.view_settings.look = "None"
+        sc.view_settings.exposure = -0.35
     except Exception:
         pass
     sc.render.resolution_x = RES
