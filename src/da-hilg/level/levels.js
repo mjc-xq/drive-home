@@ -34,9 +34,25 @@ export const LEVELS = {
     meta: '/da-hilg/stanton.meta.json',
     minimap: '/da-hilg/stanton.minimap.json',
   },
+  meemaw: {
+    slug: 'meemaw',
+    label: "Meemaw's",
+    sub: "Grandma's house",
+    glb: '/da-hilg/meemaw.glb',
+    meta: '/da-hilg/meemaw.meta.json',
+    minimap: '/da-hilg/meemaw.minimap.json',
+  },
+  xq: {
+    slug: 'xq',
+    label: '807 Broadway',
+    sub: 'Oakland HQ',
+    glb: '/da-hilg/xq.glb',
+    meta: '/da-hilg/xq.meta.json',
+    minimap: '/da-hilg/xq.minimap.json',
+  },
 };
 
-export const LEVEL_ORDER = ['dahill', 'canyon', 'stanton'];
+export const LEVEL_ORDER = ['dahill', 'meemaw', 'canyon', 'stanton', 'xq'];
 
 const STORE_KEY = 'dahilg:level';
 const DEFAULT_LEVEL = 'dahill';

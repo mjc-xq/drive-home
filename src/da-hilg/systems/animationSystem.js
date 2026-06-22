@@ -64,6 +64,74 @@ function fadeFor(next) {
   return FADE_LOCO;
 }
 
+// States that read as continuous body motion and look robotic when a crowd plays the
+// SAME clip at the SAME phase + rate. We desync these per-actor (NPCs only) so the
+// family doesn't walk/idle in lockstep — no new assets, just a stable rate + phase.
+const VARIETY_STATES = new Set(['idle', 'walk', 'run']);
+
+/**
+ * A stable 0..1 hash for an actor, derived once from its id and cached on the ref.
+ * Drives the per-actor rate jitter + phase offset so the same actor always desyncs the
+ * same way (no per-frame randomness — that would make the timeScale shimmer).
+ * @param {import('../actors/actorRegistry.js').Actor} actor
+ */
+function actorSeed(actor) {
+  if (actor.ref._varSeed != null) return actor.ref._varSeed;
+  let h = 2166136261;
+  const id = actor.id || '';
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const seed = ((h >>> 0) % 1000) / 1000; // 0..0.999
+  actor.ref._varSeed = seed;
+  return seed;
+}
+
+/**
+ * Resolve the actual action KEY to play for a canonical animState, preferring this
+ * actor's own loaded variant over the shared clip. Variant actions are bound under
+ * `<state>__<character>` (e.g. `dance__cece`) when useCharacterClips loads an
+ * ANIM_OVERRIDE_URL entry; if none is bound the canonical state key is returned. Cheap:
+ * one map lookup, only on a state change.
+ * @param {import('../actors/actorRegistry.js').Actor} actor
+ * @param {string} state canonical animState (idle|walk|dance|...)
+ * @param {Record<string, THREE.AnimationAction>} actions
+ * @returns {string} the action key to play
+ */
+function resolveVariantKey(actor, state, actions) {
+  const variant = `${state}__${actor.character}`;
+  return actions[variant] ? variant : state;
+}
+
+/**
+ * Apply the per-actor locomotion/idle desync as the actor ENTERS a variety state:
+ * a stable rate jitter (±~8%) multiplied onto the action's authored base timeScale,
+ * plus a stable phase offset so two actors in the same clip aren't on the same frame.
+ * The ACTIVE PLAYER is left untouched (predictable, input-tight feel); only NPC bodies
+ * desync. Called once on the crossfade-in (cheap), and the jitter is stored on the
+ * action so the per-frame path never recomputes or compounds it.
+ * @param {import('../actors/actorRegistry.js').Actor} actor
+ * @param {string} state target animState being entered
+ * @param {THREE.AnimationAction} action the action being faded in
+ * @param {boolean} isPlayer
+ */
+function applyLocoVariety(actor, state, action, isPlayer) {
+  if (isPlayer || !VARIETY_STATES.has(state)) return;
+  const seed = actorSeed(actor);
+  // Stable rate jitter once per action: remember the authored base timeScale, then
+  // multiply by a per-(actor,state) factor so walk keeps its WALK_TIMESCALE stride and
+  // idle its IDLE_TIMESCALE sway — just nudged so the crowd's cadence varies.
+  if (action.userData == null) action.userData = {};
+  if (action.userData._varBase == null) action.userData._varBase = action.timeScale;
+  const stateBump = state === 'run' ? 0.07 : 0.13; // a fraction more spread when walking/idling
+  const factor = 1 + (seed - 0.5) * 2 * stateBump; // ~0.87..1.13 (run ~0.93..1.07)
+  action.timeScale = action.userData._varBase * factor;
+  // Phase offset: start the loop at a stable per-actor point in the cycle.
+  const dur = action.getClip()?.duration || 0;
+  if (dur > 0) action.time = (seed * dur) % dur;
+}
+
 /**
  * Advance one actor's animation: clear finished one-shot emotes, choose the
  * target state, cross-fade if it changed, then tick the mixer.
@@ -77,7 +145,9 @@ export function updateAnimation(actor, dt) {
 
   // --- Retire a finished/expired emote so we fall back to locomotion ---
   if (m.action) {
-    const emoteAction = actions[m.action];
+    // Use the variant actually playing (e.g. dance__cece) so one-shot completion is read
+    // off the right action, not the shared clip the actor isn't playing.
+    const emoteAction = actions[resolveVariantKey(actor, m.action, actions)];
     // A clip is one-shot here if its manifest loop is 'once', OR the request forced it
     // (m.actionOnce — the player punch reuses the shared 'attack' clip, which loops for
     // the nibbler swarm but must play exactly once on the player).
@@ -113,7 +183,13 @@ export function updateAnimation(actor, dt) {
   // --- Choose target state and cross-fade if changed ---
   const target = pickAnimState(actor);
   if (target !== current) {
-    const next = actions[target];
+    // Prefer this character's OWN variant action for the state when one is bound (e.g. a
+    // future cece_dance / kelli_idle bound under a variant key by useCharacterClips), so
+    // cece/mike/kelli visibly differ — falling back to the shared clip when absent. The
+    // resolved key (not the canonical target) becomes `current` so retire/fadeOut match.
+    const isPlayer = actor === activePlayer();
+    const playKey = resolveVariantKey(actor, target, actions);
+    const next = actions[playKey];
     if (next) {
       const d = fadeFor(target);
       // Forced one-shot (the player punch on the shared 'attack' clip): bound as a
@@ -126,8 +202,11 @@ export function updateAnimation(actor, dt) {
       }
       // Restart emote/jump one-shots from frame 0 so they always play in full.
       next.reset().fadeIn(d).play();
+      // Per-actor locomotion/idle desync (NPCs only) — set AFTER reset() so the phase
+      // offset survives (reset zeroes action.time but leaves timeScale).
+      applyLocoVariety(actor, target, next, isPlayer);
       if (current && actions[current]) actions[current].fadeOut(d);
-      actor.ref.current = target;
+      actor.ref.current = playKey;
       m.animState = target;
     }
   }

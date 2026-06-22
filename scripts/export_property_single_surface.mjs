@@ -25,6 +25,7 @@ if (typeof globalThis.FileReader === 'undefined') {       // GLTFExporter binary
 const THREE = await import('three');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
 const { NodeIO } = await import('@gltf-transform/core');
+const io = new NodeIO();   // shared: reads the photoreal GLB (4b-ii) AND the exported scene (5)
 
 import { loadDEM, makeGeo, buildTerrainMesh } from './lib/terrain_mesh.mjs';
 import { gradeDemUnderRoads } from './lib/dem_road_grade.mjs';
@@ -49,7 +50,7 @@ const SETS = {
   canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
   stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
-  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true },
+  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: true },
 };
 const SET = SETS[LEVEL] || SETS.dahill;
 const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
@@ -61,6 +62,30 @@ const LAT0 = Number.isFinite(+ORIGIN.lat) ? +ORIGIN.lat : 37.6835313;
 const LON0 = Number.isFinite(+ORIGIN.lon) ? +ORIGIN.lon : -122.0686199;
 const COSLAT = Math.cos(LAT0 * Math.PI / 180);
 const w2 = (e, n) => [e - C[0], -(n - C[1])];
+
+// ---- tiny column-major 4x4 matrix helpers (photoreal node-transform flattening) ----
+// compose a TRS into a column-major mat4 (matches THREE/glTF column-major layout).
+function composeTRS(t, q, s) {
+  const [x, y, z, w] = q, [sx, sy, sz] = s;
+  const x2 = x + x, y2 = y + y, z2 = z + z;
+  const xx = x * x2, xy = x * y2, xz = x * z2;
+  const yy = y * y2, yz = y * z2, zz = z * z2;
+  const wx = w * x2, wy = w * y2, wz = w * z2;
+  return [
+    (1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0,
+    (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0,
+    (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0,
+    t[0], t[1], t[2], 1,
+  ];
+}
+// a * b for column-major mat4 (a applied after b, i.e. world = parent * local).
+function mul4(a, b) {
+  const o = new Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  }
+  return o;
+}
 
 const MS = existsSync(pick('map_surfaces_osm.json')) ? JSON.parse(readFileSync(pick('map_surfaces_osm.json'), 'utf8')) : {};
 const AB = JSON.parse(readFileSync(pick('google_aerial.json'), 'utf8'));
@@ -133,6 +158,23 @@ const facade = svWalls.length
   : { pages: [], rectByWall: {}, heroBuildings: [], stuccoTile: R('exports/facade.png') };
 console.log(`facade: ${facade.pages.length} atlas page(s), ${Object.keys(facade.rectByWall).length} hero walls (toggleable photo overlay; windowed stucco underneath)`);
 
+// ---- 4b-i) SV-DETECTED OPENINGS: door/window/garage rects per wall (from detect_facade_openings.py).
+// Each svWall may now carry an `openings` array [{kind,x0,y0,x1,y1}] normalised on its wall crop
+// (x=left->right along the edge, y=eave(0)->ground(1)). Key them 'b{building}_e{edge}' (the same
+// identity as rectByWall) and hand them to buildBuildingLayer via facade.openingsByWall so photo
+// walls get REAL 3D recessed glass / door slabs / garage panels. Backward-safe: walls without an
+// `openings` array contribute nothing, so levels predating the detector behave exactly as before.
+const openingsByWall = {};
+let nOpenings = 0;
+for (const wall of svWalls) {
+  if (!Array.isArray(wall.openings) || !wall.openings.length) continue;
+  if (wall.building == null || wall.edge == null) continue;
+  openingsByWall[`b${wall.building}_e${wall.edge}`] = wall.openings;
+  nOpenings += wall.openings.length;
+}
+facade.openingsByWall = openingsByWall;
+if (nOpenings) console.log(`openings: ${nOpenings} detected door/window/garage rects across ${Object.keys(openingsByWall).length} wall(s)`);
+
 // ---- 4a-bis) FILL MISSING BUILDINGS: lots that have a real house in the aerial (and/or Mapbox)
 // but none in our OSM/Overture scene.buildings. Inferred footprints flow through the existing
 // massing/seating/collision path below unchanged (they are scene-building shaped). ------------
@@ -180,8 +222,166 @@ if (S.creek && Array.isArray(S.creek.p) && S.creek.p.length > 1) {
 const pickColor = (name) => R(SET.dir, name);
 const { wallColor, roofColor } = makeBuildingColor(pickColor);
 const isSchool = S.meta?.kind === 'school-region-export';
+
+// ---- 4b-ii) PHOTOREAL high-rise towers (xq): replace the extruded towers with a Google-photoreal
+// mesh. We CLIP the photoreal to the tall footprints only ("the building, not the melty street"),
+// VERTICALLY SEAT it on the terrain, add it as a 'Buildings_photoreal' node, and tell the building
+// layer to SKIP those towers' extruded walls/roofs (keeping only their collision prism). The
+// photoreal texture(s) are attached as raw bytes in the gltf-transform post-pass (same pattern as
+// the ground/facade textures), so no image decode is needed here. Missing GLB -> warn + fall back
+// to extruded towers (photorealFootprints stays empty). Off for every non-photoreal level.
+const photorealFootprints = new Set();           // building indices (ib) whose massing the GLB covers
+const photorealTextures = [];                    // [{matName, bytes, mime}] attached in the post-pass
+if (SET.photoreal) {
+  const prPath = R('exports', `${SET.slug}-photoreal.glb`);
+  if (!existsSync(prPath)) {
+    console.warn(`  ! photoreal GLB missing (${path.relative(ROOT, prPath)}) — falling back to extruded towers`);
+  } else {
+    try {
+      // (a) tall footprints (towers): b.h > 20. World polygon via w2; remember their ib + centroid.
+      const tallPolys = [];                      // [{ib, ring:[[x,z]...], cen:[x,z]}]
+      (S.buildings || []).forEach((b, ib) => {
+        if (!b || !b.p || b.p.length < 3 || !(b.h > 20)) return;
+        const ring = b.p.map(([e, n]) => w2(e, n));
+        const cen = ring.reduce((a, p) => [a[0] + p[0] / ring.length, a[1] + p[1] / ring.length], [0, 0]);
+        tallPolys.push({ ib, ring, cen });
+        photorealFootprints.add(ib);
+      });
+      if (!tallPolys.length) {
+        console.warn('  ! photoreal: no tall footprints (b.h > 20) — nothing to clip; falling back to extruded');
+      } else {
+        const BUF = 4.0;                         // buffer the footprints ~4 m so eaves/setbacks survive
+        const inPolyXZ = (x, z, ring) => {
+          let inside = false;
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [xi, zi] = ring[i], [xj, zj] = ring[j];
+            if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+          }
+          return inside;
+        };
+        const distToRing = (x, z, ring) => {     // min distance to any edge (for the buffer band)
+          let best = Infinity;
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [ax, az] = ring[j], [bx, bz] = ring[i];
+            let dx = bx - ax, dz = bz - az; const l2 = dx * dx + dz * dz || 1;
+            let t = ((x - ax) * dx + (z - az) * dz) / l2; t = Math.max(0, Math.min(1, t));
+            best = Math.min(best, Math.hypot(x - (ax + t * dx), z - (az + t * dz)));
+          }
+          return best;
+        };
+        const inAnyTall = (x, z) => tallPolys.some(tp =>
+          inPolyXZ(x, z, tp.ring) || distToRing(x, z, tp.ring) <= BUF);
+
+        // (b) load the photoreal GLB with the same NodeIO, walk every mesh node, bake the node's
+        //     world transform into its primitive positions, then keep only triangles whose centroid
+        //     (X,Z) lands in a tall footprint. Group kept tris by their material's baseColor texture
+        //     so each distinct texture becomes its own THREE mesh (textures attached in the post-pass).
+        const prDoc = await io.read(prPath);
+        const flatten = (node, m) => {           // accumulate world matrices (column-major 4x4)
+          const t = node.getTranslation(), r = node.getRotation(), s = node.getScale();
+          const local = composeTRS(t, r, s);
+          const world = mul4(m, local);
+          const out = [];
+          const mesh = node.getMesh();
+          if (mesh) out.push({ mesh, world });
+          for (const c of node.listChildren()) out.push(...flatten(c, world));
+          return out;
+        };
+        const I4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+        const meshNodes = [];
+        for (const sc of prDoc.getRoot().listScenes())
+          for (const root of sc.listChildren()) meshNodes.push(...flatten(root, I4));
+
+        // group kept geometry by texture image (dedup by image pointer); each group -> a THREE mesh.
+        const groups = new Map();                // texImage(Texture|null) -> {pos:[], uv:[], tex}
+        const groupFor = (tex) => {
+          const key = tex || '__notex__';
+          let g = groups.get(key);
+          if (!g) { g = { pos: [], uv: [], tex }; groups.set(key, g); }
+          return g;
+        };
+        const keptY = [];                        // photoreal Y of kept verts (for vertical seat)
+        for (const { mesh, world } of meshNodes) {
+          for (const prim of mesh.listPrimitives()) {
+            const posAcc = prim.getAttribute('POSITION');
+            if (!posAcc) continue;
+            const uvAcc = prim.getAttribute('TEXCOORD_0');
+            const idxAcc = prim.getIndices();
+            const P = posAcc.getArray(), U = uvAcc ? uvAcc.getArray() : null;
+            const pc = posAcc.getElementSize(), uc = uvAcc ? uvAcc.getElementSize() : 0;
+            const mat = prim.getMaterial();
+            const tex = mat && mat.getBaseColorTexture ? mat.getBaseColorTexture() : null;
+            const g = groupFor(tex);
+            const nv = posAcc.getCount();
+            const idx = idxAcc ? idxAcc.getArray() : null;
+            const triCount = idx ? idx.length / 3 : nv / 3;
+            const wpos = new Array(nv * 3);
+            for (let v = 0; v < nv; v++) {       // bake world transform
+              const x = P[v * pc], y = P[v * pc + 1], z = P[v * pc + 2];
+              wpos[v * 3] = world[0] * x + world[4] * y + world[8] * z + world[12];
+              wpos[v * 3 + 1] = world[1] * x + world[5] * y + world[9] * z + world[13];
+              wpos[v * 3 + 2] = world[2] * x + world[6] * y + world[10] * z + world[14];
+            }
+            for (let t = 0; t < triCount; t++) {
+              const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
+              const cx = (wpos[a * 3] + wpos[b * 3] + wpos[c * 3]) / 3;
+              const cz = (wpos[a * 3 + 2] + wpos[b * 3 + 2] + wpos[c * 3 + 2]) / 3;
+              if (!inAnyTall(cx, cz)) continue;  // drop ground/streets/low-rise
+              for (const vi of [a, b, c]) {
+                g.pos.push(wpos[vi * 3], wpos[vi * 3 + 1], wpos[vi * 3 + 2]);
+                keptY.push(wpos[vi * 3 + 1]);
+                if (U) g.uv.push(U[vi * uc], U[vi * uc + 1]); else g.uv.push(0, 0);
+              }
+            }
+          }
+        }
+
+        const totalTris = [...groups.values()].reduce((a, g) => a + g.pos.length / 9, 0);
+        if (!totalTris) {
+          console.warn('  ! photoreal: no triangles fell inside the tall footprints — falling back to extruded towers');
+          photorealFootprints.clear();
+        } else {
+          // (b) VERTICAL SEAT: shift kept verts in Y so tower bases sit on the terrain. delta =
+          //     median(terrainAt at the tall centroids) - median(photoreal kept Y). The photoreal's
+          //     absolute Y can be off by the geoid; this lands the bases on our DEM.
+          const med = (arr) => { const s = [...arr].sort((p, q) => p - q); return s.length ? s[s.length >> 1] : 0; };
+          const terrCen = tallPolys.map(tp => terrainAt(tp.cen[0], tp.cen[1]));
+          const dy = med(terrCen) - med(keptY);
+          let gi = 0;
+          for (const g of groups.values()) {
+            const pos = g.pos.slice();
+            for (let i = 1; i < pos.length; i += 3) pos[i] += dy;
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+            geo.computeVertexNormals();
+            const matName = `Buildings_photoreal_${gi}_mat`;
+            // unlit-ish: low roughness contribution, full baseColor texture (attached in post-pass).
+            const m = new THREE.MeshStandardMaterial({ name: matName, color: 0xffffff, roughness: 1, metalness: 0, side: THREE.FrontSide });
+            const mesh = new THREE.Mesh(geo, m);
+            mesh.name = gi === 0 ? 'Buildings_photoreal' : `Buildings_photoreal_${gi}`;
+            mesh.userData = { source: 'Google Photorealistic 3D Tiles', photoreal: true };
+            scene.add(mesh);
+            // remember this group's texture bytes for the post-pass (raw, no decode)
+            if (g.tex) {
+              const img = g.tex.getImage();
+              if (img) photorealTextures.push({ matName, bytes: img, mime: g.tex.getMimeType() || 'image/jpeg' });
+            }
+            gi++;
+          }
+          console.log(`photoreal: ${totalTris} tris over ${tallPolys.length} tall footprint(s), seated dy=${dy.toFixed(2)}m, ${groups.size} texture group(s)`);
+        }
+      }
+    } catch (e) {
+      console.warn(`  ! photoreal load failed (${e.message}) — falling back to extruded towers`);
+      photorealFootprints.clear();
+    }
+  }
+}
+
 const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terrain.demRect, isSchool, wallColor, roofColor, facade, ROOT,
-  roadLines: network.surfaces.filter(s => s.kind === 'asphalt' && s.centerline).map(s => s.centerline), dropOffPatch: SET.dropOffPatch });
+  roadLines: network.surfaces.filter(s => s.kind === 'asphalt' && s.centerline).map(s => s.centerline), dropOffPatch: SET.dropOffPatch,
+  photorealFootprints });
 console.log(`buildings: emitted=${bres.counts.emitted} skipped=${bres.counts.skipped} clipped=${bres.counts.clipped} (drop ${(100 * bres.counts.skipped / Math.max(1, bres.counts.emitted + bres.counts.skipped)).toFixed(1)}%)`);
 
 const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys });
@@ -205,7 +405,6 @@ scene.add(proxyMesh(terrain.collision.pos, terrain.collision.idx, 'Collision_Ter
 mkdirSync(R('exports'), { recursive: true });
 const outGlb = R('exports', `${SET.slug}-single.glb`);
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
-const io = new NodeIO();
 const doc = await io.readBinary(new Uint8Array(glb));
 
 const texOf = (p, mime) => doc.createTexture(path.basename(p)).setImage(new Uint8Array(readFileSync(p)))
@@ -220,6 +419,13 @@ const coreOrm = texOf(ground.core.orm);
 const farAlb = await jtex(ground.far.albedo, 84);
 const facadeTexes = await Promise.all(facade.pages.map((p) => jtex(p, 85)));
 const stuccoTex = existsSync(facade.stuccoTile) ? await jtex(facade.stuccoTile, 88) : null;
+// photoreal tower textures: re-create each group's baseColor image (raw bytes from the source GLB)
+// as a doc texture, keyed by the THREE material name we gave it, to attach in the loop below.
+const photorealTexByMat = new Map();
+for (const { matName, bytes, mime } of photorealTextures) {
+  if (photorealTexByMat.has(matName)) continue;
+  photorealTexByMat.set(matName, doc.createTexture(matName).setImage(new Uint8Array(bytes)).setMimeType(mime));
+}
 const CLAMP = 33071, REPEAT = 10497;
 for (const m of doc.getRoot().listMaterials()) {
   const n = m.getName() || '';
@@ -242,6 +448,9 @@ for (const m of doc.getRoot().listMaterials()) {
     } else if (/^Stucco_b\d+_mat$/.test(n) && stuccoTex) {   // tiled window/stucco x per-building wallColor (the always-present wall)
       m.setBaseColorTexture(stuccoTex);
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
+    } else if (photorealTexByMat.has(n)) {   // Google-photoreal tower: re-attach the baked baseColor texture
+      m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(photorealTexByMat.get(n));
+      m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
     }
   }
 }

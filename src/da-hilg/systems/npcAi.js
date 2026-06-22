@@ -220,6 +220,29 @@ export function npcStep(actor, ctx, dt) {
   const dist = planarDist(pos, ppos);
   const ai = actor.ai;
 
+  // Punch STAGGER override — checked FIRST (before any mode/FSM logic). A player
+  // punch (systems/familyPunch.js) sets ai.staggerUntil + the punch source; while it
+  // lasts the NPC ignores chase/greet/pester and keeps reeling AWAY from where it was
+  // hit, so the knockback impulse reads as a shove + recoil rather than the AI
+  // instantly steering back. The velocity impulse decays via stepMotion; here we just
+  // bias the heading outward for the window, then fall through to normal behavior.
+  if (ai.staggerUntil && now < ai.staggerUntil) {
+    const sx = ai.staggerFromX ?? ppos.x;
+    const sz = ai.staggerFromZ ?? ppos.z;
+    // Seek a point well behind the NPC relative to the punch source so it backs off.
+    let ax = pos.x - sx;
+    let az = pos.z - sz;
+    if (Math.hypot(ax, az) < 1e-3) {
+      ax = Math.cos(now * 0.001);
+      az = Math.sin(now * 0.001);
+    }
+    _away.set(ax, 0, az).normalize();
+    ai._npcRun = false;
+    seek(actor, pos.x + _away.x * 6, pos.z + _away.z * 6, 1, 0.7, dt);
+    ai.faceTarget = null;
+    return _intent;
+  }
+
   // Nibblers mode: the un-controlled family don't run the greet FSM — they run up
   // and DANCE in your way (Drew most eagerly + with varied moves), a playful
   // obstacle that's separate from the nibbler swarm threat.

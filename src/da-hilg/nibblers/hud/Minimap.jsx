@@ -33,16 +33,26 @@ import { MINIMAP_URL, MINIMAP_SIZE_PX, MINIMAP_VIEW_RADIUS } from '../constants.
 import { makeMinimapProjector } from '../minimap/minimapTransform.js';
 import { buildNibblersZones } from '../zones/zoneConfig.nibblers.js';
 
-// Per-layer road strokes (read from the brand tokens; resolved at draw time so
-// theme changes are honored). Drawn back-to-front: walk/curb under road over line.
-const LAYER_STYLE = {
-  walk: { color: 'rgba(255,255,255,0.10)', width: 1 },
-  curb: { color: 'rgba(255,255,255,0.14)', width: 1 },
-  drive: { color: 'rgba(255,255,255,0.16)', width: 1.5 },
-  road: { color: 'rgba(255,255,255,0.26)', width: 2 },
-  line: { color: 'rgba(255,200,61,0.40)', width: 1, dash: [3, 4] }, // --coin center-lines
-};
-const LAYER_ORDER = ['walk', 'curb', 'drive', 'road', 'line'];
+// Map surfaces are baked by build_minimap.mjs as 1-bit occupancy masks (fillN x fillN over
+// `bounds`), NOT segment strokes — strokes rasterized as dotted stipple and were dropped.
+// Composite the masks back-to-front so sidewalks sit under driveways under roads under the
+// painted center-lines; water is its own blue layer. RGBA per layer (a = 0..255).
+const FILL_LAYERS = [
+  { key: 'fillWater', rgba: [74, 134, 208, 168] },
+  { key: 'fillWalk', rgba: [255, 255, 255, 30] },
+  { key: 'fillCurb', rgba: [255, 255, 255, 46] },
+  { key: 'fillDrive', rgba: [255, 255, 255, 64] },
+  { key: 'fillRoad', rgba: [255, 255, 255, 98] },
+  { key: 'fillLine', rgba: [255, 200, 61, 165] }, // --coin center-lines
+];
+
+/** Decode a base64 1-bit occupancy mask into its packed byte array (bit i = cell i). */
+function decodeMaskBits(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
 
 const RAF_INTERVAL_MS = 100; // ~10 Hz redraw
 
@@ -73,10 +83,11 @@ function buildZonePositions() {
   return { safe, danger };
 }
 
-/** Build the offscreen road layer from minimap.json. Returns {canvas, proj} or null. */
+/** Build the offscreen road layer from minimap.json fill masks. Returns {canvas, proj} or null. */
 function buildRoadLayer(json) {
   const worldHalf = json?.worldHalfExtent || 220;
-  const layers = json?.layers || {};
+  const bounds = json?.bounds;
+  const fillN = json?.fillN || 0;
   const size = MINIMAP_SIZE_PX;
   // Bake at the same px/m as the live view so blitting is a 1:1 translate.
   const proj = makeMinimapProjector(worldHalf, size, MINIMAP_VIEW_RADIUS);
@@ -95,32 +106,40 @@ function buildRoadLayer(json) {
   const cz = worldPx / 2;
   const s = proj.pxPerMeter;
 
-  for (const layer of LAYER_ORDER) {
-    const segs = layers[layer];
-    if (!Array.isArray(segs) || segs.length === 0) continue;
-    const style = LAYER_STYLE[layer];
-    ctx.strokeStyle = style.color;
-    ctx.lineWidth = style.width;
-    ctx.setLineDash(style.dash || []);
-    ctx.beginPath();
-    for (const seg of segs) {
-      // each seg is a flat [x,z,x,z,...] polyline/segment list
-      if (!Array.isArray(seg) || seg.length < 4) continue;
-      let started = false;
-      for (let k = 0; k + 1 < seg.length; k += 2) {
-        const px = cx + seg[k] * s;
-        const py = cz - seg[k + 1] * s; // north-up
-        if (!started) {
-          ctx.moveTo(px, py);
-          started = true;
-        } else {
-          ctx.lineTo(px, py);
+  // Composite the surface masks into one fillN×fillN ImageData, then blit it scaled into the
+  // world layer over the data's `bounds` rect. The grid is row-major cell i = z*fillN + x with
+  // z increasing south(+Z); the map is north-up, so flip rows (image row = fillN-1-z).
+  if (bounds && fillN > 0) {
+    const img = ctx.createImageData(fillN, fillN);
+    const data = img.data;
+    for (const { key, rgba } of FILL_LAYERS) {
+      const b64 = json[key];
+      if (!b64) continue;
+      const bytes = decodeMaskBits(b64);
+      const [r, g, b, a] = rgba;
+      for (let z = 0; z < fillN; z++) {
+        const row = (fillN - 1 - z) * fillN;
+        for (let x = 0; x < fillN; x++) {
+          const i = z * fillN + x;
+          if (!(bytes[i >> 3] & (1 << (i & 7)))) continue;
+          const p = (row + x) * 4;
+          data[p] = r;
+          data[p + 1] = g;
+          data[p + 2] = b;
+          data[p + 3] = a;
         }
       }
     }
-    ctx.stroke();
+    const tmp = document.createElement('canvas');
+    tmp.width = fillN;
+    tmp.height = fillN;
+    tmp.getContext('2d').putImageData(img, 0, 0);
+    const left = cx + bounds.minX * s;
+    const top = cz - bounds.maxZ * s; // maxZ = north = top
+    const w = (bounds.maxX - bounds.minX) * s;
+    const h = (bounds.maxZ - bounds.minZ) * s;
+    ctx.drawImage(tmp, left, top, w, h);
   }
-  ctx.setLineDash([]);
 
   return { canvas: off, worldPx, cx, cz, pxPerMeter: s, proj };
 }

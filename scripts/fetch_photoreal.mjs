@@ -6,14 +6,28 @@
 // approved renderers, not caching tiles into a stored asset. This bakes them to a
 // file for a personal model of your own property — keep that in mind.
 //
-// Run:  node scripts/fetch_photoreal.mjs [radius_m] [geomErrorTarget]
+// Run:  node scripts/fetch_photoreal.mjs [level] [radius_m] [geomErrorTarget]
+//   level: 'dahill' (default, curvature-ENU, byte-compatible) | 'xq' (flat-ENU)
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const R_PR = Number(process.argv[2] || 150);          // half-box around the house (m)
-const TARGET = Number(process.argv[3] || 4);          // geometric-error LOD target
+
+// ---- per-level config -----------------------------------------------------
+// dahill: legacy curvature-correct ENU (W4 matrix), origin hardcoded, output unchanged.
+// xq: flat-ENU to match the single-surface exporter (e=(lon-LON0)*cos(LAT0)*111320,
+//     n=(lat-LAT0)*110540, worldX=e-C[0], worldZ=-(n-C[1]), worldY=orthometric_height).
+const LEVEL = process.argv[2] || 'dahill';
+const SETS = {
+  dahill: { scene: 'src/assets/scene.json', out: '1840-dahill-photoreal.glb', rpr: 150, frame: 'curve', lat0: 37.6835313, lon0: -122.0686199, geoid: -32.3 },
+  xq: { scene: 'exports/xq/scene.json', out: 'xq-photoreal.glb', rpr: 320, frame: 'flat', geoid: -32.5 },
+};
+const SET = SETS[LEVEL];
+if (!SET) throw new Error('unknown level "' + LEVEL + '" — use one of: ' + Object.keys(SETS).join(', '));
+
+const R_PR = Number(process.argv[3] || SET.rpr);      // half-box around the anchor (m)
+const TARGET = Number(process.argv[4] || 4);          // geometric-error LOD target
 const CAP = 900;                                      // max leaf tiles
 
 const env = readFileSync(path.join(ROOT, '.env.local'), 'utf8');
@@ -21,19 +35,21 @@ const KEY = (env.match(/NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=(.*)/) || [])[1]?.trim()
 if (!KEY) throw new Error('no NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local');
 const HOST = 'https://tile.googleapis.com';
 
-// ---- house origin + ECEF->ENU(world) (matches scripts/geo.py / coords.js) -----
-const S = JSON.parse(readFileSync(path.join(ROOT, 'src/assets/scene.json'), 'utf8'));
-const C = S.center, LAT0 = 37.6835313, LON0 = -122.0686199, COSLAT = Math.cos(LAT0 * Math.PI / 180), D2R = Math.PI / 180;
+// ---- anchor origin + ECEF<->geodetic + ENU(world) (matches scripts/geo.py / coords.js) -----
+const S = JSON.parse(readFileSync(path.join(ROOT, SET.scene), 'utf8'));
+// dahill keeps its hardcoded LAT0/LON0 (scene.json has no origin); xq reads origin.lat/lon.
+const LAT0 = SET.lat0 ?? S.origin.lat, LON0 = SET.lon0 ?? S.origin.lon;
+const C = S.center, COSLAT = Math.cos(LAT0 * Math.PI / 180), D2R = Math.PI / 180;
 const HLAT = LAT0 + C[1] / 110540, HLON = LON0 + C[0] / (COSLAT * 111320);
+const GEOID_N = SET.geoid;                            // Bay-area geoid undulation (m)
 const WA = 6378137, WE2 = 0.00669437999014;
 function ecef(latDeg, lonDeg, h = 0) {
   const la = latDeg * D2R, lo = lonDeg * D2R, sla = Math.sin(la), cla = Math.cos(la), slo = Math.sin(lo), clo = Math.cos(lo);
   const n = WA / Math.sqrt(1 - WE2 * sla * sla);
   return [(n + h) * cla * clo, (n + h) * cla * slo, (n * (1 - WE2) + h) * sla];
 }
-// anchor at the geoid (GEOID18 N≈-32.3 m here) so world Y ≈ NAVD88 orthometric
-// elevation, matching the property model's DEM heights for vertical overlay.
-const GEOID_N = -32.3;
+// GEOID_N (per-level) anchors the curvature frame at the geoid so world Y ≈ NAVD88
+// orthometric elevation, matching the property model's DEM heights for vertical overlay.
 const E0 = ecef(HLAT, HLON, GEOID_N), sla = Math.sin(HLAT * D2R), cla = Math.cos(HLAT * D2R), slo = Math.sin(HLON * D2R), clo = Math.cos(HLON * D2R);
 // rows of R: world = (East, Up, -North)
 const Rx = [-slo, clo, 0], Ry = [cla * clo, cla * slo, sla], Rz = [sla * clo, sla * slo, -cla];
@@ -46,6 +62,31 @@ const YUP2ECEF = [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1];
 const IDENT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 function mul(a, b) { const c = new Array(16); for (let col = 0; col < 4; col++) for (let row = 0; row < 4; row++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + row] * b[col * 4 + k]; c[col * 4 + row] = s; } return c; }
 function tp(m, x, y, z) { return [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]]; }
+
+// ECEF -> geodetic (Bowring closed-form + a couple Newton refinements), WGS84.
+// Returns { lat, lon (deg), h (ellipsoidal height, m) }.
+function ecefToGeodetic(X, Y, Z) {
+  const a = WA, e2 = WE2, b = a * Math.sqrt(1 - e2), ep2 = (a * a - b * b) / (b * b);
+  const p = Math.hypot(X, Y);
+  const lon = Math.atan2(Y, X);
+  // Bowring initial parametric latitude
+  const th = Math.atan2(Z * a, p * b);
+  const sth = Math.sin(th), cth = Math.cos(th);
+  let lat = Math.atan2(Z + ep2 * b * sth * sth * sth, p - e2 * a * cth * cth * cth);
+  // refine (handles points well above the ellipsoid, e.g. tile geometry)
+  for (let i = 0; i < 2; i++) {
+    const sl = Math.sin(lat), n = a / Math.sqrt(1 - e2 * sl * sl);
+    lat = Math.atan2(Z + e2 * n * sl, p);
+  }
+  const sl = Math.sin(lat), n = a / Math.sqrt(1 - e2 * sl * sl);
+  const h = Math.abs(lat) < Math.PI / 4 ? p / Math.cos(lat) - n : Z / Math.sin(lat) - n * (1 - e2);
+  return { lat: lat / D2R, lon: lon / D2R, h };
+}
+// geodetic -> flat-ENU world, identical formulas to the single-surface exporter.
+function flatWorld(latDeg, lonDeg, h) {
+  const e = (lonDeg - LON0) * COSLAT * 111320, nn = (latDeg - LAT0) * 110540;
+  return [e - C[0], h - GEOID_N, -(nn - C[1])];           // worldX, worldY, worldZ
+}
 
 // ---- region box around the house (radians) ------------------------------
 const dLat = R_PR / 110990, dLon = R_PR / (111320 * Math.cos(HLAT * D2R));
@@ -84,7 +125,7 @@ async function walk(tile, mat) {
   for (const k of kids) await walk(k, m);
 }
 
-console.log(`[photoreal] box ±${R_PR} m, geomError<=${TARGET}, anchor ${HLAT.toFixed(6)},${HLON.toFixed(6)}`);
+console.log(`[photoreal] level=${LEVEL} frame=${SET.frame} box ±${R_PR} m, geomError<=${TARGET}, anchor ${HLAT.toFixed(6)},${HLON.toFixed(6)}`);
 const root = await gj('/v1/3dtiles/root.json');
 await walk(root.root, IDENT);
 console.log(`[photoreal] ${leaves.length} leaf tiles${leaves.length >= CAP ? ' (capped)' : ''}`);
@@ -115,12 +156,21 @@ for (let t = 0; t < leaves.length; t++) {
   try { doc = await io.readBinary(bytes); } catch (e) { continue; }
   for (const n of doc.getRoot().listNodes()) {
     const m = n.getMesh(); if (!m) continue;
-    const fm = mul(W4, mul(YUP2ECEF, mul(mat, n.getMatrix())));   // mesh-local(y-up) -> ECEF -> world
+    // mesh-local(y-up) -> ECEF (shared); curve: also fold W4 -> curvature-ENU world.
+    const em = mul(YUP2ECEF, mul(mat, n.getMatrix()));
+    const fm = SET.frame === 'curve' ? mul(W4, em) : em;
     for (const prim of m.listPrimitives()) {
       const pa = prim.getAttribute('POSITION'); if (!pa) continue;
       const src = pa.getArray(), pos = new Float32Array(src.length);
       for (let i = 0; i < src.length; i += 3) {
-        const w = tp(fm, src[i], src[i + 1], src[i + 2]);
+        let w;
+        if (SET.frame === 'curve') {
+          w = tp(fm, src[i], src[i + 1], src[i + 2]);            // ECEF -> curvature-ENU world
+        } else {
+          const ec = tp(fm, src[i], src[i + 1], src[i + 2]);     // -> ECEF
+          const g = ecefToGeodetic(ec[0], ec[1], ec[2]);         // -> geodetic
+          w = flatWorld(g.lat, g.lon, g.h);                      // -> flat-ENU world
+        }
         pos[i] = w[0]; pos[i + 1] = w[1]; pos[i + 2] = w[2];
         for (let k = 0; k < 3; k++) { if (w[k] < lo[k]) lo[k] = w[k]; if (w[k] > hiB[k]) hiB[k] = w[k]; }
       }
@@ -142,7 +192,7 @@ for (let t = 0; t < leaves.length; t++) {
 }
 
 mkdirSync(path.join(ROOT, 'exports'), { recursive: true });
-const dst = path.join(ROOT, 'exports', '1840-dahill-photoreal.glb');
+const dst = path.join(ROOT, 'exports', SET.out);
 writeFileSync(dst, Buffer.from(await io.writeBinary(out)));
 const f = n => n.toFixed(1);
 console.log(`[photoreal] ${prims} primitives  world bbox X[${f(lo[0])},${f(hiB[0])}] Y[${f(lo[1])},${f(hiB[1])}] Z[${f(lo[2])},${f(hiB[2])}]`);

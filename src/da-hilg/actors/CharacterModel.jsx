@@ -23,6 +23,14 @@ export default function CharacterModel({ actor }) {
   // future per-actor tinting never bleed across the family.
   const clone = useMemo(() => {
     const c = SkeletonUtils.clone(scene);
+    // Undo the asset build's foot-grounding for three.js. groundSkinnedRig (build_dahilg_assets)
+    // lifts the Armature node so the lowest foot JOINT sits at y=0 — Unity/gltf-transform honor
+    // that joint-hierarchy lift, but three.js skins from the inverse-bind-matrices (the mesh is
+    // authored feet-at-origin already), so the lift double-counts and FLOATS the body ~0.94 m.
+    // Zeroing the raised top node(s) restores the rig three.js grounds natively. We keep the
+    // shared GLB grounded because Unity copies the very same file (build_dahilg_unity_assets).
+    for (const child of c.children) child.position.y = 0;
+    c.updateMatrixWorld(true);
     c.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
