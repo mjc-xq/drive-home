@@ -9,7 +9,7 @@ namespace DaHilg
 {
     public sealed class DaHilgMinimapElement : VisualElement
     {
-        const int k_MaxSegmentsPerLayer = 900;
+        const int k_MaxSegmentsPerLayer = 180;
 
         readonly Label m_Title;
         readonly Label m_Legend;
@@ -21,11 +21,12 @@ namespace DaHilg
         {
             pickingMode = PickingMode.Ignore;
             style.position = Position.Absolute;
-            style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.72f);
-            style.borderTopLeftRadius = 8;
-            style.borderTopRightRadius = 8;
-            style.borderBottomLeftRadius = 8;
-            style.borderBottomRightRadius = 8;
+            style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.82f);
+            // Square chrome to match the AGC glass panels of the rest of the HUD (no rounded corners).
+            style.borderTopLeftRadius = 0;
+            style.borderTopRightRadius = 0;
+            style.borderBottomLeftRadius = 0;
+            style.borderBottomRightRadius = 0;
             style.borderTopWidth = 1;
             style.borderBottomWidth = 1;
             style.borderLeftWidth = 1;
@@ -54,6 +55,7 @@ namespace DaHilg
             m_Legend.style.fontSize = 9;
             m_Legend.style.unityFontStyleAndWeight = FontStyle.Bold;
             m_Legend.style.color = new Color(1f, 1f, 1f, 0.68f);
+            m_Legend.style.display = DisplayStyle.None; // clean: green=safe / white=you is self-evident; no alarming legend
             Add(m_Legend);
 
             generateVisualContent += OnGenerateVisualContent;
@@ -79,26 +81,25 @@ namespace DaHilg
             if (full.width <= 20f || full.height <= 20f) return;
 
             Painter2D painter = context.painter2D;
-            FillRect(painter, full, new Color(0.03f, 0.05f, 0.055f, 0.86f));
+            FillRect(painter, full, new Color(0.03f, 0.04f, 0.06f, 0.88f));
 
             Rect mapRect = new Rect(full.xMin + 10f, full.yMin + 22f, full.width - 20f, Mathf.Max(20f, full.height - 44f));
-            FillRect(painter, mapRect, new Color(0.08f, 0.10f, 0.095f, 0.72f));
+            FillRect(painter, mapRect, new Color(0.06f, 0.07f, 0.09f, 0.55f));
 
             if (m_Data == null || !m_Data.Valid) return;
 
-            DrawSegments(painter, mapRect, m_Data.Walk, new Color(0.70f, 0.74f, 0.68f, 0.28f), 0.55f);
-            DrawSegments(painter, mapRect, m_Data.Road, new Color(0.55f, 0.58f, 0.56f, 0.42f), 0.8f);
-            DrawSegments(painter, mapRect, m_Data.Drive, new Color(0.62f, 0.64f, 0.60f, 0.36f), 0.65f);
-            DrawSegments(painter, mapRect, m_Data.Curb, new Color(0.95f, 0.91f, 0.72f, 0.34f), 0.55f);
-            DrawSegments(painter, mapRect, m_Data.Line, new Color(0.95f, 0.95f, 0.88f, 0.24f), 0.45f);
+            // Clean: faint walkways + one calm road stroke only — no drive/curb/line scribble.
+            DrawSegments(painter, mapRect, m_Data.Walk, new Color(0.55f, 0.58f, 0.62f, 0.16f), 0.5f);
+            DrawSegments(painter, mapRect, m_Data.Road, new Color(0.50f, 0.56f, 0.62f, 0.5f), 1.0f);
 
             if (m_Profile != null)
             {
                 DaHilgBoxZone[] safeZones = m_Manager != null && m_Manager.Mode == DaHilgGameMode.Nibblers
                     ? m_Profile.NibblerSafeZones
                     : m_Profile.GreetSafeZones;
-                DrawZones(painter, mapRect, safeZones, new Color(0.20f, 0.95f, 0.38f, 0.24f), new Color(0.30f, 1f, 0.42f, 0.72f));
-                DrawZones(painter, mapRect, m_Profile.DangerZones, new Color(1f, 0.12f, 0.06f, 0.24f), new Color(1f, 0.18f, 0.10f, 0.84f));
+                // Safe zone = thin go-green outline (barely any fill), danger = faint — reads clean, not a red wash.
+                DrawZones(painter, mapRect, safeZones, new Color(0.20f, 0.95f, 0.38f, 0.06f), new Color(0.30f, 1f, 0.42f, 0.65f));
+                DrawZones(painter, mapRect, m_Profile.DangerZones, new Color(1f, 0.12f, 0.06f, 0.10f), new Color(1f, 0.30f, 0.18f, 0.70f));
             }
 
             DrawActors(painter, mapRect);
@@ -142,7 +143,7 @@ namespace DaHilg
                 DaHilgNibblerAgent nibbler = nibblers[i];
                 if (nibbler == null || !nibbler.Active) continue;
                 Vector3 position = nibbler.Position;
-                DrawDisk(painter, WorldToMap(position.x, position.z, rect), 2.4f, nibbler.Attached ? new Color(1f, 0.15f, 0.08f, 0.95f) : new Color(1f, 0.55f, 0.14f, 0.82f));
+                DrawDisk(painter, WorldToMap(position.x, position.z, rect), 1.8f, new Color(1f, 0.78f, 0.25f, 0.7f));
             }
         }
 

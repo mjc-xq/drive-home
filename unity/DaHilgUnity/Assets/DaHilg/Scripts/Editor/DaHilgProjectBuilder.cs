@@ -404,6 +404,11 @@ namespace DaHilg.Editor
       }
 
       canvas.addEventListener('pointerdown', focusCanvas);
+      // Keep the canvas focused for mouse-look across the gestures that commonly steal focus.
+      window.addEventListener('focus', focusCanvas);
+      window.addEventListener('pointerup', focusCanvas);
+      document.addEventListener('click', focusCanvas);
+      document.addEventListener('pointerlockchange', focusCanvas);
       function handleHudTouchStart(event) {
         if (event.changedTouches && event.changedTouches.length) {
           const touch = event.changedTouches[0];
@@ -486,8 +491,12 @@ namespace DaHilg.Editor
             window.__dahilg.touchMode = touchDevice;
             unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
           } catch (touchErr) { rememberHudError(touchErr); }
-          if (unityInstance.Module && unityInstance.Module.WebGLInput) {
-            unityInstance.Module.WebGLInput._stickyCursorLock = false;
+          // Bind keyboard to the WHOLE document, not just the focused canvas. Without this, real
+          // WASD/arrow keys are silently dropped on desktop whenever the canvas loses focus (which
+          // it does constantly). This is the actual reason desktop controls 'didn't work'.
+          if (unityInstance.Module) {
+            unityInstance.Module.WebGLInput = unityInstance.Module.WebGLInput || {};
+            unityInstance.Module.WebGLInput.captureAllKeyboardInput = true;
           }
           releasePointerLock();
           focusCanvas();

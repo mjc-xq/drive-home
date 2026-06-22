@@ -408,7 +408,21 @@ namespace DaHilg
                 Vector3 spawn = slot.Id == Settings.DefaultCharacterId
                     ? playerSpawns[0]
                     : (npcIndex < npcSpawns.Length ? npcSpawns[npcIndex++] : playerSpawns[0] + UnityEngine.Random.insideUnitSphere * 6f);
-                actor.Teleport(DaHilgLevelRuntime.GroundSpawn(spawn));
+                Vector3 grounded = DaHilgLevelRuntime.GroundSpawn(spawn);
+                if (slot.Id == Settings.DefaultCharacterId)
+                {
+                    // Face the street: the direction from the house (greet safe zone) out to the spawn.
+                    Vector3 houseCenter = m_CurrentLevel != null && m_CurrentLevel.GreetSafeZones.Length > 0
+                        ? m_CurrentLevel.GreetSafeZones[0].Center : Vector3.zero;
+                    Vector3 toStreet = grounded - houseCenter; toStreet.y = 0f;
+                    float spawnYaw = toStreet.sqrMagnitude > 0.01f
+                        ? Quaternion.LookRotation(toStreet.normalized, Vector3.up).eulerAngles.y : 0f;
+                    actor.Teleport(grounded, spawnYaw);
+                }
+                else
+                {
+                    actor.Teleport(grounded);
+                }
                 actor.SetRole(DaHilgActorRole.Npc, Time.time);
                 m_Actors.Add(actor);
             }
@@ -708,11 +722,12 @@ namespace DaHilg
             }
             else if (Time.time >= m_NextNibblerSpawn)
             {
-                int baseTarget = Mathf.Clamp(8 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 3f), 8, Settings.NibblerPoolSize);
+                // Higher floor + faster ramp so the swarm reads as a real crowd within seconds.
+                int baseTarget = Mathf.Clamp(14 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 2f), 14, Settings.NibblerPoolSize);
                 bool marked = danger || PlayerMarked;
-                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), 8, Settings.NibblerPoolSize);
+                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), 14, Settings.NibblerPoolSize);
                 int active = ActiveNibblerCount();
-                int spawnBudget = Mathf.Min(marked ? 4 : 2, Mathf.Max(0, target - active));
+                int spawnBudget = Mathf.Min(marked ? 6 : 3, Mathf.Max(0, target - active));
                 for (int i = 0; i < spawnBudget; i++)
                 {
                     if (ActiveNibblerCount() >= target) break;
