@@ -106,6 +106,9 @@ export const CHARACTER_MASS = 75;
 export const MODEL_FACING_OFFSET = Math.PI;
 // Idle clip (a boxer's warmup) is bouncy — slow it to a calm ready-sway, not a dance.
 export const IDLE_TIMESCALE = 0.5;
+// The Catwalk_Walk clip is a slow, stylized fashion strut — at WALK_SPEED (4.6 m/s) the legs
+// cycle far too slowly and the feet slide. Speed the walk clip up so the stride reads at pace.
+export const WALK_TIMESCALE = 1.55;
 
 // ── Look ────────────────────────────────────────────────────────────────────
 export const LOOK_SENSITIVITY = 0.0022;  // rad per pixel (mouse)
@@ -145,6 +148,33 @@ export const WANDER_DWELL_MIN = 2.5;
 export const WANDER_DWELL_MAX = 5.0;
 export const NPC_SCAN_INTERVAL = 0.25;   // re-evaluate targeting every 0.25 s
 export const STUCK_TIME = 0.6;           // realized<<desired for this long → unstick nudge
+
+// ── NPC AI — calmer detection + territory leash (appended tunables) ───────────
+// NPCs were too eager to find you. NPC_NOTICE_RADIUS narrows how close you must be
+// before a wandering NPC even considers you a target (smaller than the legacy
+// NOTICE_RADIUS, which other systems still read). Hysteresis: once chasing, an NPC
+// keeps pursuing until you pass NPC_GIVEUP_RADIUS, so they don't flicker chase/idle
+// at the edge — but the wider give-up is still finite, so they don't trail you forever.
+export const NPC_NOTICE_RADIUS = 11;   // start a chase only inside this (was effectively 20)
+export const NPC_GIVEUP_RADIUS = 16;   // keep chasing until past this (>notice = hysteresis)
+
+// Territory leash: each NPC is tethered to its spawn (ai.home). It wanders/chases
+// only within NPC_LEASH_RADIUS of home; stray past NPC_LEASH_RETURN and it abandons
+// whatever it was doing and walks back home, resuming normal behavior once within
+// NPC_LEASH_RADIUS again. This confines NPCs to an area instead of roaming the map.
+export const NPC_LEASH_RADIUS = 26;    // soft bound: won't chase the player beyond this from home
+export const NPC_LEASH_RETURN = 30;    // hard bound: past this, force a return-home walk
+export const NPC_LEASH_REACH = 3.0;    // "back home" once within this of home
+
+// ── Camera de-occlusion ──────────────────────────────────────────────────────
+// An NPC must never sit between the camera and the active player and block the view.
+// Each frame we test every other actor against the camera→player segment; anything
+// within DEOCCLUDE_RADIUS of that line (and in front of the player) fades toward
+// DEOCCLUDE_MIN_OPACITY, then restores when it clears. Fade rates keep it smooth.
+export const DEOCCLUDE_RADIUS = 0.7;       // perpendicular distance to the cam→player line that counts as occluding (m)
+export const DEOCCLUDE_MIN_OPACITY = 0.12; // how see-through a blocking actor gets
+export const DEOCCLUDE_FADE_OUT = 14;      // how fast a blocker fades out
+export const DEOCCLUDE_FADE_IN = 7;        // how fast it restores when it clears
 
 // ── Scoring ─────────────────────────────────────────────────────────────────
 export const SCORE_FIRST_GREET = 100;

@@ -26,6 +26,7 @@ export const scale = new Float32Array(MAX);   // 0 = dead/degenerate
 export const phase = new Float32Array(MAX);   // VAT clip phase 0..1
 export const stateT = new Float32Array(MAX);  // seconds in current state
 export const jumpCD = new Float32Array(MAX);  // jump cooldown timer
+export const circleDur = new Float32Array(MAX); // S_CIRCLE orbit duration (s) this pass
 export const seed = new Float32Array(MAX);    // per-nibbler random 0..1
 
 export const state = new Uint8Array(MAX);     // S_* enum

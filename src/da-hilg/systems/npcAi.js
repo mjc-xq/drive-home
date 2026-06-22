@@ -12,7 +12,11 @@
 import * as THREE from 'three';
 import { EMPTY_INTENT } from '../controllers/Controller.js';
 import {
-  NOTICE_RADIUS,
+  NPC_NOTICE_RADIUS,
+  NPC_GIVEUP_RADIUS,
+  NPC_LEASH_RADIUS,
+  NPC_LEASH_RETURN,
+  NPC_LEASH_REACH,
   TOUCH_DIST,
   RETREAT_MS,
   COOLDOWN_MS,
@@ -40,22 +44,36 @@ const WANDER_TIMEOUT_MS = 7000; // abandon an unreachable stroll target after th
  * Is the active player a valid target for this NPC right now?
  * Safe-zoned player is never targetable. A zone-bound NPC (ai.group set) only
  * notices the player when the player is inside its notice group; a free roamer
- * notices anyone within NOTICE_RADIUS.
+ * notices anyone within the notice radius.
+ *
+ * Detection is deliberately calm: an idle/wandering NPC only locks on inside the
+ * tight NPC_NOTICE_RADIUS, but once it IS chasing it keeps the lock out to the
+ * wider NPC_GIVEUP_RADIUS (hysteresis) so it doesn't flicker chase/idle at the
+ * edge — yet the give-up bound is finite, so it stops trailing you forever.
+ * Independently, an NPC never targets the player past NPC_LEASH_RADIUS from its
+ * own home (territory bound) — the leash always wins over detection.
  * @param {any} actor
  * @param {any} ctx
  * @param {number} dist  planar distance NPC→active player (passed in to avoid recompute)
+ * @param {boolean} [chasing]  true if the NPC is already in chase/touch (widens the radius)
  */
-function targetable(actor, ctx, dist) {
+function targetable(actor, ctx, dist, chasing) {
   // In Nibblers mode the family never chases/tags you — the nibblers are the
   // threat; the family just strolls calmly in the background.
   if (isNibblersMode()) return false;
   if (playerIsSafe()) return false;
+  // Territory leash: don't even consider the player if we've strayed (or the
+  // player has lured us) too far from home — we want to head back, not pursue.
+  const home = actor.ai && actor.ai.home;
+  if (home && planarDist(actor.motion.pos, home) > NPC_LEASH_RADIUS) return false;
+  // Hysteresis: a fresh lock needs the tight radius; holding a lock uses the wider one.
+  const radius = chasing ? NPC_GIVEUP_RADIUS : NPC_NOTICE_RADIUS;
   const group = actor.ai && actor.ai.group;
   // A zone-bound NPC needs BOTH: the player inside its notice group AND within
-  // NOTICE_RADIUS. (Without the distance gate, a map-sized notice zone makes
-  // every NPC permanently target the player, so they never get to wander.)
-  if (group) return playerNoticeGroups().has(group) && dist <= NOTICE_RADIUS;
-  return dist <= NOTICE_RADIUS;
+  // the radius. (Without the distance gate, a map-sized notice zone makes every
+  // NPC permanently target the player, so they never get to wander.)
+  if (group) return playerNoticeGroups().has(group) && dist <= radius;
+  return dist <= radius;
 }
 
 /** Planar distance between two Vector3 (ignores Y). */
@@ -218,6 +236,15 @@ export function npcStep(actor, ctx, dt) {
     ai.retreatUntil = now + RETREAT_MS;
   }
 
+  // Leash override — checked next. If the NPC has strayed past the hard bound from
+  // its home (chasing the player across the map, or a wander gone long), abandon
+  // everything and walk back into its territory. returnHome resolves to idle once
+  // it's home again. This confines each NPC to a radius around its spawn.
+  const home = ai.home;
+  if (home && actor.fsm !== 'returnHome' && planarDist(pos, home) > NPC_LEASH_RETURN) {
+    actor.fsm = 'returnHome';
+  }
+
   switch (actor.fsm) {
     // ── idle: stand, scan periodically, then either give chase or wander ──────
     case 'idle': {
@@ -282,7 +309,9 @@ export function npcStep(actor, ctx, dt) {
 
     // ── chase: run at the active player until close enough to touch ───────────
     case 'chase': {
-      if (playerSafe || !targetable(actor, ctx, dist)) {
+      // Pass chasing=true so the lock holds out to the wider give-up radius
+      // (hysteresis) and we don't drop the chase the instant the player edges out.
+      if (playerSafe || !targetable(actor, ctx, dist, true)) {
         actor.fsm = 'retreat';
         ai.retreatUntil = now + RETREAT_MS;
         break;
@@ -346,12 +375,30 @@ export function npcStep(actor, ctx, dt) {
         break;
       }
       // Tiny idle wander toward the wander anchor (home) so they don't freeze.
-      const home = ai.home || pos;
-      const dHome = planarDist(pos, home);
+      const cdHome = ai.home || pos;
+      const dHome = planarDist(pos, cdHome);
       if (dHome > 1.5) {
         actor.ai._npcRun = false;
-        seek(actor, home.x, home.z, 1, COOLDOWN_DRIFT, dt);
+        seek(actor, cdHome.x, cdHome.z, 1, COOLDOWN_DRIFT, dt);
       }
+      ai.faceTarget = null;
+      break;
+    }
+
+    // ── returnHome: walked too far from territory — head back to spawn ─────────
+    // Entered by the leash override above when the NPC strays past NPC_LEASH_RETURN.
+    // It ignores the player entirely (no chase) until it's back inside its area,
+    // then settles to idle so normal wander/scan resumes within bounds.
+    case 'returnHome': {
+      const rhHome = ai.home || pos;
+      if (planarDist(pos, rhHome) <= NPC_LEASH_REACH) {
+        actor.fsm = 'idle';
+        ai.dwellUntil = now; // re-decide (wander within territory) next tick
+        break;
+      }
+      // Walk (don't sprint) back so the return reads as ambling home, not fleeing.
+      actor.ai._npcRun = false;
+      seek(actor, rhHome.x, rhHome.z, 1, 1, dt);
       ai.faceTarget = null;
       break;
     }

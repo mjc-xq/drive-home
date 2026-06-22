@@ -16,6 +16,7 @@ import {
   S_NOTICE,
   S_RUN,
   S_JUMP,
+  S_CIRCLE,
   STOMP_DESCEND_VEL,
   STOMP_RADIUS,
   STOMP_BOUNCE,
@@ -43,7 +44,7 @@ export function updateStomp(ctx) {
   forNibblersNear(fx, fz, STOMP_RADIUS, (i) => {
     const s = state[i];
     // Only free (un-attached) chasing/wandering nibblers can be stomped.
-    if (s === S_WANDER || s === S_NOTICE || s === S_RUN || s === S_JUMP) {
+    if (s === S_WANDER || s === S_NOTICE || s === S_RUN || s === S_JUMP || s === S_CIRCLE) {
       free(i);
       killed++;
     }

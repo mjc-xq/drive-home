@@ -31,8 +31,13 @@ import {
   SMOOTH_BOOM_IN,
   SMOOTH_CAM,
   SMOOTH_LOOK,
+  DEOCCLUDE_RADIUS,
+  DEOCCLUDE_MIN_OPACITY,
+  DEOCCLUDE_FADE_OUT,
+  DEOCCLUDE_FADE_IN,
+  CAPSULE_CENTER_Y,
 } from '../constants.js';
-import { cameraRig, activePlayer } from '../state/refs.js';
+import { cameraRig, activePlayer, registry } from '../state/refs.js';
 import { daHilgStore } from '../state/store.js';
 import { cameraModeAtom } from '../state/atoms.js';
 
@@ -46,6 +51,82 @@ const _right = new THREE.Vector3();   // camera-right on XZ (for shoulder offset
 const _desired = new THREE.Vector3();
 const _lookSmooth = new THREE.Vector3(); // smoothed look target (cinematic settle)
 let _lookInit = false;
+
+// De-occlusion scratch — reused so the per-frame check never allocates.
+const _camPos = new THREE.Vector3();  // camera position
+const _segDir = new THREE.Vector3();  // camera → player segment direction (unit)
+const _toActor = new THREE.Vector3(); // camera → actor
+const _actorPos = new THREE.Vector3();// actor torso center (feet + half capsule)
+
+/**
+ * Fade NPC actors that sit between the camera and the active player so they never
+ * block the view; restore them when they clear. Per-frame, over the tiny actor set.
+ *
+ * We treat the camera→player line as a segment, project each other actor onto it,
+ * and if the actor is BETWEEN the two (param in (0,1)) and within DEOCCLUDE_RADIUS
+ * of the line, drive its target opacity toward DEOCCLUDE_MIN_OPACITY (else back to
+ * 1). The smoothed opacity is stored on actor.ref so we only touch materials when
+ * it actually changes. The active player is never faded.
+ *
+ * @param {import('three').Camera} camera
+ * @param {import('../actors/actorRegistry.js').Actor} player active player actor
+ * @param {number} dt clamped frame delta (s)
+ */
+function deoccludeActors(camera, player, dt) {
+  _camPos.copy(camera.position);
+  // Aim at the player's torso (feet + ~half capsule), the part the camera frames.
+  const pp = player.motion.pos;
+  _segDir.set(pp.x, pp.y + CAPSULE_CENTER_Y, pp.z).sub(_camPos);
+  const segLen = _segDir.length();
+  if (segLen < 1e-3) return;
+  _segDir.multiplyScalar(1 / segLen); // unit camera→player
+
+  registry.forEach((actor) => {
+    if (actor === player || actor.id === player.id) return; // never fade the player
+    const grp = actor.ref && actor.ref.group;
+    if (!grp) return;
+
+    // Actor torso center in world space (group sits at the feet).
+    const ap = actor.motion.pos;
+    _actorPos.set(ap.x, ap.y + CAPSULE_CENTER_Y, ap.z);
+    _toActor.copy(_actorPos).sub(_camPos);
+    const t = _toActor.dot(_segDir); // projection distance along the segment
+
+    // Occluding only if it's BETWEEN cam and player and close to the sight line.
+    let occluding = false;
+    if (t > 0.2 && t < segLen - 0.2) {
+      // Perpendicular distance from the actor to the cam→player line.
+      const perp = Math.sqrt(Math.max(0, _toActor.lengthSq() - t * t));
+      occluding = perp < DEOCCLUDE_RADIUS;
+    }
+
+    const target = occluding ? DEOCCLUDE_MIN_OPACITY : 1;
+    let cur = actor.ref._deoccludeOpacity;
+    if (cur === undefined) cur = 1;
+    const rate = target < cur ? DEOCCLUDE_FADE_OUT : DEOCCLUDE_FADE_IN;
+    cur += (target - cur) * (1 - Math.exp(-rate * dt));
+    if (Math.abs(cur - target) < 0.01) cur = target; // settle exactly so we can stop touching mats
+    if (cur === actor.ref._deoccludeOpacity) return;  // unchanged — skip the traverse
+    actor.ref._deoccludeOpacity = cur;
+
+    applyOpacity(grp, cur);
+  });
+}
+
+/** Set a uniform opacity across all of an actor group's materials (cheap, in place). */
+function applyOpacity(grp, opacity) {
+  const transparent = opacity < 0.999;
+  grp.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (let i = 0; i < mats.length; i++) {
+      const mat = mats[i];
+      mat.transparent = transparent;
+      mat.opacity = opacity;
+      mat.depthWrite = !transparent; // faded body shouldn't write depth and punch holes
+    }
+  });
+}
 
 // Persistent camera-only state (the useFrame closure outlives a single frame).
 // Kept here, not on the shared ref, so refs.js stays untouched.
@@ -182,6 +263,10 @@ export default function CameraRig() {
       else _lookSmooth.lerp(_look, 1 - Math.exp(-SMOOTH_LOOK * dt));
       camera.lookAt(_lookSmooth);
     }
+
+    // De-occlude: now that the camera is placed, fade any actor caught between it
+    // and the player (third-person mainly; harmless and cheap in first-person).
+    deoccludeActors(camera, actor, dt);
   }, 10);
 
   return null;

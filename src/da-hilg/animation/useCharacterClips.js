@@ -7,7 +7,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
-import { ANIM_URL, IDLE_TIMESCALE } from '../constants.js';
+import { ANIM_URL, IDLE_TIMESCALE, WALK_TIMESCALE } from '../constants.js';
 import { CLIP_KEYS, CLIP_LOOP, retargetSkinSafeClip } from './clips.js';
 
 // The clip GLB URLs in canonical key order — drei caches each by URL.
@@ -45,6 +45,8 @@ export function useCharacterClips(clonedScene, character) {
       }
       // Calm the bouncy boxer-warmup idle so a standing character reads as relaxed.
       if (key === 'idle') action.timeScale = IDLE_TIMESCALE;
+      // Speed up the slow catwalk strut so the stride matches the walk movement speed.
+      if (key === 'walk') action.timeScale = WALK_TIMESCALE;
       actions[key] = action;
     });
 
