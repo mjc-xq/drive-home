@@ -187,9 +187,11 @@ for (const { name, layer } of LAYERS) {
   // detail is invisible. This merges the dense co-located ribbon edges and roughly halves
   // the JSON without degrading the visible outline.
   const segs = dedupeSegments(raw, 0.5);
+  // Grow bounds from every road feature, but DON'T store the boundary segments: the solid road FILL
+  // (rasterised below) now renders the streets. Storing 112k stipple segments bloated the JSON to
+  // 2.5MB and is what read as "dots, not streets". Only the creek stays as a stroke (blue water).
   for (const s of segs) { grow(s[0], s[1]); grow(s[2], s[3]); }
-  layers[layer].push(...segs);
-  console.log(`  ${name.padEnd(18)} -> ${layer.padEnd(6)}  ${tris.length} tris -> ${raw.length} boundary -> ${segs.length} segs`);
+  console.log(`  ${name.padEnd(18)} -> ${layer.padEnd(6)}  ${tris.length} tris -> ${raw.length} boundary -> ${segs.length} segs (fill)`);
 }
 
 // Round bounds out a touch and derive a square worldHalfExtent (so a square minimap fits all).
@@ -203,7 +205,7 @@ const worldHalfExtent = Math.ceil(half);
 const creekNode = nodeByName('Creek_SanLorenzo') || nodeByName('Creek_Banks');
 if (creekNode && creekNode.getMesh()) {
   const cseg = dedupeSegments(boundaryEdges(readWorldTris(creekNode)), 0.8);
-  const inB = (x, z) => Math.abs(x) <= worldHalfExtent && Math.abs(z) <= worldHalfExtent;
+  const inB = (x, z) => x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ;
   const cclip = cseg.filter((s) => inB(s[0], s[1]) && inB(s[2], s[3]));
   layers.creek.push(...cclip);
   console.log(`  Creek_SanLorenzo   -> creek   ${cclip.length} segs (clipped to ±${worldHalfExtent} m)`);
@@ -211,13 +213,55 @@ if (creekNode && creekNode.getMesh()) {
   console.warn('  ! Creek mesh not found — no creek on this minimap');
 }
 
+// -------------------------------------------------------------------------------------
+// FILLED road mass (Google-Maps style solid streets). Boundary-edge strokes alone render as a
+// dotted stipple; instead rasterise every road/driveway triangle vertex into an N x N occupancy
+// grid over the map extent, dilate so thin roads stay continuous, and ship a packed 1-bit bitmap
+// the HUD bakes into a single road texture (one draw, no per-segment stipple).
+const FILL_N = 256;
+const fillGrid = new Uint8Array(FILL_N * FILL_N);
+{
+  // Map cells over the SAME bounds the HUD's WorldToMap uses (col<-x in [minX,maxX], row<-z in
+  // [minZ,maxZ]) so the baked road texture lines up exactly with the creek strokes + actor dots.
+  const bw = Math.max(1e-3, bounds.maxX - bounds.minX), bh = Math.max(1e-3, bounds.maxZ - bounds.minZ);
+  const mark = (x, z) => {
+    const cx = ((x - bounds.minX) / bw * FILL_N) | 0;
+    const cz = ((z - bounds.minZ) / bh * FILL_N) | 0;
+    if (cx >= 0 && cx < FILL_N && cz >= 0 && cz < FILL_N) fillGrid[cz * FILL_N + cx] = 1;
+  };
+  for (const { name, layer } of LAYERS) {
+    if (layer !== 'road' && layer !== 'drive') continue;
+    const node = nodeByName(name);
+    if (!node || !node.getMesh()) continue;
+    for (const t of readWorldTris(node)) { mark(t[0], t[1]); mark(t[2], t[3]); mark(t[4], t[5]); }
+  }
+  // Dilate by 1 cell so 1-cell-wide roads read as continuous ribbons, not a dotted line.
+  const src = fillGrid.slice();
+  for (let z = 0; z < FILL_N; z++) for (let x = 0; x < FILL_N; x++) {
+    if (!src[z * FILL_N + x]) continue;
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, nz = z + dz;
+      if (nx >= 0 && nx < FILL_N && nz >= 0 && nz < FILL_N) fillGrid[nz * FILL_N + nx] = 1;
+    }
+  }
+}
+const packed = new Uint8Array(Math.ceil(FILL_N * FILL_N / 8));
+let fillCells = 0;
+for (let i = 0; i < fillGrid.length; i++) if (fillGrid[i]) { packed[i >> 3] |= (1 << (i & 7)); fillCells++; }
+const fillRoadB64 = Buffer.from(packed).toString('base64');
+console.log(`  road fill: ${fillCells} / ${FILL_N * FILL_N} cells set (${FILL_N}x${FILL_N} grid)`);
+
 const minimap = {
   source: cfg.src,
   note: 'Recentered XZ line-art for the minimap. Coords = world XZ minus offset[0]/offset[2]. ' +
-        'Boundary-edge outlines (edges used by exactly one triangle). Segments are [x1,z1,x2,z2].',
+        'Boundary-edge outlines (edges used by exactly one triangle). Segments are [x1,z1,x2,z2]. ' +
+        'fillRoad = base64 of a fillN x fillN 1-bit road occupancy grid (row-major, bit i = cell i), ' +
+        'cell (col,row) spans world [-worldHalfExtent..+worldHalfExtent] in X (col) and Z (row).',
   worldHalfExtent,
   bounds: { minX: r2(bounds.minX), minZ: r2(bounds.minZ), maxX: r2(bounds.maxX), maxZ: r2(bounds.maxZ) },
   offset: offset.map(r2),
+  fillN: FILL_N,
+  fillRoad: fillRoadB64,
   layers,
 };
 writeFileSync(OUT, JSON.stringify(minimap) + '\n');
@@ -228,8 +272,8 @@ writeFileSync(OUT, JSON.stringify(minimap) + '\n');
 console.log('\n=== ASSERTIONS ===');
 let totalSegs = 0;
 for (const [k, v] of Object.entries(layers)) totalSegs += v.length;
-if (totalSegs === 0) throw new Error('minimap: no segments produced from any layer.');
-console.log(`  [pass] ${totalSegs} total segments across layers`);
+if (totalSegs === 0 && fillCells === 0) throw new Error('minimap: no road fill AND no segments produced.');
+console.log(`  [pass] ${totalSegs} segments + ${fillCells} road-fill cells`);
 
 // every named mesh found (warn-not-fail if one is missing, per spec).
 if (missing.length) console.warn(`  ! WARNING: missing meshes (non-fatal): ${missing.join(', ')}`);
@@ -244,8 +288,8 @@ for (const segs of Object.values(layers)) for (const s of segs) {
 if (outOfBounds) throw new Error(`minimap: ${outOfBounds} segment endpoints outside computed bounds.`);
 console.log('  [pass] bounds contain all segment endpoints');
 
-if (!(worldHalfExtent > 50 && worldHalfExtent < 600)) {
-  throw new Error(`minimap: worldHalfExtent ${worldHalfExtent} is implausible (expected ~220).`);
+if (!(worldHalfExtent > 50 && worldHalfExtent < 1200)) {
+  throw new Error(`minimap: worldHalfExtent ${worldHalfExtent} is implausible (expected 50..1200 m).`);
 }
 console.log(`  [pass] worldHalfExtent = ${worldHalfExtent} (plausible)`);
 

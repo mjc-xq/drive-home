@@ -243,7 +243,10 @@ namespace DaHilg
                 string lower = filter.name.ToLowerInvariant();
                 bool isCollisionProxy = lower.StartsWith("collision_");
                 bool isTreeCollision = isCollisionProxy && lower.Contains("trees");
-                bool isWater = lower.Contains("water") || lower.Contains("creek") || lower.Contains("river");
+                // Only the actual water SURFACE is water. Creek_Banks/Rocks/Reeds also contain "creek"
+                // but must NOT get the blue water tint + flow animator (that's why the banks read teal).
+                bool isWater = (lower.Contains("water") || lower.Contains("creek") || lower.Contains("river"))
+                               && !lower.Contains("bank") && !lower.Contains("rock") && !lower.Contains("reed");
                 // Walls must be SOLID even with a collision proxy (the building proxy floats ~1.5m off
                 // the ground, so you could walk under/through walls). Doors stay collider-free = walkable.
                 bool isDoor = lower.Contains("door");
@@ -392,6 +395,18 @@ namespace DaHilg
             // so there are no separate coplanar road meshes to z-fight — the old per-road
             // renderQueue+5 / double-sided ConfigureRoadMaterial firefighting is obsolete and
             // removed. `isRoad` only classifies the (rare) road-named material for tinting now.
+            // Creek banks/rocks: earthy, not the teal "green curbs" the master ships them as.
+            if (ContainsAny(key, "bank", "rock"))
+            {
+                MaterialPropertyBlock bankBlock = new MaterialPropertyBlock();
+                renderer.GetPropertyBlock(bankBlock);
+                Color earth = new Color(0.34f, 0.28f, 0.19f, 1f);
+                if (renderer.sharedMaterial.HasProperty(s_BaseColorId)) bankBlock.SetColor(s_BaseColorId, earth);
+                if (renderer.sharedMaterial.HasProperty(s_ColorId)) bankBlock.SetColor(s_ColorId, earth);
+                renderer.SetPropertyBlock(bankBlock);
+                return;
+            }
+
             bool isRoad = ContainsAny(key, "road", "street", "drive", "asphalt", "curb");
             bool isGround = isRoad || ContainsAny(key, "ground", "terrain", "grass", "yard", "walk", "sidewalk", "landscape", "dirt", "soil");
             if (!isGround && !isWater) return;
@@ -491,9 +506,22 @@ namespace DaHilg
                 return;
             }
 
+            // Grass clumps ship tiny + sparse, so they read as bare ground ("where is the grass?").
+            // Fatten each clump (taller than wide) so the field actually registers; GroundVegetationOverlay
+            // re-grounds it afterwards by its new bounds, so it never floats or sinks.
+            if (!isTree)
+            {
+                string nm = renderer.name.ToLowerInvariant();
+                if (nm.Contains("grass") || nm.Contains("clump"))
+                {
+                    Transform t = renderer.transform;
+                    t.localScale = Vector3.Scale(t.localScale, new Vector3(1.8f, 2.6f, 1.8f));
+                }
+            }
+
             MaterialPropertyBlock block = new MaterialPropertyBlock();
             renderer.GetPropertyBlock(block);
-            Color tint = isTree ? new Color(0.20f, 0.42f, 0.16f, 1f) : new Color(0.26f, 0.48f, 0.18f, 1f);
+            Color tint = isTree ? new Color(0.20f, 0.42f, 0.16f, 1f) : new Color(0.30f, 0.55f, 0.20f, 1f);
             if (material != null && material.HasProperty(s_BaseColorId)) block.SetColor(s_BaseColorId, tint);
             if (material != null && material.HasProperty(s_ColorId)) block.SetColor(s_ColorId, tint);
             renderer.SetPropertyBlock(block);

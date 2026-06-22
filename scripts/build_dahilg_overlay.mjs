@@ -83,7 +83,33 @@ for (const { out, master } of MASTERS) {
         };
         const house = gather(/house_walls|^house$/i);
         const roads = gather(/^roads?$/i);
-        const walls = gather(/wall/i);   // ALL building walls (house + neighbours) for camera clearance
+        const walls = gather(/wall/i);   // master building walls (often just the target house)
+        // The MASTER usually lacks the neighbour buildings, so a "clear" spawn can still land in a gap
+        // beside a neighbour that boxes the 3rd-person camera. The single-surface ENV (public/da-hilg/
+        // <out>.glb) HAS every Buildings_walls; fold them in (env is re-centered: master = env + offset)
+        // so the spawn keeps real clearance from EVERY building, not just the address.
+        try {
+          const envPath = OUT(`${out}.glb`);
+          if (existsSync(envPath)) {
+            const envDoc = await io.read(envPath);
+            const ev = [0, 0, 0];
+            for (const node of envDoc.getRoot().listNodes()) {
+              if (!/buildings?_walls|house_walls/i.test(node.getName() || '') || !node.getMesh()) continue;
+              const wm = node.getWorldMatrix();
+              for (const prim of node.getMesh().listPrimitives()) {
+                const pos = prim.getAttribute('POSITION'); if (!pos) continue;
+                const cnt = pos.getCount(), step = Math.max(1, Math.floor(cnt / 2500));
+                for (let i = 0; i < cnt; i += step) {
+                  pos.getElement(i, ev);
+                  const ex = wm[0]*ev[0]+wm[4]*ev[1]+wm[8]*ev[2]+wm[12];
+                  const ez = wm[2]*ev[0]+wm[6]*ev[1]+wm[10]*ev[2]+wm[14];
+                  walls.push([ex + off[0], ez + off[2]]);   // env-local -> master world
+                }
+              }
+            }
+            console.log(`${out}: folded ${walls.length} wall pts (master + env neighbours) into spawn clearance`);
+          }
+        } catch (e) { console.warn(`${out}: env walls skipped — ${e.message}`); }
         // PCA of the house footprint (XZ): the long axis runs along the facade; the FRONT faces
         // perpendicular to it. Score each perpendicular side by road mass in a 60deg cone and pick the
         // side with the real street (so a side/back road never wins).
