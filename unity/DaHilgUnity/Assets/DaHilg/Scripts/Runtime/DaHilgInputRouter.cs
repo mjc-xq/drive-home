@@ -178,7 +178,7 @@ namespace DaHilg
 
             if (m_TouchLook.sqrMagnitude > 0f)
             {
-                LookDelta += m_TouchLook * settings.TouchSensitivity;
+                LookDelta += m_TouchLook * settings.TouchSensitivity * 0.78f;
                 m_TouchLook = Vector2.zero;
             }
         }

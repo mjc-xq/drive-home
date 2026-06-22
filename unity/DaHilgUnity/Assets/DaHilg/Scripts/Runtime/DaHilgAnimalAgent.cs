@@ -14,6 +14,7 @@ namespace DaHilg
         float m_WanderRadius;
         float m_Speed;
         float m_WaitUntil;
+        float m_NextGroundProbeAt;
 
         public string Id { get; private set; }
         public Vector3 Position => transform.position;
@@ -49,7 +50,7 @@ namespace DaHilg
                 if (m_Animator != null)
                 {
                     m_Animator.applyRootMotion = false;
-                    m_Animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                    m_Animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms;
                     if (spawn.AnimatorController != null) m_Animator.runtimeAnimatorController = spawn.AnimatorController;
                     m_Animator.speed = Mathf.Clamp(m_Speed / 0.55f, 0.55f, 1.8f);
                 }
@@ -74,6 +75,7 @@ namespace DaHilg
             if (m_Controller != null) m_Controller.enabled = false;
             transform.position = position;
             if (m_Controller != null) m_Controller.enabled = true;
+            m_NextGroundProbeAt = Time.time + Random.Range(0.08f, 0.20f);
         }
 
         public void Tick(float dt)
@@ -92,8 +94,18 @@ namespace DaHilg
 
             Vector3 direction = planar.sqrMagnitude > 0.001f ? planar.normalized : Vector3.zero;
             Vector3 desired = transform.position + direction * (m_Speed * dt);
-            Vector3 grounded = DaHilgLevelRuntime.GroundSpawn(desired);
-            m_Controller.Move(grounded - transform.position);
+            if (now >= m_NextGroundProbeAt)
+            {
+                Vector3 grounded = DaHilgLevelRuntime.GroundSpawn(desired);
+                m_Controller.Move(grounded - transform.position);
+                m_NextGroundProbeAt = now + Random.Range(0.14f, 0.24f);
+            }
+            else
+            {
+                Vector3 planarMove = desired - transform.position;
+                planarMove.y = 0f;
+                m_Controller.Move(planarMove);
+            }
 
             if (direction.sqrMagnitude > 0.001f)
             {

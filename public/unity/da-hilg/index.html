@@ -178,25 +178,28 @@
         }
       }
 
-      // Reliable browser touch verdict (mobile web). Used to pick a lightweight default level so
-      // phones don't OOM on the streamed ~81MB neighborhood, and to drive the on-screen controls.
+      // Reliable browser touch verdict (mobile web). Used by Unity to select the mobile budgets and
+      // to drive the on-screen controls. Do not redirect phones to the house: the intended default
+      // spawn is outdoors on the street in front of the Dahill house.
       var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
         && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
       window.__dahilg.touchMode = __dahilgTouch;
       try {
-        if (__dahilgTouch && !/[?&]level=/.test(location.search)) {
-          var lvlUrl = new URL(location.href);
-          lvlUrl.searchParams.set('level', 'house');
-          history.replaceState(null, '', lvlUrl.toString());
+        if (__dahilgTouch) {
+          var touchUrl = new URL(location.href);
+          if (touchUrl.searchParams.get('dahilgTouch') !== '1') {
+            touchUrl.searchParams.set('dahilgTouch', '1');
+            history.replaceState(null, '', touchUrl.toString());
+          }
         }
       } catch (lvlErr) { rememberHudError(lvlErr); }
 
       const config = {
         arguments: [],
         dataUrl: '',
-        dataParts: ["Build/da-hilg.data.unityweb.part0?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part1?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part2?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part3?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part4?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part5?v=8ded0551a0d0512"],
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded0551a0d0512',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded0551a0d0512',
+        dataParts: ["Build/da-hilg.data.unityweb.part0?v=8ded0694793d9ac","Build/da-hilg.data.unityweb.part1?v=8ded0694793d9ac","Build/da-hilg.data.unityweb.part2?v=8ded0694793d9ac","Build/da-hilg.data.unityweb.part3?v=8ded0694793d9ac","Build/da-hilg.data.unityweb.part4?v=8ded0694793d9ac","Build/da-hilg.data.unityweb.part5?v=8ded0694793d9ac"],
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded0694793d9ac',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded0694793d9ac',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -211,19 +214,19 @@
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       async function assembleUnityDataUrl(partUrls) {
-        const buffers = [];
+        const blobs = [];
         for (const partUrl of partUrls) {
           const response = await fetch(partUrl, { cache: 'no-store' });
           if (!response.ok) throw new Error('Failed to load Unity data chunk ' + partUrl + ' (' + response.status + ')');
-          buffers.push(await response.arrayBuffer());
+          blobs.push(await response.blob());
         }
-        const blobUrl = URL.createObjectURL(new Blob(buffers, { type: 'application/octet-stream' }));
+        const blobUrl = URL.createObjectURL(new Blob(blobs, { type: 'application/octet-stream' }));
         window.__dahilg.dataBlobUrl = blobUrl;
         return blobUrl;
       }
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8ded0551a0d0512';
+      script.src = 'Build/da-hilg.loader.js?v=8ded0694793d9ac';
       script.onload = async () => {
         try {
           config.dataUrl = await assembleUnityDataUrl(config.dataParts);

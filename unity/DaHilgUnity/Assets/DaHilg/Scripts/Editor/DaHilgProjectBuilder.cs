@@ -452,16 +452,19 @@ namespace DaHilg.Editor
         }
       }
 
-      // Reliable browser touch verdict (mobile web). Used to pick a lightweight default level so
-      // phones don't OOM on the streamed ~81MB neighborhood, and to drive the on-screen controls.
+      // Reliable browser touch verdict (mobile web). Used by Unity to select the mobile budgets and
+      // to drive the on-screen controls. Do not redirect phones to the house: the intended default
+      // spawn is outdoors on the street in front of the Dahill house.
       var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
         && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
       window.__dahilg.touchMode = __dahilgTouch;
       try {
-        if (__dahilgTouch && !/[?&]level=/.test(location.search)) {
-          var lvlUrl = new URL(location.href);
-          lvlUrl.searchParams.set('level', 'house');
-          history.replaceState(null, '', lvlUrl.toString());
+        if (__dahilgTouch) {
+          var touchUrl = new URL(location.href);
+          if (touchUrl.searchParams.get('dahilgTouch') !== '1') {
+            touchUrl.searchParams.set('dahilgTouch', '1');
+            history.replaceState(null, '', touchUrl.toString());
+          }
         }
       } catch (lvlErr) { rememberHudError(lvlErr); }
 
@@ -2100,22 +2103,34 @@ body {
             return string.Equals(slug, "dahill", StringComparison.OrdinalIgnoreCase) ? "level" : slug;
         }
 
+        static string StreamingLevelUnitySourceName(string slug)
+        {
+            return string.Equals(slug, "dahill", StringComparison.OrdinalIgnoreCase)
+                ? "dahill-single.glb"
+                : slug + "-single.glb";
+        }
+
         // Copy a streamed level's source GLB into the project StreamingAssets folder as
         // "<slug>.glb" so it ships as a standalone file under the WebGL build's StreamingAssets
         // URL (resolved at runtime by DaHilgLevelRuntime), rather than baked into the data file.
         static void StageStreamingLevelGlb(string slug, string sourceAssetPath)
         {
-            // Ship the COMPRESSED web GLB (public/da-hilg: EXT_meshopt_compression + KTX2, ~tens of MB)
-            // rather than the decoded editor-import copy (raw geometry, ~4x larger): runtime glTFast
-            // decodes meshopt (needs com.unity.meshopt.decompress) + KTX (com.unity.cloud.ktx), so the
-            // streamed download stays small. Falls back to the decoded Asset copy if the compressed
-            // source is absent (keeps the build working even without the meshopt package).
+            // Prefer the Unity-streaming GLB built by scripts/build_dahilg_unity_assets.mjs: it keeps
+            // meshopt geometry compression but preserves JPEG/PNG textures. The streets, sidewalks,
+            // and photo facades are texture-baked into the single-surface level, so streaming the
+            // public KTX2 web GLB makes the level unreadable whenever Unity/WebGL/iOS KTX import fails.
+            // Fall back to raw exports/<slug>-single.glb, then the public web GLB, then the decoded
+            // Asset copy so ad-hoc editor builds still work.
             string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
-            string compressed = Path.Combine(repoRoot, "public", "da-hilg", StreamingLevelGlbName(slug) + ".glb");
-            string sourceFull = File.Exists(compressed)
-                ? compressed
-                : Path.Combine(projectRoot, sourceAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            string unityOptimized = Path.Combine(projectRoot, "Library", "DaHilgUnitySource", "Streaming", slug + ".glb");
+            string rawSingle = Path.Combine(repoRoot, "exports", StreamingLevelUnitySourceName(slug));
+            string webCompressed = Path.Combine(repoRoot, "public", "da-hilg", StreamingLevelGlbName(slug) + ".glb");
+            string decodedAsset = Path.Combine(projectRoot, sourceAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            string sourceFull = File.Exists(unityOptimized) ? unityOptimized
+                : File.Exists(rawSingle) ? rawSingle
+                : File.Exists(webCompressed) ? webCompressed
+                : decodedAsset;
             if (!File.Exists(sourceFull))
             {
                 Debug.LogWarning("[DaHilg] Streamed level GLB missing for '" + slug + "'; skipping StreamingAssets stage.");
@@ -2127,7 +2142,11 @@ body {
             string streamingDir = Application.streamingAssetsPath;
             Directory.CreateDirectory(streamingDir);
             File.Copy(sourceFull, Path.Combine(streamingDir, slug + ".glb"), true);
-            Debug.Log("[DaHilg] Staged streamed level '" + slug + "' (" + (sourceFull == compressed ? "compressed web GLB" : "decoded asset") + ").");
+            string sourceKind = sourceFull == unityOptimized ? "Unity stream GLB"
+                : sourceFull == rawSingle ? "raw single-surface GLB"
+                : sourceFull == webCompressed ? "compressed web GLB fallback"
+                : "decoded asset";
+            Debug.Log("[DaHilg] Staged streamed level '" + slug + "' (" + sourceKind + ").");
         }
 
         // Ship the vegetation+water OVERLAY GLB (public/da-hilg/<name>_overlay.glb: creek + instanced

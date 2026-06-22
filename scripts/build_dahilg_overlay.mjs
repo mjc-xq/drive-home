@@ -29,8 +29,88 @@ const MASTERS = [
   { out: 'xq',      master: 'xq-property.glb' },
 ];
 
+const MINIMAP_BY_OUT = {
+  level: 'minimap',
+  canyon: 'canyon.minimap',
+  stanton: 'stanton.minimap',
+  meemaw: 'meemaw.minimap',
+  xq: 'xq.minimap',
+};
+
 // Keep ONLY vegetation + water. Buildings/ground/roads/terrain live in the single-surface env.
-const KEEP = /(creek|tree|shrub|grass|clump|reed|foliage|bush|plant|hedge|canopy|trunk)/i;
+const KEEP = /(creek|tree|shrub|grass|clump|reed|foliage|bush|plant|hedge|canopy|trunk|fence|gate|rail|railing|barrier)/i;
+
+function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
+  const minimapName = MINIMAP_BY_OUT[out];
+  if (!minimapName || !meta?.houseCenter || !meta?.offset) return { sx, sz, refined: false };
+
+  const pathName = OUT(`${minimapName}.json`);
+  if (!existsSync(pathName)) return { sx, sz, refined: false };
+
+  const minimap = JSON.parse(readFileSync(pathName, 'utf8'));
+  const n = Number(minimap.fillN || 0);
+  if (!Number.isFinite(n) || n <= 0 || n > 512 || !minimap.fillRoad) return { sx, sz, refined: false };
+
+  const minX = minimap.bounds?.minX ?? minimap.minX;
+  const minZ = minimap.bounds?.minZ ?? minimap.minZ;
+  const maxX = minimap.bounds?.maxX ?? minimap.maxX;
+  const maxZ = minimap.bounds?.maxZ ?? minimap.maxZ;
+  if (![minX, minZ, maxX, maxZ].every(Number.isFinite) || maxX <= minX || maxZ <= minZ) {
+    return { sx, sz, refined: false };
+  }
+
+  const bits = Buffer.from(minimap.fillRoad, 'base64');
+  const roadBit = (col, row) => {
+    if (col < 0 || col >= n || row < 0 || row >= n) return false;
+    const cell = row * n + col;
+    const byteIndex = cell >> 3;
+    return byteIndex >= 0 && byteIndex < bits.length && (bits[byteIndex] & (1 << (cell & 7))) !== 0;
+  };
+
+  const off = meta.offset;
+  const houseLocal = [meta.houseCenter[0] - off[0], meta.houseCenter[2] - off[2]];
+  const spawnLocal = [sx - off[0], sz - off[2]];
+  const existingDistance = Math.hypot(spawnLocal[0] - houseLocal[0], spawnLocal[1] - houseLocal[1]);
+  if (existingDistance >= 42) return { sx, sz, refined: false };
+
+  let dx = spawnLocal[0] - houseLocal[0];
+  let dz = spawnLocal[1] - houseLocal[1];
+  let d = Math.hypot(dx, dz);
+  if (d < 1) {
+    dx = 0;
+    dz = 1;
+    d = 1;
+  }
+  const dirX = dx / d;
+  const dirZ = dz / d;
+  const targetAlong = Math.max(62, existingDistance + 42);
+
+  let best = null;
+  let bestScore = Infinity;
+  for (let row = 0; row < n; row++) {
+    for (let col = 0; col < n; col++) {
+      if (!roadBit(col, row)) continue;
+      const x = minX + (col + 0.5) / n * (maxX - minX);
+      const z = minZ + (row + 0.5) / n * (maxZ - minZ);
+      const vx = x - houseLocal[0];
+      const vz = z - houseLocal[1];
+      const along = vx * dirX + vz * dirZ;
+      if (along < 48 || along > 95) continue;
+      const lateral = Math.abs(-dirZ * vx + dirX * vz);
+      if (lateral > 36) continue;
+      const radius = Math.hypot(vx, vz);
+      if (radius > 105) continue;
+      const score = Math.abs(along - targetAlong) + lateral * 0.45;
+      if (score < bestScore) {
+        bestScore = score;
+        best = [x, z, along, lateral];
+      }
+    }
+  }
+
+  if (!best) return { sx, sz, refined: false };
+  return { sx: best[0] + off[0], sz: best[1] + off[2], refined: true, along: best[2], lateral: best[3] };
+}
 
 await MeshoptDecoder.ready;
 await MeshoptEncoder.ready;
@@ -164,6 +244,12 @@ for (const { out, master } of MASTERS) {
           // Guarantee clearance: if still close to a wall, walk out along the front normal until clear.
           let sx = chosen[0], sz = chosen[1];
           if (chosenN) { let g = 0; while (wallClear(sx, sz) < CLEAR - 1 && g++ < 40) { sx += chosenN[0]; sz += chosenN[1]; } }
+          const roadGridRefine = refineStreetSpawnFromRoadGrid(out, meta, sx, sz);
+          const roadGridClear = roadGridRefine.refined ? wallClear(roadGridRefine.sx, roadGridRefine.sz) : 0;
+          if (roadGridRefine.refined && roadGridClear >= CLEAR - 2) {
+            sx = roadGridRefine.sx;
+            sz = roadGridRefine.sz;
+          }
           const lr = [sx-off[0], sz-off[2]];                 // recentered-local x,z
           const lh = [hc[0]-off[0], hc[2]-off[2]];
           const dx = lr[0]-lh[0], dz = lr[1]-lh[1];          // face out from the house toward the street
@@ -172,7 +258,10 @@ for (const { out, master } of MASTERS) {
           let yaw = Math.atan2(dx, dz) * 180 / Math.PI; if (yaw < 0) yaw += 360;
           meta.facing = Math.round(yaw*10)/10;
           writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
-          console.log(`${out}: streetSpawn=[${meta.streetSpawn}] facing=${meta.facing} clear=${wallClear(sx,sz).toFixed(1)}m (${viaFront ? 'front-clear' : 'fallback'})`);
+          const source = roadGridRefine.refined && roadGridClear >= CLEAR - 2
+            ? `road-grid along=${roadGridRefine.along.toFixed(1)} lateral=${roadGridRefine.lateral.toFixed(1)}`
+            : (viaFront ? 'front-clear' : 'fallback');
+          console.log(`${out}: streetSpawn=[${meta.streetSpawn}] facing=${meta.facing} clear=${wallClear(sx,sz).toFixed(1)}m (${source})`);
         } else {
           console.log(`${out}: no street spawn (road too far) — keeps front-yard spawn`);
         }
