@@ -185,6 +185,15 @@ namespace DaHilg
             if (m_VisualRoot != null) m_VisualRoot.localPosition = Vector3.zero;
         }
 
+        // Spawn with an explicit facing (degrees, world yaw) so the player faces the street with the
+        // house behind them. The camera reads FacingYaw on switch, so it frames the same direction.
+        public void Teleport(Vector3 feetPosition, float facingYaw)
+        {
+            Teleport(feetPosition);
+            m_FacingYaw = facingYaw;
+            if (m_VisualRoot != null) m_VisualRoot.rotation = Quaternion.Euler(0f, facingYaw, 0f);
+        }
+
         void LateUpdate()
         {
             StabilizeVisualGrounding(Time.deltaTime);
