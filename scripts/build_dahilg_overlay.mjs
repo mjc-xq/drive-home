@@ -22,7 +22,7 @@ const OUT = (...p) => path.join(ROOT, 'public', 'da-hilg', ...p);
 
 // level slug -> rich master that still has the named creek/tree/grass meshes
 const MASTERS = [
-  { out: 'level',   master: '1840-dahill-property.glb' },
+  { out: 'level',   master: '1840-dahill-property-trees.glb' },
   { out: 'canyon',  master: 'canyon-middle-school-property.glb' },
   { out: 'stanton', master: 'stanton-elementary-property.glb' },
   { out: 'meemaw',  master: 'meemaw-property.glb' },
@@ -71,7 +71,6 @@ function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
   const houseLocal = [meta.houseCenter[0] - off[0], meta.houseCenter[2] - off[2]];
   const spawnLocal = [sx - off[0], sz - off[2]];
   const existingDistance = Math.hypot(spawnLocal[0] - houseLocal[0], spawnLocal[1] - houseLocal[1]);
-  if (existingDistance >= 42) return { sx, sz, refined: false };
 
   let dx = spawnLocal[0] - houseLocal[0];
   let dz = spawnLocal[1] - houseLocal[1];
@@ -83,7 +82,7 @@ function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
   }
   const dirX = dx / d;
   const dirZ = dz / d;
-  const targetAlong = Math.max(62, existingDistance + 42);
+  const targetAlong = Math.min(72, Math.max(54, existingDistance + 12));
 
   let best = null;
   let bestScore = Infinity;
@@ -95,11 +94,11 @@ function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
       const vx = x - houseLocal[0];
       const vz = z - houseLocal[1];
       const along = vx * dirX + vz * dirZ;
-      if (along < 48 || along > 95) continue;
+      if (along < 42 || along > 78) continue;
       const lateral = Math.abs(-dirZ * vx + dirX * vz);
-      if (lateral > 36) continue;
+      if (lateral > 30) continue;
       const radius = Math.hypot(vx, vz);
-      if (radius > 105) continue;
+      if (radius > 90) continue;
       const score = Math.abs(along - targetAlong) + lateral * 0.45;
       if (score < bestScore) {
         bestScore = score;
@@ -246,7 +245,8 @@ for (const { out, master } of MASTERS) {
           if (chosenN) { let g = 0; while (wallClear(sx, sz) < CLEAR - 1 && g++ < 40) { sx += chosenN[0]; sz += chosenN[1]; } }
           const roadGridRefine = refineStreetSpawnFromRoadGrid(out, meta, sx, sz);
           const roadGridClear = roadGridRefine.refined ? wallClear(roadGridRefine.sx, roadGridRefine.sz) : 0;
-          if (roadGridRefine.refined && roadGridClear >= CLEAR - 2) {
+          const currentClear = wallClear(sx, sz);
+          if (roadGridRefine.refined && (roadGridClear >= CLEAR - 2 || roadGridClear > currentClear + 2)) {
             sx = roadGridRefine.sx;
             sz = roadGridRefine.sz;
           }

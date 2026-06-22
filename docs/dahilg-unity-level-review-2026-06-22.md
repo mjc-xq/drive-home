@@ -36,10 +36,9 @@ generated GLB pipeline.
 - The creek water mesh existed in source data, but it was being placed as a broad floating sheet
   after runtime grounding. It needed to conform to the creek bed and use a visible flowing water
   material instead of relying on transparent sorting.
-- The minimap data had `road`, `drive`, `walk`, `curb`, and `line` arrays empty for Dahill. The
-  HUD fell back to a coarse 1-bit `fillRoad` mask, which rendered like dots/pixels instead of a
-  map. The current fix smooths and thickens that mask at runtime, but the right long-term fix is
-  regenerating proper vector road/sidewalk ribbons for every level.
+- The minimap was effectively a coarse occupancy fallback. It did not carry enough separate
+  surface information for roads, driveways, sidewalks, curbs, lane paint, and creek water, so the
+  HUD looked like scattered dots instead of a readable local street map.
 - The player could appear to emote constantly because ambient NPC/nibbler logic randomly called
   `PlayEmote`, and the fourth emote slot was wired to the `Attack` animation. Emotes should only
   happen from explicit emote input, explicit greet input, or combat/hit reactions.
@@ -54,20 +53,31 @@ generated GLB pipeline.
 
 - Unity now streams the textured GLBs from `exports/*-single.glb` into
   `public/unity/da-hilg/StreamingAssets/*.glb`, using smaller deploy-safe GLBs.
-- The player spawn for Dahill is on the street in front of the house and uses an explicit facing
-  yaw.
-- The creek water is grounded against the level mesh, uses a visible opaque blue/emissive
-  procedural flow texture, and animates via `DaHilgWaterAnimator`.
+- The player spawn for Dahill is on the street in front of the house at `[37.32, 0.05, 61.25]`
+  and uses an explicit facing yaw.
+- The Dahill overlay now uses `exports/1840-dahill-property-trees.glb`, which restores 46
+  fence-like named nodes into `dahill_overlay.glb`.
+- The minimap generator now emits separate packed masks for roads, driveways, sidewalks, curbs,
+  lane paint, and creek water. The Unity minimap renders those as layered smooth surfaces, so it
+  reads like a compact street map instead of dots.
+- Runtime-generated road, driveway, sidewalk, curb, lane-paint, and creek-water surface overlays
+  are grounded to the streamed level mesh, which makes the location recognizable even when the
+  source GLB bakes too much into one low-resolution ground texture.
+- Creek water now comes from the generated `fillWater` mask, is grounded against the creek bed,
+  uses a visible blue/emissive procedural flow material, animates via `DaHilgWaterAnimator`, and
+  still honors the level profile `WaterHeightOffset`. The current generated default is `0.10`,
+  clamped to `0.045..0.16`, so it fills the creek bed without returning to the old hovering sheet.
 - Procedural grass clumps/cards are generated near the player with short draw distance, no
-  realtime shadows, and mobile caps.
-- The minimap is zoomed around the player, shows actors/nibblers, and now smooths the fallback
-  road mask into continuous-looking road ribbons instead of point/dot noise.
+  realtime shadows, and mobile caps. Grass now rejects generated road/drive/walk/curb/lane/water
+  masks so it does not grow through streets, sidewalks, or creek water.
 - Touch controls use a floating left stick, right-side look zone, and explicit Punch/Roll/Run/Jump
   buttons. The HUD was tightened, and touch devices start with the status panel collapsed.
 - Ambient/random emote calls were removed. The remaining emote paths are player emote input and
   greet reactions; attack now comes from punch/melee only.
-- Camera deocclusion now collapses shoulder/arm offset when obstructed and uses a larger sphere
-  cast so walls are less likely to land between player and camera.
+- Camera deocclusion now collapses to a much tighter distance in obstructed spaces, with smaller
+  collision radii and lower occlusion damping so walls are less likely to land between player and
+  camera. It also has a lightweight visual deocclusion pass for nearby foliage/wall/fence renderers
+  that cross the camera-to-player sightline but do not have useful colliders.
 - Nibbler spawning is capped on mobile, grounded, clearance checked, and keeps full-size NPCs
   within smaller findable outdoor leash areas.
 - The huge terrain collider path now creates a collider LOD so Unity does not use oversized
@@ -81,16 +91,18 @@ generated GLB pipeline.
 - **Missing facade coverage and color fallback.** Buildings without facade panels still need wall
   colors derived from nearby Street View or a curated paint palette, not aerial/terrain colors.
   Missing facade meshes should be easy to spot in raw GLB QA.
-- **Fences are missing at Dahill.** The overlay now preserves fence/gate/rail/barrier meshes if
-  the source GLB contains them, but the current Dahill streamed master does not include the
-  previous fence placements. Re-run or repair the fence placement step from `place_fences.py` and
-  verify the output GLB contains named fence nodes.
+- **Fences need a deliberate source pipeline, not another runtime patch.** This pass restored the
+  Dahill fence meshes by switching the overlay source to `1840-dahill-property-trees.glb` and
+  verifying 46 fence-like nodes. Future GLB regeneration must keep that source or regenerate the
+  fence placement step, then verify `Fence_*`, `Gate_*`, or equivalent nodes survive into
+  `dahill_overlay.glb`.
 - **Previous-level props are missing.** The couch and bearded dragon cabinet from earlier levels
   need to be reintroduced as Unity-authored overlay props or as named GLB nodes in the level
   source. They are not reliably present in the currently streamed outdoor GLBs.
-- **Minimap source data should be regenerated.** The runtime smoothing is a visual patch. The
-  exporter should emit proper filled road/drive/walk polygons or centerline ribbons so the minimap
-  is a real map, not a smoothed occupancy raster.
+- **Minimap source data should eventually become polygon/ribbon metadata.** This pass fixed the
+  immediate visual problem with packed 384x384 masks for each surface type. A future exporter
+  should still emit editable road/drive/walk polygons or centerline ribbons so map styling and
+  hit testing are not tied to raster resolution.
 
 ## How to edit levels in Unity
 
@@ -130,7 +142,7 @@ generated GLB pipeline.
 
    ```sh
    node scripts/build_dahilg_unity_assets.mjs
-   node scripts/build_dahilg.mjs --stages=unitybuild
+   node scripts/build_dahilg.mjs --stages=unitysrc,unitybuild
    ```
 
 6. For Unity-authored props that are not generated from geodata, add a separate overlay/prefab
@@ -158,14 +170,15 @@ generated GLB pipeline.
 
 ## Recommended next work
 
-- Regenerate Dahill from the textured GLB pipeline with fence placement restored, then inspect
-  node names to ensure `Fence_*`, `Gate_*`, or equivalent meshes survive into the streamed GLB.
+- When regenerating Dahill from the textured GLB pipeline, keep the fence-bearing overlay source or
+  rerun fence placement, then inspect node names to ensure `Fence_*`, `Gate_*`, or equivalent
+  meshes survive into the streamed GLB.
 - Add a Unity overlay-prop system for non-geodata props like the couch and bearded dragon cabinet,
   with per-level transforms stored in a small JSON or ScriptableObject.
 - Rework facade fetching/cropping as a measurable pipeline: render raw GLB eye-level QA, compare
   wall edge bounds, adjust crop/UV/scaling, and fail the build when facade quads miss their wall
   bounds.
-- Replace minimap `fillRoad` fallback with filled polygon/ribbon data generated from the same
-  road/sidewalk meshes Unity consumes.
+- Replace the minimap raster masks with filled polygon/ribbon data generated from the same
+  road/sidewalk meshes Unity consumes once the source pipeline is stable.
 - Add a repeatable mobile smoke test that captures iPhone-sized screenshots and checks the HUD
   panel state, minimap texture, and touch buttons after Unity startup.

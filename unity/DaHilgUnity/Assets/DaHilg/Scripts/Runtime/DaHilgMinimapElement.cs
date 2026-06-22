@@ -9,9 +9,9 @@ namespace DaHilg
 {
     public sealed class DaHilgMinimapElement : VisualElement
     {
-        // Draw the FULL road/walk network: subsampling (the old 180/450 stride) chopped ~3000 road
-        // segments into disconnected dashes that read as "dots, not streets". A 2D minimap can afford
-        // to stroke them all.
+        // Vector strokes are only for light detail/creek edges. The real street readability comes
+        // from source-generated filled masks (road/drive/walk/curb/line/water), so the minimap reads
+        // as smooth map surfaces instead of boundary-edge stipple.
         const int k_MaxSegmentsPerLayer = 6000;
         const int k_DiskSides = 14;
         const int k_RoadTextureWidth = 384;
@@ -105,7 +105,7 @@ namespace DaHilg
 
         void RefreshRoadTextureForCurrentView(bool force)
         {
-            if (m_Data == null || m_Data.FillN <= 0 || m_Data.FillRoad == null)
+            if (m_Data == null || m_Data.FillN <= 0 || !m_Data.HasAnyFill)
             {
                 if (m_RoadTex != null) { UnityEngine.Object.Destroy(m_RoadTex); m_RoadTex = null; }
                 if (m_MapArea != null) m_MapArea.style.backgroundImage = new StyleBackground();
@@ -147,9 +147,13 @@ namespace DaHilg
             }
 
             Color ground = new Color(0.070f, 0.115f, 0.085f, 0.96f);
-            Color edge = new Color(0.175f, 0.195f, 0.205f, 1f);
-            Color road = new Color(0.64f, 0.67f, 0.71f, 1f);
-            Color roadHi = new Color(0.78f, 0.80f, 0.82f, 1f);
+            Color water = new Color(0.08f, 0.42f, 0.68f, 1f);
+            Color walk = new Color(0.68f, 0.66f, 0.58f, 1f);
+            Color drive = new Color(0.42f, 0.44f, 0.47f, 1f);
+            Color roadEdge = new Color(0.19f, 0.205f, 0.22f, 1f);
+            Color road = new Color(0.55f, 0.58f, 0.62f, 1f);
+            Color curb = new Color(0.86f, 0.88f, 0.82f, 1f);
+            Color line = new Color(1.0f, 0.80f, 0.25f, 1f);
             Color32[] px = new Color32[k_RoadTextureWidth * texHeight];
             for (int row = 0; row < texHeight; row++)
             {
@@ -157,13 +161,20 @@ namespace DaHilg
                 for (int col = 0; col < k_RoadTextureWidth; col++)
                 {
                     float x = Mathf.Lerp(viewBounds.xMin, viewBounds.xMax, (col + 0.5f) / k_RoadTextureWidth);
-                    float alpha = SampleRoadAlpha(x, z);
-                    float edge01 = Mathf.SmoothStep(0.035f, 0.28f, alpha);
-                    float road01 = Mathf.SmoothStep(0.34f, 0.66f, alpha);
-                    float highlight01 = Mathf.SmoothStep(0.76f, 0.96f, alpha) * 0.45f;
-                    Color c = Color.Lerp(ground, edge, edge01);
-                    c = Color.Lerp(c, road, road01);
-                    c = Color.Lerp(c, roadHi, highlight01);
+                    float water01 = SampleAlpha(m_Data.WaterAlpha, x, z);
+                    float walk01 = SampleAlpha(m_Data.WalkAlpha, x, z);
+                    float drive01 = SampleAlpha(m_Data.DriveAlpha, x, z);
+                    float road01 = SampleAlpha(m_Data.RoadAlpha, x, z);
+                    float curb01 = SampleAlpha(m_Data.CurbAlpha, x, z);
+                    float line01 = SampleAlpha(m_Data.LineAlpha, x, z);
+
+                    Color c = Color.Lerp(ground, water, Mathf.SmoothStep(0.20f, 0.72f, water01));
+                    c = Color.Lerp(c, walk, Mathf.SmoothStep(0.26f, 0.68f, walk01) * 0.95f);
+                    c = Color.Lerp(c, drive, Mathf.SmoothStep(0.25f, 0.68f, drive01) * 0.95f);
+                    c = Color.Lerp(c, roadEdge, Mathf.SmoothStep(0.04f, 0.24f, road01));
+                    c = Color.Lerp(c, road, Mathf.SmoothStep(0.32f, 0.70f, road01));
+                    c = Color.Lerp(c, curb, Mathf.SmoothStep(0.30f, 0.78f, curb01) * 0.75f);
+                    c = Color.Lerp(c, line, Mathf.SmoothStep(0.34f, 0.80f, line01) * 0.92f);
                     px[row * k_RoadTextureWidth + col] = c;
                 }
             }
@@ -174,9 +185,9 @@ namespace DaHilg
             m_MapArea.style.backgroundImage = new StyleBackground(m_RoadTex);
         }
 
-        float SampleRoadAlpha(float x, float z)
+        float SampleAlpha(byte[] alpha, float x, float z)
         {
-            if (m_Data == null || m_Data.RoadAlpha == null || m_Data.FillN <= 1) return 0f;
+            if (m_Data == null || alpha == null || m_Data.FillN <= 1) return 0f;
             int n = m_Data.FillN;
             Rect source = m_Data.Bounds;
             float gx = Mathf.Clamp01((x - source.xMin) / Mathf.Max(0.001f, source.width)) * (n - 1);
@@ -187,10 +198,10 @@ namespace DaHilg
             int z1 = Mathf.Min(n - 1, z0 + 1);
             float tx = gx - x0;
             float tz = gz - z0;
-            float a00 = m_Data.RoadAlpha[z0 * n + x0] / 255f;
-            float a10 = m_Data.RoadAlpha[z0 * n + x1] / 255f;
-            float a01 = m_Data.RoadAlpha[z1 * n + x0] / 255f;
-            float a11 = m_Data.RoadAlpha[z1 * n + x1] / 255f;
+            float a00 = alpha[z0 * n + x0] / 255f;
+            float a10 = alpha[z0 * n + x1] / 255f;
+            float a01 = alpha[z1 * n + x0] / 255f;
+            float a11 = alpha[z1 * n + x1] / 255f;
             return Mathf.Lerp(Mathf.Lerp(a00, a10, tx), Mathf.Lerp(a01, a11, tx), tz);
         }
 
@@ -501,8 +512,18 @@ namespace DaHilg
         {
             public Rect Bounds;
             public int FillN;            // road-fill grid resolution (0 = none)
-            public byte[] FillRoad;      // packed 1-bit road occupancy grid, row-major (row 0 = minZ)
-            public byte[] RoadAlpha;     // smoothed 0..255 road mask for HUD rendering
+            public byte[] FillRoad;      // packed 1-bit occupancy grids, row-major (row 0 = minZ)
+            public byte[] FillDrive;
+            public byte[] FillWalk;
+            public byte[] FillCurb;
+            public byte[] FillLine;
+            public byte[] FillWater;
+            public byte[] RoadAlpha;     // smoothed 0..255 masks for HUD rendering
+            public byte[] DriveAlpha;
+            public byte[] WalkAlpha;
+            public byte[] CurbAlpha;
+            public byte[] LineAlpha;
+            public byte[] WaterAlpha;
             public List<Segment> Road = new List<Segment>();
             public List<Segment> Drive = new List<Segment>();
             public List<Segment> Walk = new List<Segment>();
@@ -510,6 +531,7 @@ namespace DaHilg
             public List<Segment> Line = new List<Segment>();
             public List<Segment> Creek = new List<Segment>();
             public bool Valid => Bounds.width > 0f && Bounds.height > 0f;
+            public bool HasAnyFill => FillRoad != null || FillDrive != null || FillWalk != null || FillCurb != null || FillLine != null || FillWater != null;
 
             public static MinimapData FromProfile(DaHilgLevelProfile profile)
             {
@@ -528,7 +550,17 @@ namespace DaHilg
                 data.Bounds = new Rect(minX, minZ, Mathf.Max(1f, maxX - minX), Mathf.Max(1f, maxZ - minZ));
                 data.FillN = Mathf.RoundToInt(ExtractFloat(json, "fillN", 0f));
                 data.FillRoad = ExtractBase64(json, "fillRoad");
+                data.FillDrive = ExtractBase64(json, "fillDrive");
+                data.FillWalk = ExtractBase64(json, "fillWalk");
+                data.FillCurb = ExtractBase64(json, "fillCurb");
+                data.FillLine = ExtractBase64(json, "fillLine");
+                data.FillWater = ExtractBase64(json, "fillWater");
                 data.RoadAlpha = BuildSmoothRoadAlpha(data.FillRoad, data.FillN);
+                data.DriveAlpha = BuildSmoothRoadAlpha(data.FillDrive, data.FillN);
+                data.WalkAlpha = BuildSmoothRoadAlpha(data.FillWalk, data.FillN);
+                data.CurbAlpha = BuildSmoothRoadAlpha(data.FillCurb, data.FillN);
+                data.LineAlpha = BuildSmoothRoadAlpha(data.FillLine, data.FillN);
+                data.WaterAlpha = BuildSmoothRoadAlpha(data.FillWater, data.FillN);
                 data.Road = ExtractSegments(json, "road");
                 data.Drive = ExtractSegments(json, "drive");
                 data.Walk = ExtractSegments(json, "walk");

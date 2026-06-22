@@ -49,6 +49,15 @@ namespace DaHilg
         static readonly RaycastHit[] s_SphereHits = new RaycastHit[32];
         static readonly Collider[] s_OverlapHits = new Collider[32];
         static Texture2D s_WaterFlowTexture;
+        static bool s_ProceduralCreekWaterActive;
+        static int s_SurfaceMaskN;
+        static Rect s_SurfaceMaskBounds;
+        static byte[] s_SurfaceMaskRoad;
+        static byte[] s_SurfaceMaskDrive;
+        static byte[] s_SurfaceMaskWalk;
+        static byte[] s_SurfaceMaskCurb;
+        static byte[] s_SurfaceMaskLine;
+        static byte[] s_SurfaceMaskWater;
 
         // Heavy outdoor levels stream their GLB from StreamingAssets at level-select instead of
         // being baked into the WebGL data file. Mirrors the staged set in DaHilgProjectBuilder.
@@ -237,6 +246,8 @@ namespace DaHilg
                 s_ConfiguredVegetationMaterials.Clear();
                 s_DetailNormaledTerrainMaterials.Clear();
                 s_ConfiguredGlassMaterials.Clear();
+                s_ProceduralCreekWaterActive = false;
+                ClearSurfaceMasks();
             }
 
             MeshFilter[] filters = level.GetComponentsInChildren<MeshFilter>(true);
@@ -364,8 +375,6 @@ namespace DaHilg
             string json = profile.Minimap.text;
             int n = Mathf.RoundToInt(ExtractFloat(json, "fillN", 0f));
             if (n <= 0 || n > 512) return;
-            byte[] fillRoad = ExtractBase64(json, "fillRoad");
-            if (fillRoad == null || fillRoad.Length == 0) return;
 
             float minX = ExtractFloat(json, "minX", profile.PlayBounds.min.x);
             float minZ = ExtractFloat(json, "minZ", profile.PlayBounds.min.z);
@@ -373,18 +382,76 @@ namespace DaHilg
             float maxZ = ExtractFloat(json, "maxZ", profile.PlayBounds.max.z);
             if (maxX <= minX || maxZ <= minZ) return;
 
+            s_SurfaceMaskN = n;
+            s_SurfaceMaskBounds = new Rect(minX, minZ, maxX - minX, maxZ - minZ);
+            s_SurfaceMaskRoad = ExtractBase64(json, "fillRoad");
+            s_SurfaceMaskDrive = ExtractBase64(json, "fillDrive");
+            s_SurfaceMaskWalk = ExtractBase64(json, "fillWalk");
+            s_SurfaceMaskCurb = ExtractBase64(json, "fillCurb");
+            s_SurfaceMaskLine = ExtractBase64(json, "fillLine");
+            s_SurfaceMaskWater = ExtractBase64(json, "fillWater");
+
+            BuildMaskSurfaceOverlay(levelRoot, "PavedOverlay_Roads", s_SurfaceMaskRoad, n, minX, minZ, maxX, maxZ,
+                0.050f, new Color(0.235f, 0.245f, 0.255f, 1f), 0.42f, (int)RenderQueue.Geometry + 25, false);
+            BuildMaskSurfaceOverlay(levelRoot, "PavedOverlay_Driveways", s_SurfaceMaskDrive, n, minX, minZ, maxX, maxZ,
+                0.054f, new Color(0.285f, 0.295f, 0.305f, 1f), 0.36f, (int)RenderQueue.Geometry + 26, false);
+            BuildMaskSurfaceOverlay(levelRoot, "PavedOverlay_Sidewalks", s_SurfaceMaskWalk, n, minX, minZ, maxX, maxZ,
+                0.064f, new Color(0.62f, 0.60f, 0.54f, 1f), 0.32f, (int)RenderQueue.Geometry + 27, false);
+            BuildMaskSurfaceOverlay(levelRoot, "PavedOverlay_Curbs", s_SurfaceMaskCurb, n, minX, minZ, maxX, maxZ,
+                0.074f, new Color(0.78f, 0.77f, 0.70f, 1f), 0.28f, (int)RenderQueue.Geometry + 28, false);
+            BuildMaskSurfaceOverlay(levelRoot, "PavedOverlay_Lines", s_SurfaceMaskLine, n, minX, minZ, maxX, maxZ,
+                0.084f, new Color(0.95f, 0.72f, 0.18f, 1f), 0.20f, (int)RenderQueue.Geometry + 29, false);
+            bool water = BuildMaskSurfaceOverlay(levelRoot, "ProceduralCreekWater", s_SurfaceMaskWater, n, minX, minZ, maxX, maxZ,
+                Mathf.Clamp(profile.WaterHeightOffset, 0.045f, 0.16f), new Color(0.10f, 0.46f, 0.78f, 0.96f), 0.88f,
+                (int)RenderQueue.Geometry + 35, true);
+            s_ProceduralCreekWaterActive = water;
+        }
+
+        static void ClearSurfaceMasks()
+        {
+            s_SurfaceMaskN = 0;
+            s_SurfaceMaskBounds = default;
+            s_SurfaceMaskRoad = null;
+            s_SurfaceMaskDrive = null;
+            s_SurfaceMaskWalk = null;
+            s_SurfaceMaskCurb = null;
+            s_SurfaceMaskLine = null;
+            s_SurfaceMaskWater = null;
+        }
+
+        public static bool IsGeneratedPavedOrWater(Vector3 worldPoint)
+        {
+            if (s_SurfaceMaskN <= 0 || s_SurfaceMaskBounds.width <= 0f || s_SurfaceMaskBounds.height <= 0f) return false;
+            float u = (worldPoint.x - s_SurfaceMaskBounds.xMin) / s_SurfaceMaskBounds.width;
+            float v = (worldPoint.z - s_SurfaceMaskBounds.yMin) / s_SurfaceMaskBounds.height;
+            if (u < 0f || u > 1f || v < 0f || v > 1f) return false;
+            int col = Mathf.Clamp(Mathf.FloorToInt(u * s_SurfaceMaskN), 0, s_SurfaceMaskN - 1);
+            int row = Mathf.Clamp(Mathf.FloorToInt(v * s_SurfaceMaskN), 0, s_SurfaceMaskN - 1);
+            return RoadBit(s_SurfaceMaskRoad, s_SurfaceMaskN, col, row)
+                || RoadBit(s_SurfaceMaskDrive, s_SurfaceMaskN, col, row)
+                || RoadBit(s_SurfaceMaskWalk, s_SurfaceMaskN, col, row)
+                || RoadBit(s_SurfaceMaskCurb, s_SurfaceMaskN, col, row)
+                || RoadBit(s_SurfaceMaskLine, s_SurfaceMaskN, col, row)
+                || RoadBit(s_SurfaceMaskWater, s_SurfaceMaskN, col, row);
+        }
+
+        static bool BuildMaskSurfaceOverlay(GameObject levelRoot, string name, byte[] bits, int n,
+            float minX, float minZ, float maxX, float maxZ, float lift, Color color, float smoothness,
+            int renderQueue, bool water)
+        {
+            if (bits == null || bits.Length == 0) return false;
+
             List<Vector3> vertices = new List<Vector3>(8192);
             List<int> triangles = new List<int>(12288);
-            const float lift = 0.045f;
             for (int row = 0; row < n; row++)
             {
                 int col = 0;
                 while (col < n)
                 {
-                    while (col < n && !RoadBit(fillRoad, n, col, row)) col++;
+                    while (col < n && !RoadBit(bits, n, col, row)) col++;
                     if (col >= n) break;
                     int start = col;
-                    while (col < n && RoadBit(fillRoad, n, col, row)) col++;
+                    while (col < n && RoadBit(bits, n, col, row)) col++;
                     int end = col;
 
                     float x0 = Mathf.Lerp(minX, maxX, start / (float)n);
@@ -392,7 +459,7 @@ namespace DaHilg
                     float z0 = Mathf.Lerp(minZ, maxZ, row / (float)n);
                     float z1 = Mathf.Lerp(minZ, maxZ, (row + 1) / (float)n);
 
-                    AddPavedQuad(vertices, triangles,
+                    AddSurfaceQuad(vertices, triangles,
                         GroundSpawn(new Vector3(x0, 0f, z0)) + Vector3.up * lift,
                         GroundSpawn(new Vector3(x1, 0f, z0)) + Vector3.up * lift,
                         GroundSpawn(new Vector3(x1, 0f, z1)) + Vector3.up * lift,
@@ -400,11 +467,11 @@ namespace DaHilg
                 }
             }
 
-            if (vertices.Count == 0) return;
+            if (vertices.Count == 0) return false;
 
             Mesh mesh = new Mesh
             {
-                name = "DaHilgPavedOverlayMesh",
+                name = name + "Mesh",
                 indexFormat = vertices.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16
             };
             mesh.SetVertices(vertices);
@@ -412,36 +479,38 @@ namespace DaHilg
             mesh.RecalculateBounds();
             mesh.RecalculateNormals();
 
-            GameObject overlay = new GameObject("PavedOverlay");
+            GameObject overlay = new GameObject(name);
             overlay.transform.SetParent(levelRoot.transform, true);
             MeshFilter filter = overlay.AddComponent<MeshFilter>();
             filter.sharedMesh = mesh;
             MeshRenderer renderer = overlay.AddComponent<MeshRenderer>();
-            Material material = CreatePavedOverlayMaterial(levelRoot);
+            Material material = CreateOverlayMaterial(levelRoot, name + "_mat", color, smoothness, renderQueue, water);
             if (material == null)
             {
                 UnityEngine.Object.Destroy(overlay);
-                return;
+                return false;
             }
             renderer.sharedMaterial = material;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
+            if (water) overlay.AddComponent<DaHilgWaterAnimator>();
+            return true;
         }
 
-        static Material CreatePavedOverlayMaterial(GameObject levelRoot)
+        static Material CreateOverlayMaterial(GameObject levelRoot, string name, Color color, float smoothness, int renderQueue, bool water)
         {
             Material source = FindLevelMaterial(levelRoot);
             Material material = null;
             if (source != null && source.shader != null)
             {
-                material = new Material(source) { name = "DaHilgPavedOverlay_mat" };
+                material = new Material(source) { name = name };
             }
             else
             {
                 Shader shader = Shader.Find("Universal Render Pipeline/Lit");
                 if (shader == null) shader = Shader.Find("Standard");
                 if (shader == null) shader = Shader.Find("Unlit/Color");
-                if (shader != null) material = new Material(shader) { name = "DaHilgPavedOverlay_mat" };
+                if (shader != null) material = new Material(shader) { name = name };
             }
 
             if (material == null)
@@ -450,15 +519,22 @@ namespace DaHilg
                 return null;
             }
 
-            Color asphalt = new Color(0.30f, 0.32f, 0.34f, 1f);
             if (material.HasProperty("_BaseMap")) material.SetTexture("_BaseMap", null);
             if (material.HasProperty("_MainTex")) material.SetTexture("_MainTex", null);
-            if (material.HasProperty(s_BaseColorId)) material.SetColor(s_BaseColorId, asphalt);
-            if (material.HasProperty(s_ColorId)) material.SetColor(s_ColorId, asphalt);
+            if (material.HasProperty(s_BaseColorId)) material.SetColor(s_BaseColorId, color);
+            if (material.HasProperty(s_ColorId)) material.SetColor(s_ColorId, color);
             if (material.HasProperty(s_MetallicId)) material.SetFloat(s_MetallicId, 0.0f);
-            if (material.HasProperty(s_SmoothnessId)) material.SetFloat(s_SmoothnessId, 0.38f);
-            if (material.HasProperty(s_GlossinessId)) material.SetFloat(s_GlossinessId, 0.38f);
-            material.renderQueue = (int)RenderQueue.Geometry + 25;
+            if (material.HasProperty(s_SmoothnessId)) material.SetFloat(s_SmoothnessId, smoothness);
+            if (material.HasProperty(s_GlossinessId)) material.SetFloat(s_GlossinessId, smoothness);
+            if (water)
+            {
+                ConfigureWaterMaterial(material);
+                if (material.HasProperty(s_BaseColorId)) material.SetColor(s_BaseColorId, color);
+                if (material.HasProperty(s_ColorId)) material.SetColor(s_ColorId, color);
+                material.EnableKeyword("_EMISSION");
+                if (material.HasProperty("_EmissionColor")) material.SetColor("_EmissionColor", new Color(0.04f, 0.23f, 0.40f));
+            }
+            material.renderQueue = renderQueue;
             material.enableInstancing = true;
             return material;
         }
@@ -478,7 +554,7 @@ namespace DaHilg
             return null;
         }
 
-        static void AddPavedQuad(List<Vector3> vertices, List<int> triangles, Vector3 a, Vector3 b, Vector3 c, Vector3 d)
+        static void AddSurfaceQuad(List<Vector3> vertices, List<int> triangles, Vector3 a, Vector3 b, Vector3 c, Vector3 d)
         {
             int v = vertices.Count;
             vertices.Add(a);
@@ -837,6 +913,11 @@ namespace DaHilg
                                       && !lower.Contains("bank") && !lower.Contains("rock") && !lower.Contains("reed")
                                       && !lower.Contains("flowline") && !lower.Contains("flow_line") && !lower.Contains("line");
                 if (!isVeg && !isCreek) continue;
+                if (isWaterSurface && s_ProceduralCreekWaterActive)
+                {
+                    r.enabled = false;
+                    continue;
+                }
                 if (isWaterSurface && ConformWaterSurfaceToGround(r, waterHeightOffset)) continue;
 
                 Bounds b = r.bounds;

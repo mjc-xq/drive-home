@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Cinemachine;
 using UnityEngine;
 
@@ -35,13 +36,22 @@ namespace DaHilg
         float m_IdleLookTime;
         float m_ShakeAmp;   // decaying positional shake (crush juice)
         float m_FovPunch;   // decaying FOV zoom-in punch (crush juice)
+        readonly List<Renderer> m_VisualOcclusionCandidates = new List<Renderer>(256);
+        readonly List<Renderer> m_HiddenVisualOccluders = new List<Renderer>(24);
+        readonly HashSet<Renderer> m_NextHiddenVisualOccluders = new HashSet<Renderer>();
+        float m_VisualOcclusionRefreshAt;
+        float m_VisualOcclusionPollAt;
         const float k_BaseFov = 68f;
+        const float k_VisualOcclusionRefreshInterval = 1.25f;
+        const float k_VisualOcclusionPollInterval = 0.08f;
+        const int k_MaxVisualOccludersHidden = 20;
 
         public DaHilgActor Target
         {
             get => m_Target;
             set
             {
+                if (m_Target != value) RestoreVisualOccluders();
                 m_Target = value;
                 if (m_Target != null && m_FollowTarget != null)
                 {
@@ -146,7 +156,7 @@ namespace DaHilg
                 Enabled = true,
                 CollisionFilter = defaultLayers,
                 IgnoreTag = "Player",
-                CameraRadius = 0.18f,
+                CameraRadius = 0.26f,
                 DampingIntoCollision = 0.03f,
                 DampingFromCollision = 0.11f
             };
@@ -155,23 +165,24 @@ namespace DaHilg
             if (m_Deoccluder == null) m_Deoccluder = m_VirtualCamera.gameObject.AddComponent<CinemachineDeoccluder>();
             m_Deoccluder.CollideAgainst = defaultLayers;
             m_Deoccluder.IgnoreTag = "Player";
-            // Keep a real gap even when fully occluded so the camera never plasters a wall across the
-            // whole screen (the "spawned into a wall" feeling) — you always still see the character.
-            m_Deoccluder.MinimumDistanceFromTarget = Mathf.Clamp(settings != null ? settings.ThirdPersonMinDistance : 0.82f, 0.62f, 0.9f);
+            // In tight exterior gaps, forcing a large minimum distance leaves the camera on the wrong
+            // side of a wall. Allow it to collapse almost to first-person until line of sight clears.
+            float deocclusionMin = settings != null ? settings.ThirdPersonMinDistance * 0.28f : 0.18f;
+            m_Deoccluder.MinimumDistanceFromTarget = Mathf.Clamp(deocclusionMin, 0.08f, 0.35f);
             m_Deoccluder.AvoidObstacles = new CinemachineDeoccluder.ObstacleAvoidance
             {
                 Enabled = true,
                 DistanceLimit = 0f,
                 MinimumOcclusionTime = 0f,
-                CameraRadius = 0.18f,
+                CameraRadius = 0.26f,
                 // Pull the camera toward the player whenever anything occludes the view (instead of
                 // orbiting to preserve distance, which jams/clips in tight rooms + near buildings).
                 // Keeps the player visible in EVERY camera mode + level.
                 Strategy = CinemachineDeoccluder.ObstacleAvoidance.ResolutionStrategy.PullCameraForward,
-                MaximumEffort = 3,
+                MaximumEffort = 6,
                 SmoothingTime = 0.02f,
                 Damping = 0.12f,
-                DampingWhenOccluded = 0.025f,
+                DampingWhenOccluded = 0.0f,
                 UseFollowTarget = new CinemachineDeoccluder.ObstacleAvoidance.FollowTargetSettings
                 {
                     Enabled = true,
@@ -181,7 +192,7 @@ namespace DaHilg
 
             m_Decollider = m_VirtualCamera.GetComponent<CinemachineDecollider>();
             if (m_Decollider == null) m_Decollider = m_VirtualCamera.gameObject.AddComponent<CinemachineDecollider>();
-            m_Decollider.CameraRadius = 0.18f;
+            m_Decollider.CameraRadius = 0.26f;
             m_Decollider.Decollision = new CinemachineDecollider.DecollisionSettings
             {
                 Enabled = true,
@@ -300,6 +311,152 @@ namespace DaHilg
                 m_VirtualCamera.Lens.FieldOfView = k_BaseFov - m_FovPunch;
                 if (m_FovPunch > 0.01f) m_FovPunch = Mathf.Lerp(m_FovPunch, 0f, 1f - Mathf.Exp(-9f * dt));
             }
+        }
+
+        void LateUpdate()
+        {
+            UpdateVisualDeocclusion(Time.unscaledTime);
+        }
+
+        void UpdateVisualDeocclusion(float now)
+        {
+            if (m_Camera == null || m_Target == null || Mode == DaHilgCameraMode.FirstPerson)
+            {
+                RestoreVisualOccluders();
+                return;
+            }
+
+            if (now >= m_VisualOcclusionRefreshAt)
+            {
+                RefreshVisualOcclusionCandidates(now);
+            }
+
+            if (now < m_VisualOcclusionPollAt) return;
+            m_VisualOcclusionPollAt = now + k_VisualOcclusionPollInterval;
+
+            Vector3 cameraPos = m_Camera.transform.position;
+            Vector3 targetPos = m_Target.FeetPosition + Vector3.up * 1.12f;
+            Vector3 sight = targetPos - cameraPos;
+            float distance = sight.magnitude;
+            if (distance <= 0.2f)
+            {
+                RestoreVisualOccluders();
+                return;
+            }
+
+            Ray sightRay = new Ray(cameraPos, sight / distance);
+            m_NextHiddenVisualOccluders.Clear();
+            int hiddenCount = 0;
+            for (int i = 0; i < m_VisualOcclusionCandidates.Count; i++)
+            {
+                Renderer renderer = m_VisualOcclusionCandidates[i];
+                if (renderer == null || !renderer.gameObject.activeInHierarchy) continue;
+                if (!ShouldHideVisualOccluder(renderer, sightRay, cameraPos, targetPos, distance)) continue;
+
+                m_NextHiddenVisualOccluders.Add(renderer);
+                if (renderer.enabled) renderer.enabled = false;
+                hiddenCount++;
+                if (hiddenCount >= k_MaxVisualOccludersHidden) break;
+            }
+
+            for (int i = 0; i < m_HiddenVisualOccluders.Count; i++)
+            {
+                Renderer renderer = m_HiddenVisualOccluders[i];
+                if (renderer != null && !m_NextHiddenVisualOccluders.Contains(renderer)) renderer.enabled = true;
+            }
+
+            m_HiddenVisualOccluders.Clear();
+            foreach (Renderer renderer in m_NextHiddenVisualOccluders)
+            {
+                if (renderer != null) m_HiddenVisualOccluders.Add(renderer);
+            }
+        }
+
+        void RefreshVisualOcclusionCandidates(float now)
+        {
+            m_VisualOcclusionRefreshAt = now + k_VisualOcclusionRefreshInterval;
+            m_VisualOcclusionCandidates.Clear();
+
+            Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsInactive.Exclude);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                bool hiddenByCamera = m_HiddenVisualOccluders.Contains(renderer);
+                if (renderer == null || (!renderer.enabled && !hiddenByCamera)) continue;
+                if (!IsVisualOcclusionCandidate(renderer)) continue;
+                m_VisualOcclusionCandidates.Add(renderer);
+            }
+        }
+
+        static bool ShouldHideVisualOccluder(Renderer renderer, Ray sightRay, Vector3 cameraPos, Vector3 targetPos, float sightDistance)
+        {
+            Bounds bounds = renderer.bounds;
+            bounds.Expand(0.75f);
+            Vector3 size = bounds.size;
+            if (!IsFinite(size.x) || !IsFinite(size.y) || !IsFinite(size.z)) return false;
+            if (bounds.SqrDistance(targetPos) < 0.16f) return false;
+            if (bounds.Contains(cameraPos)) return true;
+            return bounds.IntersectRay(sightRay, out float hitDistance)
+                && hitDistance > 0.08f
+                && hitDistance < sightDistance - 0.22f;
+        }
+
+        static bool IsVisualOcclusionCandidate(Renderer renderer)
+        {
+            if (renderer == null || renderer is SkinnedMeshRenderer) return false;
+
+            string name = renderer.name.ToLowerInvariant();
+            if (name.StartsWith("collision_")
+                || name.Contains("proceduralcreekwater")
+                || name.Contains("pavedoverlay"))
+            {
+                return false;
+            }
+
+            bool relevantName = ContainsAny(name,
+                "tree", "leaf", "leaves", "branch", "foliage", "bush", "shrub", "grass", "reed", "plant",
+                "wall", "facade", "building", "house", "fence", "gate", "roof");
+            if (!relevantName && renderer.transform.parent != null)
+            {
+                relevantName = ContainsAny(renderer.transform.parent.name.ToLowerInvariant(),
+                    "tree", "leaf", "leaves", "branch", "foliage", "bush", "shrub", "grass", "reed", "plant",
+                    "wall", "facade", "building", "house", "fence", "gate", "roof");
+            }
+            if (!relevantName && ContainsAny(name,
+                "terrain", "ground", "road", "street", "drive", "walk", "sidewalk", "curb", "line",
+                "water", "creek", "river", "pavedoverlay"))
+            {
+                return false;
+            }
+
+            Vector3 size = renderer.bounds.size;
+            if (size.x < 0.2f || size.y < 0.2f) return false;
+            return size.x <= 260f && size.y <= 180f && size.z <= 260f;
+        }
+
+        static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        static bool ContainsAny(string value, params string[] needles)
+        {
+            for (int i = 0; i < needles.Length; i++)
+            {
+                if (value.Contains(needles[i])) return true;
+            }
+            return false;
+        }
+
+        void RestoreVisualOccluders()
+        {
+            for (int i = 0; i < m_HiddenVisualOccluders.Count; i++)
+            {
+                Renderer renderer = m_HiddenVisualOccluders[i];
+                if (renderer != null) renderer.enabled = true;
+            }
+            m_HiddenVisualOccluders.Clear();
+            m_NextHiddenVisualOccluders.Clear();
         }
 
         void ApplyPreset(CameraPreset preset, float dt)
