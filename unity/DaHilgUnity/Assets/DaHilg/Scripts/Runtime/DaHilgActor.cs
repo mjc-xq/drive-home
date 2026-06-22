@@ -121,8 +121,13 @@ namespace DaHilg
 
         static Transform ResolveAnimatorRoot(Transform visualRoot)
         {
-            if (visualRoot.Find("Armature") != null) return visualRoot;
-            Transform root = FindTransformWithDirectChild(visualRoot, "Armature");
+            // Generated clips are authored relative to the bone root: their paths start at "Hips"
+            // (RetargetBindingPath strips the "Armature/" prefix). The Animator must therefore sit on
+            // the node whose DIRECT child is "Hips" — exactly matching the build's FindAnimationBindingRoot.
+            // Re-exported rigs wrap the bones in an "Armature" node; legacy rigs put Hips at the visual root.
+            // (The old code looked for "Armature" and returned its PARENT, leaving the animator one level
+            //  too high once an Armature wrapper existed → clip paths didn't resolve → permanent T-pose.)
+            Transform root = FindTransformWithDirectChild(visualRoot, "Hips");
             return root != null ? root : visualRoot;
         }
 
