@@ -743,17 +743,45 @@ namespace DaHilg
             float probeHeight = Mathf.Max(settings.GroundProbeHeight, m_Controller.height * 4f);
             float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, settings.StepOffset);
             float maxAbove = Mathf.Max(settings.GroundSnapDistance * 1.2f, settings.StepOffset + 0.28f);
-            if (!DaHilgLevelRuntime.TryFindGround(Root.transform.position, out RaycastHit hit, probeHeight, probeDistance, maxAbove)) return false;
+            if (!DaHilgLevelRuntime.TryFindGround(Root.transform.position, out RaycastHit hit, probeHeight, probeDistance, maxAbove))
+            {
+                return RescueFromLevelGround(settings);
+            }
 
             float targetY = hit.point.y + Mathf.Max(0.018f, settings.GroundSkin * 0.5f);
             float deltaY = targetY - Root.transform.position.y;
             float maxLift = Mathf.Max(settings.GroundSnapDistance * 1.8f, settings.StepOffset);
             float maxDrop = Mathf.Max(settings.StepOffset, 0.45f);
-            if (deltaY > maxLift || deltaY < -maxDrop) return false;
+            if (deltaY > maxLift) return RescueFromLevelGround(settings);
+            if (deltaY < -maxDrop) return false;
             if (Mathf.Abs(deltaY) <= 0.01f) return true;
 
             m_Controller.Move(Vector3.up * deltaY);
             if (m_Velocity.y < 0f) m_Velocity.y = -1f;
+            return true;
+        }
+
+        bool RescueFromLevelGround(DaHilgGameSettings settings)
+        {
+            if (m_Controller == null || !m_Controller.enabled) return false;
+            if (m_Velocity.y > 0.1f) return false;
+
+            float maxLift = Mathf.Max(6f, settings.GroundProbeHeight * 4f, m_Controller.height * 12f);
+            float probeHeight = Mathf.Max(settings.GroundProbeHeight, maxLift + m_Controller.height);
+            float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, m_Controller.height * 2f);
+            if (!DaHilgLevelRuntime.TryFindGround(Root.transform.position, out RaycastHit hit, probeHeight, probeDistance, maxLift)) return false;
+
+            float targetY = hit.point.y + Mathf.Max(0.018f, settings.GroundSkin * 0.5f);
+            float deltaY = targetY - Root.transform.position.y;
+            float minLift = Mathf.Max(settings.GroundSnapDistance * 1.85f, settings.StepOffset + 0.08f);
+            if (deltaY < minLift || deltaY > maxLift) return false;
+
+            bool wasEnabled = m_Controller.enabled;
+            m_Controller.enabled = false;
+            Root.transform.position = new Vector3(Root.transform.position.x, targetY, Root.transform.position.z);
+            m_Controller.enabled = wasEnabled;
+            m_Velocity.y = -1f;
+            m_VisualGroundOffset = 0f;
             return true;
         }
 

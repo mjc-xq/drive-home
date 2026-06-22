@@ -569,7 +569,6 @@ const MIKE_ANIMS = 'src/assets/anim/mike-mx-anims.glb';
 const KELLI_ANIMS = 'src/assets/anim/kelli-mx-anims.glb';
 const DREW_ANIMS = 'src/assets/anim/drew-mx-anims.glb';
 const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';   // DONOR (Wave/Cheer)
-const DAD_DONOR = 'src/assets/dad.glb';                    // DONOR (Jump)
 const JACK_DONOR = 'src/assets/jack-hartmann.glb';         // DONOR (Stumble)
 
 // PLAYER motion map (15 states) — the SHARED DEFAULT motion per state, used by any character
@@ -582,7 +581,7 @@ const PLAYER_ANIMS = [
   { key: 'Idle',      src: CECE_ANIMS, clip: 'Idle' },
   { key: 'Walk',      src: CECE_ANIMS, clip: 'Catwalk_Walk',              stripRootXZ: true, loop: true },
   { key: 'Run',       src: DREW_ANIMS, clip: 'Goofy_Running',            stripRootXZ: true, loop: true },
-  { key: 'Jump',      src: DAD_DONOR,  clip: '360_Power_Spin_Jump',                         noLoop: true },
+  { key: 'Jump',      src: KELLI_ANIMS, clip: 'Jumping',                                      noLoop: true },
   { key: 'Dance',     src: MIKE_ANIMS, clip: 'Hip_Hop_Dancing',                              loop: true },
   { key: 'Wave',      src: FAMILY_ANIMS, clip: 'Agree_Gesture',                              noLoop: true },
   { key: 'Cheer',     src: FAMILY_ANIMS, clip: 'Cheer_with_Both_Hands_Up',                   noLoop: true },
@@ -632,7 +631,7 @@ const NIBBLER_ANIMS = [
   { key: 'Crawl',     src: DREW_ANIMS, clip: 'Zombie_Crawl',            stripRootXZ: true, loop: true },
   { key: 'Climb',     src: DREW_ANIMS, clip: 'Climbing',                                     loop: true },
   { key: 'Bite',      src: DREW_ANIMS, clip: 'Zombie_Biting',                                loop: true },
-  { key: 'Jump',      src: DAD_DONOR,  clip: '360_Power_Spin_Jump',                         noLoop: true },
+  { key: 'Jump',      src: KELLI_ANIMS, clip: 'Jumping',                                      noLoop: true },
   { key: 'Knockdown', src: CECE_ANIMS, clip: 'Fallen_Idle',                                  noLoop: true },
 ];
 

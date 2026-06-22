@@ -35,7 +35,7 @@
  *   4. Re-run: node scripts/build_dahilg.mjs
  */
 import { execSync } from 'node:child_process';
-import { statSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
+import { statSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, copyFileSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,6 +78,9 @@ const MIXAMO_FBX_DIRS = {
   drew: path.join(os.homedir(), 'Downloads', 'drew-animations'),
   mike: path.join(os.homedir(), 'Downloads', 'dad'),
   kelli: path.join(os.homedir(), 'Downloads', 'kelli'),
+};
+const MIXAMO_EXTRA_FBXS = {
+  kelli: [path.join(os.homedir(), 'Downloads', 'kelli@Jumping.fbx')],
 };
 // Roster manifest = single source of truth for the character set (id + body GLB path).
 const ROSTER = JSON.parse(readFileSync(path.join(ROOT, 'config', 'dahilg-roster.json'), 'utf8'));
@@ -181,10 +184,29 @@ function mixamoConvertStale(id, body) {
   if (!dir || !existsSync(dir)) return false;     // no source folder => can't (re)convert
   if (!existsSync(out)) return true;              // never converted
   const outM = statSync(out).mtimeMs;
-  const newest = readdirSync(dir)
+  const folderNewest = readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith('.fbx'))
     .reduce((m, f) => Math.max(m, statSync(path.join(dir, f)).mtimeMs), 0);
+  const extraNewest = (MIXAMO_EXTRA_FBXS[id] || [])
+    .filter((f) => existsSync(f))
+    .reduce((m, f) => Math.max(m, statSync(f).mtimeMs), 0);
+  const newest = Math.max(folderNewest, extraNewest);
   return newest > outM;
+}
+
+function stagedMixamoFbxDir(id, dir) {
+  const extras = (MIXAMO_EXTRA_FBXS[id] || []).filter((f) => existsSync(f));
+  if (extras.length === 0) return dir;
+
+  const staged = mkdtempSync(path.join(os.tmpdir(), `dahilg-${id}-fbx-`));
+  for (const file of readdirSync(dir)) {
+    if (file.toLowerCase().endsWith('.fbx')) copyFileSync(path.join(dir, file), path.join(staged, file));
+  }
+  for (const extra of extras) {
+    copyFileSync(extra, path.join(staged, path.basename(extra)));
+  }
+  console.log(`  + ${id}: staged ${extras.length} extra FBX clip(s): ${extras.map((f) => path.basename(f)).join(', ')}`);
+  return staged;
 }
 
 // OPTIONAL Mixamo FBX -> GLB convert: per roster character, run the Blender-owned headless
@@ -210,9 +232,10 @@ function maybeConvertMixamo() {
   for (const c of targets) {
     const dir = MIXAMO_FBX_DIRS[c.id];
     if (!dir || !existsSync(dir)) { console.warn(`  ! no FBX folder for ${c.id} (${dir}) — skipping`); continue; }
-    console.log(`\n· convert ${c.id} <- ${dir}`);
+    const convertDir = stagedMixamoFbxDir(c.id, dir);
+    console.log(`\n· convert ${c.id} <- ${convertDir}`);
     // Args after '--' must be exactly: <fbx_folder> <character_id> <out_dir> (the converter's order).
-    sh(`"${BLENDER}" --background --python "${MIXAMO_CONVERTER}" -- "${dir}" ${c.id} "${tmpOut}"`);
+    sh(`"${BLENDER}" --background --python "${MIXAMO_CONVERTER}" -- "${convertDir}" ${c.id} "${tmpOut}"`);
     const body = path.join(tmpOut, `${c.id}-mx.glb`);
     const anims = path.join(tmpOut, `${c.id}-mx-anims.glb`);
     if (!existsSync(body) || !existsSync(anims)) { die(`convert ${c.id}: expected ${c.id}-mx.glb + ${c.id}-mx-anims.glb in ${tmpOut}`); }
