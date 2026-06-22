@@ -40,10 +40,14 @@ namespace DaHilg.Editor
         static readonly string[] s_CharacterAnimationStates =
         {
             "Idle",
+            "IdleAlt",
             "Walk",
+            "WalkAlt",
             "Run",
             "Jump",
             "Dance",
+            "DanceAlt",
+            "DanceAlt2",
             "Wave",
             "Cheer",
             "Attack",
@@ -238,6 +242,7 @@ namespace DaHilg.Editor
         static readonly string[] s_FootPinnedClips =
         {
             "Idle",
+            "IdleAlt",
             "Wave",
             "Cheer",
         };
@@ -1056,14 +1061,7 @@ body {
             {
                 string stateName = states[i];
                 AnimatorState state = machine.AddState(stateName, new Vector3(260f, 60f + i * 48f, 0f));
-                // Prefer a per-character signature clip ("<id>_<state>") drawn from that character's own
-                // library; fall back to the shared default ("<state>") when no override was emitted. The
-                // nibbler controller passes "drew" but has no overrides, so it falls through to the base key.
-                string overrideKey = characterId.ToLowerInvariant() + "_" + stateName.ToLowerInvariant();
-                if (!clips.TryGetValue(overrideKey, out AnimationClip clip))
-                {
-                    clips.TryGetValue(stateName.ToLowerInvariant(), out clip);
-                }
+                AnimationClip clip = ResolveSourceClip(characterId, stateName, clips);
                 if (clip != null)
                 {
                     state.motion = RetargetAnimationClip(characterId, stateName, clip, targetPrefab, sourceDir);
@@ -1075,6 +1073,39 @@ body {
             if (idle != null) machine.defaultState = idle;
             EditorUtility.SetDirty(controller);
             return controller;
+        }
+
+        static AnimationClip ResolveSourceClip(string characterId, string stateName, Dictionary<string, AnimationClip> clips)
+        {
+            string[] candidates = SourceClipCandidates(characterId, stateName);
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (clips.TryGetValue(candidates[i], out AnimationClip clip)) return clip;
+            }
+            return null;
+        }
+
+        static string[] SourceClipCandidates(string characterId, string stateName)
+        {
+            string id = characterId.ToLowerInvariant();
+            string canonical = CanonicalStateName(stateName).ToLowerInvariant();
+            switch (stateName)
+            {
+                case "IdleAlt":
+                    return new[] { "kelli_idle", id + "_idle", "idle" };
+                case "WalkAlt":
+                    return new[] { "kelli_walk", id + "_walk", "walk" };
+                case "DanceAlt":
+                    if (id == "cece") return new[] { "dance", "mike_dance", "cece_dance" };
+                    if (id == "mike") return new[] { "dance", "cece_dance", "mike_dance" };
+                    return new[] { "cece_dance", "mike_dance", "dance" };
+                case "DanceAlt2":
+                    if (id == "cece") return new[] { "mike_dance", "dance", "cece_dance" };
+                    if (id == "mike") return new[] { "cece_dance", "dance", "mike_dance" };
+                    return new[] { "mike_dance", "cece_dance", "dance" };
+                default:
+                    return new[] { id + "_" + canonical, canonical };
+            }
         }
 
         static void ClearStates(AnimatorStateMachine machine)
@@ -1291,8 +1322,9 @@ body {
         {
             List<float> times = CollectKeyTimes(sourceCurves);
             AnimationCurve[] result = NewCurveSet(3);
-            bool flattenY = s_GroundedHipClips.Contains(stateName);
-            bool lockPlanar = s_StationaryHipClips.Contains(stateName);
+            string canonicalState = CanonicalStateName(stateName);
+            bool flattenY = s_GroundedHipClips.Contains(canonicalState);
+            bool lockPlanar = s_StationaryHipClips.Contains(canonicalState);
 
             for (int i = 0; i < times.Count; i++)
             {
@@ -1308,7 +1340,7 @@ body {
                     targetAnimated.z = targetRest.z;
                 }
                 if (flattenY) targetAnimated.y = targetRest.y;
-                else if (stateName.Equals("Knockdown", StringComparison.OrdinalIgnoreCase)) targetAnimated.y = Mathf.Min(targetAnimated.y, targetRest.y);
+                else if (canonicalState.Equals("Knockdown", StringComparison.OrdinalIgnoreCase)) targetAnimated.y = Mathf.Min(targetAnimated.y, targetRest.y);
 
                 result[0].AddKey(time, targetAnimated.x);
                 result[1].AddKey(time, targetAnimated.y);
@@ -1317,6 +1349,20 @@ body {
 
             SmoothCurves(result);
             return result;
+        }
+
+        static string CanonicalStateName(string stateName)
+        {
+            switch (stateName)
+            {
+                case "IdleAlt": return "Idle";
+                case "WalkAlt": return "Walk";
+                case "DanceAlt":
+                case "DanceAlt2":
+                    return "Dance";
+                default:
+                    return stateName;
+            }
         }
 
         static AnimationCurve[] NewCurveSet(int count)

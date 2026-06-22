@@ -63,9 +63,20 @@ namespace DaHilg
         // Combo strike clips indexed by m_ComboStep (0/1/2). Must match the player
         // states added in DaHilgProjectBuilder.s_CharacterAnimationStates.
         static readonly string[] s_ComboStates = { "Attack", "Attack2", "Attack3" };
+        static readonly string[] s_DanceStates = { "Dance", "DanceAlt", "DanceAlt2" };
+        static readonly string[] s_WalkStates = { "Walk", "WalkAlt" };
         float m_StaggerUntil;
         Vector3 m_HitVel;
         float m_HitVelUntil;
+        float m_LastMeleeStartedAt = -100f;
+        float m_AnimSeed;
+        float m_NpcAnimSpeedBias = 1f;
+        float m_IdleSince;
+        float m_NextIdleDanceAt;
+        float m_WalkVariantUntil;
+        int m_WalkVariant;
+        int m_LastDanceVariant = -1;
+        bool m_WasMoving;
 
         public string Id { get; private set; }
         public string Label { get; private set; }
@@ -97,6 +108,9 @@ namespace DaHilg
             m_Settings = settings;
             m_BodyHeight = settings.PlayerHeight;
             m_BodyRadius = settings.PlayerRadius;
+            m_AnimSeed = Stable01(slot.Id);
+            m_NpcAnimSpeedBias = Mathf.Lerp(0.91f, 1.11f, m_AnimSeed);
+            m_NextIdleDanceAt = Time.time + Random.Range(4.5f, 9.5f);
 
             m_Controller = GetComponent<CharacterController>();
             m_Controller.height = settings.PlayerHeight;
@@ -249,7 +263,13 @@ namespace DaHilg
                 m_HorizontalVelocity = Vector3.zero;
                 m_EmoteUntil = 0f;
                 m_RollUntil = 0f;
+                m_IdleSince = now;
+                m_NextIdleDanceAt = now + Random.Range(4.5f, 9.5f);
                 PlayAnim("Idle", 0.1f);
+            }
+            else
+            {
+                m_NextIdleDanceAt = now + Random.Range(2.5f, 8f);
             }
         }
 
@@ -267,6 +287,9 @@ namespace DaHilg
             m_EmoteUntil = 0f;
             m_RollUntil = 0f;
             m_VisualGroundOffset = 0f;
+            m_IdleSince = Time.time;
+            m_NextIdleDanceAt = Time.time + Random.Range(4.5f, 9.5f);
+            m_WasMoving = false;
             if (m_VisualRoot != null) m_VisualRoot.localPosition = Vector3.zero;
         }
 
@@ -345,12 +368,15 @@ namespace DaHilg
 
             m_NextMeleeAt = now + 0.42f;
             m_MeleeActiveUntil = now + 0.45f;
-            m_ComboStep = (m_ComboStep + 1) % 3;
+            if (now - m_LastMeleeStartedAt > 0.95f) m_ComboStep = 0;
+            int step = m_ComboStep;
+            m_ComboStep = (m_ComboStep + 1) % s_ComboStates.Length;
+            m_LastMeleeStartedAt = now;
             m_EmoteUntil = 0f;
-            SetAnimatorSpeed(m_ComboStep == 2 ? 1.18f : 1f, Time.deltaTime);
-            // 3-hit combo: each step plays a distinct strike clip. PlayAnim is
-            // HasState-guarded, so controllers lacking Attack2/Attack3 no-op safely.
-            PlayAnim(s_ComboStates[m_ComboStep], 0.05f);
+            SetAnimatorSpeed(step == 2 ? 1.18f : 1f, Time.deltaTime);
+            // 3-hit combo: first swing is Attack, then Attack2/Attack3 while chained.
+            // PlayAnim is HasState-guarded, so older controllers fall back safely.
+            PlayAnim(ResolveFirstAvailable(s_ComboStates[step], "Attack"), 0.05f);
             return true;
         }
 
@@ -387,7 +413,7 @@ namespace DaHilg
             }
 
             SetAnimatorSpeed(1f, Time.deltaTime);
-            PlayAnim(heavy ? "Knockdown" : "Stumble", 0.06f);
+            PlayAnim(heavy ? ResolveFirstAvailable("Knockdown", "Stumble") : PickHitReaction(), 0.06f);
         }
 
         public void TickHitMotion(float dt, float now)
@@ -443,6 +469,12 @@ namespace DaHilg
             {
                 desiredDirection = m_RollDirection.sqrMagnitude > 0.001f ? m_RollDirection : desiredDirection;
                 speedCap = Mathf.Max(speedCap, settings.RollSpeed);
+                m_EmoteUntil = 0f;
+            }
+            else if (now < m_StaggerUntil)
+            {
+                desiredDirection *= 0.25f;
+                speedCap *= 0.45f;
                 m_EmoteUntil = 0f;
             }
 
@@ -516,6 +548,14 @@ namespace DaHilg
                 m_VisualRoot.rotation = Quaternion.Slerp(m_VisualRoot.rotation, groundTilt * yaw * rollTilt, 1f - Mathf.Exp(18f * -dt));
             }
 
+            UpdateIdleDance(Time.time, settings, playerFacing);
+
+            if (now < m_StaggerUntil)
+            {
+                SetAnimatorSpeed(1f, dt);
+                return;
+            }
+
             if (Time.time < m_EmoteUntil && Grounded && Speed <= 0.2f)
             {
                 return;
@@ -542,9 +582,55 @@ namespace DaHilg
                 if (to.sqrMagnitude > 0.0001f)
                     m_FacingYaw = Quaternion.LookRotation(to.normalized, Vector3.up).eulerAngles.y;
             }
-            m_EmoteUntil = Time.time + EmoteDuration(emote);
+            string state = ResolveEmoteState(emote);
+            m_EmoteUntil = Time.time + EmoteDuration(state);
             SetAnimatorSpeed(1f, Time.deltaTime);
-            PlayAnim(emote, 0.12f);
+            PlayAnim(state, 0.12f);
+        }
+
+        void UpdateIdleDance(float now, DaHilgGameSettings settings, bool playerFacing)
+        {
+            bool moving = Speed > 0.18f || m_HorizontalVelocity.sqrMagnitude > 0.06f;
+            bool pressure = AttachedNibblers > 0 || (settings != null && AttachedNibblers >= settings.OverwhelmStagger);
+            bool canDance = Health > 0f
+                && Grounded
+                && !Rolling
+                && now >= m_StaggerUntil
+                && !pressure
+                && Speed <= 0.14f;
+
+            if (moving || !canDance)
+            {
+                if (moving)
+                {
+                    m_WasMoving = true;
+                    m_EmoteUntil = 0f;
+                }
+                return;
+            }
+
+            if (m_WasMoving)
+            {
+                m_IdleSince = now;
+                m_WasMoving = false;
+                m_NextIdleDanceAt = now + (Role == DaHilgActorRole.Player && Random.value < 0.38f
+                    ? Random.Range(0.35f, 1.45f)
+                    : Random.Range(4.5f, 10.5f));
+            }
+            else if (m_IdleSince <= 0f)
+            {
+                m_IdleSince = now;
+            }
+
+            if (Role != DaHilgActorRole.Player || !playerFacing) return;
+            if (Time.time < m_EmoteUntil) return;
+            if (now < m_NextIdleDanceAt) return;
+
+            string dance = PickDanceState();
+            m_EmoteUntil = now + Random.Range(1.55f, 2.65f);
+            m_NextIdleDanceAt = now + Random.Range(9f, 18f);
+            SetAnimatorSpeed(Random.Range(0.92f, 1.08f), Time.deltaTime);
+            PlayAnim(dance, 0.16f);
         }
 
         void StabilizeVisualGrounding(float dt)
@@ -594,7 +680,10 @@ namespace DaHilg
         {
             switch (emote)
             {
-                case "Dance": return 2.4f;
+                case "Dance":
+                case "DanceAlt":
+                case "DanceAlt2":
+                    return 2.4f;
                 case "Wave": return 1.45f;
                 case "Cheer": return 1.6f;
                 case "Attack": return 1.05f;
@@ -690,21 +779,79 @@ namespace DaHilg
             // play Walk. A fixed 4.5 threshold sat BELOW WalkSpeed (4.6) so walking always ran.
             if (Speed > (settings.WalkSpeed + settings.RunSpeed) * 0.5f)
             {
-                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.RunSpeed), 0.78f, 1.28f), dt);
+                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.RunSpeed), 0.78f, 1.28f) * LocomotionSpeedBias(), dt);
                 PlayAnim("Run", 0.16f);
             }
             else if (Speed > 0.15f)
             {
                 // 1.55x: the Catwalk_Walk clip is a slow stylized strut — speed the stride up
                 // so the legs cycle at the actual walk pace (mirrors R3F WALK_TIMESCALE).
-                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.WalkSpeed) * 1.55f, 1.1f, 2.0f), dt);
-                PlayAnim("Walk", 0.16f);
+                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.WalkSpeed) * 1.55f, 1.1f, 2.0f) * LocomotionSpeedBias(), dt);
+                PlayAnim(PickWalkState(), 0.16f);
             }
             else
             {
-                SetAnimatorSpeed(0.72f, dt);
-                PlayAnim("Idle", 0.18f);
+                SetAnimatorSpeed(0.72f * LocomotionSpeedBias(), dt);
+                PlayAnim(PickIdleState(), 0.18f);
             }
+        }
+
+        float LocomotionSpeedBias()
+        {
+            return Role == DaHilgActorRole.Npc ? m_NpcAnimSpeedBias : 1f;
+        }
+
+        string PickWalkState()
+        {
+            if (!HasAnimState("WalkAlt")) return "Walk";
+            if (!IsOneOf(m_CurrentAnim, s_WalkStates) || Time.time >= m_WalkVariantUntil)
+            {
+                m_WalkVariant = Random.value < 0.52f ? 0 : 1;
+                m_WalkVariantUntil = Time.time + Random.Range(1.4f, 4.8f);
+            }
+            return s_WalkStates[Mathf.Clamp(m_WalkVariant, 0, s_WalkStates.Length - 1)];
+        }
+
+        string PickIdleState()
+        {
+            if (!HasAnimState("IdleAlt")) return "Idle";
+            return (Role == DaHilgActorRole.Npc && m_AnimSeed > 0.58f) ? "IdleAlt" : "Idle";
+        }
+
+        string PickDanceState()
+        {
+            int start = Random.Range(0, s_DanceStates.Length);
+            for (int i = 0; i < s_DanceStates.Length; i++)
+            {
+                int index = (start + i) % s_DanceStates.Length;
+                if (index == m_LastDanceVariant && s_DanceStates.Length > 1) continue;
+                if (!HasAnimState(s_DanceStates[index])) continue;
+                m_LastDanceVariant = index;
+                return s_DanceStates[index];
+            }
+
+            return ResolveFirstAvailable("Dance", "Cheer", "Wave", "Idle");
+        }
+
+        string PickHitReaction()
+        {
+            return Random.value < 0.58f
+                ? ResolveFirstAvailable("Hit", "Stumble", "Knockdown")
+                : ResolveFirstAvailable("Stumble", "Hit", "Knockdown");
+        }
+
+        string ResolveEmoteState(string emote)
+        {
+            return emote == "Dance" ? PickDanceState() : ResolveFirstAvailable(emote, "Idle");
+        }
+
+        string ResolveFirstAvailable(params string[] states)
+        {
+            for (int i = 0; i < states.Length; i++)
+            {
+                if (HasAnimState(states[i])) return states[i];
+            }
+            return states.Length > 0 ? states[0] : "Idle";
         }
 
         void SetAnimatorSpeed(float speed, float dt)
@@ -723,6 +870,39 @@ namespace DaHilg
             {
                 m_Animator.CrossFade(hash, fade);
                 m_CurrentAnim = stateName;
+            }
+        }
+
+        bool HasAnimState(string stateName)
+        {
+            return m_Animator != null
+                && !string.IsNullOrEmpty(stateName)
+                && m_Animator.HasState(0, Animator.StringToHash("Base Layer." + stateName));
+        }
+
+        static bool IsOneOf(string value, string[] values)
+        {
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (value == values[i]) return true;
+            }
+            return false;
+        }
+
+        static float Stable01(string value)
+        {
+            unchecked
+            {
+                uint hash = 2166136261u;
+                if (!string.IsNullOrEmpty(value))
+                {
+                    for (int i = 0; i < value.Length; i++)
+                    {
+                        hash ^= value[i];
+                        hash *= 16777619u;
+                    }
+                }
+                return (hash % 1000u) / 999f;
             }
         }
     }

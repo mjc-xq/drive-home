@@ -629,9 +629,17 @@ namespace DaHilg
                     }
                     if (now >= actor.StateUntil)
                     {
-                        actor.WanderTarget = PickWander(actor.Home);
-                        actor.NpcState = DaHilgNpcState.Wander;
-                        actor.StateUntil = now + 7f;
+                        if (UnityEngine.Random.value < 0.32f)
+                        {
+                            actor.PlayEmote(RandomNpcEmote(0.55f), false, m_ActiveActor.FeetPosition);
+                            actor.StateUntil = now + UnityEngine.Random.Range(1.6f, 3.4f);
+                        }
+                        else
+                        {
+                            actor.WanderTarget = PickWander(actor.Home);
+                            actor.NpcState = DaHilgNpcState.Wander;
+                            actor.StateUntil = now + 7f;
+                        }
                     }
                     actor.StepNpc(Vector3.zero, false, Settings, dt, now);
                     break;
@@ -663,6 +671,7 @@ namespace DaHilg
                     {
                         actor.NpcState = DaHilgNpcState.Touch;
                         actor.StateUntil = now + 0.6f;
+                        actor.PlayEmote(RandomNpcEmote(0.4f), false, m_ActiveActor.FeetPosition);
                         break;
                     }
                     actor.StepNpc(SeekDirection(actor, toPlayer, true, 1f, dt), true, Settings, dt, now);
@@ -714,7 +723,8 @@ namespace DaHilg
                 actor.StepNpc(Vector3.zero, false, Settings, dt, Time.time);
                 if (Time.time >= actor.StateUntil)
                 {
-                    actor.StateUntil = Time.time + UnityEngine.Random.Range(1.8f, 3.0f);
+                    actor.PlayEmote(RandomNpcEmote(actor.Id == "drew" ? 0.76f : 0.58f), false, m_ActiveActor.FeetPosition);
+                    actor.StateUntil = Time.time + UnityEngine.Random.Range(1.8f, 3.2f);
                 }
                 return;
             }
@@ -1250,12 +1260,29 @@ namespace DaHilg
             }
             else if (now >= actor.StateUntil) // idle/cooldown elapsed -> pick a new nearby spot
             {
-                Vector2 r = UnityEngine.Random.insideUnitCircle * k_OutdoorNpcWanderRadius; // stay findable near spawn
-                actor.WanderTarget = DaHilgLevelRuntime.GroundSpawn(actor.Home + new Vector3(r.x, 0f, r.y));
-                actor.NpcState = DaHilgNpcState.Wander;
-                actor.StateUntil = now + 8f;
+                if (UnityEngine.Random.value < 0.28f)
+                {
+                    Vector3 face = m_ActiveActor != null ? m_ActiveActor.FeetPosition : actor.Home;
+                    actor.PlayEmote(RandomNpcEmote(0.48f), false, face);
+                    actor.StateUntil = now + UnityEngine.Random.Range(1.8f, 3.8f);
+                }
+                else
+                {
+                    Vector2 r = UnityEngine.Random.insideUnitCircle * k_OutdoorNpcWanderRadius; // stay findable near spawn
+                    actor.WanderTarget = DaHilgLevelRuntime.GroundSpawn(actor.Home + new Vector3(r.x, 0f, r.y));
+                    actor.NpcState = DaHilgNpcState.Wander;
+                    actor.StateUntil = now + 8f;
+                }
             }
             actor.StepNpc(Vector3.zero, false, Settings, dt, now);
+        }
+
+        string RandomNpcEmote(float danceWeight)
+        {
+            float r = UnityEngine.Random.value;
+            if (r < danceWeight) return "Dance";
+            if (r < danceWeight + (1f - danceWeight) * 0.55f) return "Cheer";
+            return "Wave";
         }
 
         void ClampToLevelBounds()
