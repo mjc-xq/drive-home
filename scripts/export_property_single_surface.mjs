@@ -27,6 +27,7 @@ const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter
 const { NodeIO } = await import('@gltf-transform/core');
 
 import { loadDEM, makeGeo, buildTerrainMesh } from './lib/terrain_mesh.mjs';
+import { gradeDemUnderRoads } from './lib/dem_road_grade.mjs';
 import { buildRoadNetwork } from './lib/road_network.mjs';
 import { curbLinesFromRoads } from './road_prep.mjs';
 import { bakeGroundAtlas } from './lib/ground_atlas.mjs';
@@ -70,6 +71,11 @@ console.log(`scene: ${SET.scene}  buildings=${(S.buildings || []).length} roads=
 
 // ---- 1) terrain (the ONE welded surface) -------------------------------------------
 const D = loadDEM(pick('dem_1m.json'));
+// Grade/smooth the RAW DEM under road corridors BEFORE the mesh is built, so undulations under a
+// road no longer read as bumps. Mutates D.h in place; preserves the slow real grade (only removes
+// high-frequency chatter, feathers to zero at the shoulder so there is no cliff at the corridor edge).
+const grade = gradeDemUnderRoads({ D, C, LAT0, LON0, COSLAT, roads: S.roads, w2, opts: {} });
+console.log(`terrain grade: ${grade.cellsModified} cells under roads (cut ${grade.maxCut.toFixed(2)}m / fill ${grade.maxFill.toFixed(2)}m)`);
 const geo = makeGeo(D, { C, LAT0, LON0, COSLAT });
 // ONE ground texture region over the whole DEM rect (texCoreHalf covers the full patch) so there
 // is NO core/far texture boundary — the visible white seam at ±300 m is gone by construction.
