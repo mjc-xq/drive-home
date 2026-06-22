@@ -182,3 +182,75 @@ generated GLB pipeline.
   road/sidewalk meshes Unity consumes once the source pipeline is stable.
 - Add a repeatable mobile smoke test that captures iPhone-sized screenshots and checks the HUD
   panel state, minimap texture, and touch buttons after Unity startup.
+
+## 2026-06-22 (PM) — ground-level asset-quality overhaul (CURRENT shipping pipeline)
+
+**Read this for how the levels are actually built today.** The older `neighborhood-glb-export-spec.md`
+and `dahilg-neighborhood-export.md` describe the LEGACY `export_property_glb.mjs` + per-layer ribbon
+pipeline. **Unity does NOT ship that.** Unity streams `exports/<slug>-single.glb`, produced by the
+**single-surface** exporter `scripts/export_property_single_surface.mjs`. `rebuild_all_levels.py`
+still drives the legacy exporter — do not use it for the shipping assets.
+
+Levels (5): `dahill`, `canyon`, `stanton`, `meemaw`, `xq`.
+
+### Per-level rebuild flow (the colour + facade fetchers are NOT run by any build script — run them per level, then export)
+
+```sh
+# 1) per-building WALL colour from Street View (level-agnostic via env; was hardcoded to 3 levels)
+BCOL_SCENE=<scene.json> BCOL_OUT=<dir> scripts/.venv/bin/python scripts/fetch_building_colors.py <place>
+# 2) per-building ROOF colour from the AERIAL (separate source from walls — they differ)
+BCOL_SCENE=<scene.json> BCOL_OUT=<dir> scripts/.venv/bin/python scripts/fetch_roof_colors.py
+# 3) capture a Street-View crop per road-facing wall
+SVF_SCENE=<scene.json> SVF_OUT=<dir>/sv_facades SVF_MANIFEST=<dir>/sv_facades.json \
+  scripts/.venv/bin/python scripts/fetch_sv_facades.py
+# 4) VISION FILTER — keep only crisp head-on building-wall crops; drop signs/cars/trees/fences/blur
+FF_MANIFEST=<dir>/sv_facades.json FF_DIR=<dir> scripts/.venv/bin/python scripts/filter_facades.py
+# 5) build the single-surface GLB (terrain grade + ground bake + facade atlas + buildings + trees)
+node --max-old-space-size=6144 scripts/export_property_single_surface.mjs <level>
+# 6) stage into Unity StreamingAssets (+ overlay/meta/minimap), then build/deploy
+node scripts/build_dahilg_unity_assets.mjs
+node scripts/build_dahilg.mjs --stages=unitysrc,unitybuild      # -> public/unity/da-hilg, chunked data.unityweb
+```
+Level dirs: dahill = repo root (`src/assets/scene.json` + `exports/`); others = `exports/canyon-middle-school`,
+`exports/stanton-elementary`, `exports/meemaw`, `exports/xq`.
+
+### What changed (and why) — all in `scripts/lib/` unless noted
+- **Vision facade filter** (`scripts/filter_facades.py`, step 4): the fetch is greedy and captures
+  junk (street signs, poles, cars, trees, fences, sky, blur, oblique smears). A vision model grades
+  every cached crop (`FF_MODEL`, default reviewed periodically; gpt-4o-mini was weak — being upgraded
+  to a gpt-5-mini/nano-class model) and keeps ONLY clean head-on `building_wall` crops (quality ≥
+  `FF_MIN_QUALITY`, default 0.6). Rejected walls fall back to the real-coloured procedural wall.
+  Reuses cached crops — no Street View re-fetch. Typical keep rate 15–35%.
+- **Level-agnostic colour fetchers**: `fetch_building_colors.py` / `fetch_roof_colors.py` now take
+  `BCOL_SCENE`/`BCOL_OUT` (roof also `RCOL_*`) so every level fetches into its own dir. Previously
+  hardcoded to dahill/canyon/stanton → meemaw/xq silently read dahill's stale colour file.
+- **Wall vs roof colour are separate sources** (`building_color.mjs`): wall = SV facade (`sv`/`knn`
+  provenance only, preserved value + chroma 1.45); roof = aerial; `aerial`-provenance is a roof-ish
+  sample treated as a weak wall hint; no-data → independent warm palette (never roof-derived). Roof
+  shadow-lift floor 0.34 (was 0.48 — washed dark roofs).
+- **Baked SV facades** (`building_layer.mjs`): the photo is the wall's own flush texture
+  (`PROUD_OVERLAY=0`, node `Buildings_facade_page{N}`), NOT a floating toggle quad. Stucco +
+  procedural window grid + shell trim + procedural door/garage are all suppressed on a photo'd edge.
+  Commercial glass storefront only on schools / the xq downtown patch / ≥8 m walls (residential
+  houses were wrongly getting glass curtain walls).
+- **Terrain graded under roads** (`dem_road_grade.mjs`, called in the exporter right after
+  `loadDEM`): smooths the raw DEM along road corridors so undulations don't read as bumps; Laplacian
+  low-pass preserves the slow grade; smoothstep feather to the shoulder (no cliff). This is the
+  "flatten the terrain the road sits on" requirement — NOT a road-layer change.
+- **Missing-house fill** (`fill_missing.mjs`): Mapbox vector-footprint backfill enabled
+  (`NEXT_PUBLIC_MAPBOX_TOKEN` in `.env.local`) + relaxed lot/blob gates + morphological close — fills
+  empty parcels that have a real house in the aerial (dahill +195).
+- **QA render** (`render_glb_angles.py`): Standard view transform (not AgX) + calmer lights show true
+  albedo; eye-level close/street cameras are unreliable — the orbit (`*_ne`) views and the Unity
+  editor (Play) are the trustworthy checks.
+- **Deploy**: `unity/.../Assets/StreamingAssets/` is gitignored (regenerable); the tracked/served
+  copies are `public/unity/da-hilg/StreamingAssets/*.glb` (xq on LFS, rest regular blobs). `data.unityweb`
+  is split into 6 push-safe chunks with an `index.html` reassemble loader + `?v=` cache-bust; pushing
+  `main` triggers the Vercel deploy (project "home").
+
+### Still open / next
+- **SV-derived door + window geometry** (in progress): detect opening rectangles in the vision-passed
+  facade crops and emit real mesh doors/windows at those positions, instead of the procedural grid.
+- **Photoreal 3D-tile meshes for the xq high-rise towers** (in progress; legal cleared the Google
+  Photorealistic 3D Tiles ToS for shipping): `fetch_photoreal.mjs` parameterised per level, clipped to
+  the tall (>20 m) footprints, with extruded walls suppressed there.
