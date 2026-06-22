@@ -695,7 +695,9 @@ namespace DaHilg
             }
             else if (Speed > 0.15f)
             {
-                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.WalkSpeed), 0.72f, 1.22f), dt);
+                // 1.55x: the Catwalk_Walk clip is a slow stylized strut — speed the stride up
+                // so the legs cycle at the actual walk pace (mirrors R3F WALK_TIMESCALE).
+                SetAnimatorSpeed(Mathf.Clamp(Speed / Mathf.Max(0.1f, settings.WalkSpeed) * 1.55f, 1.1f, 2.0f), dt);
                 PlayAnim("Walk", 0.16f);
             }
             else
