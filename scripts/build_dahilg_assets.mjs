@@ -566,28 +566,61 @@ console.log('\n[2/4] anims (clip-only GLBs)');
 // them by path. DONOR GLBs are the surviving legacy clip sources used for gap states.
 const CECE_ANIMS = 'src/assets/anim/cece-mx-anims.glb';
 const MIKE_ANIMS = 'src/assets/anim/mike-mx-anims.glb';
+const KELLI_ANIMS = 'src/assets/anim/kelli-mx-anims.glb';
 const DREW_ANIMS = 'src/assets/anim/drew-mx-anims.glb';
 const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';   // DONOR (Wave/Cheer)
 const DAD_DONOR = 'src/assets/dad.glb';                    // DONOR (Jump)
 const JACK_DONOR = 'src/assets/jack-hartmann.glb';         // DONOR (Stumble)
 
-// PLAYER motion map (13 states) — shared by cece AND mike. state -> { src, clip, stripRootXZ, noLoop }.
+// PLAYER motion map (15 states) — the SHARED DEFAULT motion per state, used by any character
+// that has no per-character override (see PLAYER_OVERRIDES below). state -> { src, clip, stripRootXZ, noLoop }.
 // `noLoop`/`loop` are recorded for downstream (Unity controller authoring) but do not change the
 // build output; this stage only writes the clip channels. stripRootXZ pins in-place locomotion.
+// Pass 2 added the 3-hit melee combo: Attack/Attack2/Attack3 so the otherwise-unused fight clips
+// are used, and moved the generic dance/attack defaults to mike (grounded Hip_Hop / Punching).
 const PLAYER_ANIMS = [
   { key: 'Idle',      src: CECE_ANIMS, clip: 'Idle' },
   { key: 'Walk',      src: CECE_ANIMS, clip: 'Catwalk_Walk',              stripRootXZ: true, loop: true },
   { key: 'Run',       src: DREW_ANIMS, clip: 'Goofy_Running',            stripRootXZ: true, loop: true },
   { key: 'Jump',      src: DAD_DONOR,  clip: '360_Power_Spin_Jump',                         noLoop: true },
-  { key: 'Dance',     src: CECE_ANIMS, clip: 'Breakdance_1990',                              loop: true },
+  { key: 'Dance',     src: MIKE_ANIMS, clip: 'Hip_Hop_Dancing',                              loop: true },
   { key: 'Wave',      src: FAMILY_ANIMS, clip: 'Agree_Gesture',                              noLoop: true },
   { key: 'Cheer',     src: FAMILY_ANIMS, clip: 'Cheer_with_Both_Hands_Up',                   noLoop: true },
   { key: 'Attack',    src: MIKE_ANIMS, clip: 'Punching',                                     noLoop: true },
+  { key: 'Attack2',   src: CECE_ANIMS, clip: 'Fist_Fight_B',                                 noLoop: true },
+  { key: 'Attack3',   src: CECE_ANIMS, clip: 'Brutal_Assassination',                         noLoop: true },
   { key: 'Hit',       src: CECE_ANIMS, clip: 'Standing_Death_Left_01_v2',                    noLoop: true },
   { key: 'Stumble',   src: JACK_DONOR, clip: 'Stumble_Walk',             stripRootXZ: true, loop: true },
   { key: 'Knockdown', src: CECE_ANIMS, clip: 'Fallen_Idle',                                  noLoop: true },
   { key: 'Crawl',     src: DREW_ANIMS, clip: 'Crawling',                 stripRootXZ: true, loop: true },
   { key: 'Climb',     src: DREW_ANIMS, clip: 'Climbing',                                     loop: true },
+];
+
+// PER-CHARACTER OVERRIDES (Pass 2, design C) — emit anims/<id>_<state>.glb drawn from that
+// character's OWN library. Any (char,state) NOT listed here falls back to the SHARED DEFAULT
+// above. The roster manifest (config/dahilg-roster.json `clips`) documents the same overrides as
+// the source of truth; this list mirrors it with the per-state loop/stripRootXZ flags the build
+// needs. `src` = that char's own *-mx-anims.glb; assertion B's target rig = that char's *-mx.glb,
+// resolved automatically by rigGlbForSource(src). `id`+`key` produce the '<id>_<state>' output key.
+const PLAYER_OVERRIDES = [
+  // cece — boxer/breakdancer signature
+  { id: 'cece',  key: 'Attack',    src: CECE_ANIMS,  clip: 'Boxing',               noLoop: true },
+  { id: 'cece',  key: 'Attack2',   src: CECE_ANIMS,  clip: 'Fist_Fight_B',         noLoop: true },
+  { id: 'cece',  key: 'Attack3',   src: CECE_ANIMS,  clip: 'Brutal_Assassination', noLoop: true },
+  { id: 'cece',  key: 'Dance',     src: CECE_ANIMS,  clip: 'Breakdance_1990',                       loop: true },
+  // mike — straight puncher
+  { id: 'mike',  key: 'Attack',    src: MIKE_ANIMS,  clip: 'Punching',             noLoop: true },
+  { id: 'mike',  key: 'Attack2',   src: MIKE_ANIMS,  clip: 'Punching',             noLoop: true },
+  { id: 'mike',  key: 'Attack3',   src: MIKE_ANIMS,  clip: 'Punching',             noLoop: true },
+  { id: 'mike',  key: 'Dance',     src: MIKE_ANIMS,  clip: 'Hip_Hop_Dancing',                       loop: true },
+  // kelli — jump-attacker; nervous idle + her own locomotion/laying poses
+  { id: 'kelli', key: 'Idle',      src: KELLI_ANIMS, clip: 'Nervously_Look_Around' },
+  { id: 'kelli', key: 'Walk',      src: KELLI_ANIMS, clip: 'Female_Locomotion_Pose', stripRootXZ: true, loop: true },
+  { id: 'kelli', key: 'Attack',    src: KELLI_ANIMS, clip: 'Jump_Attack',          noLoop: true },
+  { id: 'kelli', key: 'Attack2',   src: KELLI_ANIMS, clip: 'Jump_Attack',          noLoop: true },
+  { id: 'kelli', key: 'Attack3',   src: KELLI_ANIMS, clip: 'Jump_Attack',          noLoop: true },
+  { id: 'kelli', key: 'Hit',       src: KELLI_ANIMS, clip: 'Female_Laying_Pose',   noLoop: true },
+  { id: 'kelli', key: 'Knockdown', src: KELLI_ANIMS, clip: 'Female_Laying_Pose',   noLoop: true },
 ];
 
 // NIBBLER motion map (7 states) — drew (the zombie swarm body). Separate OUTPUT folder so
@@ -612,6 +645,11 @@ export function assertAnimOutputsExist() {
     const p = path.join(ANIM_DIR, `${a.key.toLowerCase()}.glb`);
     if (!existsSync(p)) missing.push(path.relative(ROOT, p));
   }
+  // Per-character override outputs (anims/<id>_<state>.glb).
+  for (const o of PLAYER_OVERRIDES) {
+    const p = path.join(ANIM_DIR, `${`${o.id}_${o.key}`.toLowerCase()}.glb`);
+    if (!existsSync(p)) missing.push(path.relative(ROOT, p));
+  }
   for (const a of NIBBLER_ANIMS) {
     const p = path.join(NIBBLER_ANIM_DIR, `${a.key.toLowerCase()}.glb`);
     if (!existsSync(p)) missing.push(path.relative(ROOT, p));
@@ -619,10 +657,10 @@ export function assertAnimOutputsExist() {
   if (missing.length) {
     throw new Error(
       `SELF-CHECK FAILED: ${missing.length} motion output(s) missing (expected ` +
-      `${PLAYER_ANIMS.length} player + ${NIBBLER_ANIMS.length} nibbler GLBs): ${missing.join(', ')}`,
+      `${PLAYER_ANIMS.length} player + ${PLAYER_OVERRIDES.length} override + ${NIBBLER_ANIMS.length} nibbler GLBs): ${missing.join(', ')}`,
     );
   }
-  console.log(`  self-check OK: ${PLAYER_ANIMS.length} player + ${NIBBLER_ANIMS.length} nibbler motion GLBs present`);
+  console.log(`  self-check OK: ${PLAYER_ANIMS.length} player + ${PLAYER_OVERRIDES.length} override + ${NIBBLER_ANIMS.length} nibbler motion GLBs present`);
 }
 
 // ---- per-source rig joints (for assertion B), cached ---------------------------------
@@ -666,7 +704,10 @@ async function rigJoints(src) {
 // the chosen one, rename it to the canonical key, then strip ALL meshes/skins so only the
 // node hierarchy that the channels target remains, then prune + meshopt + write.
 //   - outDir: ANIM_DIR (player) or NIBBLER_ANIM_DIR (nibbler) — output namespacing.
-async function buildAnim({ key, src, clip, stripRootXZ, outDir = ANIM_DIR }) {
+//   - outKey: the ON-DISK filename stem (lowercased) — defaults to `key`. Per-character overrides
+//     pass outKey='<id>_<state>' so the file lands at anims/<id>_<state>.glb while the in-GLB clip
+//     stays renamed to the bare state `key` (the C# builder resolves by FILENAME, not clip name).
+async function buildAnim({ key, src, clip, stripRootXZ, outDir = ANIM_DIR, outKey = key }) {
   const doc = await io.read(SRC(src));
   const root = doc.getRoot();
 
@@ -814,12 +855,19 @@ async function buildAnim({ key, src, clip, stripRootXZ, outDir = ANIM_DIR }) {
   // Lowercase the on-disk filename: the Unity builder loads the source rig as
   // <state>.ToLowerInvariant()+".glb", so a TitleCase file breaks the nibbler/player rig load
   // on a case-sensitive filesystem (Linux/CI). Keep the in-GLB clip name as-is (key).
-  await writeAndVerify(doc, path.join(outDir, `${key.toLowerCase()}.glb`), { label: `anim:${key}` });
+  await writeAndVerify(doc, path.join(outDir, `${outKey.toLowerCase()}.glb`), { label: `anim:${outKey}` });
 }
 
-// PLAYER set (shared by cece + mike) -> public/da-hilg/anims/<State>.glb
-console.log('  -- player motion set (anims/) --');
+// PLAYER set (SHARED DEFAULTS, used by any char lacking an override) -> public/da-hilg/anims/<State>.glb
+console.log('  -- player motion set (anims/) — shared defaults --');
 for (const a of PLAYER_ANIMS) await buildAnim({ ...a, outDir: ANIM_DIR });
+// PER-CHARACTER OVERRIDES (design C) -> public/da-hilg/anims/<id>_<State>.glb. Each draws from
+// that char's OWN library; the file stem is '<id>_<state>' (outKey) while the in-GLB clip stays
+// renamed to the bare state `key`. The C# builder prefers '<id>_<state>' over '<state>'.
+console.log('  -- player motion set (anims/) — per-character overrides --');
+for (const o of PLAYER_OVERRIDES) {
+  await buildAnim({ ...o, outDir: ANIM_DIR, outKey: `${o.id}_${o.key}` });
+}
 // NIBBLER set (drew) -> public/da-hilg/nibbler-anims/<State>.glb  (distinct output namespace)
 console.log('  -- nibbler motion set (nibbler-anims/) --');
 for (const a of NIBBLER_ANIMS) await buildAnim({ ...a, outDir: NIBBLER_ANIM_DIR });
@@ -1020,7 +1068,7 @@ for (const { path: p, bytes } of written) {
 
 // Coarse "vs sources" figure. The anim source bytes are the UNION of the player+nibbler
 // motion-map source GLBs (counted once each; many states share the same source clip GLB).
-const animSrcSet = new Set([...PLAYER_ANIMS, ...NIBBLER_ANIMS].map((x) => x.src));
+const animSrcSet = new Set([...PLAYER_ANIMS, ...PLAYER_OVERRIDES, ...NIBBLER_ANIMS].map((x) => x.src));
 const animSrcBytes = [...animSrcSet]
   .filter((s) => existsSync(SRC(s)))
   .reduce((a, s) => a + statSync(SRC(s)).size, 0);

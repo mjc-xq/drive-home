@@ -60,6 +60,9 @@ namespace DaHilg
         float m_NextMeleeAt;
         float m_MeleeActiveUntil;
         int m_ComboStep;
+        // Combo strike clips indexed by m_ComboStep (0/1/2). Must match the player
+        // states added in DaHilgProjectBuilder.s_CharacterAnimationStates.
+        static readonly string[] s_ComboStates = { "Attack", "Attack2", "Attack3" };
         float m_StaggerUntil;
         Vector3 m_HitVel;
         float m_HitVelUntil;
@@ -345,7 +348,9 @@ namespace DaHilg
             m_ComboStep = (m_ComboStep + 1) % 3;
             m_EmoteUntil = 0f;
             SetAnimatorSpeed(m_ComboStep == 2 ? 1.18f : 1f, Time.deltaTime);
-            PlayAnim("Attack", 0.05f);
+            // 3-hit combo: each step plays a distinct strike clip. PlayAnim is
+            // HasState-guarded, so controllers lacking Attack2/Attack3 no-op safely.
+            PlayAnim(s_ComboStates[m_ComboStep], 0.05f);
             return true;
         }
 

@@ -41,11 +41,18 @@ mkdirSync(OUT_DIR, { recursive: true });
 mkdirSync(OUT('anims'), { recursive: true });           // player motion set
 mkdirSync(OUT('nibbler-anims'), { recursive: true });   // nibbler motion set (distinct namespace)
 
-// PLAYER motion states (shared cece+mike) -> public/da-hilg/anims/<State>.glb
+// PLAYER motion states (shared defaults) -> public/da-hilg/anims/<State>.glb. Pass 2 added the
+// Attack2/Attack3 combo states (15 total).
 const PLAYER_STATES = [
   'Idle', 'Walk', 'Run', 'Jump', 'Dance', 'Wave', 'Cheer',
-  'Attack', 'Hit', 'Stumble', 'Knockdown', 'Crawl', 'Climb',
+  'Attack', 'Attack2', 'Attack3', 'Hit', 'Stumble', 'Knockdown', 'Crawl', 'Climb',
 ];
+// PER-CHARACTER OVERRIDE files (Pass 2, design C) -> public/da-hilg/anims/<id>_<state>.glb. Derived
+// from the roster manifest `clips` map (the source of truth) so this stays in lockstep with the
+// JS asset build. The C# builder prefers '<id>_<state>' over the shared '<state>' per (char,state).
+const PLAYER_OVERRIDE_FILES = ROSTER.characters.flatMap((c) =>
+  Object.keys(c.clips || {}).map((state) => `anims/${c.id}_${state}.glb`.toLowerCase()),
+);
 // NIBBLER motion states (drew) -> public/da-hilg/nibbler-anims/<State>.glb. Player & nibbler
 // share state NAMES (Idle/Run/Climb/Jump/Knockdown) so they MUST live in separate folders.
 const NIBBLER_STATES = ['Idle', 'Run', 'Crawl', 'Climb', 'Bite', 'Jump', 'Knockdown'];
@@ -62,6 +69,8 @@ const glbs = [
   // Player motion set -> DaHilgUnitySource/anims/<state>.glb (lowercase: the C# builder loads
   // the source rig as <state>.ToLowerInvariant()+".glb"; C# copies to Art/Animations).
   ...PLAYER_STATES.map((s) => `anims/${s.toLowerCase()}.glb`),
+  // Per-character override clips -> DaHilgUnitySource/anims/<id>_<state>.glb (also copied to Art/Animations).
+  ...PLAYER_OVERRIDE_FILES,
   // Nibbler motion set -> DaHilgUnitySource/nibbler-anims/<state>.glb (C# copies to Art/NibblerAnimations).
   ...NIBBLER_STATES.map((s) => `nibbler-anims/${s.toLowerCase()}.glb`),
 ];
