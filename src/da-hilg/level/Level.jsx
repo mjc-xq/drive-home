@@ -57,6 +57,31 @@ function tuneMaterial(o, maxAniso) {
   }
 }
 
+const CREEK_SURROUND_COLORS = new Map([
+  ['Creek_Banks', 0x5c4d34],
+  ['Creek_Rocks', 0x787266],
+  ['Creek_Reeds', 0x335f2b],
+]);
+
+function tuneCreekSurrounds(scene) {
+  scene.traverse((o) => {
+    if (!o.isMesh || !CREEK_SURROUND_COLORS.has(o.name)) return;
+    o.visible = true;
+    const color = CREEK_SURROUND_COLORS.get(o.name);
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const tuned = mats.map((m) => {
+      if (!m) return m;
+      const next = m.clone();
+      if (next.color) next.color.setHex(color);
+      if ('roughness' in next) next.roughness = 0.95;
+      if ('metalness' in next) next.metalness = 0;
+      next.needsUpdate = true;
+      return next;
+    });
+    o.material = Array.isArray(o.material) ? tuned : tuned[0];
+  });
+}
+
 /** Hide the collision/LOD proxies, tune visual materials, set shadow flags. */
 function processScene(scene, maxAniso) {
   scene.traverse((o) => {
@@ -302,13 +327,11 @@ export function Level({ onReady }) {
       if (baked.bounds) levelMeta.bounds = baked.bounds; // map boundary (walkable XZ extent)
       const b = computeCreekBounds(scene);
       setCreekBounds(b);
-      // Hide the authored creek SOURCE meshes — Creek_Banks reads as brown sidewalk and
-      // Creek_SanLorenzo as hill-climbing water. CreekWater re-skins Creek_SanLorenzo as
-      // flowing water; keep Rocks + Reeds as decoration. SanLorenzo starts hidden here so
-      // it's invisible when water is OFF. (No RoadLines/Sidewalks float over the creek in
-      // the single-surface level, so the old hideCreekClutter pass is gone.)
-      setMeshVisible(scene, 'Creek_Banks', false);
+      // Keep the creek banks/rocks/reeds visible but earth-toned; hide only the authored
+      // water/flow clutter. CreekWater re-skins Creek_SanLorenzo as live flowing water.
+      tuneCreekSurrounds(scene);
       setMeshVisible(scene, 'Creek_SanLorenzo', false);
+      setMeshVisible(scene, 'Creek_FlowLines', false);
       onReadyRef.current?.();
     });
     return () => cancelAnimationFrame(raf);
@@ -360,7 +383,7 @@ export function Level({ onReady }) {
         <WindGrass
           radius={38}
           innerRadius={0.4}
-          count={85000}
+          count={62000}
           bladeHeight={0.22}
           paveMask={paveMask.texture}
           maskMin={paveMask.min}

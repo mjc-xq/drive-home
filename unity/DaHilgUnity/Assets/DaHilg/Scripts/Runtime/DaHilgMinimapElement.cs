@@ -16,7 +16,7 @@ namespace DaHilg
 
         readonly Label m_Title;
         readonly Label m_Legend;
-        readonly VisualElement m_MapArea;   // holds the solid road texture (bg) + Painter2D markers (content)
+        readonly VisualElement m_MapArea;   // holds the solid street texture (bg) + Painter2D markers (content)
         Texture2D m_RoadTex;
         DaHilgGameManager m_Manager;
         DaHilgLevelProfile m_Profile;
@@ -26,7 +26,7 @@ namespace DaHilg
         {
             pickingMode = PickingMode.Ignore;
             style.position = Position.Absolute;
-            style.backgroundColor = new Color(0.03f, 0.04f, 0.06f, 0.82f);
+            style.backgroundColor = new Color(0.025f, 0.030f, 0.038f, 0.88f);
             // Square chrome to match the AGC glass panels of the rest of the HUD (no rounded corners).
             style.borderTopLeftRadius = 0;
             style.borderTopRightRadius = 0;
@@ -45,9 +45,9 @@ namespace DaHilg
             m_Title = new Label("MAP");
             m_Title.pickingMode = PickingMode.Ignore;
             m_Title.style.position = Position.Absolute;
-            m_Title.style.left = 10;
-            m_Title.style.top = 6;
-            m_Title.style.fontSize = 10;
+            m_Title.style.left = 8;
+            m_Title.style.top = 5;
+            m_Title.style.fontSize = 9;
             m_Title.style.unityFontStyleAndWeight = FontStyle.Bold;
             m_Title.style.color = new Color(1f, 1f, 1f, 0.88f);
             Add(m_Title);
@@ -68,9 +68,9 @@ namespace DaHilg
             // draws below its children, so the road has to live on the same element as the markers.
             m_MapArea = new VisualElement { pickingMode = PickingMode.Ignore };
             m_MapArea.style.position = Position.Absolute;
-            m_MapArea.style.left = 10; m_MapArea.style.right = 10;
-            m_MapArea.style.top = 22; m_MapArea.style.bottom = 22;
-            m_MapArea.style.backgroundColor = new Color(0.06f, 0.07f, 0.09f, 0.85f);
+            m_MapArea.style.left = 8; m_MapArea.style.right = 8;
+            m_MapArea.style.top = 20; m_MapArea.style.bottom = 8;
+            m_MapArea.style.backgroundColor = new Color(0.08f, 0.12f, 0.09f, 0.90f);
             m_MapArea.generateVisualContent += OnGenerateVisualContent;
             Add(m_MapArea);
         }
@@ -100,9 +100,10 @@ namespace DaHilg
 
             int n = m_Data.FillN;
             byte[] bits = m_Data.FillRoad;
-            Texture2D tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp };
-            Color32 road = new Color32(150, 156, 165, 255);
-            Color32 clear = new Color32(0, 0, 0, 0);
+            Texture2D tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+            Color32 ground = new Color32(22, 36, 27, 238);
+            Color32 road = new Color32(124, 130, 138, 255);
+            Color32 edge = new Color32(44, 50, 55, 255);
             Color32[] px = new Color32[n * n];
             for (int row = 0; row < n; row++)
             {
@@ -111,13 +112,30 @@ namespace DaHilg
                 {
                     int cell = row * n + col;
                     bool set = (bits[cell >> 3] & (1 << (cell & 7))) != 0;
-                    px[row * n + col] = set ? road : clear;
+                    px[row * n + col] = set ? road : (HasRoadNeighbor(bits, n, col, row) ? edge : ground);
                 }
             }
             tex.SetPixels32(px);
             tex.Apply(false, false);
             m_RoadTex = tex;
             m_MapArea.style.backgroundImage = new StyleBackground(tex);
+        }
+
+        static bool HasRoadNeighbor(byte[] bits, int n, int col, int row)
+        {
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                int z = row + dz;
+                if (z < 0 || z >= n) continue;
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int x = col + dx;
+                    if (x < 0 || x >= n) continue;
+                    int cell = z * n + x;
+                    if ((bits[cell >> 3] & (1 << (cell & 7))) != 0) return true;
+                }
+            }
+            return false;
         }
 
         void OnGenerateVisualContent(MeshGenerationContext context)
@@ -129,7 +147,8 @@ namespace DaHilg
             if (m_Data == null || !m_Data.Valid) return;
 
             Painter2D painter = context.painter2D;
-            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.28f, 0.60f, 0.92f, 0.95f), 2.6f); // blue creek
+            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.03f, 0.12f, 0.20f, 0.95f), 5.6f);
+            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.30f, 0.78f, 1f, 0.95f), 3.2f);
 
             if (m_Profile != null)
             {
@@ -180,7 +199,7 @@ namespace DaHilg
                 DaHilgNibblerAgent nibbler = nibblers[i];
                 if (nibbler == null || !nibbler.Active) continue;
                 Vector3 position = nibbler.Position;
-                DrawDisk(painter, WorldToMap(position.x, position.z, rect), 1.8f, new Color(1f, 0.78f, 0.25f, 0.7f));
+                DrawDisk(painter, WorldToMap(position.x, position.z, rect), 2.3f, new Color(1f, 0.78f, 0.25f, 0.78f));
             }
         }
 
@@ -199,7 +218,8 @@ namespace DaHilg
                     float pulse = 8.5f + Mathf.PingPong(Time.time * 8f, 4f);
                     DrawDisk(painter, p, pulse, new Color(1f, 0.05f, 0f, 0.30f));
                 }
-                DrawDisk(painter, p, active ? 5.2f : 3.6f, active ? Color.white : new Color(0.35f, 0.68f, 1f, 0.92f));
+                DrawDisk(painter, p, active ? 7.0f : 5.0f, active ? new Color(1f, 1f, 1f, 0.96f) : new Color(0.08f, 0.18f, 0.28f, 0.98f));
+                DrawDisk(painter, p, active ? 4.0f : 2.9f, active ? new Color(1f, 0.45f, 0.76f, 0.98f) : new Color(0.35f, 0.78f, 1f, 0.96f));
                 if (active)
                 {
                     Vector2 heading = new Vector2(Mathf.Sin(actor.FacingYaw * Mathf.Deg2Rad), -Mathf.Cos(actor.FacingYaw * Mathf.Deg2Rad));
@@ -221,7 +241,7 @@ namespace DaHilg
             {
                 DaHilgAnimalAgent animal = animals[i];
                 if (animal == null) continue;
-                DrawDisk(painter, WorldToMap(animal.Position.x, animal.Position.z, rect), 2.8f, new Color(1f, 0.73f, 0.26f, 0.86f));
+                DrawDisk(painter, WorldToMap(animal.Position.x, animal.Position.z, rect), 3.1f, new Color(1f, 0.73f, 0.26f, 0.90f));
             }
         }
 

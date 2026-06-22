@@ -168,6 +168,7 @@ function dedupeSegments(segs, grid = 0.25) {
 // -------------------------------------------------------------------------------------
 const layers = { road: [], drive: [], walk: [], curb: [], line: [], creek: [] };
 const bounds = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity };
+const fillTris = [];
 const grow = (x, z) => {
   bounds.minX = Math.min(bounds.minX, x); bounds.maxX = Math.max(bounds.maxX, x);
   bounds.minZ = Math.min(bounds.minZ, z); bounds.maxZ = Math.max(bounds.maxZ, z);
@@ -182,6 +183,9 @@ for (const { name, layer } of LAYERS) {
     continue;
   }
   const tris = readWorldTris(node);
+  if (layer === 'road' || layer === 'drive') {
+    for (const tri of tris) fillTris.push(tri);
+  }
   const raw = boundaryEdges(tris);
   // 0.5 m dedup grid: the minimap renders at a few hundred px across ~414 m, so sub-0.5 m
   // detail is invisible. This merges the dense co-located ribbon edges and roughly halves
@@ -215,8 +219,8 @@ if (creekNode && creekNode.getMesh()) {
 
 // -------------------------------------------------------------------------------------
 // FILLED road mass (Google-Maps style solid streets). Boundary-edge strokes alone render as a
-// dotted stipple; instead rasterise every road/driveway triangle vertex into an N x N occupancy
-// grid over the map extent, dilate so thin roads stay continuous, and ship a packed 1-bit bitmap
+// dotted stipple; instead rasterise every road/driveway triangle into an N x N occupancy grid
+// over the map extent, dilate so thin roads stay continuous, and ship a packed 1-bit bitmap
 // the HUD bakes into a single road texture (one draw, no per-segment stipple).
 const FILL_N = 256;
 const fillGrid = new Uint8Array(FILL_N * FILL_N);
@@ -224,16 +228,33 @@ const fillGrid = new Uint8Array(FILL_N * FILL_N);
   // Map cells over the SAME bounds the HUD's WorldToMap uses (col<-x in [minX,maxX], row<-z in
   // [minZ,maxZ]) so the baked road texture lines up exactly with the creek strokes + actor dots.
   const bw = Math.max(1e-3, bounds.maxX - bounds.minX), bh = Math.max(1e-3, bounds.maxZ - bounds.minZ);
-  const mark = (x, z) => {
-    const cx = ((x - bounds.minX) / bw * FILL_N) | 0;
-    const cz = ((z - bounds.minZ) / bh * FILL_N) | 0;
+  const toGrid = (x, z) => [
+    (x - bounds.minX) / bw * FILL_N,
+    (z - bounds.minZ) / bh * FILL_N,
+  ];
+  const edge = (ax, ay, bx, by, px, py) => (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+  const mark = (cx, cz) => {
     if (cx >= 0 && cx < FILL_N && cz >= 0 && cz < FILL_N) fillGrid[cz * FILL_N + cx] = 1;
   };
-  for (const { name, layer } of LAYERS) {
-    if (layer !== 'road' && layer !== 'drive') continue;
-    const node = nodeByName(name);
-    if (!node || !node.getMesh()) continue;
-    for (const t of readWorldTris(node)) { mark(t[0], t[1]); mark(t[2], t[3]); mark(t[4], t[5]); }
+  for (const t of fillTris) {
+    const [ax, ay] = toGrid(t[0], t[1]);
+    const [bx, by] = toGrid(t[2], t[3]);
+    const [cx, cy] = toGrid(t[4], t[5]);
+    const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)) - 1);
+    const maxX = Math.min(FILL_N - 1, Math.ceil(Math.max(ax, bx, cx)) + 1);
+    const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)) - 1);
+    const maxY = Math.min(FILL_N - 1, Math.ceil(Math.max(ay, by, cy)) + 1);
+    const area = edge(ax, ay, bx, by, cx, cy);
+    if (Math.abs(area) < 1e-6) continue;
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const px = x + 0.5, py = y + 0.5;
+        const w0 = edge(bx, by, cx, cy, px, py);
+        const w1 = edge(cx, cy, ax, ay, px, py);
+        const w2 = edge(ax, ay, bx, by, px, py);
+        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) mark(x, y);
+      }
+    }
   }
   // Dilate by 1 cell so 1-cell-wide roads read as continuous ribbons, not a dotted line.
   const src = fillGrid.slice();

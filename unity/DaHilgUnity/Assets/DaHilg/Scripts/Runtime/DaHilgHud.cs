@@ -154,13 +154,16 @@ namespace DaHilg
             else if (m_Manager.ShowSafeBanner) m_Prompt.text = "SAFE  ·  banked +" + m_Manager.LastBank;
             else if (m_Manager.Mode == DaHilgGameMode.Greet && m_Manager.NearbyGreetable != null) m_Prompt.text = "E greet " + m_Manager.NearbyGreetable.Label;
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.PlayerInSafeZone()) m_Prompt.text = "Safe zone";
+            else if (m_Manager.LastMeleeCrushes > 0) m_Prompt.text = "Punched " + m_Manager.LastMeleeCrushes + " nibblers";
+            else if (m_Manager.LastMeleeHits > 0) m_Prompt.text = "Punch hit";
+            else if (m_Manager.LastMeleeMiss) m_Prompt.text = "Punch missed";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.LastRollCrushCount > 0) m_Prompt.text = "Crushed " + m_Manager.LastRollCrushCount + " nibblers";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && m_Manager.PlayerMarked) m_Prompt.text = "Marked · swarm incoming";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && actor.AttachedNibblers >= m_Manager.Settings.OverwhelmStop) m_Prompt.text = "Pinned · roll or jump";
             else if (m_Manager.Mode == DaHilgGameMode.Nibblers && actor.AttachedNibblers >= m_Manager.Settings.OverwhelmDown) m_Prompt.text = "Downed · roll or crawl";
             else m_Prompt.text = ShouldShowTouchControls()
-                ? "Stick move · drag look · jump · roll"
-                : "WASD move · right-drag look · Space jump · F roll · C/V camera";
+                ? "Stick move · drag look · punch · roll"
+                : "WASD · right-click aim · Q/click punch · F roll · C/V";
 
             for (int i = 0; i < m_CharacterButtons.Count; i++)
             {
@@ -835,7 +838,7 @@ namespace DaHilg
             m_MoveZone.style.left = 0;
             m_MoveZone.style.top = 0;
             m_MoveZone.style.bottom = 0;
-            m_MoveZone.style.width = Length.Percent(58);
+            m_MoveZone.style.width = Length.Percent(48);
             m_MoveZone.pickingMode = PickingMode.Position;
             m_MoveZone.RegisterCallback<PointerDownEvent>(OnJoyDown);
             m_MoveZone.RegisterCallback<PointerMoveEvent>(OnJoyMove);
@@ -848,7 +851,7 @@ namespace DaHilg
             m_LookZone.style.right = 0;
             m_LookZone.style.top = 0;
             m_LookZone.style.bottom = 0;
-            m_LookZone.style.width = Length.Percent(50);
+            m_LookZone.style.width = Length.Percent(52);
             m_LookZone.pickingMode = PickingMode.Position;
             m_LookZone.RegisterCallback<PointerDownEvent>(OnLookDown);
             m_LookZone.RegisterCallback<PointerMoveEvent>(OnLookMove);
@@ -975,17 +978,17 @@ namespace DaHilg
 
             if (landscape)
             {
-                SetPanelFrame(m_TopPanel, 12, StyleKeyword.Auto, 12, StyleKeyword.Auto, 224, StyleKeyword.Auto);
-                // Minimap to the upper-right; the segmented menu bar drops below it.
-                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 12, 12, StyleKeyword.Auto, 190, 132);
+                SetPanelFrame(m_TopPanel, 12, StyleKeyword.Auto, 12, StyleKeyword.Auto, 210, StyleKeyword.Auto);
+                // Minimap owns the upper-right; the segmented menu bar drops below it.
+                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 12, 12, StyleKeyword.Auto, 174, 120);
                 SetBarFrame(m_CharacterBar, StyleKeyword.Auto, 12, 152, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_EmoteBar, StyleKeyword.Auto, 12, 198, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_CameraBar, StyleKeyword.Auto, 12, 244, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_LevelBar, StyleKeyword.Auto, 12, 290, StyleKeyword.Auto, new Translate(0, 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, 14, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0), 300, 12);
-                SetBarFrame(m_CompactBar, StyleKeyword.Auto, 12, 154, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 372;
-                SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 12, 206, StyleKeyword.Auto, new Translate(0, 0));
+                SetBarFrame(m_CompactBar, StyleKeyword.Auto, 12, 144, StyleKeyword.Auto, new Translate(0, 0));
+                if (m_CompactBar != null) m_CompactBar.style.width = 336;
+                SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 12, 196, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 178;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 320;
 
@@ -1013,16 +1016,16 @@ namespace DaHilg
             }
             else if (touch)
             {
-                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 234, StyleKeyword.Auto);
-                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 150, 122);
+                SetPanelFrame(m_TopPanel, 16, StyleKeyword.Auto, 16, StyleKeyword.Auto, 218, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 16, 16, StyleKeyword.Auto, 136, 108);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 118, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 166, new Translate(Length.Percent(-50), 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 258, new Translate(Length.Percent(-50), 0), 340, 13);
-                SetBarFrame(m_CompactBar, StyleKeyword.Auto, 18, 150, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 320;
-                SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 18, 200, StyleKeyword.Auto, new Translate(0, 0));
+                SetBarFrame(m_CompactBar, StyleKeyword.Auto, 16, 134, StyleKeyword.Auto, new Translate(0, 0));
+                if (m_CompactBar != null) m_CompactBar.style.width = 300;
+                SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 16, 184, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 430;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
 
@@ -1051,17 +1054,17 @@ namespace DaHilg
             }
             else
             {
-                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 252, StyleKeyword.Auto);
-                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 220, 168);
+                SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 232, StyleKeyword.Auto);
+                SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 190, 148);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 116, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, 18, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 164, new Translate(Length.Percent(-50), 0), 680, 13);
                 // Minimap owns the top-right corner; the segmented menu bar drops below it.
-                SetBarFrame(m_CompactBar, StyleKeyword.Auto, 18, 196, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 384;
-                SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 18, 248, StyleKeyword.Auto, new Translate(0, 0));
+                SetBarFrame(m_CompactBar, StyleKeyword.Auto, 18, 178, StyleKeyword.Auto, new Translate(0, 0));
+                if (m_CompactBar != null) m_CompactBar.style.width = 344;
+                SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 18, 230, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 430;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
             }
@@ -1075,20 +1078,20 @@ namespace DaHilg
                 m_CompactBar.style.right = 12;
                 m_CompactBar.style.top = 12;
                 m_CompactBar.style.width = StyleKeyword.Auto;
-                float panelLeft = landscape ? 12f : 18f;
+                float panelLeft = landscape ? 12f : 14f;
                 if (m_TopPanel != null)
                 {
                     m_TopPanel.style.left = panelLeft;
                     m_TopPanel.style.top = 64;
+                    m_TopPanel.style.width = Mathf.Clamp(Screen.width - 154f, 176f, 210f);
                 }
                 if (m_Minimap != null)
                 {
-                    float ph = m_TopPanelCollapsed ? 56f : 188f;
-                    float resolved = m_TopPanel != null ? m_TopPanel.resolvedStyle.height : float.NaN;
-                    if (!float.IsNaN(resolved) && resolved > 1f) ph = resolved;
                     m_Minimap.style.left = StyleKeyword.Auto;
                     m_Minimap.style.right = 12;
-                    m_Minimap.style.top = 64f + ph + 8f;
+                    m_Minimap.style.top = 64f;
+                    m_Minimap.style.width = 118;
+                    m_Minimap.style.height = 96;
                 }
                 if (m_CompactPanel != null) m_CompactPanel.style.top = 60;
             }
@@ -1171,6 +1174,7 @@ namespace DaHilg
             // touchscreen is present. Mobile web has no Mouse device; desktop has one from frame 1,
             // so desktop locks to mouse+keyboard (the killed-desktop-controls fix). The old
             // "< 720px" heuristic misfired on short desktop windows.
+            if (Keyboard.current != null) return false;
             if (Mouse.current != null) s_HadMouse = true;
             return Application.isMobilePlatform || Touchscreen.current != null || !s_HadMouse;
         }

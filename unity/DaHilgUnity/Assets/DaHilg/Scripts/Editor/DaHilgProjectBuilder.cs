@@ -315,14 +315,25 @@ namespace DaHilg.Editor
       }
 
       // NOTE: do NOT auto-release pointer lock on pointerlockchange — that cancelled the
-      // right-drag mouse-look on desktop the instant Unity acquired the lock. The input router
-      // locks on right-hold and releases on right-up; the browser frees the lock on Esc.
+      // right-click mouse-look on desktop the instant Unity acquired the lock. The input router
+      // keeps the lock for continuous aim; Esc/browser unlock releases it.
 
       function focusCanvas() {
         try {
           canvas.focus({ preventScroll: true });
         } catch (_) {
           canvas.focus();
+        }
+      }
+
+      function requestPointerLockFromGesture(event) {
+        focusCanvas();
+        if (!event || event.pointerType === 'touch') return;
+        if (event.button !== 2 || document.pointerLockElement === canvas || !canvas.requestPointerLock) return;
+        try {
+          canvas.requestPointerLock();
+        } catch (_) {
+          // Unity's Cursor.lockState path is still attempted from C#; ignore browser denials here.
         }
       }
 
@@ -403,7 +414,8 @@ namespace DaHilg.Editor
         }
       }
 
-      canvas.addEventListener('pointerdown', focusCanvas);
+      canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+      canvas.addEventListener('pointerdown', requestPointerLockFromGesture);
       // Keep the canvas focused for mouse-look across the gestures that commonly steal focus.
       window.addEventListener('focus', focusCanvas);
       window.addEventListener('pointerup', focusCanvas);
@@ -1174,14 +1186,20 @@ body {
             Vector3[] spawns = ExtractVectorArray(json, "spawns");
             Vector3[] npcSpawns = ExtractVectorArray(json, "npcSpawns");
             if (spawns.Length == 0) spawns = new[] { new Vector3(0f, 0.05f, 12f) };
-            // Street-front spawn (computed per-level in build_dahilg_overlay from the master's Roads) is
-            // the primary spawn for EVERY level when present; the GameManager faces it at the house.
+            // Street-front spawn and facing are computed per level in build_dahilg_overlay from
+            // road geometry. Keep that authoring direction so the first frame starts oriented
+            // toward the intended route instead of re-inferring from the house bounds.
             if (json.IndexOf("\"streetSpawn\"", StringComparison.Ordinal) >= 0)
             {
                 List<Vector3> ordered = new List<Vector3>(spawns.Length + 1) { ExtractFirstVector(json, "streetSpawn") };
                 ordered.AddRange(spawns);
                 spawns = ordered.ToArray();
             }
+            profile.HasPlayerSpawnYaw = TryExtractFloat(json, "facing", out float facing);
+            profile.PlayerSpawnYaw = profile.HasPlayerSpawnYaw ? facing : 0f;
+            profile.WaterHeightOffset = TryExtractFloat(json, "waterHeightOffset", out float waterHeightOffset)
+                ? Mathf.Max(0f, waterHeightOffset)
+                : 0.24f;
             if (npcSpawns.Length == 0)
             {
                 npcSpawns = new[]
@@ -1249,6 +1267,9 @@ body {
             profile.Minimap = null;
             profile.LevelOffset = new Vector3(0.045f, -1.402f, -0.063f);
             profile.PlayerSpawns = new[] { new Vector3(0f, 0.08f, 0f) };
+            profile.HasPlayerSpawnYaw = true;
+            profile.PlayerSpawnYaw = 180f;
+            profile.WaterHeightOffset = 0f;
             profile.NpcSpawns = new[]
             {
                 new Vector3(1.9f, 0.08f, 2.4f),
@@ -1328,7 +1349,7 @@ body {
             settings.CameraSensitivity = 0.09f;
             settings.TouchSensitivity = 0.11f;
             settings.ThirdPersonDistance = 5.2f;
-            settings.ThirdPersonMinDistance = 1.25f;
+            settings.ThirdPersonMinDistance = 0.82f;
             settings.ThirdPersonPivotHeight = 1.62f;
             settings.ShoulderOffset = new Vector2(0.38f, 0.08f);
             settings.ControllerSkinWidth = 0.06f;
@@ -1543,6 +1564,16 @@ body {
         {
             Vector3[] vectors = ExtractVectorArray(json, key);
             return vectors.Length > 0 ? vectors[0] : Vector3.zero;
+        }
+
+        static bool TryExtractFloat(string json, string key, out float value)
+        {
+            value = 0f;
+            if (string.IsNullOrEmpty(json)) return false;
+
+            Match match = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+            return match.Success
+                && float.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
         }
 
         static void ValidateSpawnGroundingAssets()

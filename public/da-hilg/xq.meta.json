@@ -89,5 +89,6 @@
     0.05,
     -21.73
   ],
-  "facing": 291.5
+  "facing": 111.5,
+  "waterHeightOffset": 0.24
 }

@@ -21,6 +21,9 @@ MonoBehaviour:
   LevelOffset: {x: 0.045, y: -1.402, z: -0.063}
   PlayerSpawns:
   - {x: 0, y: 0.08, z: 0}
+  HasPlayerSpawnYaw: 1
+  PlayerSpawnYaw: 180
+  WaterHeightOffset: 0
   NpcSpawns:
   - {x: 1.9, y: 0.08, z: 2.4}
   - {x: -1.8, y: 0.08, z: 2}

@@ -55,7 +55,7 @@ for (const { out, master } of MASTERS) {
   // --- street-front spawn: nearest Roads point to the house, written into the level meta ----------
   // Roads geometry lives only in this property master; the meta (offset/houseCenter, world coords)
   // shares its world space. We find the nearest road vertex to the house, push ~3.5m toward the
-  // house onto the shoulder, and store recentered-local streetSpawn + a yaw facing the house. The
+  // house onto the shoulder, and store recentered-local streetSpawn + a yaw facing out to the street. The
   // builder reads streetSpawn as PlayerSpawns[0]; canyon's road is too far (>70m) -> front-yard.
   // Done BEFORE the mesh-strip loop so the Roads mesh is still present.
   try {
@@ -166,7 +166,7 @@ for (const { out, master } of MASTERS) {
           if (chosenN) { let g = 0; while (wallClear(sx, sz) < CLEAR - 1 && g++ < 40) { sx += chosenN[0]; sz += chosenN[1]; } }
           const lr = [sx-off[0], sz-off[2]];                 // recentered-local x,z
           const lh = [hc[0]-off[0], hc[2]-off[2]];
-          const dx = lh[0]-lr[0], dz = lh[1]-lr[1];          // face the house from out front
+          const dx = lr[0]-lh[0], dz = lr[1]-lh[1];          // face out from the house toward the street
           const r2 = n => Math.round(n*100)/100;
           meta.streetSpawn = [r2(lr[0]), 0.05, r2(lr[1])];
           let yaw = Math.atan2(dx, dz) * 180 / Math.PI; if (yaw < 0) yaw += 360;

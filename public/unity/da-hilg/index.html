@@ -41,14 +41,25 @@
       }
 
       // NOTE: do NOT auto-release pointer lock on pointerlockchange — that cancelled the
-      // right-drag mouse-look on desktop the instant Unity acquired the lock. The input router
-      // locks on right-hold and releases on right-up; the browser frees the lock on Esc.
+      // right-click mouse-look on desktop the instant Unity acquired the lock. The input router
+      // keeps the lock for continuous aim; Esc/browser unlock releases it.
 
       function focusCanvas() {
         try {
           canvas.focus({ preventScroll: true });
         } catch (_) {
           canvas.focus();
+        }
+      }
+
+      function requestPointerLockFromGesture(event) {
+        focusCanvas();
+        if (!event || event.pointerType === 'touch') return;
+        if (event.button !== 2 || document.pointerLockElement === canvas || !canvas.requestPointerLock) return;
+        try {
+          canvas.requestPointerLock();
+        } catch (_) {
+          // Unity's Cursor.lockState path is still attempted from C#; ignore browser denials here.
         }
       }
 
@@ -129,7 +140,8 @@
         }
       }
 
-      canvas.addEventListener('pointerdown', focusCanvas);
+      canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+      canvas.addEventListener('pointerdown', requestPointerLockFromGesture);
       // Keep the canvas focused for mouse-look across the gestures that commonly steal focus.
       window.addEventListener('focus', focusCanvas);
       window.addEventListener('pointerup', focusCanvas);
@@ -181,9 +193,10 @@
 
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb?v=8ded0283821feae',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded0283821feae',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded0283821feae',
+        dataUrl: '',
+        dataParts: ["Build/da-hilg.data.unityweb.part0?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part1?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part2?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part3?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part4?v=8ded0551a0d0512","Build/da-hilg.data.unityweb.part5?v=8ded0551a0d0512"],
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded0551a0d0512',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded0551a0d0512',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -197,15 +210,35 @@
       config.devicePixelRatio = __dahilgTouch ? 1 : Math.min(window.devicePixelRatio || 1, 1.75);
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
+      async function assembleUnityDataUrl(partUrls) {
+        const buffers = [];
+        for (const partUrl of partUrls) {
+          const response = await fetch(partUrl, { cache: 'no-store' });
+          if (!response.ok) throw new Error('Failed to load Unity data chunk ' + partUrl + ' (' + response.status + ')');
+          buffers.push(await response.arrayBuffer());
+        }
+        const blobUrl = URL.createObjectURL(new Blob(buffers, { type: 'application/octet-stream' }));
+        window.__dahilg.dataBlobUrl = blobUrl;
+        return blobUrl;
+      }
+
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8ded0283821feae';
-      script.onload = () => {
+      script.src = 'Build/da-hilg.loader.js?v=8ded0551a0d0512';
+      script.onload = async () => {
+        try {
+          config.dataUrl = await assembleUnityDataUrl(config.dataParts);
+        } catch (dataErr) {
+          rememberHudError(dataErr);
+          alert(dataErr.message || dataErr);
+          return;
+        }
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
           unityInstanceRef = unityInstance;
           window.__dahilg.unityInstance = unityInstance;
           window.__dahilg.unityReady = true;
+          if (window.__dahilg.dataBlobUrl) { URL.revokeObjectURL(window.__dahilg.dataBlobUrl); window.__dahilg.dataBlobUrl = null; }
           document.querySelector('#unity-loading-bar').style.display = 'none';
           try {
             // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike

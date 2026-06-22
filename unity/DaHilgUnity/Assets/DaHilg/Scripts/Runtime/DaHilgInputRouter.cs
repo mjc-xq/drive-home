@@ -95,17 +95,17 @@ namespace DaHilg
                     Cursor.lockState = CursorLockMode.Locked;
                     Cursor.visible = false;
                 }
-                else if (mouse.rightButton.wasReleasedThisFrame)
-                {
-                    Cursor.lockState = CursorLockMode.None;
-                    Cursor.visible = true;
-                }
 
-                if (mouse.rightButton.isPressed && Cursor.lockState == CursorLockMode.Locked)
+                bool pointerLocked = Cursor.lockState == CursorLockMode.Locked;
+                if (pointerLocked)
                 {
                     LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
                 }
-                else if (!mouse.rightButton.isPressed && Cursor.lockState != CursorLockMode.None)
+                else if (mouse.rightButton.isPressed)
+                {
+                    LookDelta += mouse.delta.ReadValue() * settings.CameraSensitivity;
+                }
+                else if (Cursor.lockState != CursorLockMode.None)
                 {
                     Cursor.lockState = CursorLockMode.None;
                     Cursor.visible = true;

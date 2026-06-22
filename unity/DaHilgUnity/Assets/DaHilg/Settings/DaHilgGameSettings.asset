@@ -76,7 +76,7 @@ MonoBehaviour:
   PitchLimit: 68
   EyeHeight: 1.62
   ThirdPersonDistance: 5.2
-  ThirdPersonMinDistance: 1.25
+  ThirdPersonMinDistance: 0.82
   ThirdPersonPivotHeight: 1.62
   ShoulderOffset: {x: 0.38, y: 0.08}
   CameraSmooth: 12
