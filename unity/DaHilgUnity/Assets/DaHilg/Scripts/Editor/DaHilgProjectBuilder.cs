@@ -246,6 +246,17 @@ namespace DaHilg.Editor
             "Wave",
             "Cheer",
         };
+        static readonly string[] s_UprightCharacterClips =
+        {
+            "Idle",
+            "IdleAlt",
+            "Walk",
+            "WalkAlt",
+            "Run",
+            "Jump",
+            "Wave",
+            "Cheer",
+        };
 
         [MenuItem("Da Hilg/Rebuild Unity Scene")]
         public static void RebuildUnityScene()
@@ -565,9 +576,6 @@ namespace DaHilg.Editor
         lastHudTapTime = now;
 
         focusCanvas();
-        const command = compactCommandFromTap(x, y, rect.width);
-        if (command && sendHudCommand(command)) return;
-
         const payload = [x, y, rect.width, rect.height]
           .map((value) => Number(value).toFixed(2))
           .join(',');
@@ -619,10 +627,19 @@ namespace DaHilg.Editor
       }
 
       // Reliable browser touch verdict (mobile web). Used by Unity to select the mobile budgets and
-      // to drive the on-screen controls. Do not redirect phones to the house: the intended default
-      // spawn is outdoors on the street in front of the Dahill house.
-      var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
-        && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+      // to drive the on-screen controls. iPadOS can report a desktop UA and a fine pointer when a
+      // keyboard/trackpad is attached, so maxTouchPoints stays authoritative for tablet play.
+      function isDahilgTouchDevice() {
+        const points = navigator.maxTouchPoints || 0;
+        const ua = navigator.userAgent || '';
+        const platform = navigator.platform || '';
+        const iPadOSDesktopUA = platform === 'MacIntel' && points > 1;
+        const appleTablet = /iPad/.test(ua) || iPadOSDesktopUA;
+        const coarseOnly = window.matchMedia && window.matchMedia('(any-pointer:coarse)').matches
+          && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+        return appleTablet || points > 0 || 'ontouchstart' in window || coarseOnly;
+      }
+      var __dahilgTouch = isDahilgTouchDevice();
       window.__dahilg.touchMode = __dahilgTouch;
       try {
         if (__dahilgTouch) {
@@ -664,11 +681,9 @@ namespace DaHilg.Editor
           document.querySelector('#unity-loading-bar').style.display = 'none';
           try {
             // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike
-            // Unity's WebGL device detection which can't tell a phone from a desktop). A touch
-            // device has touch points and no fine pointer (mouse/trackpad). Drives the on-screen
-            // joystick/look/buttons so the game is playable on a phone.
-            var touchDevice = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
-              && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+            // Unity's WebGL device detection which can't tell an iPad from a desktop). Drives the
+            // on-screen joystick/look/buttons so the game is playable on touch-first devices.
+            var touchDevice = isDahilgTouchDevice();
             window.__dahilg.touchMode = touchDevice;
             unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
           } catch (touchErr) { rememberHudError(touchErr); }
@@ -2179,6 +2194,7 @@ body {
                     }
 
                     ValidateGroundedEmoteFooting(slot.Id, bindingRoot, animator, machine);
+                    ValidateUprightCharacterStates(slot.Id, bindingRoot, animator, machine);
                     checkedCharacters++;
                 }
                 finally
@@ -2300,6 +2316,56 @@ body {
                 {
                     throw new InvalidOperationException(owner + " " + stateName + " emote foot grounding drift is too high. Lift="
                         + maxLift.ToString("0.###") + " sink=" + maxSink.ToString("0.###") + ".");
+                }
+            }
+        }
+
+        static void ValidateUprightCharacterStates(string owner, Transform bindingRoot, Animator animator, AnimatorStateMachine machine)
+        {
+            Transform hips = FindDeepChild(bindingRoot, "Hips");
+            Transform head = FindDeepChild(bindingRoot, "Head")
+                ?? FindDeepChild(bindingRoot, "Neck")
+                ?? FindDeepChild(bindingRoot, "Spine2");
+            if (hips == null || head == null)
+            {
+                throw new InvalidOperationException(owner + " missing Hips/Head bones for upright animation validation.");
+            }
+
+            float[] samples = { 0.04f, 0.18f, 0.36f, 0.56f, 0.78f };
+            for (int i = 0; i < s_UprightCharacterClips.Length; i++)
+            {
+                string stateName = s_UprightCharacterClips[i];
+                AnimatorState state = FindAnimatorState(machine, stateName);
+                if (state == null || state.motion is not AnimationClip) continue;
+
+                int hash = Animator.StringToHash("Base Layer." + stateName);
+                float minUpness = 1f;
+                float worstSample = 0f;
+
+                animator.Rebind();
+                animator.Update(0f);
+                for (int s = 0; s < samples.Length; s++)
+                {
+                    animator.Play(hash, 0, samples[s]);
+                    animator.Update(0f);
+                    Vector3 torso = head.position - hips.position;
+                    if (torso.sqrMagnitude < 0.01f) continue;
+
+                    float upness = Vector3.Dot(torso.normalized, Vector3.up);
+                    if (upness < minUpness)
+                    {
+                        minUpness = upness;
+                        worstSample = samples[s];
+                    }
+                }
+
+                if (minUpness < 0.35f)
+                {
+                    throw new InvalidOperationException(owner + " " + stateName
+                        + " animation turns the torso sideways/down. Hips-to-head upness="
+                        + minUpness.ToString("0.###") + " at normalized sample "
+                        + worstSample.ToString("0.##")
+                        + ". Check Mixamo clip orientation conversion.");
                 }
             }
         }

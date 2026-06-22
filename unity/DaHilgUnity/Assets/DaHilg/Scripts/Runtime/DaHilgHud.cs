@@ -484,7 +484,7 @@ namespace DaHilg
             Vector2 screenPoint = new Vector2(x01 * Screen.width, (1f - y01) * Screen.height);
             if (!TryActivateHudButtonFromScreen(screenPoint))
             {
-                TryActivateCompactTopFromCss(cssX, cssY, cssWidth);
+                TryActivateCompactTopFromCss(cssX, cssY, cssWidth, cssHeight);
             }
         }
 
@@ -1211,13 +1211,12 @@ namespace DaHilg
         {
             // The page's JS touch verdict is authoritative when present.
             if (s_WebTouchMode >= 0) return s_WebTouchMode != 0;
-            // Fallback until it arrives: show touch until a real mouse is ever seen, OR if a
-            // touchscreen is present. Mobile web has no Mouse device; desktop has one from frame 1,
-            // so desktop locks to mouse+keyboard (the killed-desktop-controls fix). The old
-            // "< 720px" heuristic misfired on short desktop windows.
+            // Fallback until it arrives: a real touchscreen wins, even with an attached iPad
+            // keyboard/trackpad. Desktop without touch still locks to mouse+keyboard.
+            if (Application.isMobilePlatform || Touchscreen.current != null) return true;
             if (Keyboard.current != null) return false;
             if (Mouse.current != null) s_HadMouse = true;
-            return Application.isMobilePlatform || Touchscreen.current != null || !s_HadMouse;
+            return !s_HadMouse;
         }
 
         void BuildEmoteBar()
@@ -2066,27 +2065,27 @@ namespace DaHilg
             return false;
         }
 
-        bool TryActivateCompactTopFromCss(float cssX, float cssY, float cssWidth)
+        bool TryActivateCompactTopFromCss(float cssX, float cssY, float cssWidth, float cssHeight)
         {
-            if (cssWidth <= 1f || cssY < 0f || cssY > 76f) return false;
+            if (cssWidth <= 1f || cssHeight <= 1f || m_CompactBar == null) return false;
 
-            bool compactMobileScale = cssWidth < 900f;
-            float scale = compactMobileScale ? 0.62f : 1f;
-            float rightInset = compactMobileScale ? 8f : 18f;
-            float fromRight = cssWidth - cssX - rightInset;
-            if (fromRight < 0f) return false;
+            Rect bounds = m_CompactBar.worldBound;
+            if (bounds.width <= 1f || bounds.height <= 1f) return false;
 
-            float actionWidth = 90f * scale;
-            float levelWidth = 96f * scale;
-            float playerWidth = 106f * scale;
-            float cameraWidth = 100f * scale;
-            if (fromRight > actionWidth + levelWidth + playerWidth + cameraWidth) return false;
+            float scaleX = cssWidth / Mathf.Max(1f, Screen.width);
+            float scaleY = cssHeight / Mathf.Max(1f, Screen.height);
+            Rect cssBounds = new Rect(bounds.xMin * scaleX, bounds.yMin * scaleY, bounds.width * scaleX, bounds.height * scaleY);
+            if (!cssBounds.Contains(new Vector2(cssX, cssY))) return false;
 
+            float segment = cssBounds.width / 4f;
+            if (segment <= 1f) return false;
+
+            float localX = cssX - cssBounds.xMin;
             string command;
-            if (fromRight <= actionWidth) command = "actions";
-            else if (fromRight <= actionWidth + levelWidth) command = "level";
-            else if (fromRight <= actionWidth + levelWidth + playerWidth) command = "player";
-            else command = "camera";
+            if (localX < segment) command = "camera";
+            else if (localX < segment * 2f) command = "player";
+            else if (localX < segment * 3f) command = "level";
+            else command = "actions";
 
             bool activated = ActivateCompactCommand(command);
             if (!activated) return false;

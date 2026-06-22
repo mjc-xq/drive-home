@@ -413,6 +413,11 @@ def do_clip_pass(mesh_fbx, clip_fbxs, character_id, out_dir):
         before_actions = set(bpy.data.actions)
         imported = import_fbx(fbx)
         new_arm = find_armature(imported)
+        # The mesh pass bakes the FBX importer's 90deg object rotation into the armature rest pose.
+        # Do the same for every clip armature BEFORE keeping its action; otherwise the action curves
+        # remain authored in the sideways Mixamo import basis and get rebound onto an upright rig.
+        if new_arm:
+            apply_armature_rotation(new_arm)
         new_actions = [a for a in bpy.data.actions if a not in before_actions]
         if not new_actions:
             # Some FBX imports stash the action on the armature's animation_data.

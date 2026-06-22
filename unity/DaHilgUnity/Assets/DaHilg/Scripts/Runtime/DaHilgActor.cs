@@ -427,7 +427,10 @@ namespace DaHilg
 
             Vector3 horizontal = new Vector3(m_HitVel.x, 0f, m_HitVel.z) * dt;
             if (horizontal.sqrMagnitude > 0f) m_Controller.Move(horizontal);
-            if (m_Settings != null) SnapToLevelGround(m_Settings, now);
+            if (m_Settings != null && !SnapToLevelGround(m_Settings, now))
+            {
+                RescueFromLevelGround(m_Settings, now);
+            }
             m_HitVel = Vector3.Lerp(m_HitVel, Vector3.zero, dt * 6f);
         }
 
@@ -493,7 +496,7 @@ namespace DaHilg
                 Grounded = false;
                 WasJumpStartedThisFrame = true;
                 SetAnimatorSpeed(1f, dt);
-                PlayAnim("Jump", 0.05f);
+                PlayAnim(PickAirborneState(), 0.05f);
             }
 
             if (Grounded && m_VerticalVelocity < 0f) m_VerticalVelocity = -2f;
@@ -510,6 +513,10 @@ namespace DaHilg
                 m_LastGroundedTime = now;
             }
             else if (!WasJumpStartedThisFrame && m_VerticalVelocity <= 0f && SnapToLevelGround(settings, now))
+            {
+                Grounded = true;
+            }
+            else if (!WasJumpStartedThisFrame && m_VerticalVelocity <= 0f && RescueFromLevelGround(settings, now))
             {
                 Grounded = true;
             }
@@ -725,12 +732,43 @@ namespace DaHilg
             return true;
         }
 
+        bool RescueFromLevelGround(DaHilgGameSettings settings, float now)
+        {
+            if (m_Controller == null || !m_Controller.enabled) return false;
+            if (m_VerticalVelocity > 0.1f) return false;
+
+            float maxLift = Mathf.Max(8f, settings.GroundProbeHeight * 4f, m_BodyHeight * 6f);
+            if (!TryFindRescueGround(settings, maxLift, out RaycastHit hit)) return false;
+
+            float targetY = hit.point.y + Mathf.Max(0.01f, settings.GroundSkin);
+            float deltaY = targetY - transform.position.y;
+            float minLift = Mathf.Max(settings.GroundSnapDistance * 1.85f, settings.StepOffset + settings.ControllerSkinWidth + 0.15f);
+            if (deltaY < minLift || deltaY > maxLift) return false;
+
+            bool wasEnabled = m_Controller.enabled;
+            m_Controller.enabled = false;
+            transform.position = new Vector3(transform.position.x, targetY, transform.position.z);
+            m_Controller.enabled = wasEnabled;
+            m_VerticalVelocity = 0f;
+            Grounded = true;
+            m_LastGroundedTime = now;
+            m_VisualGroundOffset = 0f;
+            return true;
+        }
+
         bool TryFindLevelGround(DaHilgGameSettings settings, out RaycastHit hit)
         {
             float probeHeight = Mathf.Max(settings.GroundProbeHeight, m_BodyHeight * 1.5f);
             float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, settings.StepOffset + settings.ControllerSkinWidth);
             float maxAbove = Mathf.Max(settings.GroundSnapDistance * 1.2f, settings.StepOffset + settings.ControllerSkinWidth + 0.35f);
             return DaHilgLevelRuntime.TryFindGround(transform.position, out hit, probeHeight, probeDistance, maxAbove);
+        }
+
+        bool TryFindRescueGround(DaHilgGameSettings settings, float maxLift, out RaycastHit hit)
+        {
+            float probeHeight = Mathf.Max(settings.GroundProbeHeight, maxLift + m_BodyHeight);
+            float probeDistance = probeHeight + Mathf.Max(settings.GroundSnapDistance, m_BodyHeight * 2f);
+            return DaHilgLevelRuntime.TryFindGround(transform.position, out hit, probeHeight, probeDistance, maxLift);
         }
 
         void UpdateGroundNormal(DaHilgGameSettings settings, float dt)
@@ -757,7 +795,7 @@ namespace DaHilg
             if (!Grounded && m_VerticalVelocity < -1f)
             {
                 SetAnimatorSpeed(1f, dt);
-                PlayAnim("Jump", 0.1f);
+                PlayAnim(PickAirborneState(), 0.1f);
                 return;
             }
 
@@ -838,6 +876,14 @@ namespace DaHilg
             return Random.value < 0.58f
                 ? ResolveFirstAvailable("Hit", "Stumble", "Knockdown")
                 : ResolveFirstAvailable("Stumble", "Hit", "Knockdown");
+        }
+
+        string PickAirborneState()
+        {
+            bool moving = Speed > 0.2f || m_HorizontalVelocity.sqrMagnitude > 0.06f;
+            return moving
+                ? ResolveFirstAvailable("Run", "Walk", "Idle")
+                : ResolveFirstAvailable("Idle", "Run");
         }
 
         string ResolveEmoteState(string emote)
