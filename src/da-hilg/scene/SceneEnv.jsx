@@ -13,12 +13,21 @@ import { cameraRig } from '../state/refs.js';
 import { perfModeAtom } from '../state/settingsAtoms.js';
 import { deviceTier } from '../state/deviceTier.js';
 
-// Sun direction (shared by the sky + the key light so highlights line up).
+// Sun direction for the KEY LIGHT (drives shadow angle + highlight alignment).
+// Kept as-is so the carefully-tuned directional-light shadows don't shift.
 const SUN_DIR = [90, 70, 50];
+// Sun direction for the VISIBLE 3D model — DECOUPLED from the light so we can park
+// the friendly sun where players actually look without moving the shadows. The
+// camera looks toward -Z at spawn (yaw 0 → forward = -Z), so the old SUN_DIR put the
+// model ~120° to the right and 34° up: technically in the sky, but never in the
+// forward view, which is why it felt "missing". This points it forward-and-up
+// (-Z forward, +Y up, a touch right) at ~28° elevation so it sits plainly in the
+// upper-forward sky the moment you look ahead.
+const SUN_MODEL_DIR = [28, 50, -85];
 const FOG_COLOR = '#cfe2fb'; // matches the blue horizon so distance blends
 const SUN_URL = '/da-hilg/sun3d.glb';
-const SUN_DISTANCE = 360; // inside CAM_FAR (600); the model tracks the camera
-const SUN_SCALE = 48; // world units — tuned so it reads as a big friendly sun
+const SUN_DISTANCE = 320; // inside CAM_FAR (600); the model tracks the camera
+const SUN_SCALE = 64; // world units — big & friendly (~17° across at this distance)
 
 // ── Blue gradient sky dome ────────────────────────────────────────────────────────
 // A camera-following BackSide sphere with a zenith→horizon blue gradient. depthTest/
@@ -75,7 +84,8 @@ function GradientSky() {
 function SunModel() {
   const gltf = useGLTF(SUN_URL);
   const ref = useRef(null);
-  const ndir = useMemo(() => new THREE.Vector3(...SUN_DIR).normalize(), []);
+  // Park the visible sun along SUN_MODEL_DIR (forward-and-up), NOT the light's SUN_DIR.
+  const ndir = useMemo(() => new THREE.Vector3(...SUN_MODEL_DIR).normalize(), []);
   const scene = useMemo(() => {
     const s = gltf.scene.clone(true);
     s.traverse((o) => {

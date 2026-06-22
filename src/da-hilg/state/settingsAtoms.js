@@ -4,12 +4,14 @@ import { atom } from 'jotai';
 
 // Photo facades default ON: the SVFacade overlay quads ride in front of the always-present
 // windowed-stucco walls (turning them OFF reveals the windows underneath — no missing geometry).
-// Grass defaults ON now that it is paved-mask gated and capped to a smaller local field.
+// Grass defaults OFF: the player-following wind-grass field reads as grass growing in the
+// street and moving with you (the paved-mask gating isn't tight enough). Disabled for now;
+// the HUD "Grass" toggle still re-enables it.
 /** Show the Street View photo facade overlays (SVFacade_page* nodes) on the buildings. */
 export const showFacadesAtom = atom(true);
 /** Show the flowing creek water (the "fancy water"). */
 export const showWaterAtom = atom(true);
-export const showGrassAtom = atom(true);
+export const showGrassAtom = atom(false);
 
 // Performance mode — ON by default for a fast boot. When on, the game skips the
 // ~8 ms/frame of sun shadows + the post-processing composer (bloom/AO/SMAA), keeping

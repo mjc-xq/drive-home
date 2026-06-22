@@ -60,6 +60,7 @@ export function createActor(id) {
       lastGroundedT: 0,
       animState: 'idle',
       action: null, // active emote clip key, or null
+      actionOnce: false, // force a looping clip (punch's 'attack') to play once
       actionUntil: 0, // perf-time the held/one-shot emote ends (0 = not timed)
       jumpBufferedT: -1,
     },

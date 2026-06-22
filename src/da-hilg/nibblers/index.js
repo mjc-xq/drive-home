@@ -5,6 +5,7 @@
 
 export { isNibblersMode, nibblerPenalty } from './mode.js';
 export { updateNibblers } from './systems/nibblersSystems.js';
+export { playerPunch } from './systems/punchSystem.js';
 export { buildNibblersZones } from './zones/zoneConfig.nibblers.js';
 export { default as NibblerNpcs } from './render/NibblerNpcs.jsx';
 export { default as NibblersHud } from './hud/NibblersHud.jsx';

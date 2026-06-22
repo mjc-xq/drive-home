@@ -15,6 +15,9 @@ import {
   S_JUMP,
   ATTACH_PAD,
   ATTACH_HEIGHT_BAND,
+  CIRCLE_RING,
+  CIRCLE_SPEED,
+  CIRCLE_PULL,
 } from '../constants.js';
 import { CAPSULE_RADIUS, CAPSULE_CENTER_Y } from '../../constants.js';
 import { px, py, pz, vx, vy, vz, heading, jumpCD, state } from './swarmState.js';
@@ -39,6 +42,37 @@ export function seekTo(i, tx, tz, speed, dt) {
   const d = Math.sqrt(dx * dx + dz * dz) + 1e-5;
   const desVX = (dx / d) * speed;
   const desVZ = (dz / d) * speed;
+  const k = 1 - Math.exp(-NIBBLER_ACCEL * dt);
+  vx[i] += (desVX - vx[i]) * k;
+  vz[i] += (desVZ - vz[i]) * k;
+}
+
+/**
+ * Playful pre-lunge ORBIT: steer nibbler `i` around the player on a ring of radius
+ * CIRCLE_RING instead of bee-lining in. The desired velocity is a tangential
+ * component (sweep around the player, sign from `dir` so different nibblers weave
+ * both ways) plus a soft radial correction that pulls toward / pushes off the ring.
+ * Same critically-damped accel as seekTo so it blends with separation. Horizontal
+ * only — the playful bob is added in updateSwarm's integrate height, not here.
+ * @param {number} i
+ * @param {number} px0 player X
+ * @param {number} pz0 player Z
+ * @param {number} dir +1 / -1 orbit direction
+ * @param {number} dt
+ */
+export function circleOrbit(i, px0, pz0, dir, dt) {
+  const dx = px[i] - px0;
+  const dz = pz[i] - pz0;
+  const d = Math.sqrt(dx * dx + dz * dz) + 1e-5;
+  const ux = dx / d; // radial-out unit
+  const uz = dz / d;
+  // Tangent = radial rotated 90° (sign flips the orbit direction).
+  const tx = -uz * dir;
+  const tz = ux * dir;
+  // Radial correction: + pulls in when too far, pushes out when too close.
+  const radial = (d - CIRCLE_RING) * CIRCLE_PULL;
+  const desVX = tx * CIRCLE_SPEED - ux * radial;
+  const desVZ = tz * CIRCLE_SPEED - uz * radial;
   const k = 1 - Math.exp(-NIBBLER_ACCEL * dt);
   vx[i] += (desVX - vx[i]) * k;
   vz[i] += (desVZ - vz[i]) * k;

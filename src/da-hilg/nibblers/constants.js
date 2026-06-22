@@ -45,6 +45,7 @@ export const S_JUMP = 5;
 export const S_ATTACHED = 6;
 export const S_FALL = 7;
 export const S_SCATTER = 8;
+export const S_CIRCLE = 9;        // playful pre-lunge orbit/feint around the player
 
 // ── VAT clip bands (column offsets into the animation texture) ──────────────
 // Must match the BANDS order in scripts/build_nibbler_vat.mjs + nibbler.vat.json.
@@ -89,6 +90,20 @@ export const NIBBLER_JUMP_VEL = 4.0;
 export const NIBBLER_LUNGE = 5.0;         // horizontal boost during a jump
 export const JUMP_COOLDOWN = 1.0;
 export const EMOTE_RATE = 1.5;            // VAT phase advance / sec (loops)
+
+// ── Playful circle/feint (pre-lunge stalking before committing to the pounce) ─
+// Once a chasing nibbler closes inside CIRCLE_RADIUS it doesn't bee-line in — it
+// orbits the player on a ring with a little bob/hop for a short, randomized beat,
+// THEN commits to RUN→lunge. Reads as "playful stalking" then pounce. Pure math
+// over the SoA (no alloc), so it stays cheap across the whole swarm.
+export const CIRCLE_RADIUS = 4.5;         // start circling once this close to the player
+export const CIRCLE_RING = 2.6;           // preferred orbit distance held while circling
+export const CIRCLE_SPEED = 3.4;          // tangential orbit speed (m/s)
+export const CIRCLE_PULL = 2.0;           // radial correction toward the ring (m/s)
+export const CIRCLE_T_MIN = 0.6;          // min seconds spent circling before the lunge
+export const CIRCLE_T_MAX = 1.6;          // max seconds (per-nibbler randomized by seed)
+export const CIRCLE_BOB_RATE = 8.0;       // playful vertical bob frequency (rad/s)
+export const CIRCLE_BOB_HEIGHT = 0.12;    // bob amplitude above the ground (m)
 
 // ── Attach test (capsule-vs-point against the player) ───────────────────────
 export const ATTACH_RADIUS = 0.3;
@@ -158,6 +173,16 @@ export const HEALTH_COMMIT_HZ = 1.5;
 export const STOMP_DESCEND_VEL = -1.5;    // must be falling faster than this
 export const STOMP_RADIUS = 1.0;
 export const STOMP_BOUNCE = 3.0;
+
+// ── Punch (player melee — left-click / F) ────────────────────────────────────
+// A forward swing that knocks attached clingers off the front of the body and frees
+// close chasing nibblers in a forward arc. Reuses the existing fling/free mechanic
+// (markedSystem.shedAttached / swarmState.free) — no new physics. Self-limiting: it
+// only clears what's in front, so a full pile still needs jumps/safe zones.
+export const PUNCH_RANGE = 1.8;           // forward reach for free (un-attached) nibblers (m)
+export const PUNCH_HALF_ANGLE = 1.0;      // forward cone half-angle (rad, ~57°)
+export const PUNCH_SHED_N = 6;            // max attached clingers knocked off per punch
+export const PUNCH_COOLDOWN_MS = 320;     // min ms between landed punches
 
 // ── Scatter (safe-zone panic) ───────────────────────────────────────────────
 export const SCATTER_SPEED = 8;

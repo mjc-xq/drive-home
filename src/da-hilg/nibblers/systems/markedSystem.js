@@ -9,6 +9,7 @@ import {
   S_NOTICE,
   S_RUN,
   S_JUMP,
+  S_CIRCLE,
   S_ATTACHED,
   S_FALL,
   S_SCATTER,
@@ -84,7 +85,8 @@ export function clearAndScatter(now) {
       st === S_WANDER ||
       st === S_NOTICE ||
       st === S_RUN ||
-      st === S_JUMP
+      st === S_JUMP ||
+      st === S_CIRCLE
     ) {
       state[i] = S_SCATTER;
       stateT[i] = 0;
