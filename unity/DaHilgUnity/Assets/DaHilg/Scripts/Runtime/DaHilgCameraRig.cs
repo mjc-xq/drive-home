@@ -54,6 +54,24 @@ namespace DaHilg
         public float Yaw { get; set; }
         public float Pitch { get; set; } = 12f;
 
+        // Force the camera to cut cleanly behind the target NOW. At spawn the deoccluder otherwise
+        // resolves once while occluded (PullCameraForward pins it against a wall) and stays pinned until
+        // the target moves — so the first second framed a wall. Invalidating the vcam state makes
+        // Cinemachine re-resolve from scratch (no stale damping/occlusion carry-over).
+        public void SnapToTarget()
+        {
+            if (m_Target == null || m_FollowTarget == null) return;
+            CameraPreset preset = PresetFor(Mode, null);
+            m_CurrentDistance = preset.Distance;
+            Vector3 pivot = m_Target.FeetPosition + Vector3.up * preset.PivotHeight;
+            m_FollowTarget.SetPositionAndRotation(pivot, Quaternion.Euler(Pitch, Yaw, 0f));
+            if (m_VirtualCamera != null)
+            {
+                m_VirtualCamera.OnTargetObjectWarped(m_FollowTarget, Vector3.zero);
+                m_VirtualCamera.PreviousStateIsValid = false;
+            }
+        }
+
         public void Initialize(DaHilgGameSettings settings)
         {
             m_Camera = GetComponent<Camera>();

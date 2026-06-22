@@ -212,8 +212,9 @@ namespace DaHilg
             m_ActiveActor.SetRole(DaHilgActorRole.Player, Time.time);
             if (CameraRig != null)
             {
+                CameraRig.Yaw = m_ActiveActor.FacingYaw;   // yaw BEFORE Target so its snap uses it
                 CameraRig.Target = m_ActiveActor;
-                CameraRig.Yaw = m_ActiveActor.FacingYaw;
+                CameraRig.SnapToTarget();                    // clean cut behind the player (no spawn wall-pin)
             }
             for (int i = 0; i < m_Nibblers.Count; i++) m_Nibblers[i].SetPlayer(m_ActiveActor.transform);
         }
