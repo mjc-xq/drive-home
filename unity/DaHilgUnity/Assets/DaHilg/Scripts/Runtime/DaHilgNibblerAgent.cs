@@ -13,6 +13,7 @@ namespace DaHilg
         enum NibblerState
         {
             Chase,
+            Orbit,
             Windup,
             Lunge,
             Climb,
@@ -29,6 +30,8 @@ namespace DaHilg
         const float k_AttachPad = 0.35f;
         const float k_LungeArc = 0.68f;
         const float k_ScatterTime = 1.2f;
+        const float k_OrbitEnterRadius = 3.6f;
+        const float k_OrbitExitRadius = 5.8f;
 
         Transform m_Player;
         readonly Animator m_Animator;
@@ -37,10 +40,20 @@ namespace DaHilg
         Vector3 m_BaseScale = Vector3.one;
         Vector3 m_AppliedScale = Vector3.one;
         Transform m_VisualT;
+        Transform m_LeftFoot;
+        Transform m_RightFoot;
         readonly int m_Index;
         readonly float m_Seed;
-        readonly string m_RunClip;
-        readonly string m_ClingClip;
+        readonly float m_WeaveAmp;
+        readonly float m_RunSpeedMul;
+        readonly float m_SeparationMul;
+        readonly float m_OrbitDir;
+        readonly float m_OrbitDistance;
+        readonly float m_Reactiveness;
+        readonly string m_PrimaryMoveClip;
+        readonly string m_SecondaryMoveClip;
+        string m_CurrentMoveClip;
+        string m_ClingClip;
         NibblerState m_State;
         Vector3 m_Velocity;
         Vector3 m_LungeStart;
@@ -48,15 +61,23 @@ namespace DaHilg
         Vector3 m_AttachBaseLocal;
         float m_AttachY;
         float m_AttachTargetY;
+        float m_VisualGroundOffset;
         Transform m_NibblerRoot;        // the pool root we live under when free (not attached)
         int m_BoneSlot;                 // which player bone slot this nibbler clings to
         Transform m_AttachedParent;     // the player bone we're childed to (null when free)
         int m_AttachGen;                // player.VisualGeneration at attach (detects a re-rig/char switch)
         float m_StateTime;
+        float m_OrbitDuration;
+        float m_AvoidUntil;
+        float m_AvoidSign;
+        float m_StuckTimer;
+        float m_NextMoveClipSwap;
         float m_LungeDuration;
         float m_JumpCooldown;
         float m_ClimbSpeed;
         float m_CrushSpin;
+        float m_CrushDuration;
+        float m_CrushSquash;
         string m_Anim;
 
         public GameObject Root { get; }
@@ -70,12 +91,20 @@ namespace DaHilg
             m_Scale = scale;
             m_Index = index;
             m_Seed = Mathf.Repeat(Mathf.Sin((index + 1) * 12.9898f) * 43758.5453f, 1f);
+            m_WeaveAmp = Mathf.Lerp(0.18f, 0.68f, Hash01(index, 3.17f));
+            m_RunSpeedMul = Mathf.Lerp(0.78f, 1.22f, Hash01(index, 7.91f));
+            m_SeparationMul = Mathf.Lerp(0.78f, 1.35f, Hash01(index, 4.63f));
+            m_OrbitDir = Hash01(index, 12.7f) < 0.5f ? -1f : 1f;
+            m_OrbitDistance = Mathf.Lerp(1.75f, 2.75f, Hash01(index, 19.3f));
+            m_Reactiveness = Mathf.Lerp(0.75f, 1.35f, Hash01(index, 31.1f));
             // Nibbler swarm = zombie body: ground locomotion is the zombie CRAWL; a 1-in-4 seed keeps a
             // little RUN variety so the swarm doesn't read as one looped clip. ATTACHED nibblers BITE
             // (the player's flesh) instead of the old player Attack/Hit. These names map to the nibbler
             // controller's distinct state set (Idle/Run/Crawl/Climb/Bite/Jump/Knockdown).
-            m_RunClip = index % 4 == 3 ? "Run" : "Crawl";
-            m_ClingClip = "Bite";
+            m_PrimaryMoveClip = m_Seed < 0.68f ? "Crawl" : "Run";
+            m_SecondaryMoveClip = m_PrimaryMoveClip == "Crawl" ? "Run" : "Crawl";
+            m_CurrentMoveClip = m_PrimaryMoveClip;
+            m_ClingClip = m_Seed < 0.24f ? "Climb" : "Bite";
 
             // Controller root stays UNSCALED; the character is a CHILD that we scale. This matches the
             // player (capsule in metres on a scale-1 transform + native-scaled visual child) and avoids
@@ -90,6 +119,8 @@ namespace DaHilg
             SetLayerRecursive(visual, LayerMask.NameToLayer("Ignore Raycast"));
             visual.transform.localPosition = Vector3.zero;
             m_VisualT = visual.transform;
+            m_LeftFoot = FindDeepChild(m_VisualT, "LeftFoot");
+            m_RightFoot = FindDeepChild(m_VisualT, "RightFoot");
             m_BaseScale = m_VisualT.localScale;
             m_AppliedScale = m_BaseScale * scale;
             m_VisualT.localScale = m_AppliedScale;
@@ -114,7 +145,7 @@ namespace DaHilg
             }
             m_Animator.applyRootMotion = false;
             m_Animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms; // don't animate the off-screen swarm
-            m_Animator.speed = 0.86f + m_Seed * 0.46f;
+            m_Animator.speed = 0.78f + m_Seed * 0.62f;
             if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
 
             WarnIfStateMissing("Crawl");
@@ -155,6 +186,18 @@ namespace DaHilg
             return null;
         }
 
+        static Transform FindDeepChild(Transform parent, string childName)
+        {
+            if (parent == null) return null;
+            if (parent.name == childName) return parent;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform found = FindDeepChild(parent.GetChild(i), childName);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
         public void SetPlayer(Transform player)
         {
             // Character switch rebuilds the player's rig — drop off the old (now-dead) bones cleanly.
@@ -189,13 +232,17 @@ namespace DaHilg
             m_State = NibblerState.Chase;
             Root.SetActive(true);
             m_VisualT.localScale = m_AppliedScale;
+            m_VisualGroundOffset = 0f;
+            m_VisualT.localPosition = Vector3.zero;
             Root.transform.position = position;
             Root.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
             m_Controller.enabled = true;
             m_Velocity = Vector3.zero;
+            m_StuckTimer = 0f;
+            m_AvoidUntil = 0f;
             m_StateTime = 0f;
             m_JumpCooldown = 0.25f + m_Seed * 0.85f;
-            Play(m_RunClip, 0.08f);
+            Play(PickMoveClip(true), 0.08f);
         }
 
         public void Despawn()
@@ -220,7 +267,7 @@ namespace DaHilg
             m_StateTime += dt;
             m_JumpCooldown -= dt;
 
-            if (safe && m_State != NibblerState.Scatter)
+            if (safe && m_State != NibblerState.Scatter && m_State != NibblerState.Crushed)
             {
                 Scatter(player.FeetPosition);
             }
@@ -229,6 +276,9 @@ namespace DaHilg
             {
                 case NibblerState.Windup:
                     return TickWindup(player, settings, dt);
+                case NibblerState.Orbit:
+                    TickOrbit(player, settings, dt, safe);
+                    return false;
                 case NibblerState.Lunge:
                     return TickLunge(player, settings, dt);
                 case NibblerState.Climb:
@@ -273,6 +323,16 @@ namespace DaHilg
                 return;
             }
 
+            if (!safe
+                && centerDist < k_OrbitEnterRadius
+                && centerDist > settings.NibblerAttachDistance + k_AttachPad
+                && m_JumpCooldown <= 0f
+                && m_StateTime > 0.18f)
+            {
+                StartOrbit(player);
+                return;
+            }
+
             if (centerDist > 45f)
             {
                 Despawn();
@@ -281,23 +341,34 @@ namespace DaHilg
 
             Vector3 dir = dist > 0.001f ? planar / dist : Vector3.zero;
             Vector3 side = Vector3.Cross(Vector3.up, dir);
-            float weave = Mathf.Sin(Time.time * (2.8f + m_Seed * 1.8f) + m_Index * 0.73f) * 0.42f;
+            float weave = Mathf.Sin(Time.time * (2.4f + m_Seed * 2.6f) + m_Index * 0.73f) * m_WeaveAmp;
             Vector3 desired = (dir + side * weave).normalized;
+            if (Time.time < m_AvoidUntil)
+            {
+                desired = (desired + side * m_AvoidSign * 1.25f).normalized;
+            }
+            else if (desired.sqrMagnitude > 0.001f && NeedsAvoidance(settings, desired))
+            {
+                BeginAvoidance();
+                desired = (desired + side * m_AvoidSign * 1.35f).normalized;
+            }
             // Gentle catch-up only: a small lead from far away so a runner isn't immortal, but
             // nowhere near the old 1.7x that made the swarm sprint through the camera and pin instantly.
             float lead = Mathf.Lerp(1.0f, 1.12f, Mathf.InverseLerp(k_JumpRadius, 14f, centerDist));
-            float speed = settings.NibblerRunSpeed * (0.82f + m_Seed * 0.36f) * lead;
+            float speed = settings.NibblerRunSpeed * m_RunSpeedMul * lead;
             // Separation is applied AFTER the seek (un-normalized) so a dense pile spreads into a
             // readable, aimable doughnut instead of collapsing onto one mushy point.
-            Vector3 targetVelocity = desired * speed + ComputeSeparation() * 3.0f;
+            Vector3 targetVelocity = desired * speed + ComputeSeparation() * (3.0f * m_SeparationMul);
             m_Velocity.x = Mathf.Lerp(m_Velocity.x, targetVelocity.x, 1f - Mathf.Exp(-10f * dt));
             m_Velocity.z = Mathf.Lerp(m_Velocity.z, targetVelocity.z, 1f - Mathf.Exp(-10f * dt));
             m_Velocity.y += settings.Gravity * dt;
             if (m_Velocity.y < settings.MaxFallSpeed) m_Velocity.y = settings.MaxFallSpeed;
 
+            Vector3 before = Root.transform.position;
             CollisionFlags flags = m_Controller.Move(m_Velocity * dt);
             if ((flags & CollisionFlags.Below) != 0 && m_Velocity.y < 0f) m_Velocity.y = -1f;
             else if (m_Velocity.y <= 0f && SnapToLevelGround(settings)) flags |= CollisionFlags.Below;
+            DetectStuckOrBlocked(flags, before, speed, dt);
 
             Vector3 facing = new Vector3(m_Velocity.x, 0f, m_Velocity.z);
             if (facing.sqrMagnitude > 0.02f)
@@ -305,7 +376,8 @@ namespace DaHilg
                 Root.transform.rotation = Quaternion.Slerp(Root.transform.rotation, Quaternion.LookRotation(facing, Vector3.up), 1f - Mathf.Exp(-18f * dt));
             }
 
-            Play((flags & CollisionFlags.Below) == 0 && m_Velocity.y > 0.3f ? "Jump" : m_RunClip, 0.1f);
+            StabilizeGrounding(settings, dt, (flags & CollisionFlags.Below) != 0);
+            Play((flags & CollisionFlags.Below) == 0 && m_Velocity.y > 0.3f ? "Jump" : PickMoveClip(false), 0.1f);
         }
 
         Vector3 ComputeSeparation()
@@ -339,6 +411,64 @@ namespace DaHilg
             m_AttachY = k_ClingBottom;
             FaceBody(player, 1f);
             Play("Jump", 0.05f);
+        }
+
+        void StartOrbit(DaHilgActor player)
+        {
+            Attached = false;
+            m_State = NibblerState.Orbit;
+            m_StateTime = 0f;
+            m_OrbitDuration = Mathf.Lerp(0.22f, 0.72f, Hash01(m_Index, Time.time * 0.37f + 5.1f));
+            ChooseAttachAnchor(player, null);
+            FaceBody(player, 1f);
+            Play(PickMoveClip(true), 0.08f);
+        }
+
+        void TickOrbit(DaHilgActor player, DaHilgGameSettings settings, float dt, bool safe)
+        {
+            if (safe)
+            {
+                Scatter(player.FeetPosition);
+                return;
+            }
+
+            Vector3 center = player.FeetPosition;
+            Vector3 offset = Root.transform.position - center;
+            offset.y = 0f;
+            float dist = Mathf.Max(0.001f, offset.magnitude);
+            Vector3 radial = offset / dist;
+            Vector3 tangent = Vector3.Cross(Vector3.up, radial) * m_OrbitDir;
+            float radialCorrection = Mathf.Clamp(dist - m_OrbitDistance, -1.2f, 1.2f);
+            Vector3 desired = (tangent * (1.0f + m_Seed * 0.8f) - radial * radialCorrection * 0.95f).normalized;
+
+            float speed = settings.NibblerRunSpeed * (0.72f + m_Seed * 0.32f);
+            Vector3 targetVelocity = desired * speed + ComputeSeparation() * (2.2f * m_SeparationMul);
+            m_Velocity.x = Mathf.Lerp(m_Velocity.x, targetVelocity.x, 1f - Mathf.Exp(-12f * dt));
+            m_Velocity.z = Mathf.Lerp(m_Velocity.z, targetVelocity.z, 1f - Mathf.Exp(-12f * dt));
+            m_Velocity.y += settings.Gravity * dt;
+            if (m_Velocity.y < settings.MaxFallSpeed) m_Velocity.y = settings.MaxFallSpeed;
+
+            CollisionFlags flags = m_Controller.Move(m_Velocity * dt);
+            if ((flags & CollisionFlags.Below) != 0 && m_Velocity.y < 0f) m_Velocity.y = -1f;
+            else if (m_Velocity.y <= 0f && SnapToLevelGround(settings)) flags |= CollisionFlags.Below;
+
+            FaceBody(player, dt);
+            StabilizeGrounding(settings, dt, (flags & CollisionFlags.Below) != 0);
+            Play(PickMoveClip(false), 0.12f);
+
+            Vector3 toPlayer = player.FeetPosition - Root.transform.position;
+            toPlayer.y = 0f;
+            float d = toPlayer.magnitude;
+            if (m_StateTime >= m_OrbitDuration || d > k_OrbitExitRadius)
+            {
+                if (d <= k_OrbitExitRadius) StartLunge(player, settings);
+                else
+                {
+                    m_State = NibblerState.Chase;
+                    m_StateTime = 0f;
+                    m_JumpCooldown = 0.22f + m_Seed * 0.35f;
+                }
+            }
         }
 
         bool TickWindup(DaHilgActor player, DaHilgGameSettings settings, float dt)
@@ -396,7 +526,7 @@ namespace DaHilg
                 m_State = NibblerState.Chase;
                 m_StateTime = 0f;
                 m_JumpCooldown = 0.6f + m_Seed * 0.3f;
-                Play(m_RunClip, 0.1f);
+                Play(PickMoveClip(true), 0.1f);
             }
             return false;
         }
@@ -432,6 +562,10 @@ namespace DaHilg
             Vector3 bob = gravLocal * (0.5f + 0.5f * Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index));
             Root.transform.localPosition = Vector3.Lerp(Root.transform.localPosition, rest + bob, 1f - Mathf.Exp(-18f * dt));
             Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, ClingLocalRotation(player, m_AttachedParent), 1f - Mathf.Exp(-10f * dt));
+            if (m_StateTime > 0.8f && Mathf.Sin(Time.time * (1.5f + m_Seed) + m_Index) > 0.82f)
+            {
+                m_ClingClip = m_ClingClip == "Bite" ? "Climb" : "Bite";
+            }
             Play(m_ClingClip, 0.16f);
             return true;
         }
@@ -469,13 +603,14 @@ namespace DaHilg
                     m_State = NibblerState.Chase;
                     m_StateTime = 0f;
                     m_JumpCooldown = 0.45f + m_Seed * 0.8f;
-                    Play(m_RunClip, 0.12f);
+                    Play(PickMoveClip(true), 0.12f);
                 }
             }
             else if (m_Velocity.y <= 0f)
             {
                 SnapToLevelGround(settings);
             }
+            StabilizeGrounding(settings, dt, grounded);
 
             Vector3 flat = new Vector3(m_Velocity.x, 0f, m_Velocity.z);
             if (!grounded && flat.sqrMagnitude > 0.02f)
@@ -535,18 +670,18 @@ namespace DaHilg
 
             if (!bodySideHit && !groundHit) return false;
 
-            Crush(crushCenter);
+            Crush(crushCenter, true);
             return true;
         }
 
         public bool CrushByMelee(Vector3 from)
         {
             if (!Active) return false;
-            Crush(from);
+            Crush(from, false);
             return true;
         }
 
-        void Crush(Vector3 from)
+        void Crush(Vector3 from, bool rolled)
         {
             ReparentToWorld(); // un-child from the player bone FIRST
             Attached = false;
@@ -561,9 +696,13 @@ namespace DaHilg
                 away.y = 0f;
             }
             away.Normalize();
-            // Juicy launch + tumble so a crush reads as a satisfying pop, not a quiet fade.
-            m_Velocity = away * (6.5f + m_Seed * 2.0f) + Vector3.up * (3.5f + m_Seed * 1.0f);
-            m_CrushSpin = (m_Seed < 0.5f ? -1f : 1f) * (540f + m_Seed * 540f);
+            // Juicy launch + tumble so a hit reads as a reaction, not a quiet fade.
+            float sideKick = rolled ? 5.2f : 8.0f;
+            float upKick = rolled ? 2.2f : 4.4f;
+            m_Velocity = away * (sideKick + m_Seed * 2.2f) + Vector3.up * (upKick + m_Seed * 1.2f);
+            m_CrushSpin = (m_Seed < 0.5f ? -1f : 1f) * (rolled ? 720f : 1180f) * (0.75f + m_Seed * 0.55f);
+            m_CrushDuration = rolled ? Random.Range(0.36f, 0.54f) : Random.Range(0.46f, 0.72f);
+            m_CrushSquash = rolled ? 0.28f : 0.12f;
             Play("Knockdown", 0.04f);
         }
 
@@ -583,12 +722,18 @@ namespace DaHilg
                 SnapToLevelGround(settings);
             }
 
-            // Pop: punch to 1.3x, then ease fully to 0 over ~0.30s while tumbling.
-            float u = Mathf.Clamp01(m_StateTime / 0.30f);
-            float pop = u < 0.12f ? Mathf.Lerp(1f, 1.3f, u / 0.12f) : Mathf.Lerp(1.3f, 0f, (u - 0.12f) / 0.88f);
-            m_VisualT.localScale = m_AppliedScale * pop;
+            // Pop/squash, then ease fully to 0 while tumbling. Roll hits flatten more;
+            // melee hits fly longer and shrink after the airborne read.
+            float dur = Mathf.Max(0.12f, m_CrushDuration);
+            float u = Mathf.Clamp01(m_StateTime / dur);
+            float pop = u < 0.18f ? Mathf.Lerp(1f, 1.26f, u / 0.18f) : Mathf.Lerp(1.26f, 0f, (u - 0.18f) / 0.82f);
+            float squash = 1f - m_CrushSquash * Mathf.Sin(Mathf.Clamp01(u * 2f) * Mathf.PI);
+            m_VisualT.localScale = new Vector3(
+                m_AppliedScale.x * pop * (2f - squash),
+                m_AppliedScale.y * pop * squash,
+                m_AppliedScale.z * pop * (2f - squash));
             Root.transform.Rotate(Vector3.up, m_CrushSpin * dt, Space.World);
-            if (m_StateTime > 0.30f) Despawn();
+            if (m_StateTime > dur) Despawn();
         }
 
         bool SnapToLevelGround(DaHilgGameSettings settings)
@@ -616,7 +761,8 @@ namespace DaHilg
         {
             // Pick a distinct body BONE slot (live count so simultaneous lunges spread over the whole
             // body — back/head/shoulders/hips/legs/feet — not piled on the front face).
-            m_BoneSlot = CountAttachedSlots();
+            int boneCount = Mathf.Max(1, player.NibblerBoneCount);
+            m_BoneSlot = (CountAttachedSlots() * 5 + m_Index * 3) % boneCount;
             DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
             // The lunge homes to this bone's CURRENT world spot, expressed in the player-root frame so
             // the existing ballistic-lunge math (BeginBallisticLunge/TickLunge) is unchanged.
@@ -682,6 +828,78 @@ namespace DaHilg
                 m_Animator.CrossFade(hash, fade);
                 m_Anim = state;
             }
+        }
+
+        string PickMoveClip(bool forceNew)
+        {
+            if (forceNew || Time.time >= m_NextMoveClipSwap)
+            {
+                m_CurrentMoveClip = Random.value < Mathf.Lerp(0.2f, 0.62f, m_Seed) ? m_SecondaryMoveClip : m_PrimaryMoveClip;
+                m_NextMoveClipSwap = Time.time + Random.Range(1.3f, 4.2f);
+            }
+            return m_CurrentMoveClip;
+        }
+
+        void BeginAvoidance()
+        {
+            m_AvoidSign = Random.value < 0.5f ? -1f : 1f;
+            m_AvoidUntil = Time.time + Random.Range(0.22f, 0.55f) * m_Reactiveness;
+            m_StuckTimer = 0f;
+        }
+
+        bool NeedsAvoidance(DaHilgGameSettings settings, Vector3 desired)
+        {
+            if (settings == null || desired.sqrMagnitude < 0.001f) return false;
+            Vector3 probe = Root.transform.position + desired.normalized * Mathf.Max(0.35f, m_Controller.radius * 2.6f);
+            if (!DaHilgLevelRuntime.TryFindGround(probe, out RaycastHit hit, Mathf.Max(1.2f, settings.GroundProbeHeight), 8f, 1.2f)) return true;
+            return hit.point.y - Root.transform.position.y > Mathf.Max(0.35f, settings.StepOffset * 0.9f);
+        }
+
+        void DetectStuckOrBlocked(CollisionFlags flags, Vector3 before, float desiredSpeed, float dt)
+        {
+            if ((flags & CollisionFlags.Sides) != 0)
+            {
+                BeginAvoidance();
+                return;
+            }
+
+            Vector3 delta = Root.transform.position - before;
+            delta.y = 0f;
+            float actualSpeed = delta.magnitude / Mathf.Max(0.0001f, dt);
+            if (desiredSpeed > 0.2f && actualSpeed < desiredSpeed * 0.18f) m_StuckTimer += dt;
+            else m_StuckTimer = Mathf.Max(0f, m_StuckTimer - dt * 2f);
+
+            if (m_StuckTimer > 0.26f / m_Reactiveness)
+            {
+                BeginAvoidance();
+            }
+        }
+
+        void StabilizeGrounding(DaHilgGameSettings settings, float dt, bool grounded)
+        {
+            if (m_VisualT == null || m_LeftFoot == null || m_RightFoot == null || m_AttachedParent != null) return;
+            if (!grounded)
+            {
+                m_VisualGroundOffset = Mathf.Lerp(m_VisualGroundOffset, 0f, 1f - Mathf.Exp(-14f * Mathf.Max(0f, dt)));
+            }
+            else
+            {
+                float minFootY = Mathf.Min(m_LeftFoot.position.y, m_RightFoot.position.y);
+                float skin = settings != null ? Mathf.Max(0.008f, settings.GroundSkin * 0.22f) : 0.01f;
+                float correction = Root.transform.position.y + skin - minFootY;
+                m_VisualGroundOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -0.18f, 0.18f);
+            }
+
+            Vector3 local = m_VisualT.localPosition;
+            local.x = 0f;
+            local.y = Mathf.Lerp(local.y, m_VisualGroundOffset, 1f - Mathf.Exp(-22f * Mathf.Max(0f, dt)));
+            local.z = 0f;
+            m_VisualT.localPosition = local;
+        }
+
+        static float Hash01(int index, float salt)
+        {
+            return Mathf.Repeat(Mathf.Sin((index + 1) * (12.9898f + salt)) * 43758.5453f, 1f);
         }
 
         void WarnIfStateMissing(string state)
