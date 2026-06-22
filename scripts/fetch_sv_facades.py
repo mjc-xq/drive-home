@@ -55,7 +55,10 @@ LAT0, LON0 = _scene_origin()
 COSLAT = math.cos(math.radians(LAT0))
 
 # --- tuning ---------------------------------------------------------------
-N_NEAREST = int(sys.argv[1]) if len(sys.argv) > 1 else 400  # cover EVERY road-facing building in the patch (user: no missing buildings, every facade); bounded for API cost
+# Default: fetch EVERY road-facing building in the patch (user wants no missing facades). The old
+# 400 cap silently dropped ~896 of dahill's ~1297 road-facing buildings to blank stucco. Metadata
+# probes are free and image crops cache, so a one-time full fetch is bounded; pass a smaller N to cap.
+N_NEAREST = int(sys.argv[1]) if len(sys.argv) > 1 else 100000
 MAX_ROAD_DIST = 35.0      # wall faces a road only if nearest road point <= this
 PANO_SNAP = 25.0          # snap P to pano if metadata pano is within this
 MIN_WALL = 2.5            # skip slivers shorter than this (m)
@@ -234,7 +237,10 @@ def main():
         # roofline/sky never bleeds onto the wall (loses at most a sliver of wall top), and never
         # crop above the horizon (v>=0.5) since a street-captured house wall is below it.
         v_top = max(0.5, vrow(wallH * 0.68))   # conservative eave — keeps roof OFF the wall
-        v_bot = vrow(0.0)                       # ground
+        # Stop ~0.3 m above the true ground line, not at y=0: that trims the curb / grass strip /
+        # foreground apron AND the Google watermark band (both sit in the bottom slice) so the panel
+        # is wall siding, not pavement. The 3D wall foot still meets the terrain underneath.
+        v_bot = vrow(0.3)
         # horizontal: wall is centred on the heading and spans this fraction of the H-fov
         if wall_ang is None:
             wall_ang = 2.0 * math.degrees(math.atan((wallW / 2.0) / d))
@@ -378,8 +384,9 @@ def main():
             # head-on street capture, so a photo there can never look right).
             dPM = math.hypot(P[0] - M[0], P[1] - M[1]) or 1.0
             cos_face = (nrm[0] * (P[0] - M[0]) + nrm[1] * (P[1] - M[1])) / dPM
-            if cos_face < 0.67:   # ~48 deg max obliquity
-                continue
+            if cos_face < 0.58:   # ~54 deg max obliquity (was 0.67/~48): recover corner-lot &
+                continue          # cul-de-sac walls whose only pano is oblique (the content gates
+                                  # below still reject any genuinely smeared/blurry crop)
 
             # SV camera at P; snap to nearest pano if metadata gives a closer one
             e, n = world_to_en(*P)

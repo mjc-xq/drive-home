@@ -75,7 +75,7 @@ const inRect = (x, z, r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
  */
 export async function bakeFacadeAtlas({
   buildings, svWalls, svDir, houseIndex, demRect, w2,
-  minPxPerM = 40, heroRadius = 90, heroCap = 16, pageSize = 4096, outDir,
+  minPxPerM = 30, heroRadius = 90, heroCap = 16, pageSize = 4096, outDir,
 }) {
   mkdirSync(outDir, { recursive: true });
 
