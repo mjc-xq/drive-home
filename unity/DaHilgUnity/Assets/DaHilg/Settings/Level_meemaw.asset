@@ -20,6 +20,7 @@ MonoBehaviour:
   Minimap: {fileID: 4900000, guid: 3886db3c399ed4210baecc77af3cb3e0, type: 3}
   LevelOffset: {x: 35.35, y: 59.243, z: 6.125}
   PlayerSpawns:
+  - {x: -1.9, y: 0.05, z: -22.94}
   - {x: 0, y: 0.05, z: 12.645}
   - {x: 11.46, y: 0.05, z: 0}
   - {x: -11.46, y: 0.05, z: -2}
@@ -38,7 +39,7 @@ MonoBehaviour:
   NibblerSafeZones:
   - Id: safe_start
     Label: Start
-    Center: {x: 0, y: 6, z: 12.645}
+    Center: {x: -1.9, y: 6, z: -22.94}
     Size: {x: 36, y: 18, z: 36}
   - Id: safe_home
     Label: Home

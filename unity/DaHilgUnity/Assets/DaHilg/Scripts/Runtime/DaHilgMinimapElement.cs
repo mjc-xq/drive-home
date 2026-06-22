@@ -9,7 +9,10 @@ namespace DaHilg
 {
     public sealed class DaHilgMinimapElement : VisualElement
     {
-        const int k_MaxSegmentsPerLayer = 180;
+        // Draw the FULL road/walk network: subsampling (the old 180/450 stride) chopped ~3000 road
+        // segments into disconnected dashes that read as "dots, not streets". A 2D minimap can afford
+        // to stroke them all.
+        const int k_MaxSegmentsPerLayer = 6000;
 
         readonly Label m_Title;
         readonly Label m_Legend;
@@ -88,18 +91,19 @@ namespace DaHilg
 
             if (m_Data == null || !m_Data.Valid) return;
 
-            // Clean: faint walkways + one calm road stroke only — no drive/curb/line scribble.
-            DrawSegments(painter, mapRect, m_Data.Walk, new Color(0.55f, 0.58f, 0.62f, 0.16f), 0.5f);
-            DrawSegments(painter, mapRect, m_Data.Road, new Color(0.50f, 0.56f, 0.62f, 0.5f), 1.0f);
+            // Google-Maps style: the street network is the hero — bright, clear roads on a dark field.
+            DrawSegments(painter, mapRect, m_Data.Walk, new Color(0.48f, 0.51f, 0.55f, 0.28f), 0.7f);
+            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.28f, 0.60f, 0.92f, 0.92f), 2.4f); // blue creek under roads
+            DrawSegments(painter, mapRect, m_Data.Road, new Color(0.88f, 0.90f, 0.94f, 0.92f), 1.7f);
 
             if (m_Profile != null)
             {
                 DaHilgBoxZone[] safeZones = m_Manager != null && m_Manager.Mode == DaHilgGameMode.Nibblers
                     ? m_Profile.NibblerSafeZones
                     : m_Profile.GreetSafeZones;
-                // Safe zone = thin go-green outline (barely any fill), danger = faint — reads clean, not a red wash.
-                DrawZones(painter, mapRect, safeZones, new Color(0.20f, 0.95f, 0.38f, 0.06f), new Color(0.30f, 1f, 0.42f, 0.65f));
-                DrawZones(painter, mapRect, m_Profile.DangerZones, new Color(1f, 0.12f, 0.06f, 0.10f), new Color(1f, 0.30f, 0.18f, 0.70f));
+                // Only the SAFE zone gets a soft green tint — no red wash over the whole map (danger is
+                // implied by "not safe" + the MARKED banner + the player pulse). Keeps the map readable.
+                DrawZones(painter, mapRect, safeZones, new Color(0.25f, 0.9f, 0.45f, 0.10f), new Color(0.30f, 1f, 0.42f, 0.6f));
             }
 
             DrawActors(painter, mapRect);
@@ -124,17 +128,15 @@ namespace DaHilg
         void DrawZones(Painter2D painter, Rect rect, DaHilgBoxZone[] zones, Color fill, Color stroke)
         {
             if (zones == null) return;
+            float wToPx = rect.width / Mathf.Max(1f, m_Data.Bounds.width);
             for (int i = 0; i < zones.Length; i++)
             {
                 DaHilgBoxZone zone = zones[i];
-                float hx = zone.Size.x * 0.5f;
-                float hz = zone.Size.z * 0.5f;
-                Vector2 a = WorldToMap(zone.Center.x - hx, zone.Center.z - hz, rect);
-                Vector2 b = WorldToMap(zone.Center.x + hx, zone.Center.z - hz, rect);
-                Vector2 c = WorldToMap(zone.Center.x + hx, zone.Center.z + hz, rect);
-                Vector2 d = WorldToMap(zone.Center.x - hx, zone.Center.z + hz, rect);
-                FillPolygon(painter, fill, a, b, c, d);
-                StrokePolygon(painter, stroke, 1.2f, a, b, c, d);
+                Vector2 center = WorldToMap(zone.Center.x, zone.Center.z, rect);
+                // Soft rounded region (a shaded blob), never a hard square outline.
+                float pr = Mathf.Clamp(Mathf.Max(zone.Size.x, zone.Size.z) * 0.5f * wToPx, 7f, 64f);
+                DrawDisk(painter, center, pr, fill);
+                DrawDisk(painter, center, pr * 0.55f, new Color(fill.r, fill.g, fill.b, fill.a * 1.5f));
             }
 
             IReadOnlyList<DaHilgNibblerAgent> nibblers = m_Manager.Nibblers;
@@ -264,6 +266,7 @@ namespace DaHilg
             public List<Segment> Walk = new List<Segment>();
             public List<Segment> Curb = new List<Segment>();
             public List<Segment> Line = new List<Segment>();
+            public List<Segment> Creek = new List<Segment>();
             public bool Valid => Bounds.width > 0f && Bounds.height > 0f;
 
             public static MinimapData FromProfile(DaHilgLevelProfile profile)
@@ -286,6 +289,7 @@ namespace DaHilg
                 data.Walk = ExtractSegments(json, "walk");
                 data.Curb = ExtractSegments(json, "curb");
                 data.Line = ExtractSegments(json, "line");
+                data.Creek = ExtractSegments(json, "creek");
                 return data;
             }
 

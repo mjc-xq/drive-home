@@ -1155,6 +1155,7 @@ body {
                 // via glTFast) and clear the baked prefab reference so Unity does NOT bake the
                 // mesh into the WebGL data file. Geometry validation falls back to the prefab.
                 StageStreamingLevelGlb(slug, levelGlbPath);
+                StageStreamingOverlayGlb(slug);
                 profile.LevelPrefab = null;
             }
             else
@@ -1173,14 +1174,13 @@ body {
             Vector3[] spawns = ExtractVectorArray(json, "spawns");
             Vector3[] npcSpawns = ExtractVectorArray(json, "npcSpawns");
             if (spawns.Length == 0) spawns = new[] { new Vector3(0f, 0.05f, 12f) };
-            if (slug == "dahill")
+            // Street-front spawn (computed per-level in build_dahilg_overlay from the master's Roads) is
+            // the primary spawn for EVERY level when present; the GameManager faces it at the house.
+            if (json.IndexOf("\"streetSpawn\"", StringComparison.Ordinal) >= 0)
             {
-                List<Vector3> dahillSpawns = new List<Vector3>(spawns.Length + 1)
-                {
-                    new Vector3(0f, 0.05f, 23.315f)
-                };
-                dahillSpawns.AddRange(spawns);
-                spawns = dahillSpawns.ToArray();
+                List<Vector3> ordered = new List<Vector3>(spawns.Length + 1) { ExtractFirstVector(json, "streetSpawn") };
+                ordered.AddRange(spawns);
+                spawns = ordered.ToArray();
             }
             if (npcSpawns.Length == 0)
             {
@@ -2097,6 +2097,21 @@ body {
             Directory.CreateDirectory(streamingDir);
             File.Copy(sourceFull, Path.Combine(streamingDir, slug + ".glb"), true);
             Debug.Log("[DaHilg] Staged streamed level '" + slug + "' (" + (sourceFull == compressed ? "compressed web GLB" : "decoded asset") + ").");
+        }
+
+        // Ship the vegetation+water OVERLAY GLB (public/da-hilg/<name>_overlay.glb: creek + instanced
+        // trees/grass that the single-surface env drops) to StreamingAssets/<slug>_overlay.glb. The
+        // runtime loads it on top of the env at the same offset. Optional — absent overlay is fine.
+        static void StageStreamingOverlayGlb(string slug)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
+            string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
+            string overlay = Path.Combine(repoRoot, "public", "da-hilg", StreamingLevelGlbName(slug) + "_overlay.glb");
+            if (!File.Exists(overlay)) return;
+            string streamingDir = Application.streamingAssetsPath;
+            Directory.CreateDirectory(streamingDir);
+            File.Copy(overlay, Path.Combine(streamingDir, slug + "_overlay.glb"), true);
+            Debug.Log("[DaHilg] Staged vegetation/water overlay for '" + slug + "'.");
         }
 
         // Load a streamed level's source GLB prefab straight from Assets (used for editor-time

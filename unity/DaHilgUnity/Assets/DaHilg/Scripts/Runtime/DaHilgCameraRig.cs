@@ -142,7 +142,10 @@ namespace DaHilg
                 DistanceLimit = 0f,
                 MinimumOcclusionTime = 0f,
                 CameraRadius = 0.34f,
-                Strategy = CinemachineDeoccluder.ObstacleAvoidance.ResolutionStrategy.PreserveCameraDistance,
+                // Pull the camera toward the player whenever anything occludes the view (instead of
+                // orbiting to preserve distance, which jams/clips in tight rooms + near buildings).
+                // Keeps the player visible in EVERY camera mode + level.
+                Strategy = CinemachineDeoccluder.ObstacleAvoidance.ResolutionStrategy.PullCameraForward,
                 MaximumEffort = 5,
                 SmoothingTime = 0.04f,
                 Damping = 0.30f,
