@@ -172,19 +172,20 @@ def main():
     # live). FIXED distance so large levels still get a real close-up; camera clearly above the
     # target so the framing stays upright (no track-quat flip).
     gz = mins.z
-    for name, ang, cd in [("close1", 35, 24.0), ("close2", 215, 24.0), ("close3", 120, 34.0)]:
+    # EYE-LEVEL close-ups: stand a ~1.6 m person a short distance from the core and look nearly level
+    # (target just below eye height) so facades + ground FILL the frame instead of 60-80% empty sky.
+    for name, ang, cd in [("close1", 35, 18.0), ("close2", 215, 18.0), ("close3", 120, 26.0)]:
         a = math.radians(ang)
-        loc = mathutils.Vector((cd * math.cos(a), cd * math.sin(a), gz + 10.0))
-        loc = mathutils.Vector((center.x + cd * math.cos(a), center.y + cd * math.sin(a), gz + 10.0))
-        tgt = mathutils.Vector((center.x, center.y, gz + 3.0))
+        loc = mathutils.Vector((center.x + cd * math.cos(a), center.y + cd * math.sin(a), gz + 1.6))
+        tgt = mathutils.Vector((center.x, center.y, gz + 1.4))
         views.append((name, loc, tgt))
     # zoomed top-down on the content centre: best view for INTERSECTION z-fighting + curb/crosswalk detail
     views.append(("topcore", mathutils.Vector((center.x, center.y, gz + 90.0)), mathutils.Vector((center.x, center.y, gz))))
     # low oblique street-level sweeps to catch road JUNCTIONS, curb thickness, and dashes at a grazing angle
     for name, ang in [("street1", 70), ("street2", 250)]:
         a = math.radians(ang)
-        loc = mathutils.Vector((center.x + 52.0 * math.cos(a), center.y + 52.0 * math.sin(a), gz + 13.0))
-        views.append((name, loc, mathutils.Vector((center.x, center.y, gz + 2.0))))
+        loc = mathutils.Vector((center.x + 26.0 * math.cos(a), center.y + 26.0 * math.sin(a), gz + 1.7))
+        views.append((name, loc, mathutils.Vector((center.x, center.y, gz + 1.4))))
 
     for name, loc, tgt in views:
         co.location = loc
