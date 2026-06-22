@@ -472,7 +472,10 @@ export function buildBuildingLayer({
       // commercial storefront: a long, tall, non-residential wall gets a CONTINUOUS ground-floor
       // glass band + mullions. Now fires on ANY large non-house wall (was isSchool-only -> xq/canyon
       // commercial blocks stayed blank); the upper floors still get the punched window grid above it.
-      const commercial = !opts.house && L >= 12 && wallH >= 4.5;
+      // Storefront glass band is for genuinely COMMERCIAL/civic walls — schools, the downtown (xq)
+      // patch, or tall (3+ storey) blocks. A 1-2 storey residential house with a long wall must NOT
+      // get a continuous glass curtain wall (it read as a glass office block on meemaw/dahill).
+      const commercial = !opts.house && L >= 12 && wallH >= 4.5 && (isSchool || dropOffPatch || wallH >= 8.0);
       if (commercial) {
         const gy0 = base + 0.85, gy1 = base + Math.min(3.2, wallH - 1.4);   // ground-floor band
         if (gy1 - gy0 > 0.6) {
