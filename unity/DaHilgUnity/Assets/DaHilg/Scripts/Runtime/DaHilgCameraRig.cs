@@ -30,6 +30,8 @@ namespace DaHilg
         float m_CurrentDistance;
         Vector3 m_CurrentShoulder;
         float m_CurrentArm;
+        Vector3 m_LastPivot;
+        Quaternion m_LastPivotRotation = Quaternion.identity;
         float m_IdleLookTime;
         float m_ShakeAmp;   // decaying positional shake (crush juice)
         float m_FovPunch;   // decaying FOV zoom-in punch (crush juice)
@@ -288,7 +290,9 @@ namespace DaHilg
                 shakeOffset = new Vector3(Random.value - 0.5f, Random.value - 0.5f, Random.value - 0.5f) * m_ShakeAmp;
                 m_ShakeAmp = Mathf.Lerp(m_ShakeAmp, 0f, 1f - Mathf.Exp(-16f * dt));
             }
-            m_FollowTarget.SetPositionAndRotation(pivot + shakeOffset, Quaternion.Euler(Pitch, Yaw, 0f));
+            m_LastPivot = pivot;
+            m_LastPivotRotation = Quaternion.Euler(Pitch, Yaw, 0f);
+            m_FollowTarget.SetPositionAndRotation(pivot + shakeOffset, m_LastPivotRotation);
             ApplyPreset(preset, dt);
 
             if (m_VirtualCamera != null)
@@ -301,9 +305,15 @@ namespace DaHilg
         void ApplyPreset(CameraPreset preset, float dt)
         {
             float k = dt <= 0f ? 1f : 1f - Mathf.Exp(-preset.ChangeSpeed * dt);
-            m_CurrentDistance = Mathf.Lerp(m_CurrentDistance, preset.Distance, k);
-            m_CurrentShoulder = Vector3.Lerp(m_CurrentShoulder, preset.ShoulderOffset, k);
-            m_CurrentArm = Mathf.Lerp(m_CurrentArm, preset.VerticalArm, k);
+            float desiredDistance = ResolveObstacleDistance(preset);
+            float lineOfSight01 = Mode == DaHilgCameraMode.FirstPerson || preset.Distance <= 0.1f
+                ? 1f
+                : Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.72f, preset.Distance, desiredDistance));
+            Vector3 desiredShoulder = Vector3.Lerp(Vector3.zero, preset.ShoulderOffset, lineOfSight01);
+            float desiredArm = Mathf.Lerp(0f, preset.VerticalArm, lineOfSight01);
+            m_CurrentDistance = Mathf.Lerp(m_CurrentDistance, desiredDistance, k);
+            m_CurrentShoulder = Vector3.Lerp(m_CurrentShoulder, desiredShoulder, k);
+            m_CurrentArm = Mathf.Lerp(m_CurrentArm, desiredArm, k);
 
             m_ThirdPersonFollow.CameraDistance = Mathf.Max(0.02f, m_CurrentDistance);
             m_ThirdPersonFollow.ShoulderOffset = m_CurrentShoulder;
@@ -328,6 +338,27 @@ namespace DaHilg
                 m_Decollider.Decollision = decollision;
             }
 #endif
+        }
+
+        float ResolveObstacleDistance(CameraPreset preset)
+        {
+            if (Mode == DaHilgCameraMode.FirstPerson || m_FollowTarget == null || Target == null) return preset.Distance;
+
+            Vector3 origin = m_LastPivot + Vector3.up * 0.15f;
+            Vector3 localCamera = preset.ShoulderOffset + Vector3.up * preset.VerticalArm + Vector3.back * Mathf.Max(0.02f, preset.Distance);
+            Vector3 desired = origin + m_LastPivotRotation * localCamera;
+            Vector3 toCamera = desired - origin;
+            float distance = toCamera.magnitude;
+            if (distance <= 0.05f) return preset.Distance;
+
+            if (!DaHilgLevelRuntime.SphereCastLevel(origin, 0.30f, toCamera / distance, out RaycastHit hit, distance)) return preset.Distance;
+
+            // If the wall is very close to the player, a large "minimum distance" puts the camera on
+            // the far side of that wall and fills the screen with geometry. Stay on the player side of
+            // the hit instead; cramped spaces can go almost first-person until the line of sight clears.
+            float nearSideDistance = Mathf.Max(0.05f, hit.distance - 0.30f);
+            if (Mode == DaHilgCameraMode.TopDown) nearSideDistance = Mathf.Max(0.24f, hit.distance - 0.32f);
+            return Mathf.Clamp(nearSideDistance, 0.05f, preset.Distance);
         }
 
         static CameraPreset PresetFor(DaHilgCameraMode mode, DaHilgGameSettings settings)

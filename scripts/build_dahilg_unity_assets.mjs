@@ -7,11 +7,11 @@
 
 import { NodeIO, Logger } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
-import { prune } from '@gltf-transform/functions';
+import { dedup, meshopt, prune, reorder, weld } from '@gltf-transform/functions';
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MeshoptDecoder } from 'meshoptimizer';
+import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, 'public', 'da-hilg', ...p);
@@ -25,9 +25,11 @@ const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
   .registerDependencies({
     'meshopt.decoder': MeshoptDecoder,
+    'meshopt.encoder': MeshoptEncoder,
   });
 
 await MeshoptDecoder.ready;
+await MeshoptEncoder.ready;
 
 rmSync(OUT_DIR, { recursive: true, force: true });
 mkdirSync(OUT_DIR, { recursive: true });
@@ -223,17 +225,15 @@ for (const rel of passthrough) {
 console.log(`Unity Da Hilg assets written to ${path.relative(ROOT, OUT_DIR)}`);
 
 // ---- StreamingAssets + Data staging for the STREAMED levels ----------------------------
-// The 4 (now 5) outdoor levels stream at runtime via glTFast from StreamingAssets, loading the
-// COMPRESSED public/da-hilg/<glb>.glb (meshopt+KTX2) — NOT the decoded editor-import copy above.
-// Stage each compressed GLB as StreamingAssets/<slug>.glb (the runtime resolves it by SLUG via
-// DaHilgLevelRuntime.StreamGlbUrl), and copy its sidecar meta/minimap into DaHilg/Data so the
-// level profile + minimap + spawns resolve. This mirrors DaHilgProjectBuilder.StageStreamingLevelGlb
-// so a plain `node build_dahilg_unity_assets.mjs` (no Unity editor) already lands every streamed
-// GLB + its data in the project — Unity's build re-stages idempotently. Single-surface files carry
-// the SAME node names + meta fields (offset/groundY/houseCenter/houseBox/spawns/npcSpawns/pavedMask),
-// so they sync unchanged. The .paved_mask.png is web-grass-occlusion ONLY — Unity never reads it,
-// so it is intentionally NOT copied into StreamingAssets (it would bloat the WebGL build with an
-// unused asset); the mask stays in public/da-hilg/ for the web runtime.
+// The outdoor Unity levels must NOT stream the public web GLBs directly. Those files are
+// meshopt+KTX2, and when KTX2 transcoding fails or regresses in Unity/WebGL/iOS the roads,
+// sidewalks, and photo facades disappear because they are texture-baked into the single surface.
+// Instead, build a Unity-streaming GLB from exports/<slug>-single.glb: keep Meshopt geometry
+// compression for download size, but preserve the ordinary JPEG/PNG textures that glTFast imports
+// consistently. Stage that as StreamingAssets/<slug>.glb and copy its sidecar meta/minimap into
+// DaHilg/Data. This mirrors DaHilgProjectBuilder.StageStreamingLevelGlb so a plain
+// `node build_dahilg_unity_assets.mjs` (no Unity editor) already lands every streamed GLB + data in
+// the project. The .paved_mask.png is web-grass-occlusion ONLY — Unity never reads it.
 //
 // slug : in-game id + StreamingAssets/<slug>.glb (DaHilgLevelRuntime keys off this)
 // glb  : public/da-hilg/<glb>.glb basename (dahill's master is named "level")
@@ -247,18 +247,48 @@ const STREAMED_LEVELS = [
 ];
 const STREAMING_DIR = path.join(ROOT, 'unity', 'DaHilgUnity', 'Assets', 'StreamingAssets');
 const DATA_DIR = path.join(ROOT, 'unity', 'DaHilgUnity', 'Assets', 'DaHilg', 'Data');
+const STREAM_BUILD_DIR = OUT('Streaming');
 mkdirSync(STREAMING_DIR, { recursive: true });
 mkdirSync(DATA_DIR, { recursive: true });
+mkdirSync(STREAM_BUILD_DIR, { recursive: true });
+
+function unityStreamSourceName(lv) {
+  return lv.slug === 'dahill' ? 'dahill-single.glb' : `${lv.slug}-single.glb`;
+}
+
+async function buildUnityStreamingGlb(lv) {
+  const rawSource = EXPORT(unityStreamSourceName(lv));
+  if (!existsSync(rawSource)) {
+    const webFallback = SRC(`${lv.glb}.glb`);
+    if (existsSync(webFallback)) {
+      console.warn(`stream: ${lv.slug} missing exports/${unityStreamSourceName(lv)}; falling back to public KTX2 web GLB`);
+      return { path: webFallback, label: `public/da-hilg/${lv.glb}.glb` };
+    }
+    return null;
+  }
+
+  const out = path.join(STREAM_BUILD_DIR, `${lv.slug}.glb`);
+  const doc = await io.read(rawSource);
+  await doc.transform(
+    dedup(),
+    prune({ keepLeaves: true }),
+    weld(),
+    reorder({ encoder: MeshoptEncoder }),
+    meshopt({ encoder: MeshoptEncoder, level: 'high' }),
+  );
+  await io.write(out, doc);
+  return { path: out, label: `${path.relative(ROOT, rawSource)} (meshopt geometry + jpeg/png textures)` };
+}
 
 let stagedCount = 0;
 for (const lv of STREAMED_LEVELS) {
-  const glbSrc = SRC(`${lv.glb}.glb`);
-  if (!existsSync(glbSrc)) {
-    console.warn(`stream: skip ${lv.slug} — missing public/da-hilg/${lv.glb}.glb (not built yet?)`);
+  const streamSource = await buildUnityStreamingGlb(lv);
+  if (!streamSource || !existsSync(streamSource.path)) {
+    console.warn(`stream: skip ${lv.slug} — missing exports/${unityStreamSourceName(lv)} and public/da-hilg/${lv.glb}.glb`);
     continue;
   }
   const glbDst = path.join(STREAMING_DIR, `${lv.slug}.glb`);
-  copyFileSync(glbSrc, glbDst);
+  copyFileSync(streamSource.path, glbDst);
   stagedCount++;
   let extras = '';
 
@@ -269,6 +299,6 @@ for (const lv of STREAMED_LEVELS) {
   const minimapSrc = SRC(`${lv.minimap}.json`);
   if (existsSync(minimapSrc)) { copyFileSync(minimapSrc, path.join(DATA_DIR, `${lv.minimap}.json`)); extras += ' +minimap'; }
 
-  console.log(`stream: ${lv.slug}.glb ${(statSync(glbDst).size / 1e6).toFixed(2)} MB <- public/da-hilg/${lv.glb}.glb${extras}`);
+  console.log(`stream: ${lv.slug}.glb ${(statSync(glbDst).size / 1e6).toFixed(2)} MB <- ${streamSource.label}${extras}`);
 }
 console.log(`StreamingAssets staged ${stagedCount}/${STREAMED_LEVELS.length} streamed level GLB(s) -> ${path.relative(ROOT, STREAMING_DIR)}`);

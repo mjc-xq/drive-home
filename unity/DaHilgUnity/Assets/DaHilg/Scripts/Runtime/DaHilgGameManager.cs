@@ -8,8 +8,8 @@ namespace DaHilg
     {
         const float k_StartShieldSeconds = 3f;
         const float k_StuckTime = 0.6f;
-        const float k_OutdoorNpcWanderRadius = 8f;
-        const float k_OutdoorNpcLeashRadius = 24f;
+        const float k_OutdoorNpcWanderRadius = 6.5f;
+        const float k_OutdoorNpcLeashRadius = 16f;
 
         // Buried-TIME overwhelm: a tier-weighted load that builds while you're piled and bleeds
         // when light, so being swarmed is a felt 2-3s arc with a GUARANTEED thrash-out — never a
@@ -23,14 +23,24 @@ namespace DaHilg
         float m_BuriedLoad;
         float m_Struggle;
 
-        // True when the page loaded the mobile path (touch device -> forced ?level=house). Available
-        // eagerly (before SetWebTouchMode arrives) so graphics downgrades apply before the first frame.
-        public static bool MobileWeb => Application.absoluteURL != null && Application.absoluteURL.Contains("level=house");
+        // True when the WebGL wrapper identifies a phone/tablet. Do not infer this from
+        // ?level=house: desktop house testing should stay desktop quality, and phones can later
+        // switch to outdoor levels while still needing the mobile budgets.
+        static bool? s_MobileWeb;
+        public static bool MobileWeb
+        {
+            get
+            {
+                if (s_MobileWeb.HasValue) return s_MobileWeb.Value;
+                s_MobileWeb = DetectMobileWeb();
+                return s_MobileWeb.Value;
+            }
+        }
 
         readonly List<DaHilgActor> m_Actors = new List<DaHilgActor>(4);
         readonly List<DaHilgNibblerAgent> m_Nibblers = new List<DaHilgNibblerAgent>(32);
         readonly List<DaHilgAnimalAgent> m_Animals = new List<DaHilgAnimalAgent>(8);
-        readonly string[] m_Emotes = { "Dance", "Wave", "Cheer", "Attack" };
+        readonly string[] m_Emotes = { "Dance", "Wave", "Cheer" };
         readonly Dictionary<DaHilgActor, NpcStuckState> m_StuckStates = new Dictionary<DaHilgActor, NpcStuckState>();
 
         Transform m_LevelRoot;
@@ -95,6 +105,43 @@ namespace DaHilg
         public bool LastMeleeMiss => Time.time - m_LastMeleeAt <= 0.65f && m_LastMeleeHits == 0;
         public int CrushedNibblerTotal => m_CrushedNibblerTotal;
         bool StartShieldActive => Mode == DaHilgGameMode.Nibblers && Time.time - m_ModeStartedAt < k_StartShieldSeconds;
+
+        static bool DetectMobileWeb()
+        {
+            if (Application.isMobilePlatform || SystemInfo.deviceType == DeviceType.Handheld) return true;
+            string url = Application.absoluteURL;
+            if (string.IsNullOrEmpty(url)) return false;
+            try
+            {
+                Uri uri;
+                if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return false;
+                string query = uri.Query;
+                return HasQueryFlag(query, "dahilgTouch")
+                    || HasQueryFlag(query, "touch")
+                    || HasQueryFlag(query, "mobile");
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static bool HasQueryFlag(string query, string key)
+        {
+            if (string.IsNullOrEmpty(query) || string.IsNullOrEmpty(key)) return false;
+            string prefix = key + "=";
+            string[] parts = query.TrimStart('?').Split('&');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i];
+                if (!part.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                string value = Uri.UnescapeDataString(part.Substring(prefix.Length));
+                return value == "1"
+                    || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                    || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+            }
+            return false;
+        }
 
         void Awake()
         {
@@ -358,6 +405,7 @@ namespace DaHilg
                 return;
             }
 
+            DaHilgLevelRuntime.ReleaseStreamedImport();
             if (m_LevelRoot != null) { Destroy(m_LevelRoot.gameObject); m_LevelRoot = null; }
 
             if (DaHilgLevelRuntime.IsStreamedLevel(slug))
@@ -406,6 +454,7 @@ namespace DaHilg
             Vector3[] playerSpawns = m_CurrentLevel != null && m_CurrentLevel.PlayerSpawns.Length > 0 ? m_CurrentLevel.PlayerSpawns : new[] { Vector3.zero };
             Vector3[] npcSpawns = m_CurrentLevel != null ? m_CurrentLevel.NpcSpawns : Array.Empty<Vector3>();
             int npcIndex = 0;
+            bool hasDebugSpawn = TryResolveDebugSpawn(out Vector3 debugSpawn);
 
             for (int i = 0; i < Settings.Characters.Length; i++)
             {
@@ -426,7 +475,7 @@ namespace DaHilg
                 actor.Initialize(slot, ResolveAnimator(slot), Settings);
 
                 Vector3 spawn = slot.Id == Settings.DefaultCharacterId
-                    ? playerSpawns[0]
+                    ? (hasDebugSpawn ? debugSpawn : playerSpawns[0])
                     : (npcIndex < npcSpawns.Length ? npcSpawns[npcIndex++] : playerSpawns[0] + UnityEngine.Random.insideUnitSphere * 6f);
                 Vector3 grounded = DaHilgLevelRuntime.GroundSpawn(spawn);
                 if (slot.Id == Settings.DefaultCharacterId)
@@ -445,6 +494,11 @@ namespace DaHilg
 
         float ResolveSpawnYaw(Vector3 groundedSpawn)
         {
+            if (TryResolveQueryFloat("debugYaw", out float debugYaw))
+            {
+                return Mathf.Repeat(debugYaw, 360f);
+            }
+
             if (m_CurrentLevel != null && m_CurrentLevel.HasPlayerSpawnYaw)
             {
                 return Mathf.Repeat(m_CurrentLevel.PlayerSpawnYaw, 360f);
@@ -458,6 +512,58 @@ namespace DaHilg
             return fromHome.sqrMagnitude > 0.01f
                 ? Quaternion.LookRotation(fromHome.normalized, Vector3.up).eulerAngles.y
                 : 0f;
+        }
+
+        static bool TryResolveDebugSpawn(out Vector3 spawn)
+        {
+            spawn = Vector3.zero;
+            if (!TryResolveQueryValue("debugSpawn", out string raw) || string.IsNullOrWhiteSpace(raw)) return false;
+
+            string[] parts = raw.Split(',');
+            if (parts.Length != 2 && parts.Length != 3) return false;
+            if (!float.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x)) return false;
+
+            float y = 0.05f;
+            float z;
+            if (parts.Length == 2)
+            {
+                if (!float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out z)) return false;
+            }
+            else
+            {
+                if (!float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out y)) return false;
+                if (!float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out z)) return false;
+            }
+
+            spawn = new Vector3(Mathf.Clamp(x, -900f, 900f), Mathf.Clamp(y, -20f, 120f), Mathf.Clamp(z, -900f, 900f));
+            return true;
+        }
+
+        static bool TryResolveQueryFloat(string key, out float value)
+        {
+            value = 0f;
+            return TryResolveQueryValue(key, out string raw)
+                && float.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
+        static bool TryResolveQueryValue(string key, out string value)
+        {
+            value = null;
+            if (string.IsNullOrEmpty(Application.absoluteURL)) return false;
+            if (!Uri.TryCreate(Application.absoluteURL, UriKind.Absolute, out Uri uri)) return false;
+
+            string query = uri.Query;
+            if (string.IsNullOrEmpty(query)) return false;
+            string prefix = key + "=";
+            string[] parts = query.TrimStart('?').Split('&');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i];
+                if (!part.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                value = Uri.UnescapeDataString(part.Substring(prefix.Length));
+                return true;
+            }
+            return false;
         }
 
         void RefreshProceduralGrassTarget()
@@ -542,7 +648,6 @@ namespace DaHilg
                     {
                         actor.NpcState = DaHilgNpcState.Idle;
                         actor.StateUntil = now + UnityEngine.Random.Range(1.5f, 4.5f);
-                        actor.PlayEmote(UnityEngine.Random.value < 0.25f ? "Wave" : "Idle");
                     }
                     actor.StepNpc(toWander.normalized * 0.65f, false, Settings, dt, now);
                     break;
@@ -558,7 +663,6 @@ namespace DaHilg
                     {
                         actor.NpcState = DaHilgNpcState.Touch;
                         actor.StateUntil = now + 0.6f;
-                        actor.PlayEmote("Cheer", false, m_ActiveActor.FeetPosition);
                         break;
                     }
                     actor.StepNpc(SeekDirection(actor, toPlayer, true, 1f, dt), true, Settings, dt, now);
@@ -610,7 +714,6 @@ namespace DaHilg
                 actor.StepNpc(Vector3.zero, false, Settings, dt, Time.time);
                 if (Time.time >= actor.StateUntil)
                 {
-                    actor.PlayEmote(actor.Id == "drew" && UnityEngine.Random.value < 0.5f ? "Dance" : "Cheer", false, m_ActiveActor.FeetPosition);
                     actor.StateUntil = Time.time + UnityEngine.Random.Range(1.8f, 3.0f);
                 }
                 return;
@@ -701,13 +804,19 @@ namespace DaHilg
             if (Settings.Characters.Length == 0 || m_ActiveActor == null) return;
             // On mobile cap the pool hard so phones don't instantiate 36 skinned-character clones
             // upfront and OOM iOS Safari. Desktop neighborhoods keep the full pool.
-            int poolSize = MobileWeb ? Mathf.Min(Settings.NibblerPoolSize, 10) : Settings.NibblerPoolSize;
+            int poolSize = EffectiveNibblerPoolSize();
             for (int i = 0; i < poolSize; i++)
             {
                 DaHilgCharacterSlot slot = Settings.Characters[i % Settings.Characters.Length];
                 if (slot.Prefab == null) continue;
                 m_Nibblers.Add(new DaHilgNibblerAgent(slot.Prefab, m_NibblerRoot, m_ActiveActor.transform, ResolveAnimator(slot), Settings.NibblerScale, i));
             }
+        }
+
+        int EffectiveNibblerPoolSize()
+        {
+            if (Settings == null) return 0;
+            return MobileWeb ? Mathf.Min(Settings.NibblerPoolSize, 12) : Settings.NibblerPoolSize;
         }
 
         void SpawnAnimals()
@@ -776,11 +885,13 @@ namespace DaHilg
             else if (Time.time >= m_NextNibblerSpawn)
             {
                 // Higher floor + faster ramp so the swarm reads as a real crowd within seconds.
-                int baseTarget = Mathf.Clamp(14 + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 2f), 14, Settings.NibblerPoolSize);
+                int poolSize = Mathf.Max(0, EffectiveNibblerPoolSize());
+                int targetFloor = MobileWeb ? Mathf.Min(8, poolSize) : Mathf.Min(14, poolSize);
+                int baseTarget = Mathf.Clamp(targetFloor + Mathf.FloorToInt((Time.time - m_ModeStartedAt) / 2f), targetFloor, poolSize);
                 bool marked = danger || PlayerMarked;
-                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), 14, Settings.NibblerPoolSize);
+                int target = Mathf.Clamp(baseTarget + (marked ? Settings.DangerNibblerBonus : 0), targetFloor, poolSize);
                 int active = ActiveNibblerCount();
-                int spawnBudget = Mathf.Min(marked ? 6 : 3, Mathf.Max(0, target - active));
+                int spawnBudget = Mathf.Min(MobileWeb ? (marked ? 3 : 2) : (marked ? 6 : 3), Mathf.Max(0, target - active));
                 for (int i = 0; i < spawnBudget; i++)
                 {
                     if (ActiveNibblerCount() >= target) break;
@@ -1042,25 +1153,52 @@ namespace DaHilg
             }
             if (agent == null || m_ActiveActor == null) return;
 
-            // Bias spawns AWAY from the camera line (the camera sits behind the player in 3rd-person):
-            // prefer angles toward the player's front/sides so nibblers don't sprint THROUGH the
-            // camera to reach the player (that read as a giant nibbler filling the lens).
-            float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
-            if (CameraRig != null && (CameraRig.Mode == DaHilgCameraMode.ThirdPerson
-                || CameraRig.Mode == DaHilgCameraMode.Shoulder || CameraRig.Mode == DaHilgCameraMode.High))
+            Vector3 spawn = m_ActiveActor.FeetPosition;
+            bool found = false;
+            for (int attempt = 0; attempt < 16; attempt++)
             {
-                Vector3 camForward = Quaternion.Euler(0f, CameraRig.Yaw, 0f) * Vector3.forward;
-                for (int attempt = 0; attempt < 4; attempt++)
+                // Bias spawns AWAY from the camera line (the camera sits behind the player in 3rd-person):
+                // prefer angles toward the player's front/sides so nibblers don't sprint THROUGH the
+                // camera to reach the player (that read as a giant nibbler filling the lens).
+                float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+                if (CameraRig != null && (CameraRig.Mode == DaHilgCameraMode.ThirdPerson
+                    || CameraRig.Mode == DaHilgCameraMode.Shoulder || CameraRig.Mode == DaHilgCameraMode.High))
                 {
-                    Vector3 dir = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
-                    // Reject the rear cone (toward the camera); keep front/side spawns.
-                    if (Vector3.Dot(dir, camForward) >= -0.35f) break;
-                    angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+                    Vector3 camForward = Quaternion.Euler(0f, CameraRig.Yaw, 0f) * Vector3.forward;
+                    for (int retry = 0; retry < 4; retry++)
+                    {
+                        Vector3 dir = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
+                        // Reject the rear cone (toward the camera); keep front/side spawns.
+                        if (Vector3.Dot(dir, camForward) >= -0.35f) break;
+                        angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+                    }
                 }
+
+                float radius = UnityEngine.Random.Range(Settings.NibblerSpawnMinRadius, Settings.NibblerSpawnMaxRadius);
+                Vector3 raw = m_ActiveActor.FeetPosition + new Vector3(Mathf.Cos(angle) * radius, 0.8f, Mathf.Sin(angle) * radius);
+                if (!DaHilgLevelRuntime.TryFindGround(raw, out RaycastHit hit, 80f, 220f, 12f)) continue;
+
+                Vector3 grounded = hit.point + Vector3.up * 0.04f;
+                if (PointInZones(m_CurrentLevel != null ? m_CurrentLevel.NibblerSafeZones : null, grounded)) continue;
+                if (!DaHilgLevelRuntime.HasLevelClearance(grounded, 0.36f * Settings.NibblerScale, 1.7f * Settings.NibblerScale)) continue;
+
+                spawn = grounded;
+                found = true;
+                break;
             }
-            float radius = UnityEngine.Random.Range(Settings.NibblerSpawnMinRadius, Settings.NibblerSpawnMaxRadius);
-            Vector3 pos = m_ActiveActor.FeetPosition + new Vector3(Mathf.Cos(angle) * radius, 0.8f, Mathf.Sin(angle) * radius);
-            agent.Spawn(DaHilgLevelRuntime.GroundSpawn(pos));
+
+            if (!found) spawn = DaHilgLevelRuntime.GroundSpawn(m_ActiveActor.FeetPosition + Vector3.forward * Settings.NibblerSpawnMaxRadius);
+            agent.Spawn(spawn);
+        }
+
+        static bool PointInZones(DaHilgBoxZone[] zones, Vector3 point)
+        {
+            if (zones == null) return false;
+            for (int i = 0; i < zones.Length; i++)
+            {
+                if (zones[i].Contains(point)) return true;
+            }
+            return false;
         }
 
         int ActiveNibblerCount()
@@ -1103,7 +1241,6 @@ namespace DaHilg
             {
                 actor.NpcState = DaHilgNpcState.Idle;
                 actor.StateUntil = now + UnityEngine.Random.Range(2.5f, 6f);
-                if (UnityEngine.Random.value < 0.3f) actor.PlayEmote(UnityEngine.Random.value < 0.5f ? "Wave" : "Cheer");
             }
             else if (now >= actor.StateUntil) // idle/cooldown elapsed -> pick a new nearby spot
             {

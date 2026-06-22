@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using GLTFast;
 using UnityEngine;
@@ -15,6 +17,8 @@ namespace DaHilg
         const float k_SpawnGroundSkin = 0.08f;
         static readonly int s_BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int s_ColorId = Shader.PropertyToID("_Color");
+        static readonly int s_BaseMapId = Shader.PropertyToID("_BaseMap");
+        static readonly int s_MainTexId = Shader.PropertyToID("_MainTex");
         // URP/Built-in surface property ids for the terrain detail-normal + window-glass pass.
         // Both pipelines name these the same on their Lit/Standard shaders; all writes are guarded
         // by Material.HasProperty so a foreign glTFast shader without a slot is simply skipped.
@@ -29,16 +33,22 @@ namespace DaHilg
         static readonly int s_SrcBlendId = Shader.PropertyToID("_SrcBlend");
         static readonly int s_DstBlendId = Shader.PropertyToID("_DstBlend");
         static readonly int s_ZWriteId = Shader.PropertyToID("_ZWrite");
+        static readonly int s_CutoffId = Shader.PropertyToID("_Cutoff");
+        static readonly int s_AlphaClipId = Shader.PropertyToID("_AlphaClip");
+        static readonly int s_ModeId = Shader.PropertyToID("_Mode");
         static readonly HashSet<Collider> s_LevelColliders = new HashSet<Collider>();
         static readonly HashSet<Material> s_ConfiguredVegetationMaterials = new HashSet<Material>();
         static readonly HashSet<Material> s_DetailNormaledTerrainMaterials = new HashSet<Material>();
         static readonly HashSet<Material> s_ConfiguredGlassMaterials = new HashSet<Material>();
+        static readonly Dictionary<Mesh, Mesh> s_ColliderMeshCache = new Dictionary<Mesh, Mesh>();
         // Renderers of the SVFacade_page* photo-overlay nodes — toggled as a group by
         // SetFacadesVisible (mirrors the web showFacades). Default visible (photo mode on).
         static readonly List<Renderer> s_FacadeRenderers = new List<Renderer>();
         static Texture2D s_DetailNormalTexture;
         static readonly RaycastHit[] s_GroundHits = new RaycastHit[64];
         static readonly RaycastHit[] s_SphereHits = new RaycastHit[32];
+        static readonly Collider[] s_OverlapHits = new Collider[32];
+        static Texture2D s_WaterFlowTexture;
 
         // Heavy outdoor levels stream their GLB from StreamingAssets at level-select instead of
         // being baked into the WebGL data file. Mirrors the staged set in DaHilgProjectBuilder.
@@ -130,6 +140,7 @@ namespace DaHilg
                 s_ActiveImport = import;
                 ApplyLevelOffset(root, profile);
                 PrepareLevelColliders(root);
+                BuildPavedOverlay(root, profile);
 
                 // Layer the vegetation/water overlay (creek + instanced trees/grass that the
                 // single-surface env drops) on top, parented UNDER root so it inherits the same
@@ -164,6 +175,7 @@ namespace DaHilg
                 baked.name = "Level_" + profile.Slug;
                 ApplyLevelOffset(baked, profile);
                 PrepareLevelColliders(baked);
+                BuildPavedOverlay(baked, profile);
                 onReady?.Invoke(baked);
             }
             else
@@ -222,6 +234,9 @@ namespace DaHilg
                 // registry (read at line ~659 for the ground check) makes actors fall through.
                 s_LevelColliders.Clear();
                 s_FacadeRenderers.Clear();
+                s_ConfiguredVegetationMaterials.Clear();
+                s_DetailNormaledTerrainMaterials.Clear();
+                s_ConfiguredGlassMaterials.Clear();
             }
 
             MeshFilter[] filters = level.GetComponentsInChildren<MeshFilter>(true);
@@ -285,8 +300,16 @@ namespace DaHilg
                     }
                     else
                     {
-                        MeshCollider collider = filter.gameObject.AddComponent<MeshCollider>();
-                        collider.sharedMesh = shared;
+                        Mesh colliderMesh = ColliderMeshFor(filter.name, shared);
+                        GameObject colliderObject = filter.gameObject;
+                        if (colliderMesh != shared)
+                        {
+                            colliderObject = new GameObject(filter.name + "_ColliderLOD");
+                            colliderObject.transform.SetParent(filter.transform, false);
+                            colliderObject.isStatic = true;
+                        }
+                        MeshCollider collider = colliderObject.AddComponent<MeshCollider>();
+                        collider.sharedMesh = colliderMesh;
                         collider.convex = false;
                         levelCollider = collider;
                     }
@@ -332,6 +355,274 @@ namespace DaHilg
 
             // Additive perf: don't draw foliage/small props across the full 600m+ frustum.
             ConfigureCameraCullDistances(Camera.main);
+        }
+
+        public static void BuildPavedOverlay(GameObject levelRoot, DaHilgLevelProfile profile)
+        {
+            if (levelRoot == null || profile == null || profile.Minimap == null || string.IsNullOrEmpty(profile.Minimap.text)) return;
+
+            string json = profile.Minimap.text;
+            int n = Mathf.RoundToInt(ExtractFloat(json, "fillN", 0f));
+            if (n <= 0 || n > 512) return;
+            byte[] fillRoad = ExtractBase64(json, "fillRoad");
+            if (fillRoad == null || fillRoad.Length == 0) return;
+
+            float minX = ExtractFloat(json, "minX", profile.PlayBounds.min.x);
+            float minZ = ExtractFloat(json, "minZ", profile.PlayBounds.min.z);
+            float maxX = ExtractFloat(json, "maxX", profile.PlayBounds.max.x);
+            float maxZ = ExtractFloat(json, "maxZ", profile.PlayBounds.max.z);
+            if (maxX <= minX || maxZ <= minZ) return;
+
+            List<Vector3> vertices = new List<Vector3>(8192);
+            List<int> triangles = new List<int>(12288);
+            const float lift = 0.045f;
+            for (int row = 0; row < n; row++)
+            {
+                int col = 0;
+                while (col < n)
+                {
+                    while (col < n && !RoadBit(fillRoad, n, col, row)) col++;
+                    if (col >= n) break;
+                    int start = col;
+                    while (col < n && RoadBit(fillRoad, n, col, row)) col++;
+                    int end = col;
+
+                    float x0 = Mathf.Lerp(minX, maxX, start / (float)n);
+                    float x1 = Mathf.Lerp(minX, maxX, end / (float)n);
+                    float z0 = Mathf.Lerp(minZ, maxZ, row / (float)n);
+                    float z1 = Mathf.Lerp(minZ, maxZ, (row + 1) / (float)n);
+
+                    AddPavedQuad(vertices, triangles,
+                        GroundSpawn(new Vector3(x0, 0f, z0)) + Vector3.up * lift,
+                        GroundSpawn(new Vector3(x1, 0f, z0)) + Vector3.up * lift,
+                        GroundSpawn(new Vector3(x1, 0f, z1)) + Vector3.up * lift,
+                        GroundSpawn(new Vector3(x0, 0f, z1)) + Vector3.up * lift);
+                }
+            }
+
+            if (vertices.Count == 0) return;
+
+            Mesh mesh = new Mesh
+            {
+                name = "DaHilgPavedOverlayMesh",
+                indexFormat = vertices.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16
+            };
+            mesh.SetVertices(vertices);
+            mesh.SetTriangles(triangles, 0, true);
+            mesh.RecalculateBounds();
+            mesh.RecalculateNormals();
+
+            GameObject overlay = new GameObject("PavedOverlay");
+            overlay.transform.SetParent(levelRoot.transform, true);
+            MeshFilter filter = overlay.AddComponent<MeshFilter>();
+            filter.sharedMesh = mesh;
+            MeshRenderer renderer = overlay.AddComponent<MeshRenderer>();
+            Material material = CreatePavedOverlayMaterial(levelRoot);
+            if (material == null)
+            {
+                UnityEngine.Object.Destroy(overlay);
+                return;
+            }
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+        }
+
+        static Material CreatePavedOverlayMaterial(GameObject levelRoot)
+        {
+            Material source = FindLevelMaterial(levelRoot);
+            Material material = null;
+            if (source != null && source.shader != null)
+            {
+                material = new Material(source) { name = "DaHilgPavedOverlay_mat" };
+            }
+            else
+            {
+                Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+                if (shader == null) shader = Shader.Find("Standard");
+                if (shader == null) shader = Shader.Find("Unlit/Color");
+                if (shader != null) material = new Material(shader) { name = "DaHilgPavedOverlay_mat" };
+            }
+
+            if (material == null)
+            {
+                Debug.LogWarning("[DaHilg] Paved overlay skipped: no compatible material/shader was available.");
+                return null;
+            }
+
+            Color asphalt = new Color(0.30f, 0.32f, 0.34f, 1f);
+            if (material.HasProperty("_BaseMap")) material.SetTexture("_BaseMap", null);
+            if (material.HasProperty("_MainTex")) material.SetTexture("_MainTex", null);
+            if (material.HasProperty(s_BaseColorId)) material.SetColor(s_BaseColorId, asphalt);
+            if (material.HasProperty(s_ColorId)) material.SetColor(s_ColorId, asphalt);
+            if (material.HasProperty(s_MetallicId)) material.SetFloat(s_MetallicId, 0.0f);
+            if (material.HasProperty(s_SmoothnessId)) material.SetFloat(s_SmoothnessId, 0.38f);
+            if (material.HasProperty(s_GlossinessId)) material.SetFloat(s_GlossinessId, 0.38f);
+            material.renderQueue = (int)RenderQueue.Geometry + 25;
+            material.enableInstancing = true;
+            return material;
+        }
+
+        static Material FindLevelMaterial(GameObject levelRoot)
+        {
+            if (levelRoot == null) return null;
+            Renderer[] renderers = levelRoot.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (renderer == null || renderer.sharedMaterial == null) continue;
+                string lower = renderer.name.ToLowerInvariant();
+                if (lower.StartsWith("collision_")) continue;
+                return renderer.sharedMaterial;
+            }
+            return null;
+        }
+
+        static void AddPavedQuad(List<Vector3> vertices, List<int> triangles, Vector3 a, Vector3 b, Vector3 c, Vector3 d)
+        {
+            int v = vertices.Count;
+            vertices.Add(a);
+            vertices.Add(b);
+            vertices.Add(c);
+            vertices.Add(d);
+            triangles.Add(v);
+            triangles.Add(v + 1);
+            triangles.Add(v + 2);
+            triangles.Add(v);
+            triangles.Add(v + 2);
+            triangles.Add(v + 3);
+        }
+
+        static bool RoadBit(byte[] bits, int n, int col, int row)
+        {
+            if (col < 0 || col >= n || row < 0 || row >= n) return false;
+            int cell = row * n + col;
+            int byteIndex = cell >> 3;
+            if (byteIndex < 0 || byteIndex >= bits.Length) return false;
+            return (bits[byteIndex] & (1 << (cell & 7))) != 0;
+        }
+
+        static Mesh ColliderMeshFor(string objectName, Mesh source)
+        {
+            if (source == null) return null;
+            string lower = objectName != null ? objectName.ToLowerInvariant() : string.Empty;
+            if (!lower.Contains("collision_terrain") || source.vertexCount < 100000) return source;
+            if (s_ColliderMeshCache.TryGetValue(source, out Mesh cached) && cached != null) return cached;
+
+            Mesh simplified = BuildSimplifiedGridColliderMesh(source, 160);
+            if (simplified == null) return source;
+            s_ColliderMeshCache[source] = simplified;
+            return simplified;
+        }
+
+        static Mesh BuildSimplifiedGridColliderMesh(Mesh source, int targetSide)
+        {
+            Vector3[] srcVertices = source.vertices;
+            Dictionary<long, Vector3> byCoord = new Dictionary<long, Vector3>(srcVertices.Length);
+            HashSet<int> xSet = new HashSet<int>();
+            HashSet<int> zSet = new HashSet<int>();
+            for (int i = 0; i < srcVertices.Length; i++)
+            {
+                Vector3 v = srcVertices[i];
+                int qx = Mathf.RoundToInt(v.x * 1000f);
+                int qz = Mathf.RoundToInt(v.z * 1000f);
+                xSet.Add(qx);
+                zSet.Add(qz);
+                byCoord[CoordKey(qx, qz)] = v;
+            }
+
+            List<int> xs = new List<int>(xSet);
+            List<int> zs = new List<int>(zSet);
+            xs.Sort();
+            zs.Sort();
+            if (xs.Count < 8 || zs.Count < 8 || xs.Count * zs.Count != srcVertices.Length) return null;
+
+            List<int> sampleX = SampleAxis(xs, targetSide);
+            List<int> sampleZ = SampleAxis(zs, targetSide);
+            int width = sampleX.Count;
+            int height = sampleZ.Count;
+            Vector3[] vertices = new Vector3[width * height];
+            int vOut = 0;
+            for (int row = 0; row < height; row++)
+            {
+                int qz = sampleZ[row];
+                for (int col = 0; col < width; col++)
+                {
+                    if (!byCoord.TryGetValue(CoordKey(sampleX[col], qz), out Vector3 sampled)) return null;
+                    vertices[vOut++] = sampled;
+                }
+            }
+
+            int[] triangles = new int[(width - 1) * (height - 1) * 6];
+            int t = 0;
+            for (int row = 0; row < height - 1; row++)
+            {
+                for (int col = 0; col < width - 1; col++)
+                {
+                    int a = row * width + col;
+                    int b = a + 1;
+                    int c = a + width;
+                    int d = c + 1;
+                    triangles[t++] = a;
+                    triangles[t++] = c;
+                    triangles[t++] = b;
+                    triangles[t++] = b;
+                    triangles[t++] = c;
+                    triangles[t++] = d;
+                }
+            }
+
+            if (triangles.Length >= 3)
+            {
+                Vector3 normal = Vector3.Cross(vertices[triangles[1]] - vertices[triangles[0]], vertices[triangles[2]] - vertices[triangles[0]]);
+                if (normal.y < 0f)
+                {
+                    for (int i = 0; i < triangles.Length; i += 3)
+                    {
+                        int swap = triangles[i + 1];
+                        triangles[i + 1] = triangles[i + 2];
+                        triangles[i + 2] = swap;
+                    }
+                }
+            }
+
+            Mesh mesh = new Mesh { name = source.name + "_ColliderLOD" };
+            mesh.indexFormat = vertices.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        static List<int> SampleAxis(List<int> values, int targetSide)
+        {
+            int count = values.Count;
+            int side = Mathf.Clamp(targetSide, 8, count);
+            int step = Mathf.Max(1, Mathf.CeilToInt((count - 1) / (float)(side - 1)));
+            List<int> samples = new List<int>(side);
+            for (int i = 0; i < count; i += step) samples.Add(values[i]);
+            if (samples[samples.Count - 1] != values[count - 1]) samples.Add(values[count - 1]);
+            return samples;
+        }
+
+        static long CoordKey(int qx, int qz)
+        {
+            return ((long)qx << 32) ^ (uint)qz;
+        }
+
+        static float ExtractFloat(string json, string key, float fallback)
+        {
+            Match match = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+            if (match.Success && float.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float value)) return value;
+            return fallback;
+        }
+
+        static byte[] ExtractBase64(string json, string key)
+        {
+            Match match = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([A-Za-z0-9+/=]*)\"");
+            if (!match.Success) return null;
+            try { return Convert.FromBase64String(match.Groups[1].Value); }
+            catch { return null; }
         }
 
         // Layer indices used for per-layer cull distances. Resolved by name so missing
@@ -393,7 +684,7 @@ namespace DaHilg
             bool isVegetation = ContainsAny(key, "tree_", "trees", "grassclump", "grass_wind", "shrub", "shrubs", "reeds");
             if (isVegetation)
             {
-                TuneVegetationSurface(renderer, ContainsAny(key, "tree_", "trees"), levelScale, cullOverhang);
+                TuneVegetationSurface(renderer, ContainsAny(key, "tree_", "trees"), true, levelScale, cullOverhang);
                 return;
             }
 
@@ -452,17 +743,65 @@ namespace DaHilg
         {
             if (material == null || !Application.isPlaying) return;
 
-            material.SetOverrideTag("RenderType", "Transparent");
-            if (material.HasProperty(s_SurfaceId)) material.SetFloat(s_SurfaceId, 1f);
+            // Keep the creek reliable in WebGL/iOS: transparent sorting on the giant creek mesh can
+            // make it vanish against the bed. The mesh is lifted slightly above ground, so opaque
+            // smooth blue water reads better and draws consistently.
+            material.SetOverrideTag("RenderType", "Opaque");
+            if (material.HasProperty(s_SurfaceId)) material.SetFloat(s_SurfaceId, 0f);
             if (material.HasProperty(s_BlendId)) material.SetFloat(s_BlendId, 0f);
-            if (material.HasProperty(s_SrcBlendId)) material.SetInt(s_SrcBlendId, (int)BlendMode.SrcAlpha);
-            if (material.HasProperty(s_DstBlendId)) material.SetInt(s_DstBlendId, (int)BlendMode.OneMinusSrcAlpha);
-            if (material.HasProperty(s_ZWriteId)) material.SetInt(s_ZWriteId, 0);
+            if (material.HasProperty(s_SrcBlendId)) material.SetInt(s_SrcBlendId, (int)BlendMode.One);
+            if (material.HasProperty(s_DstBlendId)) material.SetInt(s_DstBlendId, (int)BlendMode.Zero);
+            if (material.HasProperty(s_ZWriteId)) material.SetInt(s_ZWriteId, 1);
             if (material.HasProperty(s_MetallicId)) material.SetFloat(s_MetallicId, 0.02f);
             if (material.HasProperty(s_SmoothnessId)) material.SetFloat(s_SmoothnessId, 0.86f);
             if (material.HasProperty(s_GlossinessId)) material.SetFloat(s_GlossinessId, 0.86f);
-            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            material.renderQueue = (int)RenderQueue.Transparent + 20;
+            Texture2D flow = GetWaterFlowTexture();
+            if (material.HasProperty(s_BaseMapId))
+            {
+                material.SetTexture(s_BaseMapId, flow);
+                material.SetTextureScale(s_BaseMapId, new Vector2(5.5f, 1.6f));
+            }
+            if (material.HasProperty(s_MainTexId))
+            {
+                material.SetTexture(s_MainTexId, flow);
+                material.SetTextureScale(s_MainTexId, new Vector2(5.5f, 1.6f));
+            }
+            material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.renderQueue = (int)RenderQueue.Geometry + 20;
+        }
+
+        static Texture2D GetWaterFlowTexture()
+        {
+            if (s_WaterFlowTexture != null) return s_WaterFlowTexture;
+
+            const int width = 96;
+            const int height = 32;
+            Texture2D tex = new Texture2D(width, height, TextureFormat.RGBA32, true, false)
+            {
+                name = "DaHilgCreekFlow",
+                wrapMode = TextureWrapMode.Repeat,
+                filterMode = FilterMode.Bilinear
+            };
+
+            Color32[] pixels = new Color32[width * height];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float u = x / (float)width;
+                    float v = y / (float)height;
+                    float streak = 0.5f + 0.5f * Mathf.Sin((u * 7.5f + v * 1.6f) * Mathf.PI * 2f);
+                    float ripple = Mathf.PerlinNoise(u * 9f, v * 5f);
+                    float foam = Mathf.Clamp01((streak * 0.55f + ripple * 0.45f - 0.54f) * 2.4f);
+                    Color c = Color.Lerp(new Color(0.08f, 0.35f, 0.62f, 1f), new Color(0.42f, 0.83f, 1f, 1f), foam);
+                    pixels[y * width + x] = c;
+                }
+            }
+
+            tex.SetPixels32(pixels);
+            tex.Apply(true, false);
+            s_WaterFlowTexture = tex;
+            return s_WaterFlowTexture;
         }
 
         static bool HasUsefulBaseTexture(Material material)
@@ -498,20 +837,64 @@ namespace DaHilg
                                       && !lower.Contains("bank") && !lower.Contains("rock") && !lower.Contains("reed")
                                       && !lower.Contains("flowline") && !lower.Contains("flow_line") && !lower.Contains("line");
                 if (!isVeg && !isCreek) continue;
+                if (isWaterSurface && ConformWaterSurfaceToGround(r, waterHeightOffset)) continue;
+
                 Bounds b = r.bounds;
-                Vector3 worldBase = new Vector3(b.center.x, b.min.y, b.center.z);
+                Vector3 worldBase = isWaterSurface
+                    ? new Vector3(b.center.x, b.center.y, b.center.z)
+                    : new Vector3(b.center.x, b.min.y, b.center.z);
                 // Wide probe (up 90, down 400): the master's hilly veg can sit far above OR below the
                 // re-grounded env; snap each plant's base onto the ground so none float or sink under terrain.
                 if (TryFindGround(worldBase, out RaycastHit hit, 90f, 400f))
                 {
-                    float dy = hit.point.y - worldBase.y;
                     float lift = isWaterSurface ? Mathf.Max(0.06f, waterHeightOffset) : 0.03f;
-                    if (isWaterSurface || dy < -0.05f || dy > 0.05f) r.transform.position += new Vector3(0f, dy + lift, 0f);
+                    float dy = hit.point.y + lift - worldBase.y;
+                    if (isWaterSurface || dy < -0.05f || dy > 0.05f) r.transform.position += new Vector3(0f, dy, 0f);
                 }
             }
         }
 
-        static void TuneVegetationSurface(Renderer renderer, bool isTree, float levelScale, bool cullOverhang)
+        static bool ConformWaterSurfaceToGround(Renderer renderer, float waterHeightOffset)
+        {
+            if (renderer == null || !renderer.TryGetComponent(out MeshFilter filter)) return false;
+            Mesh source = filter.sharedMesh;
+            if (source == null || !source.isReadable) return false;
+
+            Mesh mesh = UnityEngine.Object.Instantiate(source);
+            mesh.name = source.name + "_CreekGrounded";
+            Vector3[] vertices = mesh.vertices;
+            if (vertices == null || vertices.Length == 0)
+            {
+                UnityEngine.Object.Destroy(mesh);
+                return false;
+            }
+
+            Transform t = filter.transform;
+            float lift = Mathf.Clamp(waterHeightOffset, 0.045f, 0.12f);
+            int grounded = 0;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector3 world = t.TransformPoint(vertices[i]);
+                if (!TryFindGround(world, out RaycastHit hit, 90f, 420f)) continue;
+                world.y = hit.point.y + lift;
+                vertices[i] = t.InverseTransformPoint(world);
+                grounded++;
+            }
+
+            if (grounded == 0)
+            {
+                UnityEngine.Object.Destroy(mesh);
+                return false;
+            }
+
+            mesh.vertices = vertices;
+            mesh.RecalculateBounds();
+            mesh.RecalculateNormals();
+            filter.sharedMesh = mesh;
+            return true;
+        }
+
+        static void TuneVegetationSurface(Renderer renderer, bool isTree, bool useCutout, float levelScale, bool cullOverhang)
         {
             // Trees cast shadows (grounds them in the scene); billboards still skip
             // receiving shadows to avoid lighting artifacts on flat cards.
@@ -521,7 +904,7 @@ namespace DaHilg
             Material material = renderer.sharedMaterial;
             if (material != null && s_ConfiguredVegetationMaterials.Add(material))
             {
-                ConfigureOpaqueMaterial(material);
+                ConfigureVegetationMaterial(material, useCutout);
             }
 
             // The overhang cull (absolute-y thresholds tuned for the baked env, whose ground sits
@@ -573,22 +956,26 @@ namespace DaHilg
             return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
-        static void ConfigureOpaqueMaterial(Material material)
+        static void ConfigureVegetationMaterial(Material material, bool useCutout)
         {
-            // Non-destructive guard: only mutate the shared material at play time. Editing
-            // it while editing the scene (e.g. the project builder) would persist changes
-            // into the imported project asset shared by every instance.
+            // Non-destructive guard: only mutate the shared material at play time. Tree/grass cards
+            // rely on alpha cutout; forcing them fully opaque turns every card into a giant solid
+            // polygon that can cover the camera.
             if (!Application.isPlaying) return;
 
-            material.SetOverrideTag("RenderType", "Opaque");
+            material.SetOverrideTag("RenderType", useCutout ? "TransparentCutout" : "Opaque");
+            if (material.HasProperty(s_ModeId)) material.SetFloat(s_ModeId, useCutout ? 1f : 0f); // Built-in Standard: Cutout/Opaque
             if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0f);
             if (material.HasProperty("_Blend")) material.SetFloat("_Blend", 0f);
             if (material.HasProperty("_SrcBlend")) material.SetInt("_SrcBlend", (int)BlendMode.One);
             if (material.HasProperty("_DstBlend")) material.SetInt("_DstBlend", (int)BlendMode.Zero);
             if (material.HasProperty("_ZWrite")) material.SetInt("_ZWrite", 1);
+            if (material.HasProperty(s_AlphaClipId)) material.SetFloat(s_AlphaClipId, useCutout ? 1f : 0f);
+            if (material.HasProperty(s_CutoffId)) material.SetFloat(s_CutoffId, useCutout ? 0.38f : 0.5f);
             material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            material.DisableKeyword("_ALPHATEST_ON");
-            material.renderQueue = (int)RenderQueue.Geometry;
+            if (useCutout) material.EnableKeyword("_ALPHATEST_ON");
+            else material.DisableKeyword("_ALPHATEST_ON");
+            material.renderQueue = useCutout ? (int)RenderQueue.AlphaTest : (int)RenderQueue.Geometry;
         }
 
         // ---- single-surface render passes (mirror src/da-hilg/level/Level.jsx) ----------------
@@ -765,6 +1152,23 @@ namespace DaHilg
             }
 
             return bestDistance < float.MaxValue;
+        }
+
+        public static bool HasLevelClearance(Vector3 feet, float radius, float height)
+        {
+            float r = Mathf.Max(0.05f, radius);
+            float h = Mathf.Max(r * 2f + 0.05f, height);
+            Vector3 bottom = feet + Vector3.up * (r + 0.08f);
+            Vector3 top = feet + Vector3.up * Mathf.Max(r + 0.1f, h - r);
+            int count = Physics.OverlapCapsuleNonAlloc(bottom, top, r, s_OverlapHits, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < count; i++)
+            {
+                Collider c = s_OverlapHits[i];
+                s_OverlapHits[i] = null;
+                if (!IsLevelCollider(c)) continue;
+                return false;
+            }
+            return true;
         }
 
         public static bool IsLevelCollider(Collider collider)

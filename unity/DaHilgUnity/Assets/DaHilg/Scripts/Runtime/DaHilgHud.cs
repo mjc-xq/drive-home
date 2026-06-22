@@ -97,10 +97,11 @@ namespace DaHilg
         bool m_LevelDialogOpen;
         string m_PendingLevelSlug;
         float m_LastHudActivationTime = -10f;
+        bool m_DidAutoCollapseForTouch;
 
-        const float k_JoySize = 132f;
-        const float k_JoyKnobSize = 48f;
-        const float k_JoyRadius = 54f;
+        const float k_JoySize = 142f;
+        const float k_JoyKnobSize = 54f;
+        const float k_JoyRadius = 58f;
 
         struct MenuEntry
         {
@@ -763,6 +764,8 @@ namespace DaHilg
             m_RollState.style.marginTop = 7;
             m_RollState.style.letterSpacing = 0.5f;
             m_TopPanelBody.Add(m_RollState);
+
+            ApplyTopPanelCollapsedState();
         }
 
         void ToggleTopPanel()
@@ -770,12 +773,15 @@ namespace DaHilg
             if (Time.unscaledTime - m_LastHudActivationTime < 0.08f) return;
             m_LastHudActivationTime = Time.unscaledTime;
             m_TopPanelCollapsed = !m_TopPanelCollapsed;
+            ApplyTopPanelCollapsedState();
+            Refresh();
+        }
+
+        void ApplyTopPanelCollapsedState()
+        {
             if (m_TopCollapseButton != null) m_TopCollapseButton.text = m_TopPanelCollapsed ? "▸" : "▾";
             if (m_TopPanelBody != null) m_TopPanelBody.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
             if (m_TopCompactStrip != null) m_TopCompactStrip.style.display = m_TopPanelCollapsed ? DisplayStyle.Flex : DisplayStyle.None;
-            // Hide the framed minimap while collapsed so the compact strip stands alone.
-            if (m_Minimap != null) m_Minimap.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
-            Refresh();
         }
 
         void BuildMinimap()
@@ -908,7 +914,6 @@ namespace DaHilg
                 m_Input.QueueTouchJump();
                 e.StopPropagation();
             });
-            jump.clicked += () => m_Input.QueueTouchJump();
             m_Root.Add(jump);
 
             Button roll = TouchButton("ROLL", k_Nav);
@@ -920,7 +925,6 @@ namespace DaHilg
                 m_Input.QueueTouchRoll();
                 e.StopPropagation();
             });
-            roll.clicked += () => m_Input.QueueTouchRoll();
             m_Root.Add(roll);
 
             Button run = TouchButton("RUN", k_Nav);
@@ -946,7 +950,6 @@ namespace DaHilg
                 m_Input.QueueTouchAttack();
                 e.StopPropagation();
             });
-            punch.clicked += () => m_Input.QueueTouchAttack();
             m_Root.Add(punch);
 
             RefreshResponsiveControls();
@@ -955,6 +958,12 @@ namespace DaHilg
         void RefreshResponsiveControls()
         {
             bool touch = ShouldShowTouchControls();
+            if (touch && !m_DidAutoCollapseForTouch)
+            {
+                m_DidAutoCollapseForTouch = true;
+                m_TopPanelCollapsed = true;
+                ApplyTopPanelCollapsedState();
+            }
             bool landscape = touch && Screen.width > Screen.height;
             DisplayStyle display = touch ? DisplayStyle.Flex : DisplayStyle.None;
             DisplayStyle actionDisplay = touch && !m_CompactMenuOpen && !m_LevelDialogOpen ? DisplayStyle.Flex : DisplayStyle.None;
@@ -973,11 +982,11 @@ namespace DaHilg
             if (m_CompactBar != null) m_CompactBar.style.display = DisplayStyle.Flex;
             if (m_CompactPanel != null) m_CompactPanel.style.display = m_CompactMenuOpen ? DisplayStyle.Flex : DisplayStyle.None;
             if (m_LevelDialog != null) m_LevelDialog.style.display = m_LevelDialogOpen ? DisplayStyle.Flex : DisplayStyle.None;
-            // Minimap visibility is tied to the collapse state, not the breakpoint.
-            if (m_Minimap != null) m_Minimap.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
+            if (m_Minimap != null) m_Minimap.style.display = DisplayStyle.Flex;
 
             if (landscape)
             {
+                ApplyCompactBarSizing(42f, 9.5f);
                 SetPanelFrame(m_TopPanel, 12, StyleKeyword.Auto, 12, StyleKeyword.Auto, 210, StyleKeyword.Auto);
                 // Minimap owns the upper-right; the segmented menu bar drops below it.
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 12, 12, StyleKeyword.Auto, 174, 120);
@@ -996,7 +1005,7 @@ namespace DaHilg
                 if (m_RunButton != null)
                 {
                     m_RunButton.style.right = 24;
-                    m_RunButton.style.bottom = 204;
+                    m_RunButton.style.bottom = 214;
                 }
                 if (m_JumpButton != null)
                 {
@@ -1005,17 +1014,18 @@ namespace DaHilg
                 }
                 if (m_RollButton != null)
                 {
-                    m_RollButton.style.right = 92;
+                    m_RollButton.style.right = 104;
                     m_RollButton.style.bottom = 132;
                 }
                 if (m_PunchButton != null)
                 {
-                    m_PunchButton.style.right = 160;
+                    m_PunchButton.style.right = 184;
                     m_PunchButton.style.bottom = 132;
                 }
             }
             else if (touch)
             {
+                ApplyCompactBarSizing(40f, 9f);
                 SetPanelFrame(m_TopPanel, 16, StyleKeyword.Auto, 16, StyleKeyword.Auto, 218, StyleKeyword.Auto);
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 16, 16, StyleKeyword.Auto, 136, 108);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
@@ -1033,27 +1043,28 @@ namespace DaHilg
                 // 66px circular discs: stack with ~8px gaps so they never overlap each other.
                 if (m_JumpButton != null)
                 {
-                    m_JumpButton.style.right = 28;
+                    m_JumpButton.style.right = 26;
                     m_JumpButton.style.bottom = 30;
                 }
                 if (m_PunchButton != null)
                 {
-                    m_PunchButton.style.right = 104;
+                    m_PunchButton.style.right = 108;
                     m_PunchButton.style.bottom = 30;
                 }
                 if (m_RunButton != null)
                 {
-                    m_RunButton.style.right = 28;
-                    m_RunButton.style.bottom = 104;
+                    m_RunButton.style.right = 26;
+                    m_RunButton.style.bottom = 110;
                 }
                 if (m_RollButton != null)
                 {
-                    m_RollButton.style.right = 28;
-                    m_RollButton.style.bottom = 178;
+                    m_RollButton.style.right = 26;
+                    m_RollButton.style.bottom = 190;
                 }
             }
             else
             {
+                ApplyCompactBarSizing(48f, 11f);
                 SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 232, StyleKeyword.Auto);
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 190, 148);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
@@ -1076,24 +1087,24 @@ namespace DaHilg
             {
                 m_CompactBar.style.left = 12;
                 m_CompactBar.style.right = 12;
-                m_CompactBar.style.top = 12;
+                m_CompactBar.style.top = 10;
                 m_CompactBar.style.width = StyleKeyword.Auto;
                 float panelLeft = landscape ? 12f : 14f;
                 if (m_TopPanel != null)
                 {
                     m_TopPanel.style.left = panelLeft;
-                    m_TopPanel.style.top = 64;
-                    m_TopPanel.style.width = Mathf.Clamp(Screen.width - 154f, 176f, 210f);
+                    m_TopPanel.style.top = 56;
+                    m_TopPanel.style.width = Mathf.Clamp(Screen.width - 170f, 176f, 218f);
                 }
                 if (m_Minimap != null)
                 {
                     m_Minimap.style.left = StyleKeyword.Auto;
                     m_Minimap.style.right = 12;
-                    m_Minimap.style.top = 64f;
-                    m_Minimap.style.width = 118;
-                    m_Minimap.style.height = 96;
+                    m_Minimap.style.top = 56f;
+                    m_Minimap.style.width = 132;
+                    m_Minimap.style.height = 108;
                 }
-                if (m_CompactPanel != null) m_CompactPanel.style.top = 60;
+                if (m_CompactPanel != null) m_CompactPanel.style.top = 54;
             }
 
             m_CompactBar?.BringToFront();
@@ -1139,6 +1150,26 @@ namespace DaHilg
             element.style.translate = translate;
         }
 
+        void ApplyCompactBarSizing(float height, float fontSize)
+        {
+            if (m_CompactBar != null) m_CompactBar.style.height = height;
+            ApplyBarButtonSizing(m_CompactCameraButton, height, fontSize);
+            ApplyBarButtonSizing(m_CompactPlayerButton, height, fontSize);
+            ApplyBarButtonSizing(m_CompactLevelButton, height, fontSize);
+            ApplyBarButtonSizing(m_CompactMenuButton, height, fontSize);
+        }
+
+        static void ApplyBarButtonSizing(Button button, float height, float fontSize)
+        {
+            if (button == null) return;
+            button.style.height = height;
+            button.style.fontSize = fontSize;
+            button.style.paddingLeft = 4;
+            button.style.paddingRight = 4;
+            button.style.paddingTop = 0;
+            button.style.paddingBottom = 0;
+        }
+
         void SetPromptFrame(StyleLength left, StyleLength right, StyleLength top, StyleLength bottom, Translate translate, StyleLength maxWidth, StyleLength fontSize)
         {
             if (m_Prompt == null) return;
@@ -1163,6 +1194,16 @@ namespace DaHilg
         public void SetWebTouchMode(int touch)
         {
             s_WebTouchMode = touch != 0 ? 1 : 0;
+            if (s_WebTouchMode != 0 && !m_DidAutoCollapseForTouch)
+            {
+                m_DidAutoCollapseForTouch = true;
+                m_TopPanelCollapsed = true;
+                ApplyTopPanelCollapsedState();
+            }
+            else if (s_WebTouchMode == 0)
+            {
+                m_DidAutoCollapseForTouch = false;
+            }
             RefreshResponsiveControls();
         }
 
@@ -1196,7 +1237,7 @@ namespace DaHilg
 
             m_EmoteButtons.Clear();
             RemoveMenuEntriesForRow(1);
-            string[] labels = { "Dance", "Wave", "Cheer", "Tag" };
+            string[] labels = { "Dance", "Wave", "Cheer" };
             for (int i = 0; i < labels.Length; i++)
             {
                 int index = i;
@@ -1387,7 +1428,7 @@ namespace DaHilg
         {
             VisualElement section = CompactSection("ACTIONS");
             VisualElement row = CompactGrid(2);
-            string[] labels = { "Dance", "Wave", "Cheer", "Tag" };
+            string[] labels = { "Dance", "Wave", "Cheer" };
             m_CompactEmoteButtons.Clear();
             for (int i = 0; i < labels.Length; i++)
             {
@@ -1407,6 +1448,17 @@ namespace DaHilg
             section.Add(row);
 
             VisualElement utilityRow = CompactGrid(2);
+            Action punchActivate = () =>
+            {
+                m_Input.QueueTouchAttack();
+                m_CompactMenuOpen = false;
+                Refresh();
+            };
+            Button punch = CompactButton("PUNCH", punchActivate, 96);
+            StylePanelGridButton(punch);
+            utilityRow.Add(punch);
+            RegisterMenuButton(punch, 3, 0, punchActivate);
+
             Action modeActivate = () =>
             {
                 m_Manager.ToggleMode();
@@ -1415,7 +1467,7 @@ namespace DaHilg
             Button mode = CompactButton("MODE", modeActivate, 96);
             StylePanelGridButton(mode);
             utilityRow.Add(mode);
-            RegisterMenuButton(mode, 3, 0, modeActivate);
+            RegisterMenuButton(mode, 3, 1, modeActivate);
 
             Action jumpActivate = () =>
             {
@@ -1426,7 +1478,7 @@ namespace DaHilg
             Button jump = CompactButton("JUMP", jumpActivate, 96);
             StylePanelGridButton(jump);
             utilityRow.Add(jump);
-            RegisterMenuButton(jump, 3, 1, jumpActivate);
+            RegisterMenuButton(jump, 3, 2, jumpActivate);
 
             Action rollActivate = () =>
             {
@@ -1437,7 +1489,7 @@ namespace DaHilg
             Button roll = CompactButton("ROLL", rollActivate, 96);
             StylePanelGridButton(roll);
             utilityRow.Add(roll);
-            RegisterMenuButton(roll, 3, 2, rollActivate);
+            RegisterMenuButton(roll, 3, 3, rollActivate);
 
             section.Add(utilityRow);
             m_CompactPanel.Add(section);
@@ -1624,7 +1676,7 @@ namespace DaHilg
         {
             VisualElement section = CompactSection("EMOTES");
             VisualElement row = CompactGrid(2);
-            string[] labels = { "Dance", "Wave", "Cheer", "Tag" };
+            string[] labels = { "Dance", "Wave", "Cheer" };
             m_CompactEmoteButtons.Clear();
             for (int i = 0; i < labels.Length; i++)
             {
@@ -2184,9 +2236,19 @@ namespace DaHilg
         void UpdateJoy(Vector2 pointer)
         {
             Vector2 delta = pointer - m_JoyCenter;
+            float magnitude = delta.magnitude;
+            if (magnitude > k_JoyRadius)
+            {
+                // Floating-stick behavior: once the thumb reaches the edge, slide the base under it.
+                // This keeps sustained movement smooth when the finger drifts, like common mobile
+                // third-person controls, instead of feeling like it hit a hard stop.
+                m_JoyCenter += delta.normalized * (magnitude - k_JoyRadius);
+                PositionJoystick(m_JoyCenter, true);
+                delta = pointer - m_JoyCenter;
+            }
             Vector2 clamped = Vector2.ClampMagnitude(delta, k_JoyRadius);
             Vector2 n = new Vector2(clamped.x / k_JoyRadius, -clamped.y / k_JoyRadius);
-            if (n.magnitude < 0.12f) n = Vector2.zero;
+            if (n.magnitude < 0.09f) n = Vector2.zero;
             m_Input.SetTouchMove(n, true);
             m_Knob.style.left = (k_JoySize - k_JoyKnobSize) * 0.5f + clamped.x;
             m_Knob.style.top = (k_JoySize - k_JoyKnobSize) * 0.5f + clamped.y;
@@ -2327,9 +2389,8 @@ namespace DaHilg
 
         Button TouchButton(string text, Color accent)
         {
-            // Circular disc to match the driving game's mobile controls (TouchButtons.jsx: 56-64px
-            // round discs), AGC font, accent fill.
-            const float d = 66f;
+            // Larger circular discs: action buttons must be thumb targets first, decoration second.
+            const float d = 72f;
             Button button = new Button { text = text };
             button.style.position = Position.Absolute;
             button.style.width = d;

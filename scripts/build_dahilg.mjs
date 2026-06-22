@@ -106,15 +106,15 @@ function splitUnityDataBundle() {
 
   const indexPath = path.join(ROOT, 'public/unity/da-hilg/index.html');
   let html = readFileSync(indexPath, 'utf8');
-  const version = html.match(/dataUrl:\s*'Build\\/da-hilg\\.data\\.unityweb\\?v=([^']+)'/)?.[1] || Date.now().toString(36);
+  const version = html.match(/dataUrl:\s*'Build\/da-hilg\.data\.unityweb\?v=([^']+)'/)?.[1] || Date.now().toString(36);
   const partUrls = chunks.map(file => `Build/${file}?v=${version}`);
   html = html.replace(
-    /dataUrl:\s*'Build\\/da-hilg\\.data\\.unityweb\\?v=[^']+'/,
+    /dataUrl:\s*'Build\/da-hilg\.data\.unityweb\?v=[^']+'/,
     `dataUrl: '',\n        dataParts: ${JSON.stringify(partUrls)}`
   );
   html = html.replace(
     "      const script = document.createElement('script');",
-    `      async function assembleUnityDataUrl(partUrls) {\n        const buffers = [];\n        for (const partUrl of partUrls) {\n          const response = await fetch(partUrl, { cache: 'no-store' });\n          if (!response.ok) throw new Error('Failed to load Unity data chunk ' + partUrl + ' (' + response.status + ')');\n          buffers.push(await response.arrayBuffer());\n        }\n        const blobUrl = URL.createObjectURL(new Blob(buffers, { type: 'application/octet-stream' }));\n        window.__dahilg.dataBlobUrl = blobUrl;\n        return blobUrl;\n      }\n\n      const script = document.createElement('script');`
+    `      async function assembleUnityDataUrl(partUrls) {\n        const blobs = [];\n        for (const partUrl of partUrls) {\n          const response = await fetch(partUrl, { cache: 'no-store' });\n          if (!response.ok) throw new Error('Failed to load Unity data chunk ' + partUrl + ' (' + response.status + ')');\n          blobs.push(await response.blob());\n        }\n        const blobUrl = URL.createObjectURL(new Blob(blobs, { type: 'application/octet-stream' }));\n        window.__dahilg.dataBlobUrl = blobUrl;\n        return blobUrl;\n      }\n\n      const script = document.createElement('script');`
   );
   html = html.replace(
     "      script.onload = () => {\n        createUnityInstance(canvas, config, (progress) => {",

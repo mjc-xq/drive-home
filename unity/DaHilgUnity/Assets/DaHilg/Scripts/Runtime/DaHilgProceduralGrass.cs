@@ -6,11 +6,15 @@ namespace DaHilg
 {
     public sealed class DaHilgProceduralGrass : MonoBehaviour
     {
-        const int k_TargetBladeCount = 680;
-        const int k_MaxAttempts = 3200;
-        const float k_Radius = 30f;
+        const int k_TargetBladeCount = 430;
+        const int k_MaxAttempts = 2600;
+        const float k_Radius = 28f;
         const float k_InnerRadius = 1.4f;
         const float k_RebuildDistance = 4.5f;
+        const int k_MobileBladeCount = 180;
+        const int k_MobileMaxAttempts = 850;
+        const float k_MobileRadius = 18f;
+        const float k_MobileRebuildDistance = 8.5f;
 
         readonly List<Vector3> m_Vertices = new List<Vector3>(k_TargetBladeCount * 8);
         readonly List<int> m_Triangles = new List<int>(k_TargetBladeCount * 12);
@@ -37,7 +41,8 @@ namespace DaHilg
             if (m_Target == null || m_Renderer == null || !m_Renderer.enabled) return;
             Vector3 center = m_Target.position;
             center.y = 0f;
-            if (!m_HasBuilt || (center - m_LastCenter).sqrMagnitude >= k_RebuildDistance * k_RebuildDistance)
+            float rebuildDistance = RebuildDistance;
+            if (!m_HasBuilt || (center - m_LastCenter).sqrMagnitude >= rebuildDistance * rebuildDistance)
             {
                 Rebuild(force: false);
             }
@@ -88,7 +93,8 @@ namespace DaHilg
 
             Vector3 center = m_Target.position;
             center.y = 0f;
-            if (!force && m_HasBuilt && (center - m_LastCenter).sqrMagnitude < k_RebuildDistance * k_RebuildDistance) return;
+            float rebuildDistance = RebuildDistance;
+            if (!force && m_HasBuilt && (center - m_LastCenter).sqrMagnitude < rebuildDistance * rebuildDistance) return;
 
             m_LastCenter = center;
             m_HasBuilt = true;
@@ -101,10 +107,13 @@ namespace DaHilg
 
             int seed = QuantizedSeed(center);
             int blades = 0;
-            for (int attempt = 0; attempt < k_MaxAttempts && blades < k_TargetBladeCount; attempt++)
+            int targetBladeCount = TargetBladeCount;
+            int maxAttempts = MaxAttempts;
+            float radius = Radius;
+            for (int attempt = 0; attempt < maxAttempts && blades < targetBladeCount; attempt++)
             {
                 float angle = Hash01(seed, attempt * 5 + 1) * Mathf.PI * 2f;
-                float dist = Mathf.Sqrt(Hash01(seed, attempt * 5 + 2)) * k_Radius;
+                float dist = Mathf.Sqrt(Hash01(seed, attempt * 5 + 2)) * radius;
                 if (dist < k_InnerRadius) dist = k_InnerRadius + Hash01(seed, attempt * 5 + 3) * 2.5f;
 
                 Vector3 sample = center + new Vector3(Mathf.Cos(angle) * dist, 0f, Mathf.Sin(angle) * dist);
@@ -112,14 +121,14 @@ namespace DaHilg
                 if (hit.normal.y < 0.68f || IsRejectedSurface(hit)) continue;
 
                 float yaw = Hash01(seed, attempt * 5 + 4) * Mathf.PI * 2f;
-                float height = Mathf.Lerp(0.22f, 0.48f, Hash01(seed, attempt * 5 + 5));
-                float width = Mathf.Lerp(0.035f, 0.075f, Hash01(seed, attempt * 5 + 6));
+                float height = Mathf.Lerp(0.30f, 0.68f, Hash01(seed, attempt * 5 + 5));
+                float width = Mathf.Lerp(0.12f, 0.28f, Hash01(seed, attempt * 5 + 6));
                 Color32 color = Color32.Lerp(
                     new Color32(52, 126, 38, 255),
                     new Color32(126, 177, 64, 255),
                     Hash01(seed, attempt * 5 + 7));
 
-                AddCrossBlade(hit.point + Vector3.up * 0.035f - center, yaw, width, height, color);
+                AddGrassClump(hit.point + Vector3.up * 0.03f - center, yaw, width, height, color);
                 blades++;
             }
 
@@ -130,13 +139,19 @@ namespace DaHilg
             m_Mesh.RecalculateBounds();
         }
 
-        void AddCrossBlade(Vector3 basePoint, float yaw, float width, float height, Color32 color)
+        static int TargetBladeCount => DaHilgGameManager.MobileWeb ? k_MobileBladeCount : k_TargetBladeCount;
+        static int MaxAttempts => DaHilgGameManager.MobileWeb ? k_MobileMaxAttempts : k_MaxAttempts;
+        static float Radius => DaHilgGameManager.MobileWeb ? k_MobileRadius : k_Radius;
+        static float RebuildDistance => DaHilgGameManager.MobileWeb ? k_MobileRebuildDistance : k_RebuildDistance;
+
+        void AddGrassClump(Vector3 basePoint, float yaw, float width, float height, Color32 color)
         {
-            AddBlade(basePoint, yaw, width, height, color);
-            AddBlade(basePoint, yaw + Mathf.PI * 0.5f, width * 0.82f, height * 0.92f, color);
+            AddGrassCard(basePoint, yaw, width, height, color);
+            AddGrassCard(basePoint, yaw + Mathf.PI * 0.5f, width * 0.85f, height * 0.92f, color);
+            AddGrassCard(basePoint, yaw + Mathf.PI * 0.23f, width * 0.65f, height * 1.08f, color);
         }
 
-        void AddBlade(Vector3 basePoint, float yaw, float width, float height, Color32 color)
+        void AddGrassCard(Vector3 basePoint, float yaw, float width, float height, Color32 color)
         {
             Vector3 right = new Vector3(Mathf.Cos(yaw), 0f, Mathf.Sin(yaw)) * width;
             Vector3 lean = new Vector3(Mathf.Cos(yaw + 1.1f), 0f, Mathf.Sin(yaw + 1.1f)) * (width * 0.65f);
@@ -182,7 +197,7 @@ namespace DaHilg
 
         static Shader FindLoadedShader()
         {
-            Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+            Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsInactive.Exclude);
             for (int i = 0; i < renderers.Length; i++)
             {
                 Material material = renderers[i] != null ? renderers[i].sharedMaterial : null;

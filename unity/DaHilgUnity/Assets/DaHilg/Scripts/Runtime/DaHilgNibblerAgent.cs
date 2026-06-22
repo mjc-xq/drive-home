@@ -6,7 +6,6 @@ namespace DaHilg
     public sealed class DaHilgNibblerAgent
     {
         static readonly List<DaHilgNibblerAgent> s_Active = new List<DaHilgNibblerAgent>(32);
-        static readonly string[] s_IdleEmotes = { "Dance", "Wave", "Cheer" };
 
         enum NibblerState
         {
@@ -39,7 +38,6 @@ namespace DaHilg
         readonly float m_Seed;
         readonly string m_RunClip;
         readonly string m_ClingClip;
-        readonly string m_EmoteClip;
         NibblerState m_State;
         Vector3 m_Velocity;
         Vector3 m_LungeStart;
@@ -71,7 +69,6 @@ namespace DaHilg
             m_Seed = Mathf.Repeat(Mathf.Sin((index + 1) * 12.9898f) * 43758.5453f, 1f);
             m_RunClip = index % 4 == 3 ? "Walk" : "Run";
             m_ClingClip = index % 3 == 0 ? "Attack" : "Hit";
-            m_EmoteClip = s_IdleEmotes[index % s_IdleEmotes.Length];
 
             // Controller root stays UNSCALED; the character is a CHILD that we scale. This matches the
             // player (capsule in metres on a scale-1 transform + native-scaled visual child) and avoids
@@ -451,13 +448,12 @@ namespace DaHilg
             if (grounded)
             {
                 m_Velocity.y = -1f;
-                // Brake the launch so the nibbler can settle and play a per-seed idle emote.
+                // Brake the launch so the nibbler can settle briefly before resuming the chase.
                 m_Velocity.x = Mathf.Lerp(m_Velocity.x, 0f, 1f - Mathf.Exp(-9f * dt));
                 m_Velocity.z = Mathf.Lerp(m_Velocity.z, 0f, 1f - Mathf.Exp(-9f * dt));
-                // Hold a varied emote (Dance/Wave/Cheer) for a moment before resuming the chase.
-                float emoteHold = 0.6f + m_Seed * 0.7f;
-                if (m_StateTime > 0.28f) Play(m_EmoteClip, 0.18f);
-                if (m_StateTime > 0.28f + emoteHold)
+                float settleHold = 0.55f + m_Seed * 0.45f;
+                if (m_StateTime > 0.28f) Play("Idle", 0.18f);
+                if (m_StateTime > 0.28f + settleHold)
                 {
                     m_State = NibblerState.Chase;
                     m_StateTime = 0f;

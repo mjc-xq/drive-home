@@ -37,7 +37,7 @@ namespace DaHilg
                 else if (m_HasMainTexSt) m_Tiling = shared.GetVector(s_MainTexStId);
 
                 Color c = shared.color;
-                c.a = Mathf.Clamp(c.a <= 0.01f ? 0.88f : c.a, 0.78f, 0.96f);
+                c.a = 1f;
                 if (shared.HasProperty(s_BaseColorId)) m_Block.SetColor(s_BaseColorId, c);
                 if (shared.HasProperty(s_ColorId)) m_Block.SetColor(s_ColorId, c);
             }
@@ -65,7 +65,11 @@ namespace DaHilg
             // The creek water is a flat, textureless surface — a moving emission shimmer makes it read
             // as live, flowing water instead of a static blue slab (two offset sines = rippling sparkle).
             float shimmer = 0.5f + 0.34f * Mathf.Sin(Time.time * 1.8f) + 0.22f * Mathf.Sin(Time.time * 3.3f + 1.3f);
-            Color glow = Color.Lerp(new Color(0.04f, 0.22f, 0.36f), new Color(0.22f, 0.62f, 0.95f), Mathf.Clamp01(shimmer));
+            float t = Mathf.Clamp01(shimmer);
+            Color surface = Color.Lerp(new Color(0.10f, 0.42f, 0.74f, 1f), new Color(0.28f, 0.76f, 1f, 1f), t);
+            Color glow = Color.Lerp(new Color(0.04f, 0.22f, 0.36f), new Color(0.22f, 0.62f, 0.95f), t);
+            m_Block.SetColor(s_BaseColorId, surface);
+            m_Block.SetColor(s_ColorId, surface);
             m_Block.SetColor(s_EmissionId, glow);
 
             m_Renderer.SetPropertyBlock(m_Block);

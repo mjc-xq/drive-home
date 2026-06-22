@@ -13,11 +13,17 @@ namespace DaHilg
         // segments into disconnected dashes that read as "dots, not streets". A 2D minimap can afford
         // to stroke them all.
         const int k_MaxSegmentsPerLayer = 6000;
+        const int k_DiskSides = 14;
+        const int k_RoadTextureWidth = 384;
+        const float k_MinimapZoomDivisor = 3.25f;
+        static readonly Vector2[] s_DiskPoints = new Vector2[k_DiskSides];
 
         readonly Label m_Title;
         readonly Label m_Legend;
         readonly VisualElement m_MapArea;   // holds the solid street texture (bg) + Painter2D markers (content)
         Texture2D m_RoadTex;
+        Rect m_RoadViewBounds;
+        int m_RoadTexHeight;
         DaHilgGameManager m_Manager;
         DaHilgLevelProfile m_Profile;
         MinimapData m_Data;
@@ -72,6 +78,7 @@ namespace DaHilg
             m_MapArea.style.top = 20; m_MapArea.style.bottom = 8;
             m_MapArea.style.backgroundColor = new Color(0.08f, 0.12f, 0.09f, 0.90f);
             m_MapArea.generateVisualContent += OnGenerateVisualContent;
+            m_MapArea.RegisterCallback<GeometryChangedEvent>(_ => RefreshRoadTextureForCurrentView(true));
             Add(m_MapArea);
         }
 
@@ -84,58 +91,178 @@ namespace DaHilg
                 m_Profile = profile;
                 m_Data = MinimapData.FromProfile(profile);
                 m_Title.text = profile != null ? "MAP · " + profile.Label.ToUpperInvariant() : "MAP";
-                RebuildRoadTexture();
+                m_RoadViewBounds = default;
+                RefreshRoadTextureForCurrentView(true);
+            }
+            else
+            {
+                RefreshRoadTextureForCurrentView(false);
             }
 
             MarkDirtyRepaint();
             m_MapArea?.MarkDirtyRepaint();
         }
 
-        // Bake the 1-bit road occupancy grid into a solid-street texture once per level (point-filtered
-        // so streets stay crisp). Assigned as the map area's background so it sits under the markers.
-        void RebuildRoadTexture()
+        void RefreshRoadTextureForCurrentView(bool force)
         {
-            if (m_RoadTex != null) { UnityEngine.Object.Destroy(m_RoadTex); m_RoadTex = null; }
-            if (m_Data == null || m_Data.FillN <= 0 || m_Data.FillRoad == null) { m_MapArea.style.backgroundImage = new StyleBackground(); return; }
-
-            int n = m_Data.FillN;
-            byte[] bits = m_Data.FillRoad;
-            Texture2D tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
-            Color32 ground = new Color32(22, 36, 27, 238);
-            Color32 road = new Color32(124, 130, 138, 255);
-            Color32 edge = new Color32(44, 50, 55, 255);
-            Color32[] px = new Color32[n * n];
-            for (int row = 0; row < n; row++)
+            if (m_Data == null || m_Data.FillN <= 0 || m_Data.FillRoad == null)
             {
-                // Texture2D row 0 = bottom; the grid row 0 = minZ which maps to the map's bottom -> direct.
-                for (int col = 0; col < n; col++)
-                {
-                    int cell = row * n + col;
-                    bool set = (bits[cell >> 3] & (1 << (cell & 7))) != 0;
-                    px[row * n + col] = set ? road : (HasRoadNeighbor(bits, n, col, row) ? edge : ground);
-                }
+                if (m_RoadTex != null) { UnityEngine.Object.Destroy(m_RoadTex); m_RoadTex = null; }
+                if (m_MapArea != null) m_MapArea.style.backgroundImage = new StyleBackground();
+                return;
             }
-            tex.SetPixels32(px);
-            tex.Apply(false, false);
-            m_RoadTex = tex;
-            m_MapArea.style.backgroundImage = new StyleBackground(tex);
+
+            Rect mapRect = m_MapArea != null ? m_MapArea.contentRect : new Rect(0f, 0f, 190f, 148f);
+            float aspect = mapRect.width > 4f && mapRect.height > 4f ? mapRect.width / mapRect.height : 1.28f;
+            Rect viewBounds = ViewBoundsFor(aspect);
+            int texHeight = Mathf.Clamp(Mathf.RoundToInt(k_RoadTextureWidth / Mathf.Max(0.4f, aspect)), 144, 320);
+            Vector2 oldCenter = m_RoadViewBounds.center;
+            Vector2 newCenter = viewBounds.center;
+            bool moved = (oldCenter - newCenter).sqrMagnitude > 12f * 12f;
+            bool resized = Mathf.Abs(m_RoadViewBounds.width - viewBounds.width) > 0.5f
+                || Mathf.Abs(m_RoadViewBounds.height - viewBounds.height) > 0.5f
+                || m_RoadTexHeight != texHeight;
+            if (!force && m_RoadTex != null && !moved && !resized) return;
+
+            RebuildRoadTexture(viewBounds, texHeight);
         }
 
-        static bool HasRoadNeighbor(byte[] bits, int n, int col, int row)
+        // Bake the 1-bit road occupancy grid into a zoomed solid-street texture. The crop matches
+        // WorldToMap() so the filled streets and vector strokes stay aligned.
+        void RebuildRoadTexture(Rect viewBounds, int texHeight)
         {
-            for (int dz = -1; dz <= 1; dz++)
+            if (m_RoadTex != null && (m_RoadTex.width != k_RoadTextureWidth || m_RoadTex.height != texHeight))
             {
-                int z = row + dz;
-                if (z < 0 || z >= n) continue;
-                for (int dx = -1; dx <= 1; dx++)
+                UnityEngine.Object.Destroy(m_RoadTex);
+                m_RoadTex = null;
+            }
+
+            if (m_RoadTex == null)
+            {
+                m_RoadTex = new Texture2D(k_RoadTextureWidth, texHeight, TextureFormat.RGBA32, false)
                 {
-                    int x = col + dx;
-                    if (x < 0 || x >= n) continue;
-                    int cell = z * n + x;
-                    if ((bits[cell >> 3] & (1 << (cell & 7))) != 0) return true;
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp
+                };
+            }
+
+            Color ground = new Color(0.070f, 0.115f, 0.085f, 0.96f);
+            Color edge = new Color(0.175f, 0.195f, 0.205f, 1f);
+            Color road = new Color(0.64f, 0.67f, 0.71f, 1f);
+            Color roadHi = new Color(0.78f, 0.80f, 0.82f, 1f);
+            Color32[] px = new Color32[k_RoadTextureWidth * texHeight];
+            for (int row = 0; row < texHeight; row++)
+            {
+                float z = Mathf.Lerp(viewBounds.yMin, viewBounds.yMax, (row + 0.5f) / texHeight);
+                for (int col = 0; col < k_RoadTextureWidth; col++)
+                {
+                    float x = Mathf.Lerp(viewBounds.xMin, viewBounds.xMax, (col + 0.5f) / k_RoadTextureWidth);
+                    float alpha = SampleRoadAlpha(x, z);
+                    float edge01 = Mathf.SmoothStep(0.035f, 0.28f, alpha);
+                    float road01 = Mathf.SmoothStep(0.34f, 0.66f, alpha);
+                    float highlight01 = Mathf.SmoothStep(0.76f, 0.96f, alpha) * 0.45f;
+                    Color c = Color.Lerp(ground, edge, edge01);
+                    c = Color.Lerp(c, road, road01);
+                    c = Color.Lerp(c, roadHi, highlight01);
+                    px[row * k_RoadTextureWidth + col] = c;
                 }
             }
-            return false;
+            m_RoadTex.SetPixels32(px);
+            m_RoadTex.Apply(false, false);
+            m_RoadTexHeight = texHeight;
+            m_RoadViewBounds = viewBounds;
+            m_MapArea.style.backgroundImage = new StyleBackground(m_RoadTex);
+        }
+
+        float SampleRoadAlpha(float x, float z)
+        {
+            if (m_Data == null || m_Data.RoadAlpha == null || m_Data.FillN <= 1) return 0f;
+            int n = m_Data.FillN;
+            Rect source = m_Data.Bounds;
+            float gx = Mathf.Clamp01((x - source.xMin) / Mathf.Max(0.001f, source.width)) * (n - 1);
+            float gz = Mathf.Clamp01((z - source.yMin) / Mathf.Max(0.001f, source.height)) * (n - 1);
+            int x0 = Mathf.Clamp(Mathf.FloorToInt(gx), 0, n - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt(gz), 0, n - 1);
+            int x1 = Mathf.Min(n - 1, x0 + 1);
+            int z1 = Mathf.Min(n - 1, z0 + 1);
+            float tx = gx - x0;
+            float tz = gz - z0;
+            float a00 = m_Data.RoadAlpha[z0 * n + x0] / 255f;
+            float a10 = m_Data.RoadAlpha[z0 * n + x1] / 255f;
+            float a01 = m_Data.RoadAlpha[z1 * n + x0] / 255f;
+            float a11 = m_Data.RoadAlpha[z1 * n + x1] / 255f;
+            return Mathf.Lerp(Mathf.Lerp(a00, a10, tx), Mathf.Lerp(a01, a11, tx), tz);
+        }
+
+        static bool RoadBit(byte[] bits, int n, int col, int row)
+        {
+            if (bits == null || col < 0 || col >= n || row < 0 || row >= n) return false;
+            int cell = row * n + col;
+            return cell >= 0 && (cell >> 3) < bits.Length && (bits[cell >> 3] & (1 << (cell & 7))) != 0;
+        }
+
+        static byte[] BuildSmoothRoadAlpha(byte[] bits, int n)
+        {
+            if (bits == null || n <= 0) return null;
+            float[] stage = new float[n * n];
+            float[] tmp = new float[n * n];
+            float[] smooth = new float[n * n];
+            for (int row = 0; row < n; row++)
+            {
+                for (int col = 0; col < n; col++)
+                {
+                    bool center = RoadBit(bits, n, col, row);
+                    int near1 = 0;
+                    int near2 = 0;
+                    for (int dz = -2; dz <= 2; dz++)
+                    {
+                        for (int dx = -2; dx <= 2; dx++)
+                        {
+                            if (!RoadBit(bits, n, col + dx, row + dz)) continue;
+                            near2++;
+                            if (Mathf.Abs(dx) <= 1 && Mathf.Abs(dz) <= 1) near1++;
+                        }
+                    }
+                    float v = center ? 1f : (near1 > 0 ? 0.66f : (near2 > 0 ? 0.24f : 0f));
+                    stage[row * n + col] = v;
+                }
+            }
+
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int row = 0; row < n; row++)
+                {
+                    for (int col = 0; col < n; col++)
+                    {
+                        float a = stage[row * n + Mathf.Max(0, col - 1)];
+                        float b = stage[row * n + col];
+                        float c = stage[row * n + Mathf.Min(n - 1, col + 1)];
+                        tmp[row * n + col] = (a + b * 2f + c) * 0.25f;
+                    }
+                }
+                for (int row = 0; row < n; row++)
+                {
+                    int row0 = Mathf.Max(0, row - 1);
+                    int row1 = Mathf.Min(n - 1, row + 1);
+                    for (int col = 0; col < n; col++)
+                    {
+                        float a = tmp[row0 * n + col];
+                        float b = tmp[row * n + col];
+                        float c = tmp[row1 * n + col];
+                        smooth[row * n + col] = (a + b * 2f + c) * 0.25f;
+                    }
+                }
+                float[] swap = stage;
+                stage = smooth;
+                smooth = swap;
+            }
+
+            byte[] alpha = new byte[n * n];
+            for (int i = 0; i < alpha.Length; i++)
+            {
+                alpha[i] = (byte)Mathf.Clamp(Mathf.RoundToInt(stage[i] * 255f), 0, 255);
+            }
+            return alpha;
         }
 
         void OnGenerateVisualContent(MeshGenerationContext context)
@@ -145,10 +272,12 @@ namespace DaHilg
             Rect mapRect = new Rect(0f, 0f, m_MapArea.contentRect.width, m_MapArea.contentRect.height);
             if (mapRect.width <= 20f || mapRect.height <= 20f) return;
             if (m_Data == null || !m_Data.Valid) return;
+            Rect viewBounds = ViewBoundsFor(mapRect.width / Mathf.Max(1f, mapRect.height));
 
             Painter2D painter = context.painter2D;
-            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.03f, 0.12f, 0.20f, 0.95f), 5.6f);
-            DrawSegments(painter, mapRect, m_Data.Creek, new Color(0.30f, 0.78f, 1f, 0.95f), 3.2f);
+            DrawStreetNetwork(painter, mapRect, viewBounds);
+            DrawSegments(painter, mapRect, viewBounds, m_Data.Creek, new Color(0.03f, 0.12f, 0.20f, 0.95f), 5.6f);
+            DrawSegments(painter, mapRect, viewBounds, m_Data.Creek, new Color(0.30f, 0.78f, 1f, 0.95f), 3.2f);
 
             if (m_Profile != null)
             {
@@ -157,14 +286,56 @@ namespace DaHilg
                     : m_Profile.GreetSafeZones;
                 // Only the SAFE zone gets a soft green tint — no red wash over the whole map (danger is
                 // implied by "not safe" + the MARKED banner + the player pulse). Keeps the map readable.
-                DrawZones(painter, mapRect, safeZones, new Color(0.25f, 0.9f, 0.45f, 0.10f), new Color(0.30f, 1f, 0.42f, 0.6f));
+                DrawZones(painter, mapRect, viewBounds, safeZones, new Color(0.25f, 0.9f, 0.45f, 0.10f), new Color(0.30f, 1f, 0.42f, 0.6f));
             }
 
-            DrawActors(painter, mapRect);
-            DrawAnimals(painter, mapRect);
+            DrawNibblers(painter, mapRect, viewBounds);
+            DrawActors(painter, mapRect, viewBounds);
+            DrawAnimals(painter, mapRect, viewBounds);
         }
 
-        void DrawSegments(Painter2D painter, Rect rect, List<Segment> segments, Color color, float width)
+        Rect ViewBoundsFor(float aspect)
+        {
+            Rect full = m_Data != null && m_Data.Valid ? m_Data.Bounds : new Rect(-120f, -120f, 240f, 240f);
+            float desiredWidth = Mathf.Clamp(full.width / k_MinimapZoomDivisor,
+                DaHilgGameManager.MobileWeb ? 210f : 260f,
+                DaHilgGameManager.MobileWeb ? 320f : 420f);
+            float width = Mathf.Min(full.width, desiredWidth);
+            float height = Mathf.Min(full.height, width / Mathf.Max(0.55f, aspect));
+            if (height >= full.height) width = Mathf.Min(full.width, height * Mathf.Max(0.55f, aspect));
+
+            Vector2 center = full.center;
+            if (m_Manager != null && m_Manager.ActiveActor != null)
+            {
+                Vector3 p = m_Manager.ActiveActor.FeetPosition;
+                center = new Vector2(p.x, p.z);
+            }
+            else if (m_Profile != null && m_Profile.PlayerSpawns != null && m_Profile.PlayerSpawns.Length > 0)
+            {
+                Vector3 p = m_Profile.PlayerSpawns[0];
+                center = new Vector2(p.x, p.z);
+            }
+
+            float xMin = full.width <= width ? full.xMin : Mathf.Clamp(center.x - width * 0.5f, full.xMin, full.xMax - width);
+            float yMin = full.height <= height ? full.yMin : Mathf.Clamp(center.y - height * 0.5f, full.yMin, full.yMax - height);
+            return new Rect(xMin, yMin, width, height);
+        }
+
+        void DrawStreetNetwork(Painter2D painter, Rect rect, Rect viewBounds)
+        {
+            // Draw the vector street layers over the baked road-fill texture. The fill gives the
+            // neighborhood mass; these strokes make actual streets, sidewalks, curbs, and lane lines
+            // readable at small HUD sizes.
+            DrawSegments(painter, rect, viewBounds, m_Data.Drive, new Color(0.02f, 0.025f, 0.03f, 0.95f), 7.0f);
+            DrawSegments(painter, rect, viewBounds, m_Data.Road, new Color(0.02f, 0.025f, 0.03f, 0.88f), 5.4f);
+            DrawSegments(painter, rect, viewBounds, m_Data.Drive, new Color(0.54f, 0.57f, 0.62f, 0.96f), 4.9f);
+            DrawSegments(painter, rect, viewBounds, m_Data.Road, new Color(0.47f, 0.50f, 0.55f, 0.94f), 3.5f);
+            DrawSegments(painter, rect, viewBounds, m_Data.Walk, new Color(0.80f, 0.76f, 0.64f, 0.90f), 2.2f);
+            DrawSegments(painter, rect, viewBounds, m_Data.Curb, new Color(0.92f, 0.94f, 0.86f, 0.85f), 1.35f);
+            DrawSegments(painter, rect, viewBounds, m_Data.Line, new Color(1f, 0.82f, 0.26f, 0.90f), 1.15f);
+        }
+
+        void DrawSegments(Painter2D painter, Rect rect, Rect viewBounds, List<Segment> segments, Color color, float width)
         {
             if (segments == null || segments.Count == 0) return;
             painter.strokeColor = color;
@@ -173,37 +344,43 @@ namespace DaHilg
             for (int i = 0; i < segments.Count; i++)
             {
                 Segment segment = segments[i];
-                painter.MoveTo(WorldToMap(segment.X1, segment.Z1, rect));
-                painter.LineTo(WorldToMap(segment.X2, segment.Z2, rect));
+                if (!SegmentTouchesBounds(segment, viewBounds)) continue;
+                painter.MoveTo(WorldToMap(segment.X1, segment.Z1, rect, viewBounds));
+                painter.LineTo(WorldToMap(segment.X2, segment.Z2, rect, viewBounds));
             }
             painter.Stroke();
         }
 
-        void DrawZones(Painter2D painter, Rect rect, DaHilgBoxZone[] zones, Color fill, Color stroke)
+        void DrawZones(Painter2D painter, Rect rect, Rect viewBounds, DaHilgBoxZone[] zones, Color fill, Color stroke)
         {
             if (zones == null) return;
-            float wToPx = rect.width / Mathf.Max(1f, m_Data.Bounds.width);
+            float wToPx = rect.width / Mathf.Max(1f, viewBounds.width);
             for (int i = 0; i < zones.Length; i++)
             {
                 DaHilgBoxZone zone = zones[i];
-                Vector2 center = WorldToMap(zone.Center.x, zone.Center.z, rect);
+                Vector2 center = WorldToMap(zone.Center.x, zone.Center.z, rect, viewBounds);
                 // Soft rounded region (a shaded blob), never a hard square outline.
                 float pr = Mathf.Clamp(Mathf.Max(zone.Size.x, zone.Size.z) * 0.5f * wToPx, 7f, 64f);
                 DrawDisk(painter, center, pr, fill);
                 DrawDisk(painter, center, pr * 0.55f, new Color(fill.r, fill.g, fill.b, fill.a * 1.5f));
             }
+        }
 
+        void DrawNibblers(Painter2D painter, Rect rect, Rect viewBounds)
+        {
+            if (m_Manager == null || m_Manager.Nibblers == null) return;
             IReadOnlyList<DaHilgNibblerAgent> nibblers = m_Manager.Nibblers;
             for (int i = 0; i < nibblers.Count; i++)
             {
                 DaHilgNibblerAgent nibbler = nibblers[i];
                 if (nibbler == null || !nibbler.Active) continue;
                 Vector3 position = nibbler.Position;
-                DrawDisk(painter, WorldToMap(position.x, position.z, rect), 2.3f, new Color(1f, 0.78f, 0.25f, 0.78f));
+                if (!viewBounds.Contains(new Vector2(position.x, position.z))) continue;
+                DrawDisk(painter, WorldToMap(position.x, position.z, rect, viewBounds), 2.3f, new Color(1f, 0.78f, 0.25f, 0.78f));
             }
         }
 
-        void DrawActors(Painter2D painter, Rect rect)
+        void DrawActors(Painter2D painter, Rect rect, Rect viewBounds)
         {
             if (m_Manager == null || m_Manager.Actors == null) return;
             IReadOnlyList<DaHilgActor> actors = m_Manager.Actors;
@@ -212,7 +389,7 @@ namespace DaHilg
                 DaHilgActor actor = actors[i];
                 if (actor == null) continue;
                 bool active = actor == m_Manager.ActiveActor;
-                Vector2 p = WorldToMap(actor.FeetPosition.x, actor.FeetPosition.z, rect);
+                Vector2 p = WorldToMap(actor.FeetPosition.x, actor.FeetPosition.z, rect, viewBounds);
                 if (active && m_Manager.PlayerMarked)
                 {
                     float pulse = 8.5f + Mathf.PingPong(Time.time * 8f, 4f);
@@ -233,7 +410,7 @@ namespace DaHilg
             }
         }
 
-        void DrawAnimals(Painter2D painter, Rect rect)
+        void DrawAnimals(Painter2D painter, Rect rect, Rect viewBounds)
         {
             if (m_Manager == null || m_Manager.Animals == null) return;
             IReadOnlyList<DaHilgAnimalAgent> animals = m_Manager.Animals;
@@ -241,16 +418,25 @@ namespace DaHilg
             {
                 DaHilgAnimalAgent animal = animals[i];
                 if (animal == null) continue;
-                DrawDisk(painter, WorldToMap(animal.Position.x, animal.Position.z, rect), 3.1f, new Color(1f, 0.73f, 0.26f, 0.90f));
+                if (!viewBounds.Contains(new Vector2(animal.Position.x, animal.Position.z))) continue;
+                DrawDisk(painter, WorldToMap(animal.Position.x, animal.Position.z, rect, viewBounds), 3.1f, new Color(1f, 0.73f, 0.26f, 0.90f));
             }
         }
 
-        Vector2 WorldToMap(float x, float z, Rect rect)
+        Vector2 WorldToMap(float x, float z, Rect rect, Rect bounds)
         {
-            Rect bounds = m_Data.Bounds;
             float u = Mathf.InverseLerp(bounds.xMin, bounds.xMax, x);
             float v = Mathf.InverseLerp(bounds.yMin, bounds.yMax, z);
             return new Vector2(rect.xMin + u * rect.width, rect.yMax - v * rect.height);
+        }
+
+        static bool SegmentTouchesBounds(Segment segment, Rect bounds)
+        {
+            float minX = Mathf.Min(segment.X1, segment.X2);
+            float maxX = Mathf.Max(segment.X1, segment.X2);
+            float minZ = Mathf.Min(segment.Z1, segment.Z2);
+            float maxZ = Mathf.Max(segment.Z1, segment.Z2);
+            return maxX >= bounds.xMin && minX <= bounds.xMax && maxZ >= bounds.yMin && minZ <= bounds.yMax;
         }
 
         static void FillRect(Painter2D painter, Rect rect, Color color)
@@ -287,14 +473,12 @@ namespace DaHilg
 
         static void DrawDisk(Painter2D painter, Vector2 center, float radius, Color color)
         {
-            const int sides = 14;
-            Vector2[] points = new Vector2[sides];
-            for (int i = 0; i < sides; i++)
+            for (int i = 0; i < k_DiskSides; i++)
             {
-                float angle = i / (float)sides * Mathf.PI * 2f;
-                points[i] = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+                float angle = i / (float)k_DiskSides * Mathf.PI * 2f;
+                s_DiskPoints[i] = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
             }
-            FillPolygon(painter, color, points);
+            FillPolygon(painter, color, s_DiskPoints);
         }
 
         readonly struct Segment
@@ -318,6 +502,7 @@ namespace DaHilg
             public Rect Bounds;
             public int FillN;            // road-fill grid resolution (0 = none)
             public byte[] FillRoad;      // packed 1-bit road occupancy grid, row-major (row 0 = minZ)
+            public byte[] RoadAlpha;     // smoothed 0..255 road mask for HUD rendering
             public List<Segment> Road = new List<Segment>();
             public List<Segment> Drive = new List<Segment>();
             public List<Segment> Walk = new List<Segment>();
@@ -343,6 +528,7 @@ namespace DaHilg
                 data.Bounds = new Rect(minX, minZ, Mathf.Max(1f, maxX - minX), Mathf.Max(1f, maxZ - minZ));
                 data.FillN = Mathf.RoundToInt(ExtractFloat(json, "fillN", 0f));
                 data.FillRoad = ExtractBase64(json, "fillRoad");
+                data.RoadAlpha = BuildSmoothRoadAlpha(data.FillRoad, data.FillN);
                 data.Road = ExtractSegments(json, "road");
                 data.Drive = ExtractSegments(json, "drive");
                 data.Walk = ExtractSegments(json, "walk");
