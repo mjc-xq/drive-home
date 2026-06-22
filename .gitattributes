@@ -1,4 +1,6 @@
+# Vercel CANNOT resolve Git LFS (its build checkout has no LFS remote: `git lfs pull` -> "Not in a
+# Git repository"), so any LFS-tracked file deploys as a 130-byte pointer and 404s/crashes at runtime.
+# The Unity game's served binaries (*.unityweb + StreamingAssets/*.glb) therefore MUST be regular git
+# blobs. Only the R3F app's public/da-hilg/*.glb and the non-deployed source GLBs stay in LFS.
 public/da-hilg/*.glb filter=lfs diff=lfs merge=lfs -text
-public/unity/da-hilg/StreamingAssets/*.glb filter=lfs diff=lfs merge=lfs -text
 unity/DaHilgUnity/Assets/DaHilg/Art/Levels/*.glb filter=lfs diff=lfs merge=lfs -text
-*.unityweb filter=lfs diff=lfs merge=lfs -text
