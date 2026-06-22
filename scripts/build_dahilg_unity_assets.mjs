@@ -8,13 +8,18 @@
 import { NodeIO, Logger } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { dedup, meshopt, prune, reorder, weld } from '@gltf-transform/functions';
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, 'public', 'da-hilg', ...p);
+
+// Roster manifest = single source of truth for the character set. We derive the character
+// GLB copy list from its ids (cece.glb, mike.glb, drew.glb — kelli is retired, NOT listed).
+const ROSTER = JSON.parse(readFileSync(path.join(ROOT, 'config', 'dahilg-roster.json'), 'utf8'));
+const ROSTER_IDS = ROSTER.characters.map((c) => c.id);
 const EXPORT = (...p) => path.join(ROOT, 'exports', ...p);
 const OUT_DIR = path.join(ROOT, 'unity', 'DaHilgUnity', 'Library', 'DaHilgUnitySource');
 const OUT = (...p) => path.join(OUT_DIR, ...p);
@@ -33,32 +38,32 @@ await MeshoptEncoder.ready;
 
 rmSync(OUT_DIR, { recursive: true, force: true });
 mkdirSync(OUT_DIR, { recursive: true });
-mkdirSync(OUT('anims'), { recursive: true });
+mkdirSync(OUT('anims'), { recursive: true });           // player motion set
+mkdirSync(OUT('nibbler-anims'), { recursive: true });   // nibbler motion set (distinct namespace)
+
+// PLAYER motion states (shared cece+mike) -> public/da-hilg/anims/<State>.glb
+const PLAYER_STATES = [
+  'Idle', 'Walk', 'Run', 'Jump', 'Dance', 'Wave', 'Cheer',
+  'Attack', 'Hit', 'Stumble', 'Knockdown', 'Crawl', 'Climb',
+];
+// NIBBLER motion states (drew) -> public/da-hilg/nibbler-anims/<State>.glb. Player & nibbler
+// share state NAMES (Idle/Run/Climb/Jump/Knockdown) so they MUST live in separate folders.
+const NIBBLER_STATES = ['Idle', 'Run', 'Crawl', 'Climb', 'Bite', 'Jump', 'Knockdown'];
 
 const glbs = [
   'level.glb',
   'canyon.glb',
   'stanton.glb',
-  'cece.glb',
-  'drew.glb',
-  'kelli.glb',
-  'mike.glb',
+  // Character bodies are derived from the roster manifest (cece, mike, drew, kelli).
+  ...ROSTER_IDS.map((id) => `${id}.glb`),
   'meemaw.glb',
   'xq.glb',
   'sun3d.glb',
-  'anims/attack.glb',
-  'anims/cheer.glb',
-  'anims/climb.glb',
-  'anims/crawl.glb',
-  'anims/dance.glb',
-  'anims/hit.glb',
-  'anims/idle.glb',
-  'anims/jump.glb',
-  'anims/knockdown.glb',
-  'anims/run.glb',
-  'anims/stumble.glb',
-  'anims/walk.glb',
-  'anims/wave.glb',
+  // Player motion set -> DaHilgUnitySource/anims/<state>.glb (lowercase: the C# builder loads
+  // the source rig as <state>.ToLowerInvariant()+".glb"; C# copies to Art/Animations).
+  ...PLAYER_STATES.map((s) => `anims/${s.toLowerCase()}.glb`),
+  // Nibbler motion set -> DaHilgUnitySource/nibbler-anims/<state>.glb (C# copies to Art/NibblerAnimations).
+  ...NIBBLER_STATES.map((s) => `nibbler-anims/${s.toLowerCase()}.glb`),
 ];
 
 const sourceOverrides = useRawUnityLevelSources

@@ -20,20 +20,6 @@ MonoBehaviour:
   - {fileID: 11400000, guid: a8ece56730a89420c86da0b3e75890bd, type: 2}
   - {fileID: 11400000, guid: 42d373b7e570b4baead063d26f7cb388, type: 2}
   Characters:
-  - Id: mike
-    Label: Mike
-    Blurb: Dad
-    Prefab: {fileID: 6635245195314443262, guid: 09dbf31029fd54aa3888300b9842ac61, type: 3}
-    Accent: {r: 0.36, g: 0.68, b: 1, a: 1}
-    VisualYawOffset: 0
-    AnimatorController: {fileID: 9100000, guid: 356f520c3bfc74ff1a17777e1915b702, type: 2}
-  - Id: kelli
-    Label: Kelli
-    Blurb: Mom
-    Prefab: {fileID: 6635245195314443262, guid: 92edf880c2b29453e9970245247f4c71, type: 3}
-    Accent: {r: 1, g: 0.67, b: 0.35, a: 1}
-    VisualYawOffset: 0
-    AnimatorController: {fileID: 9100000, guid: 80e4667c77ce242bfb416d1d849dede1, type: 2}
   - Id: cece
     Label: Cece
     Blurb: Kid
@@ -41,14 +27,16 @@ MonoBehaviour:
     Accent: {r: 1, g: 0.45, b: 0.76, a: 1}
     VisualYawOffset: 0
     AnimatorController: {fileID: 9100000, guid: 9e5cb70ce4eab4aa0a686eede89e7973, type: 2}
-  - Id: drew
-    Label: Drew
-    Blurb: Kid
-    Prefab: {fileID: 6635245195314443262, guid: d272ee557b3d641be828a72806e202b9, type: 3}
-    Accent: {r: 0.42, g: 1, b: 0.58, a: 1}
+  - Id: mike
+    Label: Mike
+    Blurb: Dad
+    Prefab: {fileID: 6635245195314443262, guid: 09dbf31029fd54aa3888300b9842ac61, type: 3}
+    Accent: {r: 0.36, g: 0.68, b: 1, a: 1}
     VisualYawOffset: 0
-    AnimatorController: {fileID: 9100000, guid: 7e69e68f3a78b40658f32fabcc4ff5a5, type: 2}
+    AnimatorController: {fileID: 9100000, guid: 356f520c3bfc74ff1a17777e1915b702, type: 2}
   CharacterAnimator: {fileID: 9100000, guid: 9e5cb70ce4eab4aa0a686eede89e7973, type: 2}
+  NibblerAnimator: {fileID: 9100000, guid: 49221b2c228e242f499c3ff3b525024f, type: 2}
+  NibblerPrefab: {fileID: 6635245195314443262, guid: d272ee557b3d641be828a72806e202b9, type: 3}
   DefaultLevelSlug: dahill
   DefaultCharacterId: cece
   DefaultMode: 1

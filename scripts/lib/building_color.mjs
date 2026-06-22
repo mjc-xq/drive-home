@@ -55,14 +55,26 @@ const isPlausiblePaint = (c) => {
 export function makeBuildingColor(pick) {
   const COL = existsSync(pick('buildings_color.json')) ? JSON.parse(readFileSync(pick('buildings_color.json'), 'utf8')) : {};
   const RCOL = existsSync(pick('buildings_roof_color.json')) ? JSON.parse(readFileSync(pick('buildings_roof_color.json'), 'utf8')) : {};
+  // provenance per building: 'sv' (real Street-View facade) | 'aerial' | 'knn' | undefined (none).
+  const SRC = existsSync(pick('buildings_color_src.json')) ? JSON.parse(readFileSync(pick('buildings_color_src.json'), 'utf8')) : {};
   const wallColor = (ib) => {
     let src = COL[ib];
-    if (!src || !isPlausiblePaint(src)) src = RCOL[ib] ? lighten(RCOL[ib]) : seededColor(WALL_PALETTE, ib);
+    const prov = SRC[ib];
+    // WALL colour and ROOF colour are SEPARATE measurements from SEPARATE sources and are often
+    // different (a gray-shingle roof over a tan house). So:
+    //  - 'sv'/'knn' = a true Street-View FACADE sample -> the real wall colour: PRESERVE its value
+    //    (skip the low-luma lift that washes dark paints toward stucco) and push chroma harder.
+    //  - 'aerial' = the footprint sampled TOP-DOWN = essentially the roof tint, NOT a wall colour;
+    //    keep it only as a weak hint with gentle normalization, never high-chroma "real".
+    //  - none/implausible = an INDEPENDENT warm paint palette (NEVER derived from the roof colour,
+    //    since walls and roofs do not match).
+    const real = !!src && isPlausiblePaint(src) && (prov === 'sv' || prov === 'knn');
+    if (!src || !isPlausiblePaint(src)) src = seededColor(WALL_PALETTE, ib);
     const L = Math.max(0.02, luma(src));
-    let c = src.map((v) => v * (remapLuma(L) / L));
+    let c = real ? src.slice() : src.map((v) => v * (remapLuma(L) / L));
     c = deGreen(c);
     const m = luma(c);
-    c = c.map((v) => m + (v - m) * 1.24);   // stronger chroma so paint reads as colour, not pale wash
+    c = c.map((v) => m + (v - m) * (real ? 1.45 : 1.24));   // stronger chroma so paint reads as colour, not pale wash
     return c.map(clamp01);
   };
   const roofColor = (ib) => {

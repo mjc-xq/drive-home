@@ -808,8 +808,14 @@ namespace DaHilg
             for (int i = 0; i < poolSize; i++)
             {
                 DaHilgCharacterSlot slot = Settings.Characters[i % Settings.Characters.Length];
-                if (slot.Prefab == null) continue;
-                m_Nibblers.Add(new DaHilgNibblerAgent(slot.Prefab, m_NibblerRoot, m_ActiveActor.transform, ResolveAnimator(slot), Settings.NibblerScale, i));
+                // The swarm is the dedicated "drew" nibbler rig + its nibbler controller (Idle/Run/Crawl/
+                // Climb/Bite/Jump/Knockdown). Fall back to the player slot's body/controller only if the
+                // Unity-side NibblerPrefab/NibblerAnimator aren't wired — otherwise the swarm would be
+                // cece-meshed players with a player controller.
+                GameObject prefab = Settings.NibblerPrefab != null ? Settings.NibblerPrefab : slot.Prefab;
+                RuntimeAnimatorController animatorController = Settings.NibblerAnimator != null ? Settings.NibblerAnimator : ResolveAnimator(slot);
+                if (prefab == null) continue;
+                m_Nibblers.Add(new DaHilgNibblerAgent(prefab, m_NibblerRoot, m_ActiveActor.transform, animatorController, Settings.NibblerScale, i));
             }
         }
 

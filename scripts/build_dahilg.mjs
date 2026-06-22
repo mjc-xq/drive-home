@@ -19,6 +19,8 @@
  *   node scripts/build_dahilg.mjs --levels=dahill,canyon   # export only these levels
  *   node scripts/build_dahilg.mjs --skip-unity         # alias for --to=unitysrc
  *   node scripts/build_dahilg.mjs --fetch-facades      # re-fetch Street View facades first (needs network)
+ *   node scripts/build_dahilg.mjs --convert            # force Mixamo FBX -> body/clip GLBs before assets
+ *                                                      # (otherwise auto-runs only when a body GLB is stale)
  *   node scripts/build_dahilg.mjs --dry-run            # print the plan, run nothing
  *
  * TO ADD A NEW LEVEL
@@ -33,7 +35,8 @@
  *   4. Re-run: node scripts/build_dahilg.mjs
  */
 import { execSync } from 'node:child_process';
-import { statSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { statSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,11 +63,31 @@ const LEVELS = [
 const STAGES = ['export', 'assets', 'unitysrc', 'unitybuild'];
 const UNITY = '/Applications/Unity/Hub/Editor/6000.5.0f1/Unity.app/Contents/MacOS/Unity';
 
+// ---- MIXAMO FBX CONVERT (optional, before the `assets` stage) ---------------------
+// All three characters share ONE canonical Mixamo skeleton, so each character's Mixamo
+// FBX dump (one @-clip per file + an @T-Pose mesh) converts to a body GLB + a clip-only
+// GLB that join the shared motion library. The converter is the Blender-owned headless
+// script; we just invoke it once per roster character. This step is OPT-IN — it runs only
+// with --convert OR when a character's body GLB is stale/missing (freshness check) — so a
+// normal `node scripts/build_dahilg.mjs` never reconverts.
+const BLENDER = '/Applications/Blender.app/Contents/MacOS/Blender';
+const MIXAMO_CONVERTER = path.join(ROOT, 'scripts', 'convert_mixamo_fbx.py');
+// Source Mixamo FBX folders per character id (the @-clip dumps). Shared-contract paths.
+const MIXAMO_FBX_DIRS = {
+  cece: path.join(os.homedir(), 'Downloads', 'Cece mixamo'),
+  drew: path.join(os.homedir(), 'Downloads', 'drew-animations'),
+  mike: path.join(os.homedir(), 'Downloads', 'dad'),
+  kelli: path.join(os.homedir(), 'Downloads', 'kelli'),
+};
+// Roster manifest = single source of truth for the character set (id + body GLB path).
+const ROSTER = JSON.parse(readFileSync(path.join(ROOT, 'config', 'dahilg-roster.json'), 'utf8'));
+
 // ---- flags ----------------------------------------------------------------
 const argv = process.argv.slice(2);
 const flag = (name) => { const a = argv.find(x => x === `--${name}` || x.startsWith(`--${name}=`)); return a === undefined ? undefined : (a.includes('=') ? a.split('=').slice(1).join('=') : true); };
 const dryRun = !!flag('dry-run');
 const fetchFacades = !!flag('fetch-facades');
+const forceConvert = !!flag('convert');   // force the Mixamo FBX -> GLB convert step
 let stages = STAGES.slice();
 if (flag('stages')) stages = String(flag('stages')).split(',').map(s => s.trim()).filter(Boolean);
 if (flag('from')) { const i = STAGES.indexOf(String(flag('from'))); if (i < 0) die(`unknown --from stage`); stages = STAGES.slice(i); }
@@ -150,8 +173,58 @@ function stageExport() {
        { ALLOW_UNSTAMPED_SV_FACADES: '1' });
   }
 }
+// True if the character's body GLB (src/assets/<id>-mx.glb) is missing or OLDER than the
+// newest .fbx in its source folder — i.e. the convert output is stale and should rebuild.
+function mixamoConvertStale(id, body) {
+  const out = path.join(ROOT, body);
+  const dir = MIXAMO_FBX_DIRS[id];
+  if (!dir || !existsSync(dir)) return false;     // no source folder => can't (re)convert
+  if (!existsSync(out)) return true;              // never converted
+  const outM = statSync(out).mtimeMs;
+  const newest = readdirSync(dir)
+    .filter((f) => f.toLowerCase().endsWith('.fbx'))
+    .reduce((m, f) => Math.max(m, statSync(path.join(dir, f)).mtimeMs), 0);
+  return newest > outM;
+}
+
+// OPTIONAL Mixamo FBX -> GLB convert: per roster character, run the Blender-owned headless
+// converter (one body GLB + one clip-only GLB per id). Runs only on --convert or a freshness
+// miss; the character id is passed EXPLICITLY (the converter ignores the folder prefix). Each
+// character is independently guarded so a missing folder/converter just warns + skips.
+function maybeConvertMixamo() {
+  const targets = ROSTER.characters.filter((c) =>
+    forceConvert || mixamoConvertStale(c.id, c.body));
+  if (targets.length === 0) {
+    console.log('  (mixamo convert: bodies fresh — skipped; pass --convert to force)');
+    return;
+  }
+  banner('CONVERT — Mixamo FBX -> shared-skeleton GLBs');
+  if (!existsSync(BLENDER)) { console.warn(`  ! Blender not found at ${BLENDER} — skipping convert`); return; }
+  if (!existsSync(MIXAMO_CONVERTER)) { console.warn(`  ! converter not found at ${path.relative(ROOT, MIXAMO_CONVERTER)} — skipping convert`); return; }
+  // The converter writes BOTH <id>-mx.glb and <id>-mx-anims.glb into ONE out_dir; the repo
+  // wants the body in src/assets/ and the clip GLB in src/assets/anim/. So convert into a tmp
+  // dir, then split-copy to the two destinations the roster/asset-builder expect.
+  const tmpOut = path.join(os.tmpdir(), 'dahilg-char-out');
+  mkdirSync(tmpOut, { recursive: true });
+  const animDir = path.join(ROOT, 'src', 'assets', 'anim');
+  for (const c of targets) {
+    const dir = MIXAMO_FBX_DIRS[c.id];
+    if (!dir || !existsSync(dir)) { console.warn(`  ! no FBX folder for ${c.id} (${dir}) — skipping`); continue; }
+    console.log(`\n· convert ${c.id} <- ${dir}`);
+    // Args after '--' must be exactly: <fbx_folder> <character_id> <out_dir> (the converter's order).
+    sh(`"${BLENDER}" --background --python "${MIXAMO_CONVERTER}" -- "${dir}" ${c.id} "${tmpOut}"`);
+    const body = path.join(tmpOut, `${c.id}-mx.glb`);
+    const anims = path.join(tmpOut, `${c.id}-mx-anims.glb`);
+    if (!existsSync(body) || !existsSync(anims)) { die(`convert ${c.id}: expected ${c.id}-mx.glb + ${c.id}-mx-anims.glb in ${tmpOut}`); }
+    copyFileSync(body, path.join(ROOT, c.body));                       // -> src/assets/<id>-mx.glb (manifest body)
+    copyFileSync(anims, path.join(animDir, `${c.id}-mx-anims.glb`));   // -> src/assets/anim/<id>-mx-anims.glb
+    console.log(`  ✓ ${c.id}: ${path.relative(ROOT, c.body)} + anim/${c.id}-mx-anims.glb`);
+  }
+}
+
 function stageAssets() {
   banner('ASSETS — atlas + meshopt + KTX2 + minimaps');
+  maybeConvertMixamo();   // optional FBX convert (runs BEFORE build:dahilg-assets)
   sh('npm run build:dahilg-assets');
   for (const l of levels.filter(x => x.streamed)) {
     sh(`node scripts/build_minimap.mjs ${l.slug}`);

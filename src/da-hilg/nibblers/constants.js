@@ -166,16 +166,13 @@ export const PANIC_POP = 3.5;
 export const SCATTER_TIME = 1.2;
 
 // ── Assets ──────────────────────────────────────────────────────────────────
-// NIBBLER_CHARS is the canonical family order (charIx 0..3); the real-NPC pool clones
+// Roster source of truth: config/dahilg-roster.json. All four family members are active
+// again; the family order is charIx 0..3 = mike/kelli/cece/drew. The real-NPC pool clones
 // the live character GLBs (CHARACTER_URL) directly — no separate baked nibbler assets.
 export const NIBBLER_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 
-// The real-NPC pool uses ONLY the two light Meshy bodies — cece (~5.6k verts) and
-// drew (~13k). mike/kelli are 128k-vert and far too heavy to clone × the pool size.
-// charIx values that the spawner assigns (indices into NIBBLER_CHARS / CHARACTER_URL):
-//   2 = cece, 3 = drew. Order is the spawn rotation.
-// All four family members now ride as nibblers — mike (jack-hartmann, 11.6k) and kelli
-// (decimated 26k) are finally light enough to clone alongside cece (5.6k) + drew (13k).
+// The real-NPC pool clones the live character bodies. charIx values that the spawner
+// assigns are indices into NIBBLER_CHARS / CHARACTER_URL: 0 = mike, 1 = kelli, 2 = cece, 3 = drew.
 export const NIBBLER_NPC_CHARS = ['mike', 'kelli', 'cece', 'drew'];
 export const NIBBLER_NPC_CHAR_IX = [0, 1, 2, 3]; // their indices in NIBBLER_CHARS
 export const MINIMAP_URL = currentLevel.minimap; // selected level's minimap (see level/levels.js)
@@ -185,7 +182,7 @@ export const MINIMAP_URL = currentLevel.minimap; // selected level's minimap (se
 // gentle hue separates them in a dense pile. Order = char index 0..3 = mike/kelli/cece/drew.
 export const NIBBLER_TINTS = [
   [0.92, 0.96, 1.0],  // mike — faint cool
-  [1.0, 0.96, 0.9],   // kelli — faint warm
+  [1.0, 0.97, 0.92],  // kelli — faint warm
   [1.0, 0.94, 0.98],  // cece — faint pink
   [0.94, 1.0, 0.95],  // drew — faint green
 ];
