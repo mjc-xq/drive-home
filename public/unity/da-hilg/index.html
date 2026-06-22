@@ -196,9 +196,10 @@
 
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb?v=8ded092f367adac',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded092f367adac',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded092f367adac',
+        dataUrl: '',
+        dataParts: ["Build/da-hilg.data.unityweb.part0?v=8ded094e390f1ac","Build/da-hilg.data.unityweb.part1?v=8ded094e390f1ac","Build/da-hilg.data.unityweb.part2?v=8ded094e390f1ac","Build/da-hilg.data.unityweb.part3?v=8ded094e390f1ac","Build/da-hilg.data.unityweb.part4?v=8ded094e390f1ac","Build/da-hilg.data.unityweb.part5?v=8ded094e390f1ac"],
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded094e390f1ac',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded094e390f1ac',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -212,15 +213,35 @@
       config.devicePixelRatio = __dahilgTouch ? 1 : Math.min(window.devicePixelRatio || 1, 1.75);
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
+      async function assembleUnityDataUrl(partUrls) {
+        const blobs = [];
+        for (const partUrl of partUrls) {
+          const response = await fetch(partUrl, { cache: 'no-store' });
+          if (!response.ok) throw new Error('Failed to load Unity data chunk ' + partUrl + ' (' + response.status + ')');
+          blobs.push(await response.blob());
+        }
+        const blobUrl = URL.createObjectURL(new Blob(blobs, { type: 'application/octet-stream' }));
+        window.__dahilg.dataBlobUrl = blobUrl;
+        return blobUrl;
+      }
+
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8ded092f367adac';
-      script.onload = () => {
+      script.src = 'Build/da-hilg.loader.js?v=8ded094e390f1ac';
+      script.onload = async () => {
+        try {
+          config.dataUrl = await assembleUnityDataUrl(config.dataParts);
+        } catch (dataErr) {
+          rememberHudError(dataErr);
+          alert(dataErr.message || dataErr);
+          return;
+        }
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
         }).then((unityInstance) => {
           unityInstanceRef = unityInstance;
           window.__dahilg.unityInstance = unityInstance;
           window.__dahilg.unityReady = true;
+          if (window.__dahilg.dataBlobUrl) { URL.revokeObjectURL(window.__dahilg.dataBlobUrl); window.__dahilg.dataBlobUrl = null; }
           document.querySelector('#unity-loading-bar').style.display = 'none';
           try {
             // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike
