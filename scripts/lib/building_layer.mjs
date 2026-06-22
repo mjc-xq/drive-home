@@ -569,6 +569,8 @@ export function buildBuildingLayer({
   const houseIdx = S.buildings.findIndex(b => b.house);
   const buildingPolys = [];            // emitted world rings (overhang clamp + later layers)
   const buildingCollision = [];        // [{ring, base, h}]
+  const ringToIb = new Map();          // emitted ring -> building index (so the door loop can tell
+                                       // if an entrance edge already carries a baked photo)
   let houseRing = null, houseWallH = 0;
   let emitted = 0, skipped = 0, clipped = 0;
 
@@ -589,7 +591,7 @@ export function buildBuildingLayer({
     houseWallH = wallHeight(houseB);
     const base = buildingBase(ring);
     houseRing = emitRing(ring, base, houseWallH, houseB.r, houseIdx, hW, hRf, buildingPolys);
-    buildingPolys.push(houseRing);
+    buildingPolys.push(houseRing); ringToIb.set(houseRing, houseIdx);
     buildingCollision.push({ ring: houseRing, base, h: houseWallH });
     emitted++;
     // facade detail: shell trim/siding only (no auto grid); the cues add the street-facing windows.
@@ -633,7 +635,7 @@ export function buildBuildingLayer({
     const localW = { stucco: { pos: [], uv: [], material: stuccoMaterial(ib) } };
     const rs = bRf.pos.length / 3;
     const emittedRing = emitRing(ring, base, h, b.r, ib, localW, bRf, buildingPolys);
-    buildingPolys.push(emittedRing);
+    buildingPolys.push(emittedRing); ringToIb.set(emittedRing, ib);
     buildingCollision.push({ ring: emittedRing, base, h });
     // facade detail: window grid on EVERY wall edge (+ shell trim). Windows live UNDER the photo
     // overlay, so a hero wall keeps its grid (shown when photo mode is OFF). No per-edge skip.
@@ -687,16 +689,20 @@ export function buildBuildingLayer({
       const isOwner = ring === houseRing;
       const cen = ring.reduce((a, [x, z]) => [a[0] + x / ring.length, a[1] + z / ring.length], [0, 0]);
       // edge whose midpoint is nearest a road (or longest edge when no roadLines)
-      let best = null, bestD = Infinity, bestL = 0;
+      let best = null, bestD = Infinity, bestL = 0, bestI = -1;
       for (let i = 0; i < ring.length; i++) {
         const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
         const eL = Math.hypot(bx - ax, bz - az);
         if (eL < 1.6) continue;
         const mx = (ax + bx) / 2, mz = (az + bz) / 2;
         const d = roadLines.length ? distToLines(mx, mz, roadLines, 1e9) : -eL;   // no roads -> prefer longest
-        if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; bestL = eL; }
+        if (d < bestD) { bestD = d; best = [ax, az, bx, bz]; bestL = eL; bestI = i; }
       }
       if (!best || bestL < 2.4) return;
+      // If this entrance edge already carries a BAKED Street-View photo, the photo shows the real
+      // door/garage — don't float a procedural door slab (and garage) over it.
+      const dib = ringToIb.get(ring);
+      if (dib != null && rectByWall[`b${dib}_e${bestI}`]) return;
       const [ax, az, bx, bz] = best;
       let ex = bx - ax, ez = bz - az; const L = Math.hypot(ex, ez) || 1; ex /= L; ez /= L;
       let nx = -ez, nz = ex;                                    // outward normal (away from centroid)
