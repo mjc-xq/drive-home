@@ -125,9 +125,6 @@
         lastHudTapTime = now;
 
         focusCanvas();
-        const command = compactCommandFromTap(x, y, rect.width);
-        if (command && sendHudCommand(command)) return;
-
         const payload = [x, y, rect.width, rect.height]
           .map((value) => Number(value).toFixed(2))
           .join(',');
@@ -179,10 +176,19 @@
       }
 
       // Reliable browser touch verdict (mobile web). Used by Unity to select the mobile budgets and
-      // to drive the on-screen controls. Do not redirect phones to the house: the intended default
-      // spawn is outdoors on the street in front of the Dahill house.
-      var __dahilgTouch = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
-        && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+      // to drive the on-screen controls. iPadOS can report a desktop UA and a fine pointer when a
+      // keyboard/trackpad is attached, so maxTouchPoints stays authoritative for tablet play.
+      function isDahilgTouchDevice() {
+        const points = navigator.maxTouchPoints || 0;
+        const ua = navigator.userAgent || '';
+        const platform = navigator.platform || '';
+        const iPadOSDesktopUA = platform === 'MacIntel' && points > 1;
+        const appleTablet = /iPad/.test(ua) || iPadOSDesktopUA;
+        const coarseOnly = window.matchMedia && window.matchMedia('(any-pointer:coarse)').matches
+          && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+        return appleTablet || points > 0 || 'ontouchstart' in window || coarseOnly;
+      }
+      var __dahilgTouch = isDahilgTouchDevice();
       window.__dahilg.touchMode = __dahilgTouch;
       try {
         if (__dahilgTouch) {
@@ -197,9 +203,9 @@
       const config = {
         arguments: [],
         dataUrl: '',
-        dataParts: ["Build/da-hilg.data.unityweb.part0?v=8ded0a90a785bca","Build/da-hilg.data.unityweb.part1?v=8ded0a90a785bca","Build/da-hilg.data.unityweb.part2?v=8ded0a90a785bca","Build/da-hilg.data.unityweb.part3?v=8ded0a90a785bca","Build/da-hilg.data.unityweb.part4?v=8ded0a90a785bca","Build/da-hilg.data.unityweb.part5?v=8ded0a90a785bca"],
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded0a90a785bca',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded0a90a785bca',
+        dataParts: ["Build/da-hilg.data.unityweb.part0?v=8ded0b60db89676","Build/da-hilg.data.unityweb.part1?v=8ded0b60db89676","Build/da-hilg.data.unityweb.part2?v=8ded0b60db89676","Build/da-hilg.data.unityweb.part3?v=8ded0b60db89676","Build/da-hilg.data.unityweb.part4?v=8ded0b60db89676","Build/da-hilg.data.unityweb.part5?v=8ded0b60db89676","Build/da-hilg.data.unityweb.part6?v=8ded0b60db89676"],
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8ded0b60db89676',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8ded0b60db89676',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -226,7 +232,7 @@
       }
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8ded0a90a785bca';
+      script.src = 'Build/da-hilg.loader.js?v=8ded0b60db89676';
       script.onload = async () => {
         try {
           config.dataUrl = await assembleUnityDataUrl(config.dataParts);
@@ -245,11 +251,9 @@
           document.querySelector('#unity-loading-bar').style.display = 'none';
           try {
             // Authoritative touch detection from the BROWSER (reliable on mobile web, unlike
-            // Unity's WebGL device detection which can't tell a phone from a desktop). A touch
-            // device has touch points and no fine pointer (mouse/trackpad). Drives the on-screen
-            // joystick/look/buttons so the game is playable on a phone.
-            var touchDevice = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
-              && !(window.matchMedia && window.matchMedia('(any-pointer:fine)').matches);
+            // Unity's WebGL device detection which can't tell an iPad from a desktop). Drives the
+            // on-screen joystick/look/buttons so the game is playable on touch-first devices.
+            var touchDevice = isDahilgTouchDevice();
             window.__dahilg.touchMode = touchDevice;
             unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
           } catch (touchErr) { rememberHudError(touchErr); }
