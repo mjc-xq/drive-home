@@ -244,10 +244,14 @@ namespace DaHilg
                 bool isCollisionProxy = lower.StartsWith("collision_");
                 bool isTreeCollision = isCollisionProxy && lower.Contains("trees");
                 bool isWater = lower.Contains("water") || lower.Contains("creek") || lower.Contains("river");
+                // Walls must be SOLID even with a collision proxy (the building proxy floats ~1.5m off
+                // the ground, so you could walk under/through walls). Doors stay collider-free = walkable.
+                bool isDoor = lower.Contains("door");
+                bool isSolidWall = !isDoor && (lower.EndsWith("_walls") || lower.EndsWith("_roof") || lower.EndsWith("_roofs"));
                 // The vegetation/water overlay is VISUAL ONLY — the single-surface env owns collision.
                 // (Baking MeshColliders on the merged trees/grass made a 2M-tri collider that ejected
                 //  the player.) addColliders=false => tune materials + animate water, add no colliders.
-                bool useCollider = addColliders && (hasCollisionProxy ? isCollisionProxy && !isTreeCollision : !isWater);
+                bool useCollider = addColliders && (hasCollisionProxy ? (isCollisionProxy && !isTreeCollision) || isSolidWall : !isWater);
 
                 if (isCollisionProxy && filter.TryGetComponent(out Renderer renderer))
                 {
@@ -402,11 +406,20 @@ namespace DaHilg
             MaterialPropertyBlock block = new MaterialPropertyBlock();
             renderer.GetPropertyBlock(block);
             Color tint = isWater
-                ? new Color(0.16f, 0.38f, 0.52f, 0.88f)
+                ? new Color(0.20f, 0.52f, 0.82f, 0.92f)
                 : (isRoad ? new Color(0.22f, 0.23f, 0.22f, 1f) : new Color(0.28f, 0.40f, 0.22f, 1f));
 
             if (renderer.sharedMaterial.HasProperty(s_BaseColorId)) block.SetColor(s_BaseColorId, tint);
             if (renderer.sharedMaterial.HasProperty(s_ColorId)) block.SetColor(s_ColorId, tint);
+            // Water reads as a dark channel in shadow with base color alone; give it a blue self-glow so
+            // the creek stays visibly water-blue regardless of the baked lighting on the bed.
+            if (isWater)
+            {
+                Material wm = renderer.sharedMaterial;
+                wm.EnableKeyword("_EMISSION");
+                wm.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+                if (wm.HasProperty("_EmissionColor")) wm.SetColor("_EmissionColor", new Color(0.05f, 0.20f, 0.34f));
+            }
             renderer.SetPropertyBlock(block);
         }
 
@@ -433,17 +446,21 @@ namespace DaHilg
                 Renderer r = rends[i];
                 if (r == null) continue;
                 string lower = r.gameObject.name.ToLowerInvariant();
-                if (lower.Contains("creek") || lower.Contains("water") || lower.Contains("river")
-                    || lower.Contains("bank") || lower.Contains("rock")) continue;
                 bool isVeg = lower.Contains("tree") || lower.Contains("grass") || lower.Contains("clump")
                              || lower.Contains("shrub") || lower.Contains("reed") || lower.Contains("bush");
-                if (!isVeg) continue;
+                // Snap the creek too (water/banks/rocks) — it floats above the re-grounded env like the
+                // trees did, which is why it reads as a tiny puddle instead of a creek in its bed.
+                bool isCreek = lower.Contains("creek") || lower.Contains("water") || lower.Contains("river")
+                               || lower.Contains("bank") || lower.Contains("rock");
+                if (!isVeg && !isCreek) continue;
                 Bounds b = r.bounds;
                 Vector3 worldBase = new Vector3(b.center.x, b.min.y, b.center.z);
-                if (TryFindGround(worldBase, out RaycastHit hit, 60f, 140f))
+                // Wide probe (up 90, down 400): the master's hilly veg can sit far above OR below the
+                // re-grounded env; snap each plant's base onto the ground so none float or sink under terrain.
+                if (TryFindGround(worldBase, out RaycastHit hit, 90f, 400f))
                 {
                     float dy = hit.point.y - worldBase.y;
-                    if (dy < -0.05f || dy > 0.5f) r.transform.position += new Vector3(0f, dy + 0.02f, 0f);
+                    if (dy < -0.05f || dy > 0.05f) r.transform.position += new Vector3(0f, dy + 0.02f, 0f);
                 }
             }
         }

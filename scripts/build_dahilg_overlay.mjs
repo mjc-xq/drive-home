@@ -64,37 +64,87 @@ for (const { out, master } of MASTERS) {
       const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
       const hc = meta.houseCenter, off = meta.offset;
       if (hc && off) {
-        let best = null, bestD = Infinity; const v = [0, 0, 0];
-        for (const node of root.listNodes()) {
-          if (!/^roads?$/i.test(node.getName() || '') || !node.getMesh()) continue;
-          const wm = node.getWorldMatrix();
-          for (const prim of node.getMesh().listPrimitives()) {
-            const pos = prim.getAttribute('POSITION'); if (!pos) continue;
-            const cnt = pos.getCount(), step = Math.max(1, Math.floor(cnt / 8000));
-            for (let i = 0; i < cnt; i += step) {
-              pos.getElement(i, v);
-              const wx = wm[0] * v[0] + wm[4] * v[1] + wm[8] * v[2] + wm[12];
-              const wz = wm[2] * v[0] + wm[6] * v[1] + wm[10] * v[2] + wm[14];
-              const dx = wx - hc[0], dz = wz - hc[2], d = dx * dx + dz * dz;
-              if (d < bestD) { bestD = d; best = [wx, wm[1] * v[0] + wm[5] * v[1] + wm[9] * v[2] + wm[13], wz]; }
+        // World-XZ vertex sampler for nodes matching a name regex -> array of [x, z].
+        const gather = (re) => {
+          const pts = []; const v = [0, 0, 0];
+          for (const node of root.listNodes()) {
+            if (!re.test(node.getName() || '') || !node.getMesh()) continue;
+            const wm = node.getWorldMatrix();
+            for (const prim of node.getMesh().listPrimitives()) {
+              const pos = prim.getAttribute('POSITION'); if (!pos) continue;
+              const cnt = pos.getCount(), step = Math.max(1, Math.floor(cnt / 4000));
+              for (let i = 0; i < cnt; i += step) {
+                pos.getElement(i, v);
+                pts.push([wm[0]*v[0]+wm[4]*v[1]+wm[8]*v[2]+wm[12], wm[2]*v[0]+wm[6]*v[1]+wm[10]*v[2]+wm[14]]);
+              }
             }
           }
+          return pts;
+        };
+        const house = gather(/house_walls|^house$/i);
+        const roads = gather(/^roads?$/i);
+        // PCA of the house footprint (XZ): the long axis runs along the facade; the FRONT faces
+        // perpendicular to it. Score each perpendicular side by road mass in a 60deg cone and pick the
+        // side with the real street (so a side/back road never wins).
+        let cx = hc[0] - 0, cz = hc[2];
+        if (house.length) { cx = 0; cz = 0; for (const p of house) { cx += p[0]; cz += p[1]; } cx /= house.length; cz /= house.length; }
+        let sxx = 0, szz = 0, sxz = 0;
+        for (const p of house) { const dx = p[0]-cx, dz = p[1]-cz; sxx += dx*dx; szz += dz*dz; sxz += dx*dz; }
+        const m = Math.max(1, house.length); sxx/=m; szz/=m; sxz/=m;
+        const tr = sxx+szz, l1 = tr/2 + Math.sqrt(Math.max(0, (sxx-szz)*(sxx-szz)/4 + sxz*sxz));
+        let ax, az; if (Math.abs(sxz) > 1e-6) { ax = l1-szz; az = sxz; } else { ax = sxx>=szz?1:0; az = sxx>=szz?0:1; }
+        const al = Math.hypot(ax,az)||1; ax/=al; az/=al;
+        const normals = [[-az, ax],[az,-ax]]; // the two facade-front directions
+
+        // How far the house walls reach along a front direction, and the open clearance from any point
+        // to the nearest wall vertex. The OLD code picked the NEAREST road point in the cone, which on
+        // 1840 Dahill hugs the long side wall (~3 m) -> you spawn facing a wall. Instead we want a point
+        // at real clearance, out in front of the facade.
+        const CLEAR = 11;                                   // metres of open ground wanted in front
+        const wallReach = (nx, nz) => { let mx = 0; for (const p of house) { const pr = (p[0]-cx)*nx + (p[1]-cz)*nz; if (pr > mx) mx = pr; } return mx; };
+        const wallClear = (x, z) => { let m = Infinity; for (const p of house) { const d = Math.hypot(p[0]-x, p[1]-z); if (d < m) m = d; } return m; };
+
+        let chosen = null, chosenN = null, viaFront = false, bestScore = -1;
+        for (const [nx,nz] of normals) {
+          const reach = wallReach(nx, nz), target = reach + CLEAR;
+          let score = 0, best = null, bestErr = Infinity;
+          for (const r of roads) {
+            const dx = r[0]-cx, dz = r[1]-cz, d = Math.hypot(dx,dz);
+            if (d < 1 || d > 140) continue;
+            const dot = (dx*nx + dz*nz)/d;
+            if (dot < 0.5) continue;                        // within ~60deg of this front direction
+            score += dot/d;
+            const along = dx*nx + dz*nz;                    // signed distance out along the normal
+            if (along < reach + 4) continue;                // reject points hugging / inside the wall line
+            if (wallClear(r[0], r[1]) < 7) continue;        // reject side-yard roads close to ANY wall
+            const err = Math.abs(along - target);
+            if (err < bestErr) { bestErr = err; best = r; }
+          }
+          if (best && score > bestScore) { bestScore = score; chosen = best; chosenN = [nx,nz]; viaFront = true; }
         }
-        const horiz = best ? Math.hypot(best[0] - hc[0], best[2] - hc[2]) : Infinity;
-        if (best && horiz <= 70) {
-          const lr = [best[0] - off[0], best[2] - off[2]];     // recentered-local x,z
-          const lh = [hc[0] - off[0], hc[2] - off[2]];
-          const dx = lh[0] - lr[0], dz = lh[1] - lr[1], L = Math.hypot(dx, dz) || 1;
-          // Stand BACK from the nearest-road point, AWAY from the house, onto the street (the road point
-          // can sit at the driveway/curb right by the wall) — still facing the house.
-          const PUSH = 5, r2 = n => Math.round(n * 100) / 100;
-          meta.streetSpawn = [r2(lr[0] - dx / L * PUSH), 0.05, r2(lr[1] - dz / L * PUSH)];
+        if (!chosen) { // road mass exists in front but no clear point -> synthesise one on the best normal
+          let bn = null, bs = -1;
+          for (const [nx,nz] of normals) { let s=0; for (const r of roads){ const dx=r[0]-cx,dz=r[1]-cz,d=Math.hypot(dx,dz); if(d<1||d>140)continue; const dot=(dx*nx+dz*nz)/d; if(dot>=0.5)s+=dot/d; } if(s>bs){bs=s;bn=[nx,nz];} }
+          if (bn && bs > 0) { const reach = wallReach(bn[0],bn[1]); chosen = [cx + bn[0]*(reach+CLEAR), cz + bn[1]*(reach+CLEAR)]; chosenN = bn; viaFront = true; }
+        }
+        if (!chosen) { // fallback: overall-nearest road <=70m (rural levels stay null -> front-yard)
+          let bd = Infinity; for (const r of roads) { const d = Math.hypot(r[0]-hc[0], r[1]-hc[2]); if (d < bd) { bd = d; chosen = d <= 70 ? r : null; } }
+        }
+        if (chosen) {
+          // Guarantee clearance: if still close to a wall, walk out along the front normal until clear.
+          let sx = chosen[0], sz = chosen[1];
+          if (chosenN) { let g = 0; while (wallClear(sx, sz) < CLEAR - 1 && g++ < 40) { sx += chosenN[0]; sz += chosenN[1]; } }
+          const lr = [sx-off[0], sz-off[2]];                 // recentered-local x,z
+          const lh = [hc[0]-off[0], hc[2]-off[2]];
+          const dx = lh[0]-lr[0], dz = lh[1]-lr[1];          // face the house from out front
+          const r2 = n => Math.round(n*100)/100;
+          meta.streetSpawn = [r2(lr[0]), 0.05, r2(lr[1])];
           let yaw = Math.atan2(dx, dz) * 180 / Math.PI; if (yaw < 0) yaw += 360;
-          meta.facing = Math.round(yaw * 10) / 10;
+          meta.facing = Math.round(yaw*10)/10;
           writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
-          console.log(`${out}: streetSpawn=[${meta.streetSpawn}] facing=${meta.facing} (road ${horiz.toFixed(1)}m from house)`);
+          console.log(`${out}: streetSpawn=[${meta.streetSpawn}] facing=${meta.facing} clear=${wallClear(sx,sz).toFixed(1)}m (${viaFront ? 'front-clear' : 'fallback'})`);
         } else {
-          console.log(`${out}: no street spawn (nearest road ${Number.isFinite(horiz) ? horiz.toFixed(1) : '∞'}m > 70m) — keeps front-yard spawn`);
+          console.log(`${out}: no street spawn (road too far) — keeps front-yard spawn`);
         }
       }
     }

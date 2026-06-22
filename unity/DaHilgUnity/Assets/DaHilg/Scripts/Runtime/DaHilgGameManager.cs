@@ -445,6 +445,15 @@ namespace DaHilg
             // (applied separately via TickHitMotion); suppress wander/chase this frame.
             if (actor.Staggered(Time.time)) return;
 
+            // Outdoor NPCs are background scenery: each gently wanders around its own spawn and never
+            // chases/pesters the player. Only the interior 'house' gathering keeps the full greet AI
+            // (so inside has all of them milling together).
+            if (m_CurrentLevel == null || m_CurrentLevel.Slug != "house")
+            {
+                TickHomebodyNpc(actor, Time.time, dt);
+                return;
+            }
+
             Vector3 toPlayer = m_ActiveActor.FeetPosition - actor.FeetPosition;
             toPlayer.y = 0f;
             float dist = toPlayer.magnitude;
@@ -780,6 +789,8 @@ namespace DaHilg
             }
             AttachedNibblerCount = attached;
             m_ActiveActor.AttachedNibblers = attached;
+            // If the player goes down, fling everyone off so no nibbler is left childed to a dying/respawning rig.
+            if (m_ActiveActor.Health <= 0f && attached > 0) ShedAttached(attached);
             if (attached > m_LastAttachedCount)
             {
                 // Flash the new-attach cue, but DON'T re-mark — marking now only happens on
@@ -1026,6 +1037,31 @@ namespace DaHilg
             Vector2 r = UnityEngine.Random.insideUnitCircle * Settings.WanderRadius;
             Vector3 p = home + new Vector3(r.x, 0f, r.y);
             return DaHilgLevelRuntime.GroundSpawn(p);
+        }
+
+        // Outdoor NPC: drift gently within a small radius of its spawn, idle/wander only — no chasing.
+        void TickHomebodyNpc(DaHilgActor actor, float now, float dt)
+        {
+            Vector3 toWander = actor.WanderTarget - actor.FeetPosition; toWander.y = 0f;
+            if (actor.NpcState == DaHilgNpcState.Wander && toWander.magnitude >= 1.0f && now < actor.StateUntil)
+            {
+                actor.StepNpc(toWander.normalized * 0.5f, false, Settings, dt, now); // amble toward the target
+                return;
+            }
+            if (actor.NpcState == DaHilgNpcState.Wander)
+            {
+                actor.NpcState = DaHilgNpcState.Idle;
+                actor.StateUntil = now + UnityEngine.Random.Range(2.5f, 6f);
+                if (UnityEngine.Random.value < 0.3f) actor.PlayEmote(UnityEngine.Random.value < 0.5f ? "Wave" : "Cheer");
+            }
+            else if (now >= actor.StateUntil) // idle/cooldown elapsed -> pick a new nearby spot
+            {
+                Vector2 r = UnityEngine.Random.insideUnitCircle * 4.5f; // stay close to spawn
+                actor.WanderTarget = DaHilgLevelRuntime.GroundSpawn(actor.Home + new Vector3(r.x, 0f, r.y));
+                actor.NpcState = DaHilgNpcState.Wander;
+                actor.StateUntil = now + 6f;
+            }
+            actor.StepNpc(Vector3.zero, false, Settings, dt, now);
         }
 
         void ClampToLevelBounds()
