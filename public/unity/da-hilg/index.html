@@ -130,6 +130,11 @@
       }
 
       canvas.addEventListener('pointerdown', focusCanvas);
+      // Keep the canvas focused for mouse-look across the gestures that commonly steal focus.
+      window.addEventListener('focus', focusCanvas);
+      window.addEventListener('pointerup', focusCanvas);
+      document.addEventListener('click', focusCanvas);
+      document.addEventListener('pointerlockchange', focusCanvas);
       function handleHudTouchStart(event) {
         if (event.changedTouches && event.changedTouches.length) {
           const touch = event.changedTouches[0];
@@ -176,9 +181,9 @@
 
       const config = {
         arguments: [],
-        dataUrl: 'Build/da-hilg.data.unityweb?v=8decff0aab3a6ee',
-        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decff0aab3a6ee',
-        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decff0aab3a6ee',
+        dataUrl: 'Build/da-hilg.data.unityweb?v=8decff466a3a0ae',
+        frameworkUrl: 'Build/da-hilg.framework.js.unityweb?v=8decff466a3a0ae',
+        codeUrl: 'Build/da-hilg.wasm.unityweb?v=8decff466a3a0ae',
         streamingAssetsUrl: 'StreamingAssets',
         companyName: 'Da Hilg',
         productName: 'Da Hilg Unity',
@@ -193,7 +198,7 @@
       document.querySelector('#unity-loading-bar').style.display = 'grid';
 
       const script = document.createElement('script');
-      script.src = 'Build/da-hilg.loader.js?v=8decff0aab3a6ee';
+      script.src = 'Build/da-hilg.loader.js?v=8decff466a3a0ae';
       script.onload = () => {
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector('#unity-progress-bar-full').style.width = `${100 * progress}%`;
@@ -212,8 +217,12 @@
             window.__dahilg.touchMode = touchDevice;
             unityInstance.SendMessage('DaHilgHUD', 'SetWebTouchMode', touchDevice ? 1 : 0);
           } catch (touchErr) { rememberHudError(touchErr); }
-          if (unityInstance.Module && unityInstance.Module.WebGLInput) {
-            unityInstance.Module.WebGLInput._stickyCursorLock = false;
+          // Bind keyboard to the WHOLE document, not just the focused canvas. Without this, real
+          // WASD/arrow keys are silently dropped on desktop whenever the canvas loses focus (which
+          // it does constantly). This is the actual reason desktop controls 'didn't work'.
+          if (unityInstance.Module) {
+            unityInstance.Module.WebGLInput = unityInstance.Module.WebGLInput || {};
+            unityInstance.Module.WebGLInput.captureAllKeyboardInput = true;
           }
           releasePointerLock();
           focusCanvas();
