@@ -654,8 +654,8 @@ namespace DaHilg
 
             m_TopCollapseButton = new Button(ToggleTopPanel) { text = "▾" };
             m_TopCollapseButton.focusable = true;
-            m_TopCollapseButton.style.width = 26;
-            m_TopCollapseButton.style.height = 26;
+            m_TopCollapseButton.style.width = 44;   // meet the 44px minimum touch target (was 26)
+            m_TopCollapseButton.style.height = 44;
             m_TopCollapseButton.style.marginLeft = 8;
             m_TopCollapseButton.style.marginTop = 0;
             m_TopCollapseButton.style.marginBottom = 0;

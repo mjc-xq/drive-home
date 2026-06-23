@@ -45,6 +45,7 @@ namespace DaHilg.Editor
             "WalkAlt",
             "Run",
             "Jump",
+            "JumpAlt",
             "Dance",
             "DanceAlt",
             "DanceAlt2",
@@ -1140,6 +1141,10 @@ body {
                     return id == "kelli"
                         ? new[] { "walk", "kelli_walk" }
                         : new[] { "kelli_walk", id + "_walk", "walk" };
+                case "JumpAlt":
+                    // Shared alternate jump (a different leap) so airborne anims rotate. Falls back to
+                    // the primary Jump if the alt clip wasn't built.
+                    return new[] { "jumpalt", id + "_jumpalt", "jump" };
                 case "DanceAlt":
                     if (id == "cece") return new[] { "dance", "mike_dance", "cece_dance" };
                     if (id == "mike") return new[] { "dance", "cece_dance", "mike_dance" };
@@ -1463,6 +1468,7 @@ body {
             {
                 case "IdleAlt": return "Idle";
                 case "WalkAlt": return "Walk";
+                case "JumpAlt": return "Jump";
                 case "DanceAlt":
                 case "DanceAlt2":
                     return "Dance";
@@ -1812,8 +1818,8 @@ body {
             settings.RollCrushRadius = 1.38f;
             settings.RollCrushBodyHeight = 1.08f;
             settings.RollCrushScore = 35;
-            // Selectable players come straight from the roster (cece + mike). drew is NOT a player slot;
-            // it is the nibbler swarm body, wired separately below.
+            // Selectable players come straight from the roster (cece + mike + kelli). drew is NOT a player
+            // slot; it is the nibbler swarm body, wired separately below.
             CharacterDef[] players = s_Characters;
             DaHilgCharacterSlot[] slots = new DaHilgCharacterSlot[players.Length];
             for (int i = 0; i < players.Length; i++)

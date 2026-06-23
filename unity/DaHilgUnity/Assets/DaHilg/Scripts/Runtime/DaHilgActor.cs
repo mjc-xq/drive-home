@@ -67,6 +67,7 @@ namespace DaHilg
         static readonly string[] s_DanceStates = { "Dance", "DanceAlt", "DanceAlt2" };
         static readonly string[] s_WalkStates = { "Walk", "WalkAlt" };
         static readonly string[] s_IdleStates = { "Idle", "IdleAlt" };
+        static readonly string[] s_AirborneStates = { "Jump", "JumpAlt" };
         float m_StaggerUntil;
         Vector3 m_HitVel;
         float m_HitVelUntil;
@@ -84,6 +85,7 @@ namespace DaHilg
         int m_WalkVariant;
         float m_IdleVariantUntil;
         int m_IdleVariant;
+        int m_AirVariant;
         int m_LastDanceVariant = -1;
         bool m_WasMoving;
 
@@ -306,6 +308,7 @@ namespace DaHilg
             m_EmoteUntil = 0f;
             m_RollUntil = 0f;
             m_VisualGroundOffset = 0f;
+            m_FootPinPrimed = false; // re-arm the snap-on-first-frame so a respawn/clamp never shows a hover frame
             m_QueuedCombatDanceAt = -100f;
             m_KnockdownStartedAt = -100f;
             m_KnockdownUntil = -100f;
@@ -878,6 +881,7 @@ namespace DaHilg
             Grounded = true;
             m_LastGroundedTime = now;
             m_VisualGroundOffset = 0f;
+            m_FootPinPrimed = false; // snap the foot-plant on the next frame after a fall-through rescue
             return true;
         }
 
@@ -1012,6 +1016,15 @@ namespace DaHilg
 
         string PickAirborneState()
         {
+            // Rotate jump variants for variety (mirrors PickWalkState/PickIdleState). Pick once per
+            // takeoff (when not already airborne) and hold it through the arc so it doesn't flicker.
+            // HasAnimState-guarded, so a controller without JumpAlt safely falls back to the one Jump.
+            if (HasAnimState("JumpAlt"))
+            {
+                if (!IsOneOf(m_CurrentAnim, s_AirborneStates))
+                    m_AirVariant = Random.value < 0.58f ? 0 : 1;
+                return s_AirborneStates[Mathf.Clamp(m_AirVariant, 0, s_AirborneStates.Length - 1)];
+            }
             bool moving = Speed > 0.2f || m_HorizontalVelocity.sqrMagnitude > 0.06f;
             return moving
                 ? ResolveFirstAvailable("Jump", "Run", "Walk", "Idle")

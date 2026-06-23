@@ -588,6 +588,7 @@ const PLAYER_ANIMS = [
   { key: 'Walk',      src: CECE_ANIMS, clip: 'Catwalk_Walk',              stripRootXZ: true, loop: true },
   { key: 'Run',       src: DREW_ANIMS, clip: 'Goofy_Running',            stripRootXZ: true, loop: true },
   { key: 'Jump',      src: KELLI_ANIMS, clip: 'Jumping',                                      noLoop: true },
+  { key: 'JumpAlt',   src: LIB('jump/Jump_Up.glb'), clip: 'Jump_Up',          stripRootXZ: true, noLoop: true },
   { key: 'Dance',     src: MIKE_ANIMS, clip: 'Hip_Hop_Dancing',                              loop: true },
   { key: 'Wave',      src: FAMILY_ANIMS, clip: 'Agree_Gesture',                              noLoop: true },
   { key: 'Cheer',     src: FAMILY_ANIMS, clip: 'Cheer_with_Both_Hands_Up',                   noLoop: true },
