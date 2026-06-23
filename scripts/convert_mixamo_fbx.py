@@ -28,6 +28,7 @@ fcurve data_path so paths like pose.bones["mixamorig:Hips"].location become
 pose.bones["Hips"].location and bind to the shared plain-named skeleton.
 """
 
+import json
 import os
 import re
 import sys
@@ -39,13 +40,15 @@ PREFIX = "mixamorig:"
 
 # CORE bones present on ALL rigs (from the shared migration contract). Finger / thumb /
 # *_End leaf bones may differ per rig and are intentionally NOT required here.
-CORE_BONES = [
-    "Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
-    "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
-    "RightShoulder", "RightArm", "RightForeArm", "RightHand",
-    "LeftUpLeg", "LeftLeg", "LeftFoot",
-    "RightUpLeg", "RightLeg", "RightFoot",
-]
+# SINGLE SOURCE OF TRUTH: loaded from config/dahilg-skeleton.json (shared with the JS asset
+# pipeline and the C# Unity build) so the bone-name contract cannot drift across stages.
+# Resolved RELATIVE TO THIS SCRIPT FILE, not cwd, because Blender runs us from a different cwd.
+_SKELETON_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "config", "dahilg-skeleton.json"
+)
+with open(_SKELETON_PATH, "r", encoding="utf-8") as _f:
+    _SKELETON = json.load(_f)
+CORE_BONES = list(_SKELETON["canonicalBones"])
 
 
 # ---------------------------------------------------------------------------

@@ -280,6 +280,7 @@ namespace DaHilg.Editor
         [MenuItem("Da Hilg/Rebuild Unity Scene")]
         public static void RebuildUnityScene()
         {
+            EnsureSkeletonContract();   // fail fast if the C# alias switch drifted from dahilg-skeleton.json
             EnsureFolders();
             SyncSourceAssets();
             SyncSupplementalSourceAssets();
@@ -1328,7 +1329,18 @@ body {
 
             foreach (KeyValuePair<string, AnimationCurve[]> pair in rotationCurves)
             {
-                if (!TryFindRetargetBones(sourcePrefab.transform, targetPrefab.transform, pair.Key, out Transform sourceBone, out Transform targetBone)) continue;
+                if (!TryFindRetargetBones(sourcePrefab.transform, targetPrefab.transform, pair.Key, out Transform sourceBone, out Transform targetBone))
+                {
+                    if (ShouldFailOnDroppedBone(pair.Key))
+                    {
+                        throw new InvalidOperationException("Da Hilg retarget dropped TRUNK/CORE bone for "
+                            + characterId + " " + stateName + ": source path '" + pair.Key + "' (bone '"
+                            + LastPathSegment(pair.Key) + "') resolved to no target bone. This silent drop is the "
+                            + "T-pose / frozen-torso root cause — fix the rig or the bone-name contract in "
+                            + "config/dahilg-skeleton.json.");
+                    }
+                    continue;
+                }
                 AnimationCurve[] curves = pair.Value;
                 if (curves[0] == null || curves[1] == null || curves[2] == null || curves[3] == null) continue;
 
@@ -1345,7 +1357,18 @@ body {
             foreach (KeyValuePair<string, AnimationCurve[]> pair in positionCurves)
             {
                 if (!IsHipsPath(pair.Key)) continue;
-                if (!TryFindRetargetBones(sourcePrefab.transform, targetPrefab.transform, pair.Key, out Transform sourceBone, out Transform targetBone)) continue;
+                if (!TryFindRetargetBones(sourcePrefab.transform, targetPrefab.transform, pair.Key, out Transform sourceBone, out Transform targetBone))
+                {
+                    if (ShouldFailOnDroppedBone(pair.Key))
+                    {
+                        throw new InvalidOperationException("Da Hilg retarget dropped TRUNK/CORE bone for "
+                            + characterId + " " + stateName + ": source path '" + pair.Key + "' (bone '"
+                            + LastPathSegment(pair.Key) + "') resolved to no target bone. This silent drop is the "
+                            + "T-pose / frozen-torso root cause — fix the rig or the bone-name contract in "
+                            + "config/dahilg-skeleton.json.");
+                    }
+                    continue;
+                }
                 AnimationCurve[] curves = pair.Value;
                 if (curves[0] == null || curves[1] == null || curves[2] == null) continue;
 
@@ -1401,6 +1424,98 @@ body {
                 case "Neck01": return "Neck";
                 default: return null;
             }
+        }
+
+        // ---- SINGLE SOURCE OF TRUTH bone-name contract guard ------------------------------------
+        // config/dahilg-skeleton.json is the one place the canonical bone set + donor aliases live;
+        // the Python FBX converter and the JS asset builder also read it. We validate at build time
+        // that the C# CanonicalBoneAlias switch above has NOT drifted from that file, then use the
+        // canonical set to make dropped trunk bones in the retarget loop fail LOUDLY (the silent drop
+        // of a trunk/core bone is the root cause of the recurring T-pose / frozen-torso bug).
+        static HashSet<string> s_CanonicalBonesCache;
+        static HashSet<string> s_AliasKeysCache;
+
+        static void EnsureSkeletonContract()
+        {
+            if (s_CanonicalBonesCache != null) return;
+
+            // Same relative-path resolution used for the roster (Application.dataPath = <repo>/unity/
+            // DaHilgUnity/Assets, so config/ is three levels up).
+            string skeletonPath = Path.GetFullPath(Path.Combine(Application.dataPath, "../../../config/dahilg-skeleton.json"));
+            if (!File.Exists(skeletonPath))
+            {
+                throw new FileNotFoundException("Da Hilg skeleton contract not found.", skeletonPath);
+            }
+
+            string json = File.ReadAllText(skeletonPath);
+
+            // canonicalBones is a flat string[] — JsonUtility can read it via a wrapper.
+            SkeletonContractJson contract = JsonUtility.FromJson<SkeletonContractJson>(json);
+            if (contract == null || contract.canonicalBones == null || contract.canonicalBones.Length == 0)
+            {
+                throw new InvalidOperationException("Da Hilg skeleton contract has no canonicalBones: " + skeletonPath);
+            }
+            HashSet<string> canonical = new HashSet<string>(contract.canonicalBones);
+
+            // aliases is an OBJECT MAP, which JsonUtility cannot parse, so pull the key/value pairs out
+            // directly. The switch stays code (JsonUtility can't drive it); we VALIDATE it against the
+            // file instead so the two cannot silently diverge.
+            HashSet<string> aliasKeys = new HashSet<string>();
+            foreach (KeyValuePair<string, string> pair in ParseAliasMap(json, skeletonPath))
+            {
+                if (!canonical.Contains(pair.Value))
+                {
+                    throw new InvalidOperationException("Da Hilg skeleton contract alias '" + pair.Key
+                        + "' maps to '" + pair.Value + "', which is not in canonicalBones: " + skeletonPath + ".");
+                }
+                string code = CanonicalBoneAlias(pair.Key);
+                if (code != pair.Value)
+                {
+                    throw new InvalidOperationException("Da Hilg CanonicalBoneAlias switch disagrees with "
+                        + skeletonPath + " for '" + pair.Key + "': switch=" + (code ?? "<none>")
+                        + " json=" + pair.Value + ". Update the switch and the JSON together.");
+                }
+                aliasKeys.Add(pair.Key);
+            }
+
+            s_AliasKeysCache = aliasKeys;
+            s_CanonicalBonesCache = canonical;   // set LAST so a throw above leaves the cache unprimed
+        }
+
+        // Minimal parser for the "aliases" object map in dahilg-skeleton.json (JsonUtility can't read a
+        // string->string map). Returns the literal "key": "value" pairs inside the aliases { ... } block.
+        static IEnumerable<KeyValuePair<string, string>> ParseAliasMap(string json, string skeletonPath)
+        {
+            Match block = Regex.Match(json, "\"aliases\"\\s*:\\s*\\{(?<body>[^}]*)\\}");
+            if (!block.Success)
+            {
+                throw new InvalidOperationException("Da Hilg skeleton contract has no aliases object: " + skeletonPath + ".");
+            }
+            List<KeyValuePair<string, string>> pairs = new List<KeyValuePair<string, string>>();
+            foreach (Match m in Regex.Matches(block.Groups["body"].Value, "\"(?<k>[^\"]+)\"\\s*:\\s*\"(?<v>[^\"]+)\""))
+            {
+                pairs.Add(new KeyValuePair<string, string>(m.Groups["k"].Value, m.Groups["v"].Value));
+            }
+            return pairs;
+        }
+
+        // A retarget channel whose source bone could not be resolved is FATAL when that bone is a trunk/
+        // core bone (a canonical bone, or a donor alias KEY that should have mapped onto one) — dropping
+        // it silently is exactly how the torso/neck freezes. Leaf / finger bones (everything else) keep
+        // the historical silent skip because rigs legitimately differ on those.
+        static bool ShouldFailOnDroppedBone(string sourcePath)
+        {
+            EnsureSkeletonContract();
+            string boneName = LastPathSegment(sourcePath);
+            return s_CanonicalBonesCache.Contains(boneName) || s_AliasKeysCache.Contains(boneName);
+        }
+
+        [Serializable]
+        class SkeletonContractJson
+        {
+            public string root;
+            public string[] canonicalBones;
+            public string[] neverPrestrip;
         }
 
         static AnimationCurve[] RetargetRotationCurves(AnimationCurve[] sourceCurves, Quaternion sourceRest, Quaternion targetRest)
@@ -1807,7 +1922,7 @@ body {
             settings.ControllerSkinWidth = 0.06f;
             settings.GroundProbeHeight = 3.4f;
             settings.GroundSnapDistance = 1.55f;
-            settings.GroundSkin = 0.05f;
+            settings.GroundSkin = 0.06f;
             settings.NibblerPoolSize = 36;
             settings.OverwhelmStagger = 7;
             settings.OverwhelmDown = 15;
