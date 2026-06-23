@@ -12,17 +12,24 @@ Usage:
   blender --background --python scripts/place_fences.py -- <path-to-property-glb>
   (no arg -> defaults to exports/1840-dahill-property-trees.glb)
 
-Four fence RUNS, each a polyline in WORLD coords (x,z) — the same coords as the
-parcels.json p.ring the exporters draw as yellow YourLots lines:
-  GREEN side   -> "Fence Section.glb" : two long road->creek side edges.
-  PINK interlot-> "Picket fence.glb"  : the edge shared by both owner lots.
-  RED creek    -> "Fence.glb"         : back lot boundary nearest the creek.
-  BLACK front  -> "Picket fence.glb"  : short run off the house's road corners.
+Fence RUNS, each a polyline in WORLD coords (x,z) — the same coords as the
+parcels.json p.ring the exporters draw as yellow YourLots lines. The owner's
+property is the UNION of two adjacent parcels (APN 416-120-67 + 416-120-68);
+their rings share an interior divider edge. The runs are authored from that
+union geometry, NOT hand-tuned chords:
+  GREEN perimeter -> "Fence Section.glb" : the OUTER union ring — one run per
+                     side so every side of the property gets exactly one fence
+                     line (no bare sides, no double rows). The street-facing
+                     FRONT side is split into two runs with a GATE GAP between
+                     them so the yard entrance is not walled off.
+  PINK divider    -> "Picket fence.glb"  : the interior shared lot-divider line
+                     (the edge dropped from the union), where the two parcels
+                     touch — the intended place for the picket fence.
 
 Each tiled section is a SEPARATE, individually deletable object named per run
-(FenceGreen_0001, FencePink_0001, FenceRed_0001, FenceBlack_0001), parented to a
-single empty "Fences". Colour/identity stays in each template's MATERIAL base
-colour (the GLBs carry their own materials) so usdrecord/Quick Look render it.
+(FenceGreen_0001, FencePink_0001, ...), parented to a single empty "Fences".
+Colour/identity stays in each template's MATERIAL base colour (the GLBs carry
+their own materials) so usdrecord/Quick Look render it.
 """
 import bpy, os, sys, json, math, mathutils
 
@@ -70,21 +77,42 @@ def terrain_at(X, Z):
 
 
 # ---- fence runs (WORLD coords x,z) -------------------------------------------
+# Authored from the UNION of the two owner parcels (APN 416-120-67 + 416-120-68;
+# see exports/parcels.json). The shared interior divider edge is DROPPED from the
+# outer ring (it becomes the FencePink picket run instead). FenceGreen runs the
+# OUTER perimeter, one run per side, so every side gets exactly one fence line.
+#
+#   union outer ring (CCW), from parcels.json (rounded):
+#     (18.26,5.17) (14.96,8.26) (8.67,14.06) (2.06,19.71) (1.46,20.26)   <- FRONT (street)
+#     (-13.51,-0.98) (-28.79,-22.54)                                      <- NW side
+#     (-28.95,-22.87) (-29.11,-23.18) (-35.81,-32.67) (-27.43,-41.2) (-17.09,-39.75) <- BACK/rear
+#     (0.06,-17.9) -> back to (18.26,5.17)                                <- SE side
+#   interior divider (shared edge, dropped from ring):
+#     (-13.51,-0.98) (-7.64,-5.02) (-3.47,-10.29) (0.06,-17.9)            <- PINK picket
+#
+# The FRONT (street-facing) side faces the streetSpawn (+X,+Z); it is split into
+# two GREEN runs with a ~3.5 m GATE GAP between them so the yard entrance from the
+# street is left open like a real front yard (not walled off).
 RUNS = [
+    # FRONT side (street), LEFT of the gate: corner -> gate-left
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[1.46, 20.34], [-28.83, -22.64]]},
+     "polyline": [[18.26, 5.17], [14.96, 8.26], [11.27, 11.66]]},
+    # FRONT side (street), RIGHT of the gate: gate-right -> corner   [GATE GAP between]
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[18.28, 5.19], [-17.11, -39.91]]},
-    # human<->pig yard divider = the owner's WHITE line (#11): set BACK from the house,
-    # NOT on the lot divider; follows the terrain break across the back lot (georef-extracted).
+     "polyline": [[8.69, 14.04], [2.06, 19.71], [1.46, 20.26]]},
+    # NW side: front corner -> back-left corner
+    {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
+     "polyline": [[1.46, 20.26], [-13.51, -0.98], [-28.79, -22.54]]},
+    # BACK / rear: across the back of the property to the SE back corner
+    {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
+     "polyline": [[-28.79, -22.54], [-28.95, -22.87], [-29.11, -23.18],
+                  [-35.81, -32.67], [-27.43, -41.2], [-17.09, -39.75]]},
+    # SE side: back corner -> front-right corner (closes the perimeter)
+    {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
+     "polyline": [[-17.09, -39.75], [0.06, -17.9], [18.26, 5.17]]},
+    # PINK picket fence on the INTERIOR shared lot-divider line (the dropped edge).
     {"name": "FencePink", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[-28.8, -13.2], [-17.7, 2.0]]},
-    # back/creek fence — LEAVE ALONE (owner: the very back line is fine). On the east
-    # bank, inside the property, off the creek ribbon.
-    {"name": "FenceRed", "glb": f"{DL}/Fence.glb",
-     "polyline": [[-28.83, -22.64], [-17.11, -39.91]]},
-    # NOTE: the old FenceBlack front-yard picket run was dropped per the owner — fences
-    # belong in the BACK/SIDE yards, not across the front of the house.
+     "polyline": [[-13.51, -0.98], [-7.64, -5.02], [-3.47, -10.29], [0.06, -17.9]]},
 ]
 
 # per-asset unit scale (-> meters), whether the native run axis is Y not X, and a
@@ -195,6 +223,24 @@ def make_collision_helpers_transparent():
 # ---- build scene -------------------------------------------------------------
 bpy.ops.wm.read_factory_settings(use_empty=True)
 import_glb(OUT)                                    # the property model (+trees)
+
+# Purge any fences ALREADY baked into the master from a prior run of this script
+# (the empty group "Fences"/"Fences.001..." and every Fence* section under it).
+# Without this, each re-bake STACKS a fresh ring on top of the old one — that is
+# exactly how the masters ended up with stale FenceBlack/FenceRed/double rows.
+# Stripping first makes the bake idempotent: re-running just rewrites the ring.
+def purge_old_fences():
+    doomed = [o for o in bpy.data.objects
+              if o.name == "Fences" or o.name.startswith("Fences.")
+              or o.name.startswith("FenceGreen") or o.name.startswith("FencePink")
+              or o.name.startswith("FenceRed") or o.name.startswith("FenceBlack")]
+    for o in doomed:
+        bpy.data.objects.remove(o, do_unlink=True)
+    if doomed:
+        print(f"[fences] purged {len(doomed)} stale fence objects from master")
+
+
+purge_old_fences()
 
 templates = {}
 for r in RUNS:

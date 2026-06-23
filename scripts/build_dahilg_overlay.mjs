@@ -253,7 +253,7 @@ for (const { out, master } of MASTERS) {
           // dahill's address sits in a deep side-gap, so the auto front-clear point ([17.29,16.29])
           // lands between the buildings rather than on the street. Nudge the spawn the rest of the way
           // out along the front normal onto the road (verified: walking forward from there reaches it).
-          if (out === 'level' && chosenN) { sx += chosenN[0] * 8; sz += chosenN[1] * 8; }
+          if (out === 'level' && chosenN) { sx += chosenN[0] * 14; sz += chosenN[1] * 14; }
           const lr = [sx-off[0], sz-off[2]];                 // recentered-local x,z
           const lh = [hc[0]-off[0], hc[2]-off[2]];
           const dx = lr[0]-lh[0], dz = lr[1]-lh[1];          // face out from the house toward the street
@@ -276,13 +276,91 @@ for (const { out, master } of MASTERS) {
   // Strip the mesh off every node whose name is NOT vegetation/water (keeps the hierarchy intact so
   // we never orphan a kept child). prune() then drops the now-unused meshes/materials/textures.
   let kept = 0, stripped = 0;
+  // FIX 1 — acacia "blob" trees. The acacia canopy primitive uses an OPAQUE texture with no alpha
+  // channel (Acacia_BaseColor is RGB), so no runtime alpha-cutout can ever cut it — it renders as a
+  // solid green blob. Each acacia mesh has prim[0]=Acacia_Mat (OPAQUE blob) + prim[1]=NormalTree_Leaves
+  // (MASK cut-out leaves). Drop the OPAQUE acacia canopy prim and keep the MASK leaf prim so the acacia
+  // renders as a normal cut-out leaf tree. Acacia meshes are shared across ~14 Tree_NNNN nodes, so
+  // de-dupe by mesh to avoid removing a primitive twice. Scoped strictly to meshes matching /acacia/i.
+  const acaciaFixed = new Set();
+  const debladeAcacia = (mesh) => {
+    if (!mesh || acaciaFixed.has(mesh)) return;
+    acaciaFixed.add(mesh);
+    for (const prim of mesh.listPrimitives()) {
+      const mat = prim.getMaterial();
+      if (!mat) continue;
+      const isOpaqueCanopy = mat.getAlphaMode() === 'OPAQUE' || /acacia/i.test(mat.getName() || '');
+      if (isOpaqueCanopy) mesh.removePrimitive(prim);
+    }
+  };
   for (const node of root.listNodes()) {
     const name = node.getName() || '';
-    if (node.getMesh()) {
-      if (KEEP.test(name)) kept++;
-      else { node.setMesh(null); stripped++; }
+    const mesh = node.getMesh();
+    if (mesh) {
+      if (KEEP.test(name)) {
+        if (/acacia/i.test(mesh.getName() || '')) debladeAcacia(mesh);
+        kept++;
+      } else { node.setMesh(null); stripped++; }
     }
   }
+
+  // FIX 2 — trees/grass standing IN the creek/water. Cull kept vegetation nodes that sit on water cells.
+  // dahill has ~1805 water cells; the other 4 levels have 0, so this is a no-op for them. We mirror the
+  // runtime water-bitmask decode (DaHilgLevelRuntime.cs RoadBit / BuildPavedOverlay): cell = row*n + col,
+  // byteIndex = cell>>3, bit = 1<<(cell&7); cell center maps to env-space x=lerp(minX,maxX,(col+0.5)/n),
+  // z=lerp(minZ,maxZ,(row+0.5)/n). Node env-space XZ = world translation MINUS the meta offset the runtime
+  // applies (master = env + offset). A node is culled when its OWN cell is water; the ~3.15m cell size is
+  // the ~1-cell (~3.15m) tolerance, so a tree on/just-into the water is culled while bank-framing trees one
+  // cell out survive (DILATE bumps the halo a further cell — kept at 0 here, which over-prunes ~2x at 1).
+  // Cull Tree_NNNN / GrassClump / bare grass / Shrubs — but NOT reeds, creek, banks, rocks, fence/gate/rail.
+  const CULL_VEG = /^Tree_|grassclump|^grass|^shrubs?/i;
+  try {
+    const minimapName = MINIMAP_BY_OUT[out];
+    const metaPath = OUT(`${out}.meta.json`);
+    const minimapPath = minimapName ? OUT(`${minimapName}.json`) : null;
+    if (minimapPath && existsSync(minimapPath) && existsSync(metaPath)) {
+      const minimap = JSON.parse(readFileSync(minimapPath, 'utf8'));
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+      const n = Number(minimap.fillN || 0);
+      const minX = minimap.bounds?.minX ?? minimap.minX;
+      const minZ = minimap.bounds?.minZ ?? minimap.minZ;
+      const maxX = minimap.bounds?.maxX ?? minimap.maxX;
+      const maxZ = minimap.bounds?.maxZ ?? minimap.maxZ;
+      const off = meta?.offset;
+      const okBounds = [minX, minZ, maxX, maxZ].every(Number.isFinite) && maxX > minX && maxZ > minZ;
+      if (Number.isFinite(n) && n > 0 && n <= 512 && minimap.fillWater && okBounds && off) {
+        const bits = Buffer.from(minimap.fillWater, 'base64');
+        const waterBit = (col, row) => {
+          if (col < 0 || col >= n || row < 0 || row >= n) return false;
+          const cell = row * n + col;
+          const byteIndex = cell >> 3;
+          return byteIndex >= 0 && byteIndex < bits.length && (bits[byteIndex] & (1 << (cell & 7))) !== 0;
+        };
+        // total set water cells — short-circuits the (already no-op) other-level case and gives a useful log.
+        let waterCells = 0;
+        for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (waterBit(c, r)) waterCells++;
+        let culled = 0;
+        if (waterCells > 0) {
+          const DILATE = 0; // own-cell test; the 3.15m cell IS the ~1-cell tolerance (1 over-prunes ~2x)
+          for (const node of root.listNodes()) {
+            if (!node.getMesh()) continue;
+            if (!CULL_VEG.test(node.getName() || '')) continue;
+            const wm = node.getWorldMatrix();
+            const ex = wm[12] - off[0]; // env-space X = world X - offset X
+            const ez = wm[14] - off[2]; // env-space Z = world Z - offset Z
+            const col = Math.floor((ex - minX) / (maxX - minX) * n);
+            const row = Math.floor((ez - minZ) / (maxZ - minZ) * n);
+            let onWater = false;
+            for (let dr = -DILATE; dr <= DILATE && !onWater; dr++)
+              for (let dc = -DILATE; dc <= DILATE && !onWater; dc++)
+                if (waterBit(col + dc, row + dr)) onWater = true;
+            if (onWater) { node.setMesh(null); culled++; }
+          }
+        }
+        console.log(`${out}: water-cull removed ${culled} on-water veg nodes (${waterCells} water cells)`);
+      }
+    }
+  } catch (e) { console.warn(`${out}: water-cull skipped — ${e.message}`); }
 
   await doc.transform(
     prune(),                                   // drop orphaned meshes/mats/textures from stripped nodes

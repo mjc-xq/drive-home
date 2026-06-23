@@ -57,6 +57,9 @@ namespace DaHilg
         VisualElement m_TopCompactStrip;
         Label m_TopCompactLabel;
         bool m_TopPanelCollapsed;
+        // Bottom-center stat strip (drive MPH|GEAR|TIME analogue): holds the segmented
+        // HP|SWARM|SCORE strip + ROLL/cause readout, anchored bottom-center, above the prompt.
+        VisualElement m_StatStrip;
         VisualElement m_MarkOverlay;
         Label m_MarkLabel;
         VisualElement m_NibblerMeter;
@@ -81,6 +84,12 @@ namespace DaHilg
         Button m_CompactPlayerButton;
         Button m_CompactLevelButton;
         Button m_CompactMenuButton;
+        // The tiny ALL-CAPS label inside each top-right action chip (under its glyph),
+        // kept so RefreshCompactControls can swap the live value (camera/player/level).
+        Label m_CompactCameraLabel;
+        Label m_CompactPlayerLabel;
+        Label m_CompactLevelLabel;
+        Label m_CompactMenuLabel;
         VisualElement m_LevelDialog;
         VisualElement m_LevelDialogPanel;
         Label m_LevelDialogTitle;
@@ -323,18 +332,20 @@ namespace DaHilg
         {
             if (m_CompactBar == null) return;
 
+            // Top-right action CHIPS: the tiny under-glyph label carries the live value
+            // (current view / player / level); the chip goes solid-accent when "on".
             if (m_CompactCameraButton != null)
             {
-                string camera = m_Manager.CameraRig != null ? m_Manager.CameraRig.ModeLabel() : "CAMERA";
-                SetSegmentLabel(m_CompactCameraButton, "VIEW", camera);
-                StyleBarSegment(m_CompactCameraButton, false, k_Nav);
+                string camera = m_Manager.CameraRig != null ? m_Manager.CameraRig.ModeLabel().ToUpperInvariant() : "VIEW";
+                SetChipLabel(m_CompactCameraLabel, camera);
+                StyleActionChip(m_CompactCameraButton, false, k_Nav);
             }
 
             if (m_CompactPlayerButton != null)
             {
                 string label = actor != null && !string.IsNullOrEmpty(actor.Label) ? actor.Label.ToUpperInvariant() : "—";
-                SetSegmentLabel(m_CompactPlayerButton, "PLAYER", label);
-                StyleBarSegment(m_CompactPlayerButton, false, k_Nav);
+                SetChipLabel(m_CompactPlayerLabel, label);
+                StyleActionChip(m_CompactPlayerButton, false, k_Nav);
             }
 
             if (m_CompactLevelButton != null)
@@ -342,14 +353,14 @@ namespace DaHilg
                 string label = m_Manager.CurrentLevel != null
                     ? LevelButtonLabel(m_Manager.CurrentLevel).ToUpperInvariant()
                     : "LEVEL";
-                SetSegmentLabel(m_CompactLevelButton, "LEVEL", label);
-                StyleBarSegment(m_CompactLevelButton, m_LevelDialogOpen, k_Go);
+                SetChipLabel(m_CompactLevelLabel, label);
+                StyleActionChip(m_CompactLevelButton, m_LevelDialogOpen, k_Go);
             }
 
             if (m_CompactMenuButton != null)
             {
-                SetSegmentLabel(m_CompactMenuButton, m_CompactMenuOpen ? "CLOSE" : "MENU", m_CompactMenuOpen ? string.Empty : "ACTIONS");
-                StyleBarSegment(m_CompactMenuButton, m_CompactMenuOpen, k_Nav);
+                SetChipLabel(m_CompactMenuLabel, m_CompactMenuOpen ? "CLOSE" : "ACTIONS");
+                StyleActionChip(m_CompactMenuButton, m_CompactMenuOpen, k_Nav);
             }
 
             for (int i = 0; i < m_CompactCharacterButtons.Count; i++)
@@ -384,11 +395,11 @@ namespace DaHilg
             RefreshLevelDialogButtons();
         }
 
-        // Stack a tiny kicker word over a bigger value, like the driving game's .segLab.
-        static void SetSegmentLabel(Button button, string kick, string value)
+        // Swap the live value text under an action chip's glyph (drive .actionBtn label).
+        static void SetChipLabel(Label label, string value)
         {
-            if (button == null) return;
-            button.text = string.IsNullOrEmpty(value) ? kick : kick + "\n" + value;
+            if (label == null) return;
+            label.text = value;
         }
 
         void StyleCompactButton(Button button, bool active, Color activeColor)
@@ -406,18 +417,32 @@ namespace DaHilg
             button.style.borderRightWidth = button.style.borderTopWidth.value;
         }
 
-        void StyleBarSegment(Button button, bool active, Color accent)
+        // Style a top-right action chip. Resting = neutral glass + hairline border + dim
+        // label. Active/selected = the drive PRIMARY look: a SOLID accent fill, white
+        // glyph + label, and a brighter border — the "on" chip reads boldly.
+        void StyleActionChip(Button button, bool active, Color accent)
         {
             if (button == null) return;
-            // Resting = near-transparent neutral fill (airy, lets the strip glass + sheen
-            // through). Active = the drive PRIMARY look: a SOLID accent fill with white
-            // text — the one segment that is "on" reads boldly, the rest stay quiet.
             button.style.backgroundColor = active ? WithAlpha(accent, 0.92f) : k_Fill;
-            button.style.color = Color.white;
-            button.style.borderTopWidth = 0;
-            button.style.borderBottomWidth = 0;
-            button.style.borderLeftWidth = 0;
-            button.style.borderRightWidth = 0;
+            Color border = active ? Color.white : k_Line;
+            button.style.borderTopColor = border;
+            button.style.borderBottomColor = border;
+            button.style.borderLeftColor = border;
+            button.style.borderRightColor = border;
+            button.style.borderTopWidth = active ? 2 : 1;
+            button.style.borderBottomWidth = button.style.borderTopWidth.value;
+            button.style.borderLeftWidth = button.style.borderTopWidth.value;
+            button.style.borderRightWidth = button.style.borderTopWidth.value;
+            // Tint the chip's child labels: white when active, faint when resting.
+            int count = button.childCount;
+            for (int i = 0; i < count; i++)
+            {
+                if (button[i] is Label child)
+                {
+                    bool isGlyph = i == 0;
+                    child.style.color = active ? Color.white : (isGlyph ? Color.white : k_TextFaint);
+                }
+            }
         }
 
         Color CharacterAccent(string id)
@@ -600,6 +625,7 @@ namespace DaHilg
             m_Root.Add(m_MarkLabel);
 
             BuildTopPanel();
+            BuildStatStrip();
 
             m_Prompt = Label("", 13, FontStyle.Bold);
             m_Prompt.style.position = Position.Absolute;
@@ -741,11 +767,43 @@ namespace DaHilg
             m_TopCompactLabel.style.letterSpacing = 0.5f;
             m_TopCompactStrip.Add(m_TopCompactLabel);
 
-            // ── Expanded body: the segmented status strip + roll readout ───────────
+            // The segmented HP|SWARM|SCORE strip + ROLL/cause readout used to ride here
+            // under the title pill. It now lives in a centered BOTTOM bar (the drive HUD's
+            // MPH|GEAR|TIME slot) — see BuildStatStrip. m_TopPanelBody stays an empty stub
+            // so the collapse toggle (which hides the body) still has something to hide and
+            // the existing responsive frame plumbing keeps working untouched.
             m_TopPanelBody = new VisualElement();
             m_TopPanelBody.style.flexDirection = FlexDirection.Column;
-            m_TopPanelBody.style.marginTop = 7;
             m_TopPanel.Add(m_TopPanelBody);
+
+            // m_State stays a data sink feeding the collapsed one-line strip; not rendered
+            // on its own in the airy layout (the cells carry name/HP/score).
+            m_State = Label("", 12, FontStyle.Normal);
+
+            ApplyTopPanelCollapsedState();
+        }
+
+        void BuildStatStrip()
+        {
+            // ── BOTTOM-CENTER segmented stat strip (drive MPH|GEAR|TIME analogue) ──────
+            // A thin glass strip holding HP | SWARM | SCORE cells split by hairlines, with
+            // a tiny ALL-CAPS kicker over a bold value per cell — the exact drive dash
+            // cell pattern, now horizontally centered near the bottom of the screen. The
+            // ROLL/cause readout lines stack directly under it. Anchored bottom-center via
+            // left:50% + translateX(-50%); the responsive pass re-tops it per layout.
+            m_StatStrip = new VisualElement();
+            m_StatStrip.style.position = Position.Absolute;
+            m_StatStrip.style.left = Length.Percent(50);
+            m_StatStrip.style.bottom = 172;
+            m_StatStrip.style.translate = new Translate(Length.Percent(-50), 0);
+            m_StatStrip.style.width = 340;
+            m_StatStrip.style.maxWidth = Length.Percent(94);
+            m_StatStrip.style.flexDirection = FlexDirection.Column;
+            m_StatStrip.style.alignItems = Align.Stretch;
+            // Pure readout: never eat pointer events (it overlaps the touch-look zone on
+            // phones, and the desktop click-through HUD root). Children inherit Ignore.
+            m_StatStrip.pickingMode = PickingMode.Ignore;
+            m_Root.Add(m_StatStrip);
 
             // The segmented strip: HP | SWARM | SCORE cells in ONE thin glass strip,
             // divided by hairlines, each cell a tiny ALL-CAPS kicker over a value —
@@ -754,7 +812,8 @@ namespace DaHilg
             strip.style.flexDirection = FlexDirection.Row;
             strip.style.alignItems = Align.Stretch;
             strip.style.overflow = Overflow.Hidden; // clip cells + fills to the rounded frame
-            m_TopPanelBody.Add(strip);
+            strip.pickingMode = PickingMode.Ignore; // readout strip — must not block touch-look
+            m_StatStrip.Add(strip);
 
             // HP cell — kicker over % value, with a thin fill bar pinned to the bottom.
             VisualElement hpCell = StripCell();
@@ -790,26 +849,23 @@ namespace DaHilg
             strip.Add(scoreCell);
 
             // ROLL / status readout: a thin tracked line under the strip (drive .miniHint vibe).
+            // Centered to match the bottom strip's centered anchor.
             m_RollState = Label("", 10, FontStyle.Bold);
             m_RollState.style.marginTop = 6;
-            m_RollState.style.marginLeft = 3;
+            m_RollState.style.unityTextAlign = TextAnchor.MiddleCenter;
             m_RollState.style.letterSpacing = DaHilgHudTheme.KickerTracking;
-            m_TopPanelBody.Add(m_RollState);
+            m_RollState.pickingMode = PickingMode.Ignore;
+            m_StatStrip.Add(m_RollState);
 
             // Secondary cause-ticker line: rider HP-drain / BANK·BEST / greet status.
             // A thin dim line, like the drive HUD's .miniHint — not a heavy block.
             m_Attached = Label("", 10, FontStyle.Normal);
             m_Attached.style.marginTop = 4;
-            m_Attached.style.marginLeft = 3;
+            m_Attached.style.unityTextAlign = TextAnchor.MiddleCenter;
             m_Attached.style.color = k_TextFaint;
             m_Attached.style.letterSpacing = 0.4f;
-            m_TopPanelBody.Add(m_Attached);
-
-            // m_State stays a data sink feeding the collapsed one-line strip; not rendered
-            // on its own in the airy layout (the cells carry name/HP/score).
-            m_State = Label("", 12, FontStyle.Normal);
-
-            ApplyTopPanelCollapsedState();
+            m_Attached.pickingMode = PickingMode.Ignore;
+            m_StatStrip.Add(m_Attached);
         }
 
         // ── Airy-strip building blocks (mirror .scoreStrip / .dashCluster) ─────────
@@ -842,6 +898,7 @@ namespace DaHilg
         static VisualElement StripCell()
         {
             VisualElement cell = new VisualElement();
+            cell.pickingMode = PickingMode.Ignore; // readout cell — never blocks pointer events
             cell.style.position = Position.Relative;
             cell.style.flexGrow = 1;
             cell.style.flexBasis = 0;
@@ -858,6 +915,7 @@ namespace DaHilg
         Label CellKicker(string text)
         {
             Label label = Label(text, DaHilgHudTheme.FontKicker, FontStyle.Bold);
+            label.pickingMode = PickingMode.Ignore;
             label.style.color = k_TextDim;
             label.style.letterSpacing = DaHilgHudTheme.KickerTracking;
             label.style.marginBottom = 2;
@@ -867,6 +925,7 @@ namespace DaHilg
         Label CellValue(string text)
         {
             Label label = Label(text, DaHilgHudTheme.FontCellValue, FontStyle.Bold);
+            label.pickingMode = PickingMode.Ignore;
             ApplyFont(label, m_AgcHeavyFont);
             label.style.color = Color.white;
             label.style.unityFontStyleAndWeight = FontStyle.Bold;
@@ -922,6 +981,10 @@ namespace DaHilg
             if (m_TopCollapseButton != null) m_TopCollapseButton.text = m_TopPanelCollapsed ? "▸" : "▾";
             if (m_TopPanelBody != null) m_TopPanelBody.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
             if (m_TopCompactStrip != null) m_TopCompactStrip.style.display = m_TopPanelCollapsed ? DisplayStyle.Flex : DisplayStyle.None;
+            // The bottom-center stat strip moved out of the panel body, so collapse it
+            // explicitly: collapsed = the one-line summary under the title pill carries the
+            // numbers, so hide the full bottom strip; expanded = show it.
+            if (m_StatStrip != null) m_StatStrip.style.display = m_TopPanelCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
         }
 
         void BuildMinimap()
@@ -1130,8 +1193,10 @@ namespace DaHilg
                 SetBarFrame(m_CameraBar, StyleKeyword.Auto, 12, 244, StyleKeyword.Auto, new Translate(0, 0));
                 SetBarFrame(m_LevelBar, StyleKeyword.Auto, 12, 290, StyleKeyword.Auto, new Translate(0, 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, 14, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0), 300, 12);
+                // Landscape: prompt is top-anchored, so the stat strip owns the bottom-center.
+                SetStatStripFrame(18f, 320f);
                 SetBarFrame(m_CompactBar, StyleKeyword.Auto, 12, 144, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 336;
+                if (m_CompactBar != null) m_CompactBar.style.width = StyleKeyword.Auto; // chip row hugs content
                 SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 12, 196, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 178;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 320;
@@ -1163,38 +1228,37 @@ namespace DaHilg
                 ApplyCompactBarSizing(46f, 9.5f);
                 SetPanelFrame(m_TopPanel, 16, StyleKeyword.Auto, 16, StyleKeyword.Auto, 218, StyleKeyword.Auto);
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 16, 16, StyleKeyword.Auto, 136, 108);
-                SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
-                SetBarFrame(m_EmoteBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 72, new Translate(Length.Percent(-50), 0));
-                SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 118, new Translate(Length.Percent(-50), 0));
-                SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 166, new Translate(Length.Percent(-50), 0));
-                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 258, new Translate(Length.Percent(-50), 0), 340, 13);
+                SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, 64f, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0), 320, 13);
+                // Portrait touch: the stat strip is bottom-pinned (centered, like desktop/landscape)
+                // and the prompt is a top-center toast so it clears the bottom thumb controls.
+                SetStatStripFrame(20f, 330f);
                 SetBarFrame(m_CompactBar, StyleKeyword.Auto, 16, 134, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 300;
+                if (m_CompactBar != null) m_CompactBar.style.width = StyleKeyword.Auto; // chip row hugs content
                 SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 16, 184, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 430;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
 
                 PositionJoystickGhost(false);
-                // 66px circular discs: stack with ~8px gaps so they never overlap each other.
+                // 72px circular discs: spread into a thumb arc in the bottom-right corner.
                 if (m_JumpButton != null)
                 {
-                    m_JumpButton.style.right = 26;
-                    m_JumpButton.style.bottom = 30;
+                    m_JumpButton.style.right = 24;
+                    m_JumpButton.style.bottom = 96;
                 }
                 if (m_PunchButton != null)
                 {
-                    m_PunchButton.style.right = 108;
-                    m_PunchButton.style.bottom = 30;
-                }
-                if (m_RunButton != null)
-                {
-                    m_RunButton.style.right = 26;
-                    m_RunButton.style.bottom = 110;
+                    m_PunchButton.style.right = 104;
+                    m_PunchButton.style.bottom = 110;
                 }
                 if (m_RollButton != null)
                 {
-                    m_RollButton.style.right = 26;
-                    m_RollButton.style.bottom = 190;
+                    m_RollButton.style.right = 30;
+                    m_RollButton.style.bottom = 178;
+                }
+                if (m_RunButton != null)
+                {
+                    m_RunButton.style.right = 116;
+                    m_RunButton.style.bottom = 192;
                 }
             }
             else
@@ -1207,23 +1271,32 @@ namespace DaHilg
                 SetBarFrame(m_CameraBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 116, new Translate(Length.Percent(-50), 0));
                 SetBarFrame(m_LevelBar, Length.Percent(50), StyleKeyword.Auto, 18, StyleKeyword.Auto, new Translate(Length.Percent(-50), 0));
                 SetPromptFrame(Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 164, new Translate(Length.Percent(-50), 0), 680, 13);
+                // Desktop: stat strip sits at the very bottom-center (drive MPH|GEAR|TIME slot);
+                // the prompt floats just above it at bottom:164.
+                SetStatStripFrame(28f, 360f);
                 // Minimap owns the top-right corner; the segmented menu bar drops below it.
                 SetBarFrame(m_CompactBar, StyleKeyword.Auto, 18, 178, StyleKeyword.Auto, new Translate(0, 0));
-                if (m_CompactBar != null) m_CompactBar.style.width = 344;
+                if (m_CompactBar != null) m_CompactBar.style.width = StyleKeyword.Auto; // chip row hugs content
                 SetBarFrame(m_CompactPanel, StyleKeyword.Auto, 18, 230, StyleKeyword.Auto, new Translate(0, 0));
                 if (m_CompactPanel != null) m_CompactPanel.style.maxHeight = 430;
                 if (m_LevelDialogPanel != null) m_LevelDialogPanel.style.maxWidth = 360;
             }
 
-            // Narrow screens (portrait phones / short windows): the top-right segmented bar
-            // cannot sit beside the top-left status card without overlapping it. Stack the bar
-            // as a full-width row at the very top and drop the status card + minimap below it.
+            // Wide layouts: chips hug the top-RIGHT (under the minimap). The narrow override
+            // below flips this to FlexStart; reset here so a wide→narrow→wide resize is clean.
+            if (m_CompactBar != null) m_CompactBar.style.justifyContent = Justify.FlexEnd;
+
+            // Narrow screens (portrait phones / short windows): the action chip row cannot
+            // sit at the top-right beside the title pill without overlapping it. Pin the chip
+            // row to the TOP-LEFT (left-to-right) at the very top and drop the title pill +
+            // minimap below it. The ~215px chip row fits even a 360px-wide phone.
             if (Screen.width < 720 && m_CompactBar != null)
             {
                 m_CompactBar.style.left = 12;
-                m_CompactBar.style.right = 12;
+                m_CompactBar.style.right = StyleKeyword.Auto;
                 m_CompactBar.style.top = 10;
                 m_CompactBar.style.width = StyleKeyword.Auto;
+                m_CompactBar.style.justifyContent = Justify.FlexStart;
                 float panelLeft = landscape ? 12f : 14f;
                 if (m_TopPanel != null)
                 {
@@ -1285,24 +1358,41 @@ namespace DaHilg
             element.style.translate = translate;
         }
 
-        void ApplyCompactBarSizing(float height, float fontSize)
+        // Bottom-center anchor for the stat strip: always left:50% + translateX(-50%) so it
+        // stays centered; only the bottom offset + width change per layout. maxWidth 94% keeps
+        // it on-screen on narrow portrait (~1200px CSS → smaller panel px) and desktop alike.
+        void SetStatStripFrame(float bottom, float width)
         {
-            if (m_CompactBar != null) m_CompactBar.style.height = height;
-            ApplyBarButtonSizing(m_CompactCameraButton, height, fontSize);
-            ApplyBarButtonSizing(m_CompactPlayerButton, height, fontSize);
-            ApplyBarButtonSizing(m_CompactLevelButton, height, fontSize);
-            ApplyBarButtonSizing(m_CompactMenuButton, height, fontSize);
+            if (m_StatStrip == null) return;
+            m_StatStrip.style.left = Length.Percent(50);
+            m_StatStrip.style.right = StyleKeyword.Auto;
+            m_StatStrip.style.top = StyleKeyword.Auto;
+            m_StatStrip.style.bottom = bottom;
+            m_StatStrip.style.translate = new Translate(Length.Percent(-50), 0);
+            m_StatStrip.style.width = width;
+            m_StatStrip.style.maxWidth = Length.Percent(94);
         }
 
-        static void ApplyBarButtonSizing(Button button, float height, float fontSize)
+        // The chip row hugs its content; each chip is a square ≥44px tap target. The
+        // `chipSize` arg sets the per-layout chip dimension (was the old segment height).
+        void ApplyCompactBarSizing(float chipSize, float gap)
         {
-            if (button == null) return;
-            button.style.height = height;
-            button.style.fontSize = fontSize;
-            button.style.paddingLeft = 4;
-            button.style.paddingRight = 4;
-            button.style.paddingTop = 0;
-            button.style.paddingBottom = 0;
+            if (m_CompactBar != null) m_CompactBar.style.height = StyleKeyword.Auto;
+            ApplyChipSizing(m_CompactCameraButton, chipSize, gap);
+            ApplyChipSizing(m_CompactPlayerButton, chipSize, gap);
+            ApplyChipSizing(m_CompactLevelButton, chipSize, gap);
+            ApplyChipSizing(m_CompactMenuButton, chipSize, gap);
+        }
+
+        static void ApplyChipSizing(Button chip, float size, float gap)
+        {
+            if (chip == null) return;
+            chip.style.width = size;
+            chip.style.minWidth = size;
+            chip.style.height = size;
+            chip.style.minHeight = size;
+            // First chip has no left gap; the rest space out by `gap`.
+            chip.style.marginLeft = chip.parent != null && chip.parent.IndexOf(chip) == 0 ? 0f : gap;
         }
 
         void SetPromptFrame(StyleLength left, StyleLength right, StyleLength top, StyleLength bottom, Translate translate, StyleLength maxWidth, StyleLength fontSize)
@@ -1450,60 +1540,49 @@ namespace DaHilg
 
         void BuildCompactControls()
         {
-            // ── TOP-RIGHT segmented action bar (VIEW / PLAYER / LEVEL / ACTIONS) ──
-            // Thin, light glass strip mirroring the driving game's .segBar; segments
-            // stack a tiny kicker over a value and divide on hairlines. The lighter
-            // k_StripGlass + top sheen keep it airy (no real backdrop blur available).
-            m_CompactBar = Strip();
+            // ── TOP-RIGHT action CHIP row (VIEW / PLAYER / LEVEL / ACTIONS) ───────────
+            // The drive HUD's top-right control cluster: a tight ROW of small rounded
+            // glass chips, each a glyph over a tiny ALL-CAPS label. No icon font is
+            // guaranteed in the HUD face, so we use legible unicode glyphs (eye / person
+            // / map-pin / hamburger). The container is transparent — each chip carries its
+            // own glass + radius (unlike the old edge-to-edge .segBar strip).
+            m_CompactBar = new VisualElement();
             m_CompactBar.style.position = Position.Absolute;
             m_CompactBar.style.right = 18;
             m_CompactBar.style.top = 18;
-            m_CompactBar.style.width = 372;
+            m_CompactBar.style.width = StyleKeyword.Auto;
             m_CompactBar.style.flexDirection = FlexDirection.Row;
-            m_CompactBar.style.alignItems = Align.Stretch;
-            m_CompactBar.style.paddingLeft = 0;
-            m_CompactBar.style.paddingRight = 0;
-            m_CompactBar.style.paddingTop = 0;
-            m_CompactBar.style.paddingBottom = 0;
+            m_CompactBar.style.justifyContent = Justify.FlexEnd;
+            m_CompactBar.style.alignItems = Align.FlexStart;
             m_Root.Add(m_CompactBar);
 
-            m_CompactCameraButton = CompactButton("VIEW", () =>
+            m_CompactCameraButton = ActionChip("◉", "VIEW", () =>
             {
                 m_Manager.CameraRig?.CycleMode();
                 Refresh();
-            }, 92);
-            MakeBarSegment(m_CompactCameraButton);
+            }, out m_CompactCameraLabel);
             m_CompactBar.Add(m_CompactCameraButton);
             RegisterMenuButton(m_CompactCameraButton, 0, 0, () => { m_Manager.CameraRig?.CycleMode(); Refresh(); });
 
-            m_CompactBar.Add(SegmentDivider());
-
-            m_CompactPlayerButton = CompactButton("PLAYER", () =>
+            m_CompactPlayerButton = ActionChip("☻", "PLAYER", () =>
             {
                 m_Manager.CycleActor(1);
                 Refresh();
-            }, 96);
-            MakeBarSegment(m_CompactPlayerButton);
+            }, out m_CompactPlayerLabel);
             m_CompactBar.Add(m_CompactPlayerButton);
             RegisterMenuButton(m_CompactPlayerButton, 0, 1, () => { m_Manager.CycleActor(1); Refresh(); });
 
-            m_CompactBar.Add(SegmentDivider());
-
-            m_CompactLevelButton = CompactButton("LEVEL", () =>
+            m_CompactLevelButton = ActionChip("⌖", "LEVEL", () =>
             {
                 OpenLevelDialog();
-            }, 92);
-            MakeBarSegment(m_CompactLevelButton);
+            }, out m_CompactLevelLabel);
             m_CompactBar.Add(m_CompactLevelButton);
             RegisterMenuButton(m_CompactLevelButton, 0, 2, OpenLevelDialog);
 
-            m_CompactBar.Add(SegmentDivider());
-
-            m_CompactMenuButton = CompactButton("ACTIONS", () =>
+            m_CompactMenuButton = ActionChip("☰", "ACTIONS", () =>
             {
                 ToggleCompactMenu();
-            }, 82);
-            MakeBarSegment(m_CompactMenuButton);
+            }, out m_CompactMenuLabel);
             m_CompactBar.Add(m_CompactMenuButton);
             RegisterMenuButton(m_CompactMenuButton, 0, 3, () =>
             {
@@ -1528,35 +1607,6 @@ namespace DaHilg
             m_Root.Add(m_CompactPanel);
 
             AddCompactActionSection();
-        }
-
-        VisualElement SegmentDivider()
-        {
-            VisualElement divider = new VisualElement();
-            divider.style.width = 1;
-            divider.style.flexShrink = 0;
-            divider.style.backgroundColor = new Color(1f, 1f, 1f, 0.14f);
-            divider.style.marginTop = 0;
-            divider.style.marginBottom = 0;
-            divider.pickingMode = PickingMode.Ignore;
-            return divider;
-        }
-
-        static void MakeBarSegment(Button button)
-        {
-            // Segments tile edge-to-edge inside the rounded+clipped .segBar container, so they
-            // drop their own border AND radius — the outer frame supplies both.
-            if (button == null) return;
-            button.style.flexGrow = 1;
-            button.style.flexBasis = 0;
-            button.style.minWidth = 0;
-            button.style.height = 50;
-            button.style.minHeight = 50;
-            button.style.borderTopWidth = 0;
-            button.style.borderBottomWidth = 0;
-            button.style.borderLeftWidth = 0;
-            button.style.borderRightWidth = 0;
-            RoundCorners(button, 0f);
         }
 
         void AddCompactActionSection()
@@ -1946,6 +1996,69 @@ namespace DaHilg
             return button;
         }
 
+        // A small rounded glass action chip (drive top-right .actionBtn): a glyph stacked
+        // over a tiny ALL-CAPS label, ≥44px tap target. Returns the chip and hands back the
+        // value label so RefreshCompactControls can swap the live text (camera/player/level).
+        Button ActionChip(string glyph, string label, Action activate, out Label valueLabel)
+        {
+            float lastActivation = -10f;
+            void ActivateOnce()
+            {
+                if (Time.unscaledTime - m_LastHudActivationTime < 0.08f) return;
+                if (Time.unscaledTime - lastActivation < 0.12f) return;
+                lastActivation = Time.unscaledTime;
+                m_LastHudActivationTime = Time.unscaledTime;
+                activate?.Invoke();
+            }
+
+            Button button = new Button(ActivateOnce);
+            button.focusable = true;
+            button.style.flexDirection = FlexDirection.Column;
+            button.style.alignItems = Align.Center;
+            button.style.justifyContent = Justify.Center;
+            button.style.width = DaHilgHudTheme.ChipSize;
+            button.style.minWidth = DaHilgHudTheme.ChipSize;
+            button.style.height = DaHilgHudTheme.ChipSize;
+            button.style.minHeight = DaHilgHudTheme.ChipSize;
+            button.style.marginLeft = DaHilgHudTheme.ChipGap;
+            button.style.marginRight = 0;
+            button.style.marginTop = 0;
+            button.style.marginBottom = 0;
+            button.style.paddingLeft = 2;
+            button.style.paddingRight = 2;
+            button.style.paddingTop = 2;
+            button.style.paddingBottom = 2;
+            button.style.backgroundColor = k_Fill;
+            ApplyBorder(button, k_Line, 1);
+            RoundCorners(button, DaHilgHudTheme.Radius);
+            ApplyFont(button, m_AgcFont);
+
+            Label glyphLabel = Label(glyph, DaHilgHudTheme.FontChipGlyph, FontStyle.Bold);
+            glyphLabel.pickingMode = PickingMode.Ignore;
+            glyphLabel.style.color = Color.white;
+            glyphLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+            glyphLabel.style.marginBottom = 1;
+            button.Add(glyphLabel);
+
+            valueLabel = Label(label, DaHilgHudTheme.FontChipLabel, FontStyle.Bold);
+            valueLabel.pickingMode = PickingMode.Ignore;
+            valueLabel.style.color = k_TextFaint;
+            valueLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+            valueLabel.style.letterSpacing = DaHilgHudTheme.KickerTracking;
+            valueLabel.style.whiteSpace = WhiteSpace.NoWrap;
+            valueLabel.style.overflow = Overflow.Hidden;
+            valueLabel.style.textOverflow = TextOverflow.Ellipsis;
+            valueLabel.style.maxWidth = Length.Percent(100);
+            button.Add(valueLabel);
+
+            button.RegisterCallback<PointerDownEvent>(e =>
+            {
+                ActivateOnce();
+                e.StopPropagation();
+            });
+            return button;
+        }
+
         void AddCameraButton(DaHilgCameraMode mode, string label, int column)
         {
             Action activate = () => m_Manager.SetCameraMode(mode);
@@ -2171,6 +2284,10 @@ namespace DaHilg
             }
 
             if (TryActivateButtonAt(m_TopCollapseButton, ToggleTopPanel, panelPoint)) return true;
+            if (TryActivateButtonAt(m_PunchButton, () => m_Input?.QueueTouchAttack(), panelPoint)) return true;
+            if (TryActivateButtonAt(m_JumpButton, () => m_Input?.QueueTouchJump(), panelPoint)) return true;
+            if (TryActivateButtonAt(m_RollButton, () => m_Input?.QueueTouchRoll(), panelPoint)) return true;
+            if (TryActivateButtonAt(m_RunButton, () => m_Input?.SetTouchRun(true), panelPoint)) return true;
 
             for (int i = m_MenuEntries.Count - 1; i >= 0; i--)
             {
@@ -2436,7 +2553,7 @@ namespace DaHilg
             float h = RootHeight();
             Vector2 center = landscape
                 ? new Vector2(92f, h - 98f)
-                : new Vector2(98f, h - 132f);
+                : new Vector2(98f, h - 150f);
             PositionJoystick(center, false);
         }
 

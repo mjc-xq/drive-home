@@ -49,6 +49,7 @@ namespace DaHilg
         float m_BodyHeight = 1.7f;
         float m_BodyRadius = 0.3f;
         float m_VisualGroundOffset;
+        float m_BoneAboveSole = 0.018f; // per-rig: foot SOLE drop below the foot BONE (measured at spawn)
         bool m_FootPinPrimed;
         string m_CurrentAnim;
         float m_EmoteUntil;
@@ -144,6 +145,7 @@ namespace DaHilg
                 m_Animator = animatorRoot.GetComponent<Animator>();
                 m_LeftFoot = ResolveFootContact(visual.transform, true);
                 m_RightFoot = ResolveFootContact(visual.transform, false);
+                m_BoneAboveSole = MeasureBoneAboveSole(visual.transform);
                 m_NibblerBones = BuildNibblerBones(visual.transform);
                 VisualGeneration++;
                 if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
@@ -198,6 +200,34 @@ namespace DaHilg
             return FindDeepChild(visualRoot, side + "ToeBase")
                 ?? FindDeepChild(visualRoot, side + "Toe_End")
                 ?? FindDeepChild(visualRoot, side + "Foot");
+        }
+
+        // Per-rig calibration: how far the foot MESH SOLE hangs below the foot BONE, measured in the
+        // visual's local frame at bind pose. cece/mike/drew differ by ~1cm; guessing one constant for all
+        // was what kept sinking or floating a character. Bakes the skinned mesh once at spawn, finds the
+        // lowest vertex (the sole), and returns its drop below the foot bone. Falls back to a sane default.
+        float MeasureBoneAboveSole(Transform visualRoot)
+        {
+            Transform footBone = m_LeftFoot != null ? m_LeftFoot : m_RightFoot;
+            if (footBone == null) return 0.018f;
+            float minSoleY = float.PositiveInfinity;
+            foreach (SkinnedMeshRenderer smr in visualRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (smr.sharedMesh == null) continue;
+                Mesh baked = new Mesh();
+                smr.BakeMesh(baked);
+                Matrix4x4 toLocal = visualRoot.worldToLocalMatrix * smr.transform.localToWorldMatrix;
+                Vector3[] verts = baked.vertices;
+                for (int i = 0; i < verts.Length; i++)
+                {
+                    float y = toLocal.MultiplyPoint3x4(verts[i]).y;
+                    if (y < minSoleY) minSoleY = y;
+                }
+                Destroy(baked);
+            }
+            if (float.IsInfinity(minSoleY)) return 0.018f;
+            float footLocalY = visualRoot.InverseTransformPoint(footBone.position).y;
+            return Mathf.Clamp(footLocalY - minSoleY, 0f, 0.06f);
         }
 
         // Back-weighted, off-center bone slots (WORLD-metre offsets) so a swarm distributes over the
@@ -781,14 +811,15 @@ namespace DaHilg
             }
             if (!hasFoot) return;
 
-            // The CharacterController rests with the capsule bottom (= FeetPosition.y) skinWidth ABOVE the
-            // collider, and the collider IS the visual surface (build asserts Collision_Terrain==Terrain).
-            // The foot BONE sits ~at FeetPosition.y, but the foot MESH SOLE hangs a couple cm below the
-            // bone — so planting the bone at FeetPosition.y-skinWidth pushed the sole THROUGH the floor,
-            // while FeetPosition.y+skin floated it. Plant the bone a hair ABOVE ground (subtract LESS than
-            // a full skinWidth) so the sole rests on the surface.
-            float skin = m_Controller != null ? Mathf.Max(0.01f, m_Controller.skinWidth) : 0.06f;
-            float targetY = FeetPosition.y - Mathf.Max(0.012f, skin - m_Settings.GroundSkin * 0.35f);
+            // Anchor the foot-plant to the ACTUAL level surface (a downward raycast), NOT to the capsule
+            // bottom. The capsule-to-ground gap varies with skinWidth / GroundSkin / slope, and guessing it
+            // is exactly what kept sinking the body (a fat skinWidth minus a small GroundSkin planted the
+            // bone several cm under the floor). Plant the foot BONE one measured bone-above-sole height (+ a
+            // hair) above the surface so the SOLE of THIS rig rests on the ground.
+            float groundY;
+            if (TryFindLevelGround(m_Settings, out RaycastHit groundHit)) groundY = groundHit.point.y;
+            else groundY = FeetPosition.y - Mathf.Max(0.01f, m_Settings.GroundSkin);
+            float targetY = groundY + m_BoneAboveSole + 0.004f;
             float correction = targetY - minFootY;
             // Lower enough for a ground-skinned rig to settle, but bounded so one bad foot read can't yank
             // the whole body a body-height into the floor.
