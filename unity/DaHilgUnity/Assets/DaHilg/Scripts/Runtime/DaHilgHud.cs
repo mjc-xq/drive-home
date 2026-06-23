@@ -29,6 +29,10 @@ namespace DaHilg
         static readonly Color k_TextFaint = DaHilgHudTheme.TextFaint;
         static readonly Color k_Fill = DaHilgHudTheme.Fill;
         static readonly Color k_FillHi = DaHilgHudTheme.FillHi;
+        static readonly Color k_StripGlass = DaHilgHudTheme.StripGlass;
+        static readonly Color k_StripSheen = DaHilgHudTheme.StripSheen;
+        static readonly Color k_CellDivider = DaHilgHudTheme.CellDivider;
+        static readonly Color k_TrackBg = DaHilgHudTheme.TrackBg;
 
         DaHilgGameManager m_Manager;
         DaHilgInputRouter m_Input;
@@ -42,6 +46,11 @@ namespace DaHilg
         Label m_Mode;
         Label m_Attached;
         VisualElement m_HealthFill;
+        Label m_HpValue;
+        Label m_SwarmValue;
+        Label m_ScoreCellKick;
+        VisualElement m_SwarmCell;
+        VisualElement m_SwarmDivider;
         VisualElement m_TopPanel;
         VisualElement m_TopPanelBody;
         Button m_TopCollapseButton;
@@ -127,7 +136,11 @@ namespace DaHilg
             m_Title.text = m_Manager.CurrentLevel != null ? m_Manager.CurrentLevel.Label : "Da Hilg";
             m_Mode.text = m_Manager.Mode == DaHilgGameMode.Nibblers ? "NIBBLERS" : "GREET";
             float combo = m_Manager.ComboMultiplier;
-            m_Score.text = m_Manager.Score.ToString("000") + (combo > 1.01f ? "  x" + combo.ToString("0.#") : "");
+            // Clean tally in the SCORE cell value; the combo multiplier rides the cell's
+            // ALL-CAPS kicker (SCORE / SCORE ×1.5) so the value stays a tidy number.
+            m_Score.text = m_Manager.Score.ToString("000");
+            m_Score.style.color = combo > 1.01f ? k_Reverse : k_Coin;
+            if (m_ScoreCellKick != null) m_ScoreCellKick.text = combo > 1.01f ? "SCORE ×" + combo.ToString("0.#") : "SCORE";
             if (m_Manager.Mode == DaHilgGameMode.Nibblers)
             {
                 int riders = actor.AttachedNibblers;
@@ -142,11 +155,17 @@ namespace DaHilg
             else m_Attached.text = m_Manager.HasWon() ? "all greeted" : "family nearby";
             m_State.text = actor.Label + " · " + Mathf.RoundToInt(actor.Health) + "%";
 
-            // Horizontal health bar — go (>60) → coin (30..60) → reverse (<30), matching
-            // the driving game's HealthBar fill ramp.
+            // HP cell — value % + thin fill ramp: go (>60) → coin (30..60) → reverse (<30),
+            // matching the driving game's HealthBar fill ramp.
             float health = Mathf.Clamp(actor.Health, 0f, 100f);
+            Color healthColor = health < 30f ? k_Reverse : (health < 60f ? k_Coin : k_Go);
             m_HealthFill.style.width = Length.Percent(health);
-            m_HealthFill.style.backgroundColor = health < 30f ? k_Reverse : (health < 60f ? k_Coin : k_Go);
+            m_HealthFill.style.backgroundColor = healthColor;
+            if (m_HpValue != null)
+            {
+                m_HpValue.text = Mathf.RoundToInt(health) + "%";
+                m_HpValue.style.color = healthColor;
+            }
             RefreshNibblerStatus(actor);
 
             UpdateTopCompactLabel(actor, health);
@@ -247,9 +266,12 @@ namespace DaHilg
             if (m_NibblerMeter == null || m_RollState == null) return;
 
             bool nibblers = m_Manager.Mode == DaHilgGameMode.Nibblers;
-            // The nibbler counter chip + roll readout only matter in Nibblers mode.
-            DisplayStyle nibblerDisplay = nibblers && !m_TopPanelCollapsed ? DisplayStyle.Flex : DisplayStyle.None;
-            m_NibblerMeter.style.display = nibblerDisplay;
+            // The SWARM cell + roll readout only matter in Nibblers mode. The SCORE cell
+            // doubles as a CRUSHED tally there. Drop the SWARM cell AND its leading
+            // divider together in Greet mode so the strip stays a clean HP | SCORE pair.
+            DisplayStyle nibblerDisplay = nibblers ? DisplayStyle.Flex : DisplayStyle.None;
+            m_SwarmCell.style.display = nibblerDisplay;
+            if (m_SwarmDivider != null) m_SwarmDivider.style.display = nibblerDisplay;
             m_RollState.style.display = nibblerDisplay;
             if (!nibblers)
             {
@@ -263,6 +285,11 @@ namespace DaHilg
             float buried01 = m_Manager.BuriedLoad01;
             m_NibblerFill.style.width = Length.Percent(buried01 * 100f);
             m_NibblerFill.style.backgroundColor = buried01 > 0.66f ? k_Reverse : (buried01 > 0.33f ? k_Coin : k_Go);
+            if (m_SwarmValue != null)
+            {
+                m_SwarmValue.text = actor.AttachedNibblers.ToString("00");
+                m_SwarmValue.style.color = buried01 > 0.66f ? k_Reverse : (buried01 > 0.33f ? k_Coin : Color.white);
+            }
 
             bool rollReady = m_Manager.RollReady;
             m_RollState.text = rollReady
@@ -300,14 +327,14 @@ namespace DaHilg
             {
                 string camera = m_Manager.CameraRig != null ? m_Manager.CameraRig.ModeLabel() : "CAMERA";
                 SetSegmentLabel(m_CompactCameraButton, "VIEW", camera);
-                StyleBarSegment(m_CompactCameraButton, false, WithAlpha(k_Nav, 0.22f));
+                StyleBarSegment(m_CompactCameraButton, false, k_Nav);
             }
 
             if (m_CompactPlayerButton != null)
             {
                 string label = actor != null && !string.IsNullOrEmpty(actor.Label) ? actor.Label.ToUpperInvariant() : "—";
                 SetSegmentLabel(m_CompactPlayerButton, "PLAYER", label);
-                StyleBarSegment(m_CompactPlayerButton, false, WithAlpha(k_Nav, 0.22f));
+                StyleBarSegment(m_CompactPlayerButton, false, k_Nav);
             }
 
             if (m_CompactLevelButton != null)
@@ -316,13 +343,13 @@ namespace DaHilg
                     ? LevelButtonLabel(m_Manager.CurrentLevel).ToUpperInvariant()
                     : "LEVEL";
                 SetSegmentLabel(m_CompactLevelButton, "LEVEL", label);
-                StyleBarSegment(m_CompactLevelButton, m_LevelDialogOpen, WithAlpha(k_Go, 0.22f));
+                StyleBarSegment(m_CompactLevelButton, m_LevelDialogOpen, k_Go);
             }
 
             if (m_CompactMenuButton != null)
             {
                 SetSegmentLabel(m_CompactMenuButton, m_CompactMenuOpen ? "CLOSE" : "MENU", m_CompactMenuOpen ? string.Empty : "ACTIONS");
-                StyleBarSegment(m_CompactMenuButton, m_CompactMenuOpen, WithAlpha(k_Nav, 0.22f));
+                StyleBarSegment(m_CompactMenuButton, m_CompactMenuOpen, k_Nav);
             }
 
             for (int i = 0; i < m_CompactCharacterButtons.Count; i++)
@@ -379,10 +406,14 @@ namespace DaHilg
             button.style.borderRightWidth = button.style.borderTopWidth.value;
         }
 
-        void StyleBarSegment(Button button, bool active, Color activeColor)
+        void StyleBarSegment(Button button, bool active, Color accent)
         {
             if (button == null) return;
-            button.style.backgroundColor = active ? activeColor : k_Fill;
+            // Resting = near-transparent neutral fill (airy, lets the strip glass + sheen
+            // through). Active = the drive PRIMARY look: a SOLID accent fill with white
+            // text — the one segment that is "on" reads boldly, the rest stay quiet.
+            button.style.backgroundColor = active ? WithAlpha(accent, 0.92f) : k_Fill;
+            button.style.color = Color.white;
             button.style.borderTopWidth = 0;
             button.style.borderBottomWidth = 0;
             button.style.borderLeftWidth = 0;
@@ -633,37 +664,51 @@ namespace DaHilg
 
         void BuildTopPanel()
         {
-            // ── TOP-LEFT collapsible status panel ─────────────────────────────────
-            // Rounded nav-app glass card holding title/mode/score, the horizontal health
-            // row, the nibbler counter chip and the framed minimap. A small ▾ toggle
-            // collapses it to a one-line strip so the screen frees up.
-            m_TopPanel = Panel();
+            // ── TOP-LEFT status: thin title pill + segmented strip ────────────────
+            // Mirrors the drive HUD's airy top-left: a slim title/mode bar over a
+            // segmented .scoreStrip (HP | SWARM | SCORE cells split by hairlines), NOT
+            // a heavy opaque card. UIToolkit can't backdrop-blur, so we keep the
+            // surfaces THIN and LIGHT (k_StripGlass) with a faint top sheen instead.
+            // m_TopPanel is a transparent stacking column; the strips supply the glass.
+            m_TopPanel = new VisualElement();
+            m_TopPanel.style.position = Position.Absolute;
             m_TopPanel.style.left = 18;
             m_TopPanel.style.top = 18;
             m_TopPanel.style.width = 252;
+            m_TopPanel.style.flexDirection = FlexDirection.Column;
             m_Root.Add(m_TopPanel);
 
-            // Header row: title + collapse toggle, always visible.
-            VisualElement header = new VisualElement();
+            // ── Title pill: title + mode chip + collapse toggle, always visible ────
+            VisualElement header = Strip();
             header.style.flexDirection = FlexDirection.Row;
             header.style.alignItems = Align.Center;
-            header.style.justifyContent = Justify.SpaceBetween;
+            header.style.paddingLeft = 12;
+            header.style.paddingRight = 6;
+            header.style.paddingTop = 5;
+            header.style.paddingBottom = 5;
             m_TopPanel.Add(header);
 
-            m_Title = Label("Da Hilg", 18, FontStyle.Bold);
+            m_Title = Label("Da Hilg", 15, FontStyle.Bold);
             ApplyFont(m_Title, m_AgcHeavyFont);
             m_Title.style.flexGrow = 1;
             m_Title.style.flexShrink = 1;
+            m_Title.style.letterSpacing = 0.4f;
             m_Title.style.overflow = Overflow.Hidden;
             m_Title.style.textOverflow = TextOverflow.Ellipsis;
             m_Title.style.whiteSpace = WhiteSpace.NoWrap;
             header.Add(m_Title);
 
+            m_Mode = Chip("GREET", k_Nav);
+            m_Mode.style.marginRight = 6;
+            m_Mode.style.fontSize = 9;
+            m_Mode.style.letterSpacing = DaHilgHudTheme.KickerTracking;
+            header.Add(m_Mode);
+
             m_TopCollapseButton = new Button(ToggleTopPanel) { text = "▾" };
             m_TopCollapseButton.focusable = true;
-            m_TopCollapseButton.style.width = 44;   // meet the 44px minimum touch target (was 26)
-            m_TopCollapseButton.style.height = 44;
-            m_TopCollapseButton.style.marginLeft = 8;
+            m_TopCollapseButton.style.width = 44;   // 44px minimum touch target
+            m_TopCollapseButton.style.height = 36;
+            m_TopCollapseButton.style.marginLeft = 0;
             m_TopCollapseButton.style.marginTop = 0;
             m_TopCollapseButton.style.marginBottom = 0;
             m_TopCollapseButton.style.marginRight = 0;
@@ -672,19 +717,23 @@ namespace DaHilg
             m_TopCollapseButton.style.paddingTop = 0;
             m_TopCollapseButton.style.paddingBottom = 0;
             m_TopCollapseButton.style.flexShrink = 0;
-            m_TopCollapseButton.style.fontSize = 14;
-            m_TopCollapseButton.style.color = k_Text;
-            m_TopCollapseButton.style.backgroundColor = k_Fill;
+            m_TopCollapseButton.style.fontSize = 13;
+            m_TopCollapseButton.style.color = k_TextFaint;
+            m_TopCollapseButton.style.backgroundColor = Color.clear;
             m_TopCollapseButton.style.unityTextAlign = TextAnchor.MiddleCenter;
-            ApplyBorder(m_TopCollapseButton, k_Line, 1);
+            ApplyBorder(m_TopCollapseButton, Color.clear, 0);
             RoundCorners(m_TopCollapseButton, 8f);
             header.Add(m_TopCollapseButton);
 
-            // Collapsed one-line strip (hidden until collapsed).
-            m_TopCompactStrip = new VisualElement();
+            // Collapsed one-line strip (hidden until collapsed): rides under the title pill.
+            m_TopCompactStrip = Strip();
             m_TopCompactStrip.style.flexDirection = FlexDirection.Row;
             m_TopCompactStrip.style.alignItems = Align.Center;
             m_TopCompactStrip.style.marginTop = 7;
+            m_TopCompactStrip.style.paddingLeft = 12;
+            m_TopCompactStrip.style.paddingRight = 12;
+            m_TopCompactStrip.style.paddingTop = 6;
+            m_TopCompactStrip.style.paddingBottom = 6;
             m_TopCompactStrip.style.display = DisplayStyle.None;
             m_TopPanel.Add(m_TopCompactStrip);
             m_TopCompactLabel = Label("", 11, FontStyle.Bold);
@@ -692,95 +741,171 @@ namespace DaHilg
             m_TopCompactLabel.style.letterSpacing = 0.5f;
             m_TopCompactStrip.Add(m_TopCompactLabel);
 
-            // Expanded body holding all the detail widgets.
+            // ── Expanded body: the segmented status strip + roll readout ───────────
             m_TopPanelBody = new VisualElement();
             m_TopPanelBody.style.flexDirection = FlexDirection.Column;
+            m_TopPanelBody.style.marginTop = 7;
             m_TopPanel.Add(m_TopPanelBody);
 
-            VisualElement chipRow = new VisualElement { style = { flexDirection = FlexDirection.Row, marginTop = 9, alignItems = Align.Center } };
-            m_TopPanelBody.Add(chipRow);
-            m_Mode = Chip("GREET", k_Nav);
-            m_Score = Chip("000", k_Coin);
+            // The segmented strip: HP | SWARM | SCORE cells in ONE thin glass strip,
+            // divided by hairlines, each cell a tiny ALL-CAPS kicker over a value —
+            // exactly the drive dash's .dashCluster / .scoreStrip cell pattern.
+            VisualElement strip = Strip();
+            strip.style.flexDirection = FlexDirection.Row;
+            strip.style.alignItems = Align.Stretch;
+            strip.style.overflow = Overflow.Hidden; // clip cells + fills to the rounded frame
+            m_TopPanelBody.Add(strip);
+
+            // HP cell — kicker over % value, with a thin fill bar pinned to the bottom.
+            VisualElement hpCell = StripCell();
+            m_HpValue = CellValue("100%");
+            hpCell.Add(CellKicker("HP"));
+            hpCell.Add(m_HpValue);
+            m_HealthFill = CellTrackFill(hpCell, k_Go);
+            strip.Add(hpCell);
+
+            m_SwarmDivider = StripCellDivider();
+            strip.Add(m_SwarmDivider);
+
+            // SWARM cell — kicker over rider count, fill bar = buried-load gauge.
+            m_SwarmCell = StripCell();
+            m_SwarmValue = CellValue("00");
+            m_SwarmCell.Add(CellKicker("SWARM"));
+            m_SwarmCell.Add(m_SwarmValue);
+            m_NibblerFill = CellTrackFill(m_SwarmCell, k_Go);
+            m_NibblerMeter = m_SwarmCell; // back-compat alias: visibility toggled in RefreshNibblerStatus
+            strip.Add(m_SwarmCell);
+
+            strip.Add(StripCellDivider());
+
+            // SCORE cell — kicker (SCORE / SCORE ×combo) over the bold AGC tally; the
+            // crushed-nibbler count lives in the ROLL readout line below the strip.
+            VisualElement scoreCell = StripCell();
+            m_ScoreCellKick = CellKicker("SCORE");
+            m_Score = CellValue("000");
             ApplyFont(m_Score, m_AgcHeavyFont);
-            chipRow.Add(m_Mode);
-            chipRow.Add(m_Score);
+            m_Score.style.color = k_Coin;
+            scoreCell.Add(m_ScoreCellKick);
+            scoreCell.Add(m_Score);
+            strip.Add(scoreCell);
 
-            m_State = Label("", 12, FontStyle.Normal);
-            m_State.style.marginTop = 9;
-            m_State.style.color = WithAlpha(Color.white, 0.82f);
-            m_TopPanelBody.Add(m_State);
-
-            // ── Compact HORIZONTAL health row: slim bar + inline % readout ─────────
-            VisualElement healthRow = new VisualElement();
-            healthRow.style.flexDirection = FlexDirection.Row;
-            healthRow.style.alignItems = Align.Center;
-            healthRow.style.marginTop = 7;
-            m_TopPanelBody.Add(healthRow);
-
-            Label healthKick = Label("HP", 8, FontStyle.Bold);
-            healthKick.style.color = k_TextDim;
-            healthKick.style.letterSpacing = 1.5f;
-            healthKick.style.marginRight = 7;
-            healthKick.style.flexShrink = 0;
-            healthRow.Add(healthKick);
-
-            VisualElement healthTrack = new VisualElement();
-            healthTrack.style.flexGrow = 1;
-            healthTrack.style.height = 6;
-            healthTrack.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
-            ApplyBorder(healthTrack, k_Line, 1);
-            healthTrack.style.overflow = Overflow.Hidden;
-            healthRow.Add(healthTrack);
-            m_HealthFill = new VisualElement();
-            m_HealthFill.style.position = Position.Absolute;
-            m_HealthFill.style.left = 0;
-            m_HealthFill.style.top = 0;
-            m_HealthFill.style.bottom = 0;
-            m_HealthFill.style.width = Length.Percent(100);
-            m_HealthFill.style.backgroundColor = k_Go;
-            healthTrack.Add(m_HealthFill);
-
-            // ── Inline nibbler counter chip (compact, only shows in Nibblers) ──────
-            m_Attached = Label("", 11, FontStyle.Normal);
-            m_Attached.style.marginTop = 8;
-            m_Attached.style.color = WithAlpha(Color.white, 0.78f);
-            m_TopPanelBody.Add(m_Attached);
-
-            VisualElement nibRow = new VisualElement();
-            nibRow.style.flexDirection = FlexDirection.Row;
-            nibRow.style.alignItems = Align.Center;
-            nibRow.style.marginTop = 6;
-            m_TopPanelBody.Add(nibRow);
-
-            Label nibKick = Label("SWARM", 8, FontStyle.Bold);
-            nibKick.style.color = k_TextDim;
-            nibKick.style.letterSpacing = 1.5f;
-            nibKick.style.marginRight = 7;
-            nibKick.style.flexShrink = 0;
-            nibRow.Add(nibKick);
-
-            m_NibblerMeter = new VisualElement();
-            m_NibblerMeter.style.flexGrow = 1;
-            m_NibblerMeter.style.height = 6;
-            m_NibblerMeter.style.backgroundColor = new Color(1f, 1f, 1f, 0.12f);
-            ApplyBorder(m_NibblerMeter, k_Line, 1);
-            m_NibblerMeter.style.overflow = Overflow.Hidden;
-            nibRow.Add(m_NibblerMeter);
-            m_NibblerFill = new VisualElement();
-            m_NibblerFill.style.position = Position.Absolute;
-            m_NibblerFill.style.left = 0;
-            m_NibblerFill.style.top = 0;
-            m_NibblerFill.style.bottom = 0;
-            m_NibblerFill.style.width = Length.Percent(0);
-            m_NibblerFill.style.backgroundColor = k_Go;
-            m_NibblerMeter.Add(m_NibblerFill);
-
+            // ROLL / status readout: a thin tracked line under the strip (drive .miniHint vibe).
             m_RollState = Label("", 10, FontStyle.Bold);
-            m_RollState.style.marginTop = 7;
-            m_RollState.style.letterSpacing = 0.5f;
+            m_RollState.style.marginTop = 6;
+            m_RollState.style.marginLeft = 3;
+            m_RollState.style.letterSpacing = DaHilgHudTheme.KickerTracking;
             m_TopPanelBody.Add(m_RollState);
 
+            // Secondary cause-ticker line: rider HP-drain / BANK·BEST / greet status.
+            // A thin dim line, like the drive HUD's .miniHint — not a heavy block.
+            m_Attached = Label("", 10, FontStyle.Normal);
+            m_Attached.style.marginTop = 4;
+            m_Attached.style.marginLeft = 3;
+            m_Attached.style.color = k_TextFaint;
+            m_Attached.style.letterSpacing = 0.4f;
+            m_TopPanelBody.Add(m_Attached);
+
+            // m_State stays a data sink feeding the collapsed one-line strip; not rendered
+            // on its own in the airy layout (the cells carry name/HP/score).
+            m_State = Label("", 12, FontStyle.Normal);
+
             ApplyTopPanelCollapsedState();
+        }
+
+        // ── Airy-strip building blocks (mirror .scoreStrip / .dashCluster) ─────────
+        // A thin, light translucent glass strip with a hairline border and a faint
+        // top sheen cap — the UIToolkit stand-in for the drive HUD's frosted glass.
+        VisualElement Strip()
+        {
+            VisualElement strip = new VisualElement();
+            strip.style.backgroundColor = k_StripGlass;
+            ApplyBorder(strip, k_Line, 1);
+            RoundCorners(strip, DaHilgHudTheme.StripRadius);
+            strip.style.overflow = Overflow.Hidden;
+
+            // Faux top-down gradient: a faint sheen pinned to the top third lifts the
+            // strip off the scene so it reads light/airy without a real blur.
+            VisualElement sheen = new VisualElement();
+            sheen.pickingMode = PickingMode.Ignore;
+            sheen.style.position = Position.Absolute;
+            sheen.style.left = 0;
+            sheen.style.right = 0;
+            sheen.style.top = 0;
+            sheen.style.height = Length.Percent(46);
+            sheen.style.backgroundColor = k_StripSheen;
+            strip.Add(sheen);
+            return strip;
+        }
+
+        // One segmented cell: a centered column that stacks a kicker over a value,
+        // like .ssCell.trip / .dashCol. flexBasis 0 keeps the three cells even.
+        static VisualElement StripCell()
+        {
+            VisualElement cell = new VisualElement();
+            cell.style.position = Position.Relative;
+            cell.style.flexGrow = 1;
+            cell.style.flexBasis = 0;
+            cell.style.flexDirection = FlexDirection.Column;
+            cell.style.alignItems = Align.FlexStart;
+            cell.style.justifyContent = Justify.Center;
+            cell.style.paddingLeft = 11;
+            cell.style.paddingRight = 11;
+            cell.style.paddingTop = 7;
+            cell.style.paddingBottom = 9;
+            return cell;
+        }
+
+        Label CellKicker(string text)
+        {
+            Label label = Label(text, DaHilgHudTheme.FontKicker, FontStyle.Bold);
+            label.style.color = k_TextDim;
+            label.style.letterSpacing = DaHilgHudTheme.KickerTracking;
+            label.style.marginBottom = 2;
+            return label;
+        }
+
+        Label CellValue(string text)
+        {
+            Label label = Label(text, DaHilgHudTheme.FontCellValue, FontStyle.Bold);
+            ApplyFont(label, m_AgcHeavyFont);
+            label.style.color = Color.white;
+            label.style.unityFontStyleAndWeight = FontStyle.Bold;
+            return label;
+        }
+
+        // A thin gauge fill pinned to the cell's bottom edge (the .dashBar i / health ramp).
+        VisualElement CellTrackFill(VisualElement cell, Color color)
+        {
+            VisualElement track = new VisualElement();
+            track.pickingMode = PickingMode.Ignore;
+            track.style.position = Position.Absolute;
+            track.style.left = 0;
+            track.style.right = 0;
+            track.style.bottom = 0;
+            track.style.height = 3;
+            track.style.backgroundColor = k_TrackBg;
+            cell.Add(track);
+
+            VisualElement fill = new VisualElement();
+            fill.pickingMode = PickingMode.Ignore;
+            fill.style.position = Position.Absolute;
+            fill.style.left = 0;
+            fill.style.top = 0;
+            fill.style.bottom = 0;
+            fill.style.width = Length.Percent(100);
+            fill.style.backgroundColor = color;
+            track.Add(fill);
+            return fill;
+        }
+
+        VisualElement StripCellDivider()
+        {
+            VisualElement divider = new VisualElement();
+            divider.pickingMode = PickingMode.Ignore;
+            divider.style.width = 1;
+            divider.style.flexShrink = 0;
+            divider.style.backgroundColor = k_CellDivider;
+            return divider;
         }
 
         void ToggleTopPanel()
@@ -1326,19 +1451,16 @@ namespace DaHilg
         void BuildCompactControls()
         {
             // ── TOP-RIGHT segmented action bar (VIEW / PLAYER / LEVEL / ACTIONS) ──
-            // Rounded glass strip mirroring the driving game's .segBar; segments stack a
-            // tiny kicker over a value.
-            m_CompactBar = new VisualElement();
+            // Thin, light glass strip mirroring the driving game's .segBar; segments
+            // stack a tiny kicker over a value and divide on hairlines. The lighter
+            // k_StripGlass + top sheen keep it airy (no real backdrop blur available).
+            m_CompactBar = Strip();
             m_CompactBar.style.position = Position.Absolute;
             m_CompactBar.style.right = 18;
             m_CompactBar.style.top = 18;
             m_CompactBar.style.width = 372;
             m_CompactBar.style.flexDirection = FlexDirection.Row;
             m_CompactBar.style.alignItems = Align.Stretch;
-            m_CompactBar.style.backgroundColor = k_Glass;
-            ApplyBorder(m_CompactBar, k_Line, 1);
-            RoundCorners(m_CompactBar, DaHilgHudTheme.RadiusLg);
-            m_CompactBar.style.overflow = Overflow.Hidden; // clips segments to the rounded outer frame, like .segBar
             m_CompactBar.style.paddingLeft = 0;
             m_CompactBar.style.paddingRight = 0;
             m_CompactBar.style.paddingTop = 0;

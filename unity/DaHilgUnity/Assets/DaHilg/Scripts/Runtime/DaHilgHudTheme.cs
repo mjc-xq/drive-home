@@ -30,6 +30,16 @@ namespace DaHilg
         public static readonly Color PanelDeep = new Color(0.039f, 0.047f, 0.063f, 0.95f); // modal sheet
         public static readonly Color Line = new Color(1f, 1f, 1f, 0.18f);                  // --hud-line
 
+        // ── Airy strip surfaces ──────────────────────────────────────────────────
+        // UIToolkit can't backdrop-blur, so the OLD heavy opaque card read as a dark
+        // slab. The drive HUD's .scoreStrip / .dashCluster are THIN translucent strips:
+        // we fake the frosted lightness with a LIGHTER glass + a faint top sheen and a
+        // hairline cell divider, exactly like .ssDiv / .dashDiv (rgba(255,255,255,.14)).
+        public static readonly Color StripGlass = new Color(0.039f, 0.047f, 0.063f, 0.52f); // lighter than --hud-glass
+        public static readonly Color StripSheen = new Color(1f, 1f, 1f, 0.05f);             // faux top-down gradient cap
+        public static readonly Color CellDivider = new Color(1f, 1f, 1f, 0.14f);            // .ssDiv / .dashDiv / .segDiv
+        public static readonly Color TrackBg = new Color(1f, 1f, 1f, 0.16f);                // .dashBar / .boostBar track
+
         // Text ramp (--txt + opacity steps used across the drive HUD).
         public static readonly Color Text = new Color(0.957f, 0.945f, 0.917f, 1f);  // --txt
         public static readonly Color TextDim = new Color(1f, 1f, 1f, 0.5f);         // kicker labels
@@ -52,6 +62,10 @@ namespace DaHilg
         public const int FontLabel = 13;        // button / value text
         public const int FontKicker = 9;         // tiny ALL-CAPS kicker over a value
         public const int FontTitle = 18;
-        public const float KickerTracking = 1.6f; // letter-spacing for kickers
+        public const float KickerTracking = 1.6f; // letter-spacing for kickers (~.16em on a 9px kicker)
+
+        // Segmented strip cell tuning (mirrors .ssCell.trip / .dashCol).
+        public const int FontCellValue = 17;     // bold AGC value sitting under a kicker (.tripNum ≈ 18px)
+        public const float StripRadius = 12f;     // thin strip corner — between .actionBtn(10) and .chip(14)
     }
 }
