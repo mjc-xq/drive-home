@@ -245,6 +245,8 @@ if (SET.photoreal) {
       const tallPolys = [];                      // [{ib, ring:[[x,z]...], cen:[x,z]}]
       (S.buildings || []).forEach((b, ib) => {
         if (!b || !b.p || b.p.length < 3 || !(b.h > MIN_PR_H)) return;
+        if (b.house) return;   // keep the owner-house anchor EXTRUDED so House_walls (recenter +
+                               // the build's required collision node) is still emitted, not photoreal-skipped.
         const ring = b.p.map(([e, n]) => w2(e, n));
         const cen = ring.reduce((a, p) => [a[0] + p[0] / ring.length, a[1] + p[1] / ring.length], [0, 0]);
         tallPolys.push({ ib, ring, cen });
