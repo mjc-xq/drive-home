@@ -117,6 +117,10 @@ export function buildRegistry(levelMeta) {
 
   const spawns = levelMeta?.spawns ?? [[0, 0.1, 0]];
   const npcSpawns = levelMeta?.npcSpawns ?? [];
+  // The PLAYER prefers an explicit open street spawn when the level provides one (xq's
+  // high-rise block — the default front-of-building spawn lands inside a neighbor tower).
+  // House levels have no streetSpawn, so they keep their front-of-house spawns[0].
+  const playerSpawn = (Array.isArray(levelMeta?.streetSpawn) && levelMeta.streetSpawn) || spawns[0] || [0, 0.1, 0];
 
   // The active player (activePlayerIdAtom, defaults to Cece) takes the PRIMARY spawn
   // (the home/lawn spot); whoever it is must land there, not at a per-character slot.
@@ -128,8 +132,8 @@ export function buildRegistry(levelMeta) {
     const actor = createActor(id);
 
     if (id === activeId) {
-      // The player takes the first/primary spawn.
-      placeActor(actor, spawns[0] ?? [0, 0.1, 0]);
+      // The player takes the primary spawn (streetSpawn when present, else front-of-house).
+      placeActor(actor, playerSpawn);
     } else {
       // NPCs take npcSpawns in order; fall back to a fixed spread around spawn0.
       const spawn =

@@ -18,9 +18,10 @@ import {
   CIRCLE_RING,
   CIRCLE_SPEED,
   CIRCLE_PULL,
+  S_FALL,
 } from '../constants.js';
 import { CAPSULE_RADIUS, CAPSULE_CENTER_Y } from '../../constants.js';
-import { px, py, pz, vx, vy, vz, heading, jumpCD, state } from './swarmState.js';
+import { px, py, pz, vx, vy, vz, heading, jumpCD, stateT, state } from './swarmState.js';
 import { forNeighbors } from './grid.js';
 import { attachNibbler } from './attachment.js';
 
@@ -190,4 +191,25 @@ export function tryJumpAndAttach(i, ctx, playerPos) {
     return true;
   }
   return false;
+}
+
+/**
+ * PUNT nibbler `i`: fling it into a FALL arc with a strong FORWARD (+up) impulse along
+ * (dirX,dirZ) — the player's kick sends it flying. Mirrors shedAttached's S_ATTACHED→S_FALL
+ * fling but forward instead of radial-out; S_FALL's integrate() arcs + lands → S_SCATTER →
+ * despawn, so there is no new state machine. Pure SoA, no allocation.
+ * @param {number} i
+ * @param {number} dirX forward X (need not be unit)
+ * @param {number} dirZ forward Z
+ * @param {number} speed horizontal launch speed (m/s)
+ * @param {number} up vertical launch speed (m/s)
+ */
+export function puntNibbler(i, dirX, dirZ, speed, up) {
+  const n = Math.hypot(dirX, dirZ) || 1;
+  state[i] = S_FALL;
+  stateT[i] = 0;
+  vx[i] = (dirX / n) * speed;
+  vz[i] = (dirZ / n) * speed;
+  vy[i] = up;
+  py[i] += 0.2; // lift slightly so the arc starts off the ground
 }

@@ -45,6 +45,11 @@ function applyMeta(src) {
   levelMeta.houseBox = src.houseBox && src.houseBox.min && src.houseBox.max ? src.houseBox : FALLBACK.houseBox;
   levelMeta.spawns = Array.isArray(src.spawns) && src.spawns.length ? src.spawns : FALLBACK.spawns;
   levelMeta.npcSpawns = Array.isArray(src.npcSpawns) ? src.npcSpawns : FALLBACK.npcSpawns;
+  // streetSpawn (e.g. xq's high-rise block): an exporter-computed OPEN street position.
+  // Used as the player's primary spawn when present so the player never starts boxed
+  // inside a building footprint (the default front-of-building spawn can land inside a
+  // neighboring tower). Absent on the house levels => null (they keep spawns[0]).
+  levelMeta.streetSpawn = Array.isArray(src.streetSpawn) ? src.streetSpawn : null;
   // Grass occlusion: the paved-mask sidecar (bare filename) + the recentered DEM rect it covers.
   // Resolve the filename against the meta URL's directory (both live in /da-hilg/). Both ship
   // already recentered, so they're used as-is. Absent => null (the web grass occlusion stays off).

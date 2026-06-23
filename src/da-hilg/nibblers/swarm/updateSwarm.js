@@ -32,12 +32,17 @@ import {
   CLIP_RUN,
   CLIP_ATTACK,
   CLIP_DANCE,
+  CLIP_PUNTED,
+  CLIP_CRUSHED,
   CIRCLE_RADIUS,
+  CIRCLE_FRACTION,
   CIRCLE_T_MIN,
   CIRCLE_T_MAX,
   CIRCLE_BOB_RATE,
   CIRCLE_BOB_HEIGHT,
-  JUMP_COOLDOWN,
+  JUMP_RADIUS,
+  FLANK_FRACTION,
+  FLANK_OFFSET,
 } from '../constants.js';
 import {
   px,
@@ -62,6 +67,7 @@ import { seekTo, separate, integrate, tryJumpAndAttach, circleOrbit } from './ni
 
 const NOTICE_R2 = NOTICE_RADIUS * NOTICE_RADIUS;
 const CIRCLE_R2 = CIRCLE_RADIUS * CIRCLE_RADIUS;
+const JUMP_R2 = JUMP_RADIUS * JUMP_RADIUS;
 const SPAWN_SETTLE_T = 0.3; // seconds of pop-in before WANDER
 const NOTICE_DWELL_T = 0.25; // "spotted you" beat before RUN
 
@@ -154,14 +160,25 @@ export function updateSwarm(ctx) {
       }
 
       case S_RUN: {
-        seekTo(i, P.x, P.z, NIBBLER_RUN_SPEED, dt);
+        // Flankers (a seed-stable minority) approach from your SIDE while still far, aiming at a
+        // point perpendicular to their line-in, so the swarm fans out and SURROUNDS you instead of
+        // bunching at your front. Once inside CIRCLE_RADIUS they drop the flank and close in/lunge
+        // normally (the circle/jump logic below).
+        if (seed[i] < FLANK_FRACTION && dist2 > CIRCLE_R2) {
+          const dd = Math.sqrt(dist2) || 1;
+          const side = seed[i] < FLANK_FRACTION * 0.5 ? 1 : -1;
+          seekTo(i, P.x + (-dz / dd) * side * FLANK_OFFSET, P.z + (dx / dd) * side * FLANK_OFFSET, NIBBLER_RUN_SPEED, dt);
+        } else {
+          seekTo(i, P.x, P.z, NIBBLER_RUN_SPEED, dt);
+        }
         separate(i, dt);
         integrate(i, dt, groundY, false);
         active++;
-        // Playful stalking: once we close inside CIRCLE_RADIUS (but haven't just
-        // circled — jumpCD gates re-entry), peel into a brief orbit/feint before
-        // committing to the pounce, instead of bee-lining straight in.
-        if (jumpCD[i] <= 0 && dist2 < CIRCLE_R2 && dist2 > 1e-4) {
+        // Playful stalking — but only a MINORITY feint, and only from OUTSIDE pounce range
+        // (dist > JUMP_RADIUS). Most chasers (seed >= CIRCLE_FRACTION) and anyone already
+        // inside JUMP_RADIUS skip the orbit and fall through to tryJumpAndAttach below, so the
+        // swarm actually closes in and attacks instead of endlessly ringing the player.
+        if (jumpCD[i] <= 0 && seed[i] < CIRCLE_FRACTION && dist2 < CIRCLE_R2 && dist2 > JUMP_R2) {
           state[i] = S_CIRCLE;
           stateT[i] = 0;
           // Randomized circle duration per nibbler (stable-ish from seed + slot parity
@@ -198,8 +215,10 @@ export function updateSwarm(ctx) {
         if (stateT[i] >= circleDur[i] || dist2 > CIRCLE_R2 * 2.25) {
           state[i] = S_RUN;
           stateT[i] = 0;
-          // Brief cooldown so RUN gets a window to lunge before re-circling.
-          jumpCD[i] = JUMP_COOLDOWN * 0.5;
+          // Commit: clear the cooldown so the very next RUN frame can pounce. The orbit drew
+          // us inside JUMP_RADIUS, so RUN's feint check (which only re-circles when
+          // dist > JUMP_RADIUS) falls through to the lunge instead of re-feinting.
+          jumpCD[i] = 0;
         }
         break;
       }
@@ -262,6 +281,7 @@ export function updateSwarm(ctx) {
     const cur = state[i];
     if (cur === S_RUN || cur === S_NOTICE || cur === S_JUMP || cur === S_CIRCLE) clip[i] = CLIP_RUN;
     else if (cur === S_ATTACHED) clip[i] = seed[i] < 0.22 ? CLIP_DANCE : CLIP_ATTACK;
+    else if (cur === S_FALL) clip[i] = seed[i] < 0.5 ? CLIP_PUNTED : CLIP_CRUSHED; // flung/stomped → reaction pose
     else if (cur === S_WANDER || cur === S_SPAWN) clip[i] = CLIP_IDLE;
     else clip[i] = CLIP_IDLE;
   }

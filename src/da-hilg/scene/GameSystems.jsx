@@ -25,6 +25,7 @@ import { stepMotion } from '../systems/stepMotion.js';
 import { trySnapActor } from '../systems/spawnSnap.js';
 import { updateAnimation } from '../systems/animationSystem.js';
 import { clampToBoundary } from '../systems/boundarySystem.js';
+import { autoBumpAttack } from '../systems/familyPunch.js';
 import { flushZones } from '../systems/zoneSystem.js';
 import { updateGreet } from '../systems/greetSystem.js';
 import { commitReactive } from '../systems/commitReactive.js';
@@ -81,6 +82,11 @@ export default function GameSystems() {
     // ── 3b. Map boundary: warp the player to a random border spot if they cross the
     //        walkable edge (after motion, before animation/zones read the position). ──
     clampToBoundary(ctx);
+
+    // ── 3c. Auto-bump: walking INTO a full-size family NPC throws an automatic swing
+    //        (player attacks, the bumped NPC gets shoved + flinched). Greet mode only — in
+    //        Nibblers mode the combat focus is the swarm, not the wandering family. ──
+    if (!isNibblersMode()) autoBumpAttack(ctx);
 
     // ── 4. Animation (reads motion produced in step 3, strictly after) ──
     registry.forEach((actor) => {

@@ -96,11 +96,20 @@ function SunModel() {
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       for (const m of mats) {
         if (!m) continue;
-        // Make it glow: drive emissive off the base color so the sun is self-lit.
+        // The baked sun texture is a noisy, low-sample bake squashed to 512px — it read as a
+        // SPLOTCHY sun. A sun looks better as a clean, smooth, self-lit disc, so drop every
+        // baked map and glow off a flat warm colour instead. The geometry still gives the
+        // sun/ray silhouette; only the blotchy surface detail goes away.
+        m.map = null;
+        if ('emissiveMap' in m) m.emissiveMap = null;
+        if ('normalMap' in m) m.normalMap = null;
+        if ('roughnessMap' in m) m.roughnessMap = null;
+        if ('metalnessMap' in m) m.metalnessMap = null;
+        if ('aoMap' in m) m.aoMap = null;
+        if (m.color) m.color.set('#ffd86b');
         if (m.emissive) {
-          m.emissive.copy(m.color || new THREE.Color('#ffd86b'));
-          m.emissiveMap = m.map || m.emissiveMap || null;
-          m.emissiveIntensity = 1.4;
+          m.emissive.set('#ffcf5a');
+          m.emissiveIntensity = 1.8;
         }
         m.toneMapped = false;
         m.fog = false;
