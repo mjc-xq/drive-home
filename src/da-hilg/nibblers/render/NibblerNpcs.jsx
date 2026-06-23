@@ -29,7 +29,7 @@ import { bindNpcActions } from './npcAnim.js';
 // The animation clips this pool needs (subset of the shared clips — only the horde's
 // moods). Drew Nibblers use the flirty walk clip for movement, so keep `walk` loaded
 // alongside the normal run used by Cece.
-const NPC_CLIP_KEYS = ['idle', 'walk', 'run', 'climb', 'attack', 'dance'];
+const NPC_CLIP_KEYS = ['idle', 'walk', 'run', 'climb', 'attack', 'dance', 'knockdown', 'hit'];
 const NPC_CLIP_URLS = NPC_CLIP_KEYS.map((k) => ANIM_URL[k]);
 
 // Warm drei's cache so the first NPC mount doesn't stall on clip / body fetches.

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 
 // 'attack' is an aggressive looping clip used by the Nibblers swarm when clinging —
 // the family never triggers it as an emote, but every character can load/retarget it.
-export const CLIP_KEYS = ['idle', 'walk', 'run', 'jump', 'dance', 'wave', 'cheer', 'attack', 'climb', 'crawl', 'stumble', 'hit', 'knockdown'];
+export const CLIP_KEYS = ['idle', 'walk', 'run', 'jump', 'dance', 'wave', 'cheer', 'attack', 'attack2', 'attack3', 'attack4', 'attack5', 'celebrate', 'climb', 'crawl', 'stumble', 'hit', 'knockdown'];
 
 export const LOCOMOTION_KEYS = ['idle', 'walk', 'run', 'jump'];
 export const EMOTE_KEYS = ['dance', 'wave', 'cheer'];
@@ -23,6 +23,11 @@ export const CLIP_LOOP = {
   wave: 'once',
   cheer: 'once',
   attack: 'repeat', // nibblers flail/slam continuously while clinging
+  attack2: 'once', // player combo step 2
+  attack3: 'once', // player combo step 3
+  attack4: 'once', // player kick
+  attack5: 'once', // player finisher
+  celebrate: 'once', // post-finisher victory taunt
   climb: 'repeat', // nibblers clinging/climbing on a body
   crawl: 'repeat', // downed player dragging along the ground
   stumble: 'repeat', // staggering under the swarm load
@@ -47,7 +52,10 @@ export const EMOTE_SLOT = { 1: 'wave', 2: 'cheer', 3: 'dance' };
 // jump/climb/crawl intentionally keep their vertical motion; knockdown is clamped (it
 // may sink toward the ground as the body falls, but must never rise above standing).
 const GROUNDED_FLAT_Y = new Set([
-  'idle', 'walk', 'run', 'dance', 'wave', 'cheer', 'stumble', 'attack', 'hit',
+  'idle', 'walk', 'run', 'dance', 'wave', 'cheer', 'stumble', 'hit',
+  // The per-character combat clips are all in-place (stripRootXZ at build); pin Hips-Y so
+  // the kicks/spins/finishers never lift the FK body off the grounded feet plane.
+  'attack', 'attack2', 'attack3', 'attack4', 'attack5', 'celebrate',
 ]);
 
 const SKIN_SAFE_CLIP_CACHE = new WeakMap();

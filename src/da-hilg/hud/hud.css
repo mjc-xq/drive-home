@@ -664,3 +664,20 @@
     bottom: calc(12px + var(--safe-b));
   }
 }
+
+/* ── Responsive overflow guard ─────────────────────────────────────────────
+   Every floating HUD panel is position:absolute with hard-px insets and (some)
+   nowrap text, so on a narrow/short window a panel could run off-screen. These
+   viewport-relative caps keep them on-screen at ANY size; they no-op on normal
+   desktop widths (the cap only binds when the natural width would exceed the
+   viewport). Additive — overrides only the max-width, not the layout. */
+.dh-statestrip,
+.dh-objstrip,
+.dh-charbar,
+.dh-prompt {
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+}
+.dh-prompt { overflow: hidden; }
+.dh-prompt-text { overflow: hidden; text-overflow: ellipsis; }
+.dh-pips { flex-wrap: wrap; }

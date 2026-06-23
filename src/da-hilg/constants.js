@@ -29,6 +29,11 @@ export const ANIM_URL = {
   wave: '/da-hilg/anims/wave.glb',
   cheer: '/da-hilg/anims/cheer.glb',
   attack: '/da-hilg/anims/attack.glb',
+  attack2: '/da-hilg/anims/attack2.glb',
+  attack3: '/da-hilg/anims/attack3.glb',
+  attack4: '/da-hilg/anims/attack4.glb',
+  attack5: '/da-hilg/anims/attack5.glb',
+  celebrate: '/da-hilg/anims/celebrate.glb',
   // Jack-Hartmann emote set (same 24-bone rig): climb = nibblers clinging on a body;
   // crawl/stumble/hit/knockdown drive the player's overwhelm arc.
   climb: '/da-hilg/anims/climb.glb',
@@ -45,12 +50,10 @@ export const ANIM_URL = {
 // override for a state and falls back to the shared ANIM_URL clip when none exists. Keyed
 // by character id, then by canonical state key (must match an entry in CLIP_KEYS).
 export const ANIM_OVERRIDE_URL = {
-  cece: { dance: '/da-hilg/anims/cece_dance.glb' },
-  mike: { dance: '/da-hilg/anims/mike_dance.glb' },
-  kelli: {
-    idle: '/da-hilg/anims/kelli_idle.glb',
-    walk: '/da-hilg/anims/kelli_walk.glb',
-  },
+  mike: { idle: '/da-hilg/anims/mike_idle.glb', walk: '/da-hilg/anims/mike_walk.glb', run: '/da-hilg/anims/mike_run.glb', attack: '/da-hilg/anims/mike_attack.glb', attack2: '/da-hilg/anims/mike_attack2.glb', attack3: '/da-hilg/anims/mike_attack3.glb', attack4: '/da-hilg/anims/mike_attack4.glb', attack5: '/da-hilg/anims/mike_attack5.glb', celebrate: '/da-hilg/anims/mike_celebrate.glb', dance: '/da-hilg/anims/mike_dance.glb' },
+  kelli: { idle: '/da-hilg/anims/kelli_idle.glb', walk: '/da-hilg/anims/kelli_walk.glb', run: '/da-hilg/anims/kelli_run.glb', attack: '/da-hilg/anims/kelli_attack.glb', attack2: '/da-hilg/anims/kelli_attack2.glb', attack3: '/da-hilg/anims/kelli_attack3.glb', attack4: '/da-hilg/anims/kelli_attack4.glb', attack5: '/da-hilg/anims/kelli_attack5.glb', celebrate: '/da-hilg/anims/kelli_celebrate.glb', dance: '/da-hilg/anims/kelli_dance.glb' },
+  cece: { idle: '/da-hilg/anims/cece_idle.glb', walk: '/da-hilg/anims/cece_walk.glb', run: '/da-hilg/anims/cece_run.glb', attack: '/da-hilg/anims/cece_attack.glb', attack2: '/da-hilg/anims/cece_attack2.glb', attack3: '/da-hilg/anims/cece_attack3.glb', attack4: '/da-hilg/anims/cece_attack4.glb', attack5: '/da-hilg/anims/cece_attack5.glb', celebrate: '/da-hilg/anims/cece_celebrate.glb', dance: '/da-hilg/anims/cece_dance.glb' },
+  drew: { idle: '/da-hilg/anims/drew_idle.glb', walk: '/da-hilg/anims/drew_walk.glb', run: '/da-hilg/anims/drew_run.glb', attack: '/da-hilg/anims/drew_attack.glb', attack2: '/da-hilg/anims/drew_attack2.glb', attack3: '/da-hilg/anims/drew_attack3.glb', attack4: '/da-hilg/anims/drew_attack4.glb', attack5: '/da-hilg/anims/drew_attack5.glb', celebrate: '/da-hilg/anims/drew_celebrate.glb', dance: '/da-hilg/anims/drew_dance.glb' },
 };
 // The SELECTED level's assets (see level/levels.js). Only this level's files are ever
 // fetched; switching levels reloads the page, so levels never coexist in memory.

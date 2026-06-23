@@ -21,7 +21,8 @@ import { pausedAtom } from '../state/atoms.js';
 import { EMOTE_SLOT } from '../animation/clips.js';
 import { cycleSwitch } from '../systems/switchSystem.js';
 import { requestGreet } from '../systems/greetSystem.js';
-import { requestEmote, requestPunch } from '../systems/animationSystem.js';
+import { requestEmote, requestPunch, requestCelebrate } from '../systems/animationSystem.js';
+import { ATTACK_POOLS, kickKey } from '../animation/attackPools.js';
 import { playerPunch } from '../nibblers/systems/punchSystem.js';
 import { playerPunchFamily } from '../systems/familyPunch.js';
 
@@ -55,13 +56,20 @@ function buildCtxLite() {
  * Punch on the active player: play the one-shot 'attack' swing and resolve the melee
  * hit against the nibbler swarm. Routed through the same lite ctx as the other verbs.
  */
-function doPunch() {
+function doPunch(opts = {}) {
   const player = activePlayer();
   if (!player) return;
+  const key = requestPunch(player, opts); // dynamic combo pick (null if gated by cooldown/downed)
+  if (!key) return;                        // gated — don't resolve a hit on a swing that didn't happen
   const ctx = buildCtxLite();
-  requestPunch(player);            // brief one-shot 'attack' clip on the player rig
-  playerPunch(ctx);                // knock clingers off + free chasers in front (no-op in greet mode)
-  playerPunchFamily(ctx);          // shove + stagger any full-size family NPC caught in the forward cone
+  ctx.attackKey = key;                     // lets the swarm choose crush vs punt by the attack
+  playerPunch(ctx);                        // crush/punt/dislodge nibblers in front (no-op in greet mode)
+  playerPunchFamily(ctx);                  // shove + stagger any full-size family NPC caught in the forward cone
+  // A finisher caps the combo with a short victory taunt (delayed so the finisher plays out;
+  // the emote system cancels it the moment the player moves).
+  if (key === ATTACK_POOLS[player.character]?.finisher) {
+    setTimeout(() => requestCelebrate(activePlayer()), 480);
+  }
 }
 
 /** Install the window keydown handler for the edge verbs. Mount once. */
@@ -98,6 +106,14 @@ export function useEdgeKeys() {
         case 'KeyF': {
           // Keyboard fallback for punch (works without pointer lock).
           if (!daHilgStore.get(pausedAtom)) doPunch();
+          break;
+        }
+        case 'KeyC': {
+          // Dedicated KICK — the character's signature kick instead of the combo punch.
+          if (!daHilgStore.get(pausedAtom)) {
+            const p = activePlayer();
+            if (p) doPunch({ key: kickKey(p.character) });
+          }
           break;
         }
         // Esc is owned by HudMenu (toggles the pause menu); the browser also exits

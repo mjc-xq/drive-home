@@ -55,6 +55,8 @@ export const CLIP_IDLE = 0;
 export const CLIP_RUN = 1;
 export const CLIP_ATTACK = 2;
 export const CLIP_DANCE = 3;
+export const CLIP_PUNTED = 4; // sent flying by a kick/finisher (reaction pose during the FALL arc)
+export const CLIP_CRUSHED = 5; // stomped/crushed under the feet (reaction pose)
 
 // ── Attraction timeline (seconds-marked → target active count) ──────────────
 // Tuned for the real skinned-NPC pool: readable pressure by 30s, near-cap by 90s.
@@ -85,7 +87,7 @@ export const NIBBLER_ACCEL = 10;
 export const SEP_RADIUS = 0.6;            // separation / spatial-hash cell size
 export const SEP_STRENGTH = 3.0;
 export const NIBBLER_GRAVITY = -18;
-export const JUMP_RADIUS = 2.0;           // start a lunge-jump within this
+export const JUMP_RADIUS = 2.7;           // start a lunge-jump within this (MUST exceed CIRCLE_RING so a feinting nibbler ends its orbit inside pounce range)
 export const NIBBLER_JUMP_VEL = 4.0;
 export const NIBBLER_LUNGE = 5.0;         // horizontal boost during a jump
 export const JUMP_COOLDOWN = 1.0;
@@ -96,12 +98,13 @@ export const EMOTE_RATE = 1.5;            // VAT phase advance / sec (loops)
 // orbits the player on a ring with a little bob/hop for a short, randomized beat,
 // THEN commits to RUN→lunge. Reads as "playful stalking" then pounce. Pure math
 // over the SoA (no alloc), so it stays cheap across the whole swarm.
-export const CIRCLE_RADIUS = 4.5;         // start circling once this close to the player
-export const CIRCLE_RING = 2.6;           // preferred orbit distance held while circling
+export const CIRCLE_FRACTION = 0.33;      // only this fraction of chasers feint/orbit; the REST bee-line in and pounce (was effectively 1.0 — everyone orbited)
+export const CIRCLE_RADIUS = 3.4;         // start circling once this close to the player
+export const CIRCLE_RING = 1.7;           // preferred orbit distance held while circling (INSIDE JUMP_RADIUS so the feint ends in pounce range)
 export const CIRCLE_SPEED = 3.4;          // tangential orbit speed (m/s)
-export const CIRCLE_PULL = 2.0;           // radial correction toward the ring (m/s)
-export const CIRCLE_T_MIN = 0.6;          // min seconds spent circling before the lunge
-export const CIRCLE_T_MAX = 1.6;          // max seconds (per-nibbler randomized by seed)
+export const CIRCLE_PULL = 2.4;           // radial correction toward the ring (m/s) — draws the feint inward
+export const CIRCLE_T_MIN = 0.35;         // min seconds spent circling before the lunge
+export const CIRCLE_T_MAX = 0.85;         // max seconds (per-nibbler randomized by seed)
 export const CIRCLE_BOB_RATE = 8.0;       // playful vertical bob frequency (rad/s)
 export const CIRCLE_BOB_HEIGHT = 0.12;    // bob amplitude above the ground (m)
 
@@ -183,6 +186,17 @@ export const PUNCH_RANGE = 1.8;           // forward reach for free (un-attached
 export const PUNCH_HALF_ANGLE = 1.0;      // forward cone half-angle (rad, ~57°)
 export const PUNCH_SHED_N = 6;            // max attached clingers knocked off per punch
 export const PUNCH_COOLDOWN_MS = 320;     // min ms between landed punches
+// Crush: a melee swing also CRUSHES free nibblers right under/around the feet (no cone, no
+// fall-velocity gate) so the swarm massed at your feet can't ignore your punches.
+export const PUNCH_CRUSH_RADIUS = 1.15;
+// Punt: a KICK / FINISHER sends nearby front nibblers FLYING (S_FALL with a forward+up impulse).
+export const PUNT_SPEED = 8.5;            // forward launch speed (m/s)
+export const PUNT_UP = 5.0;               // upward launch (m/s)
+export const PUNT_COUNT = 4;              // max nibblers punted by one kick/finisher
+// Flanking: a fraction of chasers peel to your SIDES/BACK instead of bee-lining your front, so
+// the swarm SURROUNDS you (reads as coordinated) instead of bunching in one frontal cone.
+export const FLANK_FRACTION = 0.45;
+export const FLANK_OFFSET = 2.6;          // how far around the player a flanker aims (m)
 
 // ── Scatter (safe-zone panic) ───────────────────────────────────────────────
 export const SCATTER_SPEED = 8;

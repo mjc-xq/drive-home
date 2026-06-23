@@ -570,6 +570,12 @@ const KELLI_ANIMS = 'src/assets/anim/kelli-mx-anims.glb';
 const DREW_ANIMS = 'src/assets/anim/drew-mx-anims.glb';
 const FAMILY_ANIMS = 'src/assets/anim/family-anims.glb';   // DONOR (Wave/Cheer)
 const JACK_DONOR = 'src/assets/jack-hartmann.glb';         // DONOR (Stumble)
+// LIB(p): a clip from the 2344-clip animation library (mixamo-animation-library/<category>/<Name>.glb).
+// Anim-only, plain-bone (mixamorig stripped), upright (apply_armature_rotation) clips on the canonical
+// Mixamo skeleton. buildAnim's skin-safe retarget (drops non-Hips translation + scale) + assertion B
+// (routed to cece-mx's canonical 33-joint skin via rigGlbForSource) make them game-safe. These power
+// the per-character signature fighting + movement.
+const LIB = (p) => `mixamo-animation-library/${p}`;
 
 // PLAYER motion map (15 states) — the SHARED DEFAULT motion per state, used by any character
 // that has no per-character override (see PLAYER_OVERRIDES below). state -> { src, clip, stripRootXZ, noLoop }.
@@ -588,6 +594,9 @@ const PLAYER_ANIMS = [
   { key: 'Attack',    src: MIKE_ANIMS, clip: 'Punching',                                     noLoop: true },
   { key: 'Attack2',   src: CECE_ANIMS, clip: 'Fist_Fight_B',                                 noLoop: true },
   { key: 'Attack3',   src: CECE_ANIMS, clip: 'Brutal_Assassination',                         noLoop: true },
+  { key: 'Attack4',   src: LIB('combat/unarmed/attacks/Mma_Low_Kick.glb'),                 clip: 'Mma_Low_Kick',                 stripRootXZ: true, noLoop: true },
+  { key: 'Attack5',   src: LIB('combat/unarmed/attacks/Standing_Left_Uppercut_Punch.glb'), clip: 'Standing_Left_Uppercut_Punch', stripRootXZ: true, noLoop: true },
+  { key: 'Celebrate', src: LIB('emotes/Victory_From_A_Boxing_Win.glb'),                    clip: 'Victory_From_A_Boxing_Win',    stripRootXZ: true, noLoop: true },
   { key: 'Hit',       src: CECE_ANIMS, clip: 'Standing_Death_Left_01_v2',                    noLoop: true },
   { key: 'Stumble',   src: JACK_DONOR, clip: 'Stumble_Walk',             stripRootXZ: true, loop: true },
   { key: 'Knockdown', src: CECE_ANIMS, clip: 'Fallen_Idle',                                  noLoop: true },
@@ -601,25 +610,55 @@ const PLAYER_ANIMS = [
 // the source of truth; this list mirrors it with the per-state loop/stripRootXZ flags the build
 // needs. `src` = that char's own *-mx-anims.glb; assertion B's target rig = that char's *-mx.glb,
 // resolved automatically by rigGlbForSource(src). `id`+`key` produce the '<id>_<state>' output key.
+// Each family member gets a full SIGNATURE set drawn from the library: own idle/walk/run, a 3-hit
+// combo (Attack/Attack2/Attack3), a kick (Attack4), a finisher (Attack5), a victory taunt (Celebrate),
+// and a signature dance. All combat clips are stripRootXZ (in-place — the capsule drives world motion,
+// no foot slide) + grounded; aerial-looking kicks stay grounded so they never re-break foot grounding.
 const PLAYER_OVERRIDES = [
-  // cece — boxer/breakdancer signature
-  { id: 'cece',  key: 'Attack',    src: CECE_ANIMS,  clip: 'Boxing',               noLoop: true },
-  { id: 'cece',  key: 'Attack2',   src: CECE_ANIMS,  clip: 'Fist_Fight_B',         noLoop: true },
-  { id: 'cece',  key: 'Attack3',   src: CECE_ANIMS,  clip: 'Brutal_Assassination', noLoop: true },
-  { id: 'cece',  key: 'Dance',     src: CECE_ANIMS,  clip: 'Breakdance_1990',                       loop: true },
-  // mike — straight puncher
-  { id: 'mike',  key: 'Attack',    src: MIKE_ANIMS,  clip: 'Punching',             noLoop: true },
-  { id: 'mike',  key: 'Attack2',   src: MIKE_ANIMS,  clip: 'Punching',             noLoop: true },
-  { id: 'mike',  key: 'Attack3',   src: MIKE_ANIMS,  clip: 'Punching',             noLoop: true },
-  { id: 'mike',  key: 'Dance',     src: MIKE_ANIMS,  clip: 'Hip_Hop_Dancing',                       loop: true },
-  // kelli — jump-attacker; nervous idle + her own locomotion/laying poses
-  { id: 'kelli', key: 'Idle',      src: KELLI_ANIMS, clip: 'Nervously_Look_Around' },
-  { id: 'kelli', key: 'Walk',      src: KELLI_ANIMS, clip: 'Female_Locomotion_Pose', stripRootXZ: true, loop: true },
-  { id: 'kelli', key: 'Attack',    src: KELLI_ANIMS, clip: 'Jump_Attack',          noLoop: true },
-  { id: 'kelli', key: 'Attack2',   src: KELLI_ANIMS, clip: 'Jump_Attack',          noLoop: true },
-  { id: 'kelli', key: 'Attack3',   src: KELLI_ANIMS, clip: 'Jump_Attack',          noLoop: true },
-  { id: 'kelli', key: 'Hit',       src: KELLI_ANIMS, clip: 'Female_Laying_Pose',   noLoop: true },
-  { id: 'kelli', key: 'Knockdown', src: KELLI_ANIMS, clip: 'Female_Laying_Pose',   noLoop: true },
+  // mike — solid BOXER: jab/cross/hook combo, low kick, uppercut finisher, bob-and-weave guard idle
+  { id: 'mike', key: 'Idle',      src: LIB('locomotion/idle/Bouncing_Fight_Idle_With_Guard_Up.glb'), clip: 'Bouncing_Fight_Idle_With_Guard_Up' },
+  { id: 'mike', key: 'Walk',      src: LIB('locomotion/walk/Walking_With_A_Swagger.glb'), clip: 'Walking_With_A_Swagger', stripRootXZ: true, loop: true },
+  { id: 'mike', key: 'Run',       src: LIB('locomotion/run/Male_Weighted_Run.glb'), clip: 'Male_Weighted_Run', stripRootXZ: true, loop: true },
+  { id: 'mike', key: 'Attack',    src: LIB('combat/unarmed/attacks/Boxing_Leading_Hand_Jab.glb'), clip: 'Boxing_Leading_Hand_Jab', stripRootXZ: true, noLoop: true },
+  { id: 'mike', key: 'Attack2',   src: LIB('combat/unarmed/attacks/A_Cross_Punch.glb'), clip: 'A_Cross_Punch', stripRootXZ: true, noLoop: true },
+  { id: 'mike', key: 'Attack3',   src: LIB('combat/unarmed/attacks/Boxing_Lead_Hand_Hook.glb'), clip: 'Boxing_Lead_Hand_Hook', stripRootXZ: true, noLoop: true },
+  { id: 'mike', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Mma_Low_Kick.glb'), clip: 'Mma_Low_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'mike', key: 'Attack5',   src: LIB('combat/unarmed/attacks/Standing_Left_Uppercut_Punch.glb'), clip: 'Standing_Left_Uppercut_Punch', stripRootXZ: true, noLoop: true },
+  { id: 'mike', key: 'Celebrate', src: LIB('emotes/Victory_From_A_Boxing_Win.glb'), clip: 'Victory_From_A_Boxing_Win', stripRootXZ: true, noLoop: true },
+  { id: 'mike', key: 'Dance',     src: LIB('dance/Step_Hip_Hop_Dance.glb'), clip: 'Step_Hip_Hop_Dance', loop: true },
+  // kelli — AERIAL striker: high/spin/hurricane kicks (grounded-pinned), bouncy guard idle, ninja walk
+  { id: 'kelli', key: 'Idle',      src: LIB('locomotion/idle/Bouncing_Fight_Idle_With_Guard_Up.glb'), clip: 'Bouncing_Fight_Idle_With_Guard_Up' },
+  { id: 'kelli', key: 'Walk',      src: LIB('locomotion/walk/Female_Ninja_Walk_Forward_Arc_Left.glb'), clip: 'Female_Ninja_Walk_Forward_Arc_Left', stripRootXZ: true, loop: true },
+  { id: 'kelli', key: 'Run',       src: LIB('locomotion/run/Female_Ninja_Run.glb'), clip: 'Female_Ninja_Run', stripRootXZ: true, loop: true },
+  { id: 'kelli', key: 'Attack',    src: LIB('combat/unarmed/attacks/Mma_High_Kick.glb'), clip: 'Mma_High_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack2',   src: LIB('combat/unarmed/attacks/Spinning_Flip_Kick.glb'), clip: 'Spinning_Flip_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack3',   src: LIB('combat/unarmed/attacks/Flying_Hurricane_Kick.glb'), clip: 'Flying_Hurricane_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Flying_Sidekick_From_A_Run.glb'), clip: 'Flying_Sidekick_From_A_Run', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack5',   src: LIB('combat/unarmed/attacks/Flying_Bicycle_Kick.glb'), clip: 'Flying_Bicycle_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Celebrate', src: LIB('emotes/Ecstatic_Jumping_With_Both_Legs_And_Arms.glb'), clip: 'Ecstatic_Jumping_With_Both_Legs_And_Arms', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Dance',     src: LIB('dance/Bboy_Hip_Hop_Variation_One.glb'), clip: 'Bboy_Hip_Hop_Variation_One', loop: true },
+  // cece — BREAKDANCE-FIGHTER: capoeira kicks + leg sweep, breakdance finisher, capoeira idle
+  { id: 'cece', key: 'Idle',      src: LIB('locomotion/idle/Capoeira_Idle.glb'), clip: 'Capoeira_Idle' },
+  { id: 'cece', key: 'Walk',      src: LIB('locomotion/walk/Walking_With_A_Swagger.glb'), clip: 'Walking_With_A_Swagger', stripRootXZ: true, loop: true },
+  { id: 'cece', key: 'Run',       src: LIB('locomotion/run/Female_Run_Forward.glb'), clip: 'Female_Run_Forward', stripRootXZ: true, loop: true },
+  { id: 'cece', key: 'Attack',    src: LIB('combat/unarmed/attacks/Capoeira_Side_Step_Front_Kick.glb'), clip: 'Capoeira_Side_Step_Front_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack2',   src: LIB('combat/unarmed/attacks/Capoeira_Spin_Kick.glb'), clip: 'Capoeira_Spin_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack3',   src: LIB('combat/unarmed/attacks/360_Leg_Sweep_Kick.glb'), clip: '360_Leg_Sweep_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Capoeira_Ground_Spin_Kick.glb'), clip: 'Capoeira_Ground_Spin_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack5',   src: LIB('dance/Breakdance_Finishing_Combo_Var_1.glb'), clip: 'Breakdance_Finishing_Combo_Var_1', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Celebrate', src: LIB('emotes/Turning_Head_To_The_Side_In_A_Cocky_Manner.glb'), clip: 'Turning_Head_To_The_Side_In_A_Cocky_Manner', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Dance',     src: LIB('dance/Breakdance_Flair.glb'), clip: 'Breakdance_Flair', loop: true },
+  // drew — FLAMBOYANT/SEDUCTIVE: catwalk strut, open-palm + backhand + elbow combo, jazz kick, kiss taunt
+  { id: 'drew', key: 'Idle',      src: LIB('locomotion/idle/Hands_On_Hips_Looking_Over_Shoulder.glb'), clip: 'Hands_On_Hips_Looking_Over_Shoulder' },
+  { id: 'drew', key: 'Walk',      src: LIB('locomotion/walk/Model_Walking_Down_The_Catwalk.glb'), clip: 'Model_Walking_Down_The_Catwalk', stripRootXZ: true, loop: true },
+  { id: 'drew', key: 'Run',       src: LIB('locomotion/run/Happy_Run_Forward.glb'), clip: 'Happy_Run_Forward', stripRootXZ: true, loop: true },
+  { id: 'drew', key: 'Attack',    src: LIB('combat/unarmed/attacks/Uppercut_Jab_And_Open_Palm_Strike_Combo.glb'), clip: 'Uppercut_Jab_And_Open_Palm_Strike_Combo', stripRootXZ: true, noLoop: true },
+  { id: 'drew', key: 'Attack2',   src: LIB('combat/unarmed/attacks/Back_Hand_Cross.glb'), clip: 'Back_Hand_Cross', stripRootXZ: true, noLoop: true },
+  { id: 'drew', key: 'Attack3',   src: LIB('combat/unarmed/attacks/Vertical_Elbow_And_Solar_Plexus_Strike.glb'), clip: 'Vertical_Elbow_And_Solar_Plexus_Strike', stripRootXZ: true, noLoop: true },
+  { id: 'drew', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Female_Jazz_Dancing_Rockette_Kick.glb'), clip: 'Female_Jazz_Dancing_Rockette_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'drew', key: 'Attack5',   src: LIB('combat/unarmed/attacks/Capoeira_Spin_Kick.glb'), clip: 'Capoeira_Spin_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'drew', key: 'Celebrate', src: LIB('emotes/Blowing_A_Kiss.glb'), clip: 'Blowing_A_Kiss', stripRootXZ: true, noLoop: true },
+  { id: 'drew', key: 'Dance',     src: LIB('dance/Female_Salsa_Dancing.glb'), clip: 'Female_Salsa_Dancing', loop: true },
 ];
 
 // NIBBLER motion map (7 states) — drew (the zombie swarm body). Separate OUTPUT folder so
@@ -681,6 +720,11 @@ const NEVER_PRESTRIP = new Set(['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck']);
 
 const rigJointsCache = new Map();   // sourceGLB rel path -> Set<boneName>
 function rigGlbForSource(src) {
+  // Library clips (mixamo-animation-library/**) ride the canonical plain-bone Mixamo skeleton
+  // shared by all four bodies. Validate assertion (B) against that CANONICAL joint set —
+  // cece-mx.glb's skin (33 joints, identical across cece/mike/kelli/drew) — instead of the
+  // clip's own skin, so a library clip targeting a non-canonical bone fails loudly.
+  if (/(^|\/)mixamo-animation-library\//.test(src)) return 'src/assets/cece-mx.glb';
   // src/assets/anim/<id>-mx-anims.glb -> src/assets/<id>-mx.glb
   const m = /\/anim\/([a-z0-9]+)-mx-anims\.glb$/i.exec(src);
   if (m) return `src/assets/${m[1]}-mx.glb`;
@@ -961,8 +1005,11 @@ for (const { out, src } of CHARS) {
   const { verts: srcVerts } = countTris(doc);
   const simplifyOpts = srcVerts > SIMPLIFY_VERT_THRESHOLD ? CHAR_SIMPLIFY : null;
   if (!simplifyOpts) console.log(`    simplify: ${out} ${srcVerts} verts <= ${SIMPLIFY_VERT_THRESHOLD} threshold — left untouched`);
-  // Characters cap textures at 512 — a 1.7 m rig never needs more (per-class cap).
-  await meshoptPipeline(doc, out, CHAR_QUANT, 512, simplifyOpts);
+  // Characters cap textures at 1024 (was 512). The Meshy-AI source albedo is 2048 and
+  // already mottled; 512 turned skin to mush ("camo"). 1024 keeps the face/skin readable
+  // while staying small for a 1.7 m rig. (A true fix for the mottling needs cleaner source
+  // art — the splotch is baked into the AI texture, not the compression, which is UASTC.)
+  await meshoptPipeline(doc, out, CHAR_QUANT, 1024, simplifyOpts);
   await writeAndVerify(doc, OUT(out), { label: out });
 }
 

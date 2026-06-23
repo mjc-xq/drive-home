@@ -18,6 +18,7 @@ import {
 } from '../constants.js';
 import * as THREE from 'three';
 import { CLIP_LOOP, EMOTE_HELD } from '../animation/clips.js';
+import { pickAttackKey, ATTACK_COOLDOWN_MS, COMBO_WINDOW_MS } from '../animation/attackPools.js';
 import { activePlayer } from '../state/refs.js';
 import { nibblerPenalty } from '../nibblers/mode.js';
 
@@ -62,6 +63,68 @@ function fadeFor(next) {
   if (next === 'idle') return FADE_IDLE;
   if (next === 'dance' || next === 'wave' || next === 'cheer') return FADE_EMOTE;
   return FADE_LOCO;
+}
+
+// Scratch vectors for the per-frame foot-grounding clamp (no per-frame allocation).
+const _gfFootL = new THREE.Vector3();
+const _gfFootR = new THREE.Vector3();
+const _gfPlane = new THREE.Vector3();
+
+/**
+ * Foot-grounding clamp. The shipped rig carries a build-time groundSkinnedRig lift (~0.95 m)
+ * that CharacterModel undoes for three.js, and the shared Mixamo clips bake a (cm-scale) Hips
+ * vertical that only PARTLY cancels it — so the rendered lowest foot can sit anywhere from a
+ * few cm (mid-animation) to ~0.95 m (bind / mid-crossfade) BELOW the feet-plane (measured via
+ * the grounding-diagnosis workflow). Rather than chase the exact per-clip baseline, we measure
+ * both foot bones' world Y each grounded frame and RAISE the cloned model so the lower foot
+ * sits on the group origin (= motion.pos feet plane). This is robust to whatever the baseline
+ * offset is (sunk OR floating). It ONLY ever raises (never shoves the body down), with a
+ * ceiling above the full lift. Airborne, it eases back to 0 so jump/fall clips keep air time.
+ * @param {import('../actors/actorRegistry.js').Actor} actor
+ * @param {number} dt clamped seconds
+ */
+function groundFeet(actor, dt) {
+  const grp = actor.ref.group;
+  if (!grp) return;
+  const clone = grp.children[0];
+  if (!clone) return;
+
+  // Resolve + cache the two foot bones once (toe base reads lowest; fall back to foot/heel).
+  let feet = actor.ref._feetBones;
+  if (feet === undefined) {
+    const find = (names) => {
+      for (const n of names) {
+        const o = clone.getObjectByName(n);
+        if (o) return o;
+      }
+      return null;
+    };
+    const l = find(['LeftToeBase', 'LeftToe_End', 'LeftFoot']);
+    const r = find(['RightToeBase', 'RightToe_End', 'RightFoot']);
+    feet = l && r ? [l, r] : null;
+    actor.ref._feetBones = feet;
+  }
+  if (!feet) return;
+
+  if (actor.motion.grounded) {
+    feet[0].getWorldPosition(_gfFootL);
+    feet[1].getWorldPosition(_gfFootR);
+    grp.getWorldPosition(_gfPlane);
+    const lowest = Math.min(_gfFootL.y, _gfFootR.y);
+    // Move the model so the lower foot lands exactly on the plane (getWorldPosition already
+    // folds in the current clone offset, so this converges to a locked planted foot).
+    clone.position.y += _gfPlane.y - lowest;
+    // ONLY ever RAISE — never push the body DOWN. The old [-0.25, +0.55] band buried the feet
+    // two ways: it allowed a 0.25 m downward shove, AND its 0.55 m ceiling couldn't reach the
+    // ~0.95 m the undone groundSkinnedRig lift demands, pinning feet ~0.4 m underground. Ceiling
+    // 1.2 m clears that lift; floor 0 forbids any downward shove (a raised foot just stays put).
+    if (clone.position.y > 1.2) clone.position.y = 1.2;
+    else if (clone.position.y < 0) clone.position.y = 0;
+  } else if (clone.position.y !== 0) {
+    // Airborne: relax the grounding offset so the jump/fall clip plays naturally.
+    clone.position.y += (0 - clone.position.y) * Math.min(1, dt * 8);
+    if (Math.abs(clone.position.y) < 1e-4) clone.position.y = 0;
+  }
 }
 
 // States that read as continuous body motion and look robotic when a crowd plays the
@@ -227,11 +290,13 @@ export function updateAnimation(actor, dt) {
       }
       actor.ref._animAcc = 0;
       mixer.update(acc);
+      groundFeet(actor, acc);
       return;
     }
   }
 
   mixer.update(dt);
+  groundFeet(actor, dt);
 }
 
 /**
@@ -256,22 +321,50 @@ export function requestEmote(actor, key, opts = {}) {
   actor.ai.faceTarget = opts.faceTarget ?? actor.ai.faceTarget;
 }
 
+// Dynamic combo state (module-scoped, mirrors the existing single-punch timing pattern). Each
+// swing advances the combo while presses stay inside COMBO_WINDOW_MS; a gap resets the chain.
+let _comboIx = 0;
+let _lastSwingT = 0;
+
 /**
- * Play the player's PUNCH: the shared 'attack' clip as a brief one-shot. Distinct
- * from requestEmote so a rapid second punch re-fires even while 'attack' is already
- * the current action (rewind the bound action so the swing replays from frame 0).
- * The nibblers' looping use of 'attack' is in the SoA swarm, never this path.
+ * Play the player's ATTACK as a brief one-shot, choosing the clip DYNAMICALLY from the
+ * character's attack pool (3-hit combo that escalates to a finisher) so rapid presses chain a
+ * flowing combo and each character fights with their own signature clips. `opts.key` forces a
+ * specific attack (e.g. the dedicated kick). Returns the chosen clip key (or null if gated by
+ * cooldown / downed). The nibblers' looping use of 'attack' is the SoA swarm, never this path.
  * @param {import('../actors/actorRegistry.js').Actor} actor
+ * @param {{ key?: string }} [opts]
+ * @returns {string|null} the attack clip key played, or null if no swing happened
  */
-export function requestPunch(actor) {
-  if (!actor) return;
+export function requestPunch(actor, opts = {}) {
+  if (!actor) return null;
   // Don't punch while downed/pinned — the body is prone (knockdown clip owns it).
-  if (nibblerPenalty.overwhelm >= 2) return;
+  if (nibblerPenalty.overwhelm >= 2) return null;
+  const now = performance.now();
+  if (now - _lastSwingT < ATTACK_COOLDOWN_MS) return null; // spam gate
+  // Advance the combo if still inside the window; otherwise restart the chain at hit 1.
+  _comboIx = now - _lastSwingT > COMBO_WINDOW_MS ? 0 : _comboIx + 1;
+  _lastSwingT = now;
+  const key = opts.key || pickAttackKey(actor.character, _comboIx);
   const m = actor.motion;
-  // If already mid-punch, rewind the bound action so the swing restarts cleanly.
-  const a = actor.ref?.actions?.attack;
-  if (m.action === 'attack' && a) a.reset();
-  m.action = 'attack';
+  // Rewind THIS actor's bound action (its own per-character variant when present) so a rapid
+  // re-press replays the swing from frame 0 instead of freezing on the clamped last frame.
+  const resolved = resolveVariantKey(actor, key, actor.ref?.actions || {});
+  const a = actor.ref?.actions?.[resolved];
+  if (m.action === key && a) a.reset();
+  m.action = key;
   m.actionOnce = true;
   m.actionUntil = 0;
+  return key;
+}
+
+/**
+ * Queue the player's victory CELEBRATION — a short per-character taunt one-shot that returns to
+ * locomotion on finish or first movement. Fired after a finisher / a satisfying hit.
+ * @param {import('../actors/actorRegistry.js').Actor} actor
+ */
+export function requestCelebrate(actor) {
+  if (!actor) return;
+  if (nibblerPenalty.overwhelm >= 2) return;
+  requestEmote(actor, 'celebrate', { oneShot: true });
 }

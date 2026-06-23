@@ -21,11 +21,17 @@ import {
   S_NOTICE,
   S_RUN,
   S_JUMP,
+  S_CIRCLE,
   PUNCH_RANGE,
   PUNCH_HALF_ANGLE,
   PUNCH_SHED_N,
   PUNCH_COOLDOWN_MS,
+  PUNCH_CRUSH_RADIUS,
+  PUNT_SPEED,
+  PUNT_UP,
+  PUNT_COUNT,
 } from '../constants.js';
+import { puntNibbler } from '../swarm/nibblerFSM.js';
 import { emit } from '../../hud/hudEvents.js';
 
 // Last landed-punch time so a held / rapid trigger can't farm hits every frame.
@@ -65,27 +71,44 @@ export function playerPunch(ctx) {
   //    the overwhelm struggle's exact detach so the pile thins on a hit.
   const shed = shedAttached(m.pos, PUNCH_SHED_N);
 
-  // 2) Free close FREE (un-attached) nibblers inside the forward cone — the swing
-  //    connects with whoever is lunging at your front. Same retire as the stomp.
+  // 2) Resolve the swing against FREE (un-attached) nibblers. A standard punch CRUSHES anyone
+  //    massed right at the feet (no cone, no gate) and FREES the forward cone; a KICK / FINISHER
+  //    (attack4/attack5) instead PUNTS the front nibblers FLYING. The crush pass is what finally
+  //    makes the swarm piled at your feet react to a punch.
+  const isBigHit = ctx.attackKey === 'attack4' || ctx.attackKey === 'attack5';
   const cosHalf = Math.cos(PUNCH_HALF_ANGLE);
   const r2 = PUNCH_RANGE * PUNCH_RANGE;
+  const crush2 = PUNCH_CRUSH_RADIUS * PUNCH_CRUSH_RADIUS;
   let freed = 0;
+  let crushed = 0;
+  let punted = 0;
   for (let i = 0; i < scale.length; i++) {
     if (scale[i] <= 0) continue;
     const s = state[i];
-    if (s !== S_WANDER && s !== S_NOTICE && s !== S_RUN && s !== S_JUMP) continue;
+    if (s !== S_WANDER && s !== S_NOTICE && s !== S_RUN && s !== S_JUMP && s !== S_CIRCLE) continue;
     const dx = px[i] - fx;
     const dz = pz[i] - fz;
     const d2 = dx * dx + dz * dz;
+    // CRUSH: anyone right under/around the feet — no cone, no fall-velocity gate.
+    if (d2 <= crush2) {
+      free(i);
+      crushed++;
+      continue;
+    }
     if (d2 > r2) continue;
     const d = Math.sqrt(d2) + 1e-5;
-    // Dot of the forward vector with the unit direction to the nibbler → cone test.
-    if ((dx * fwdX + dz * fwdZ) / d < cosHalf) continue;
-    free(i);
-    freed++;
+    if ((dx * fwdX + dz * fwdZ) / d < cosHalf) continue; // forward cone
+    if (isBigHit && punted < PUNT_COUNT) {
+      puntNibbler(i, fwdX, fwdZ, PUNT_SPEED, PUNT_UP); // send it flying with a reaction
+      punted++;
+    } else {
+      free(i);
+      freed++;
+    }
   }
 
-  const hit = shed + freed;
-  if (hit > 0) emit('nibblerPunch', { count: hit, shed, freed });
+  const hit = shed + freed + crushed + punted;
+  if (crushed > 0) emit('nibblerStomp', { count: crushed });
+  if (hit > 0) emit('nibblerPunch', { count: hit, shed, freed, crushed, punted });
   return hit;
 }

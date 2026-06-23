@@ -22,6 +22,63 @@ import {
 import { requestEmote } from './animationSystem.js';
 import { emit } from '../hud/hudEvents.js';
 
+// Auto-bump-attack: walking INTO a full-size family NPC auto-triggers a swing — the player
+// throws an attack and the bumped NPC gets shoved + flinched (a playful scuffle). Runs every
+// sim frame; only fires on actual contact, on a cooldown so a steady lean isn't a machine gun.
+const BUMP_RANGE = 1.15;        // contact distance to a full-size NPC (two ~0.3 m capsules + slack)
+const BUMP_COOLDOWN_MS = 650;   // min ms between auto-bump swings
+let _lastBumpT = -1;
+
+/** Reset on a fresh run / mode re-enter. */
+export function resetBump() {
+  _lastBumpT = -1;
+}
+
+/**
+ * If the active player is touching a full-size family NPC, auto-swing at them and shove them.
+ * Called from the sim loop (after motion is stepped). Returns true if a bump-attack fired.
+ * @param {object} ctx per-frame ctx — needs { registry, activePlayerId, now }
+ * @returns {boolean}
+ */
+export function autoBumpAttack(ctx) {
+  const player = ctx.registry.get(ctx.activePlayerId);
+  if (!player) return false;
+  const now = ctx.now || performance.now();
+  if (_lastBumpT >= 0 && now - _lastBumpT < BUMP_COOLDOWN_MS) return false;
+
+  const pm = player.motion;
+  const b2 = BUMP_RANGE * BUMP_RANGE;
+  let bumped = null;
+  ctx.registry.forEach((actor) => {
+    if (bumped) return;
+    if (actor.id === ctx.activePlayerId || actor.role === 'player') return;
+    const dx = actor.motion.pos.x - pm.pos.x;
+    const dz = actor.motion.pos.z - pm.pos.z;
+    if (dx * dx + dz * dz <= b2) bumped = actor;
+  });
+  if (!bumped) return false;
+
+  _lastBumpT = now;
+  // Play a fixed one-shot swing (NOT the combo picker) so an incidental bump never hijacks the
+  // player's deliberate combo counter. resolveVariantKey picks the player's own attack clip.
+  requestEmote(player, 'attack', { oneShot: true });
+
+  // Shove the bumped NPC directly — we already know it's in contact, so no cone test needed.
+  const bm = bumped.motion;
+  const dx = bm.pos.x - pm.pos.x;
+  const dz = bm.pos.z - pm.pos.z;
+  const d = Math.sqrt(dx * dx + dz * dz) + 1e-5;
+  bm.velX += (dx / d) * NPC_PUNCH_KNOCKBACK;
+  bm.velZ += (dz / d) * NPC_PUNCH_KNOCKBACK;
+  const ai = bumped.ai;
+  ai.staggerUntil = now + NPC_PUNCH_STAGGER_MS;
+  ai.staggerFromX = pm.pos.x;
+  ai.staggerFromZ = pm.pos.z;
+  requestEmote(bumped, 'hit');
+  emit('greetHit');
+  return true;
+}
+
 /**
  * Resolve a player punch against the family NPCs this instant: shove every OTHER actor
  * in the forward cone outward (knockback impulse + stagger) and flinch them. Skips the

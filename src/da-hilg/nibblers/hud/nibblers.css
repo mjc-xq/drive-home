@@ -643,3 +643,17 @@
     animation: none !important;
   }
 }
+
+/* ── Responsive overflow guard ─────────────────────────────────────────────
+   Same intent as hud.css: cap every floating Nibblers panel to the viewport so
+   nothing runs off-screen on narrow/short windows. Viewport-relative => no-ops
+   on desktop, binds only when a panel would otherwise overflow. */
+.nb-marked,
+.nb-swarm,
+.nb-hint,
+.nb-controls,
+.nb-feedback {
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+}
+.nb-hint { overflow: hidden; text-overflow: ellipsis; }

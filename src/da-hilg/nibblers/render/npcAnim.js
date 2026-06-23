@@ -25,15 +25,20 @@ import {
   CLIP_RUN,
   CLIP_ATTACK,
   CLIP_DANCE,
+  CLIP_PUNTED,
+  CLIP_CRUSHED,
 } from '../constants.js';
 import { retargetSkinSafeClip } from '../../animation/clips.js';
 
-// SoA clip band → animation clip key.
+// SoA clip band → animation clip key. Punted/crushed reuse the existing 'knockdown'/'hit' player
+// clips (already in ANIM_URL) so flung/stomped nibblers show a real reaction with no new asset.
 const BAND_TO_CLIP = {
   [CLIP_IDLE]: 'idle',
   [CLIP_RUN]: 'run',
   [CLIP_ATTACK]: 'climb', // clinging/climbing on the player's body (Jack-Hartmann climb)
   [CLIP_DANCE]: 'dance',
+  [CLIP_PUNTED]: 'knockdown', // sent flying — full-body tumble during the FALL arc
+  [CLIP_CRUSHED]: 'hit', // stomped — a sharp flinch
 };
 
 /** Cross-fade duration into a given clip key (mirrors animationSystem.fadeFor). */
@@ -66,7 +71,7 @@ export function bindNpcActions(mixer, clipByKey, targetRoot, character) {
   // Stable 0..1 seed for THIS NPC's locomotion cadence (golden-ratio stride spreads
   // successive binds evenly instead of clustering).
   const seed = (_bindSeq++ * 0.61803398875) % 1;
-  for (const key of ['idle', 'walk', 'run', 'climb', 'attack', 'dance']) {
+  for (const key of ['idle', 'walk', 'run', 'climb', 'attack', 'dance', 'knockdown', 'hit']) {
     const source = clipByKey[key];
     const sourceClip = source?.clip;
     if (!sourceClip) continue;
