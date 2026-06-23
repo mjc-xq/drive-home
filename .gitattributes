@@ -25,6 +25,11 @@ public/da-hilg/canyon.glb -filter -diff -merge text=auto
 public/da-hilg/stanton.glb -filter -diff -merge text=auto
 public/da-hilg/meemaw.glb -filter -diff -merge text=auto
 
+# Uncompressed editable LEVEL masters (exports/<slug>/<slug>.level.glb): large (~130MB, over GitHub's
+# 100MB limit) and NOT deploy-served (only the compressed public/da-hilg + StreamingAssets assets are),
+# so the Vercel-can't-resolve-LFS constraint doesn't apply. LFS so the flaky push chunks/resumes.
+exports/*/*.level.glb filter=lfs diff=lfs merge=lfs -text
+
 src/assets/anim/kelli-mx-anims.glb filter=lfs diff=lfs merge=lfs -text
 unity/DaHilgUnity/Assets/DaHilg/Art/Levels/*.glb filter=lfs diff=lfs merge=lfs -text
 

@@ -1,6 +1,17 @@
 node_modules/
 dist/
-exports/
+# exports/ is the level generator's working dir. Track the generated per-level LEVEL folders
+# (exports/<slug>/ — versioned level masters; big *.level.glb via LFS, see .gitattributes) but ignore
+# the loose scratch/legacy clutter in the root. Verification RENDERS are ignored; logs are kept.
+exports/*
+!exports/dahill/
+!exports/canyon/
+!exports/stanton/
+!exports/meemaw/
+!exports/xq/
+exports/**/_renders/
+exports/**/*.verify.jpg
+exports/**/*.verify.png
 scripts/.venv/
 scripts/_cache/
 .DS_Store
