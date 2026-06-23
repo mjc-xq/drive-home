@@ -132,11 +132,15 @@ export function buildBuildingLayer({
   // SVFacade_page{N} mesh per page (so the runtime toggles them as a group). PROUD_OVERLAY sits
   // in FRONT of the window trim (which pushes out to ~0.12 m) so the photo covers the windows when
   // ON and the windowed stucco shows when the overlay is hidden.
-  // BAKED facade: the photo is the wall's OWN surface, flush (offset 0), not a quad floating in
-  // front. emitRing SKIPS the stucco face under a photo'd edge and suppresses the procedural
-  // grid/trim there, so the Street-View crop IS the baked wall texture — no float, no z-fight, no
-  // panel hanging past a corner. (Photo mode is no longer a runtime toggle; it's baked in.)
+  // TOGGLEABLE-but-clean facade: the photo quad sits FLUSH on the wall edge (offset 0) so adjacent
+  // walls' photos meet exactly at corners (no float, no panel hanging past a corner — the default,
+  // photo-on view is identical to a fully-baked wall). To make the photo a real on/off TOGGLE
+  // without revealing a hole, emitRing ALSO emits the windowed-stucco wall just BEHIND the photo,
+  // recessed by STUCCO_RECESS: the opaque flush photo fully occludes it when photo mode is ON, and
+  // it shows when the 'Buildings_facade_page{N}' overlay nodes are hidden. (Recessing the wall, not
+  // pushing the photo proud, keeps the corners clean.)
   const PROUD_OVERLAY = 0.0;
+  const STUCCO_RECESS = 0.04;   // metres the under-photo stucco wall sits behind the flush photo
   const overlayByPage = new Map();
   const overlayBucket = (page) => {
     let b = overlayByPage.get(page);
@@ -408,11 +412,21 @@ export function buildBuildingLayer({
     for (let i = 0; i < ring.length; i++) {              // walls
       const [xi, zi] = ring[i], [xj, zj] = ring[(i + 1) % ring.length];
       const seg = Math.hypot(xj - xi, zj - zi);
-      // HERO wall with a packed atlas crop -> BAKE the photo as this wall's surface (flush, opaque)
-      // and emit NO stucco underneath (the photo is the wall). Other edges get windowed stucco.
+      // HERO wall with a packed atlas crop -> a FLUSH, opaque photo quad PLUS the windowed-stucco
+      // wall recessed just behind it, so the 'Photo facades' switch can hide the photo and reveal a
+      // real wall (not a hole). Other edges get plain windowed stucco on the edge plane.
       const rect = hero ? rectByWall[`b${ib}_e${i}`] : null;
-      if (rect) emitOverlayQuad(xi, zi, xj, zj, yt, base, cen, rect);
-      else pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
+      if (rect) {
+        // recess the under-photo stucco inward along the outward normal so it tucks behind the photo
+        const segL = Math.max(0.001, Math.hypot(xj - xi, zj - zi));
+        let rnx = -(zj - zi) / segL, rnz = (xj - xi) / segL;
+        if (((xi + xj) * 0.5 - cen[0]) * rnx + ((zi + zj) * 0.5 - cen[1]) * rnz < 0) { rnx = -rnx; rnz = -rnz; }
+        const rr = STUCCO_RECESS;
+        pushWallFace(W.stucco, xi - rnx * rr, zi - rnz * rr, xj - rnx * rr, zj - rnz * rr, yt, base, dist, dist + seg, cen, null);
+        emitOverlayQuad(xi, zi, xj, zj, yt, base, cen, rect);
+      } else {
+        pushWallFace(W.stucco, xi, zi, xj, zj, yt, base, dist, dist + seg, cen, null);
+      }
       // REAL detected openings (recessed glass / door slab / garage panel) sit ON/just-in-front of
       // the wall — emitted on ANY edge that has them (hero or not), giving photo'd walls depth.
       emitDetectedOpenings(ring, base, wallH, ib, i, D);
