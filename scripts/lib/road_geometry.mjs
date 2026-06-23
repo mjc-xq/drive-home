@@ -63,16 +63,17 @@ function densify(ring) {
 }
 
 // triangulate a (densified) ring with optional holes and DRAPE every vertex on the terrain surface.
-function drapedFill(ShapeUtils, ring, holes, terrainAt, yOff, pos) {
-  const contour = densify(ring).map(([x, z]) => ({ x, y: z }));
-  const holeContours = (holes || []).map((h) => densify(h).map(([x, z]) => ({ x, y: z })));
+// NB: ShapeUtils.triangulateShape needs real THREE.Vector2 points (it calls .equals()), not {x,y}.
+function drapedFill(THREE, ShapeUtils, ring, holes, terrainAt, yOff, pos) {
+  const contour = densify(ring).map(([x, z]) => new THREE.Vector2(x, z));
+  const holeContours = (holes || []).map((h) => densify(h).map(([x, z]) => new THREE.Vector2(x, z)));
   if (contour.length < 3) return;
   let tris;
   try { tris = ShapeUtils.triangulateShape(contour, holeContours); } catch { return; }
   const all = contour.concat(...holeContours);
   for (const [ia, ib, ic] of tris) {
     for (const idx of [ia, ic, ib]) {        // reversed -> upward-facing winding for Y-up
-      const p = all[idx]; pos.push(p.x, terrainAt(p.x, p.y) + yOff, p.y);
+      const p = all[idx]; pos.push(p.x, terrainAt(p.x, p.y) + yOff, p.y);   // p.y holds the world Z
     }
   }
 }
@@ -130,17 +131,19 @@ function meshFromPos(THREE, pos, name, rgb, rough = 0.9) {
 export function buildRoadGeometryLayer({ THREE, scene, network, curbLines = [], terrainAt }) {
   if (!network || !network.surfaces) return { added: 0 };
   const ShapeUtils = THREE.ShapeUtils;
-  const ringsOf = (s) => s.polygon ? [s.polygon, ...(s.holes || [])] : (s.centerline ? [bandRing(s.centerline, s.width)] : []);
 
   const asphalt = [], driveway = [], sidewalk = [], crosswalk = [], curb = [], markYellow = [], markWhite = [];
   for (const s of network.surfaces) {
-    const rings = ringsOf(s).filter((r) => r && r.length >= 3);
-    if (!rings.length && s.kind !== 'curb') continue;
-    if (s.kind === 'asphalt')               for (const r of rings) drapedFill(ShapeUtils, r, s.holes, terrainAt, ASPHALT_Y, asphalt);
-    else if (s.kind === 'driveway')          for (const r of rings) drapedFill(ShapeUtils, r, s.holes, terrainAt, DRIVEWAY_Y, driveway);
-    else if (s.kind === 'concrete-sidewalk') for (const r of rings) drapedFill(ShapeUtils, r, s.holes, terrainAt, SIDEWALK_Y, sidewalk);
-    else if (s.kind === 'crosswalk')         for (const r of rings) drapedFill(ShapeUtils, r, s.holes, terrainAt, CROSSWALK_Y, crosswalk);
-    else if (s.kind === 'curb' && s.centerline) curbLip(s.centerline, s.width || 0.55, terrainAt, curb);
+    // curb surfaces are a raised LIP from a centreline (not a flat fill)
+    if (s.kind === 'curb' && s.centerline) { curbLip(s.centerline, s.width || 0.55, terrainAt, curb); continue; }
+    // every other surface is a flat fill: a polygon (+ optional holes) or a centreline banded to a ring
+    const ring = s.polygon || (s.centerline ? bandRing(s.centerline, s.width) : null);
+    if (!ring || ring.length < 3) continue;
+    const holes = s.polygon ? s.holes : null;   // holes only meaningful for an explicit polygon
+    if (s.kind === 'asphalt')                drapedFill(THREE, ShapeUtils, ring, holes, terrainAt, ASPHALT_Y, asphalt);
+    else if (s.kind === 'driveway')          drapedFill(THREE, ShapeUtils, ring, holes, terrainAt, DRIVEWAY_Y, driveway);
+    else if (s.kind === 'concrete-sidewalk') drapedFill(THREE, ShapeUtils, ring, holes, terrainAt, SIDEWALK_Y, sidewalk);
+    else if (s.kind === 'crosswalk')         drapedFill(THREE, ShapeUtils, ring, holes, terrainAt, CROSSWALK_Y, crosswalk);
   }
   // RAISED curb lip along every curb line (from curbLinesFromRoads + sidewalk-network curbs)
   for (const cl of curbLines) { const line = cl.line || cl; if (Array.isArray(line) && line.length >= 2) curbLip(line, 0.5, terrainAt, curb); }
@@ -149,7 +152,7 @@ export function buildRoadGeometryLayer({ THREE, scene, network, curbLines = [], 
   for (const p of (network.paint || [])) {
     const buf = /yellow/.test(p.kind) ? markYellow : markWhite;
     for (const ln of (p.lines || [])) markingRibbon(ln, p.width || 0.12, terrainAt, buf);
-    for (const r of (p.rings || [])) { if (r.length >= 3) drapedFill(ShapeUtils, r, null, terrainAt, MARKING_Y, buf); }
+    for (const r of (p.rings || [])) { if (r.length >= 3) drapedFill(THREE, ShapeUtils, r, null, terrainAt, MARKING_Y, buf); }
   }
 
   const grp = new THREE.Group();
