@@ -57,6 +57,7 @@ namespace DaHilg
         float m_LastRollAt = -999f;
         float m_PendingMeleeHitAt = -1f;
         float m_LastMeleeAt = -999f;
+        float m_NextSocialBeatAt;
         int m_LastMeleeHits;
         int m_LastMeleeCrushes;
         int m_LastAttachedCount;
@@ -243,9 +244,10 @@ namespace DaHilg
             }
             for (int i = 0; i < m_Animals.Count; i++) m_Animals[i].Tick(dt);
 
+            TickSocialMotionBeats(menuConsumedInput);
             ClampToLevelBounds();
 
-            if (Mode == DaHilgGameMode.Nibblers) TickNibblers(dt);
+            if (Mode == DaHilgGameMode.Nibblers) { TickBumpAttack(); TickNibblers(dt); }
             else TickGreetMode(menuConsumedInput);
 
             Hud?.Refresh();
@@ -732,6 +734,79 @@ namespace DaHilg
             actor.StepNpc(SeekDirection(actor, toPlayer, true, 1f, dt), true, Settings, dt, Time.time);
         }
 
+        // Auto-attack on contact: walking into a full-size NPC throws a swing (combat mode only). The
+        // strike's own 0.42s cooldown in StartMelee rate-limits it to a steady auto-combo, not a spam.
+        void TickBumpAttack()
+        {
+            if (m_ActiveActor == null || m_ActiveActor.Health <= 0f) return;
+            DaHilgActor a = m_ActiveActor;
+            for (int i = 0; i < m_Actors.Count; i++)
+            {
+                DaHilgActor t = m_Actors[i];
+                if (t == a || t == null || t.Health <= 0f) continue;
+                Vector3 to = t.FeetPosition - a.FeetPosition; to.y = 0f;
+                float contact = a.BodyRadius + t.BodyRadius + 0.35f;
+                if (to.sqrMagnitude <= contact * contact)
+                {
+                    TryMelee();
+                    return;
+                }
+            }
+        }
+
+        void TickSocialMotionBeats(bool menuConsumedInput)
+        {
+            if (Settings == null || m_Actors.Count < 2) return;
+            float now = Time.time;
+            if (now < m_NextSocialBeatAt) return;
+            m_NextSocialBeatAt = now + 0.14f;
+
+            bool playerCanJoin = m_ActiveActor != null
+                && !menuConsumedInput
+                && Input.Move.sqrMagnitude <= 0.035f
+                && !Input.AttackPressed
+                && !Input.RollPressed
+                && !Input.JumpPressed
+                && m_ActiveActor.AttachedNibblers == 0;
+
+            int started = 0;
+            for (int i = 0; i < m_Actors.Count; i++)
+            {
+                DaHilgActor a = m_Actors[i];
+                if (a == null) continue;
+                for (int j = i + 1; j < m_Actors.Count; j++)
+                {
+                    DaHilgActor b = m_Actors[j];
+                    if (b == null) continue;
+
+                    Vector3 delta = b.FeetPosition - a.FeetPosition;
+                    delta.y = 0f;
+                    float dist = delta.magnitude;
+                    if (dist < 0.85f || dist > 2.45f) continue;
+
+                    bool aIsPlayer = a == m_ActiveActor;
+                    bool bIsPlayer = b == m_ActiveActor;
+                    bool aAllowed = !aIsPlayer || playerCanJoin;
+                    bool bAllowed = !bIsPlayer || playerCanJoin;
+                    if (!aAllowed && !bAllowed) continue;
+
+                    bool any = false;
+                    if (aAllowed && a.TrySocialDance(b.FeetPosition, now, !aIsPlayer || playerCanJoin))
+                    {
+                        a.StateUntil = now + UnityEngine.Random.Range(1.6f, 3.0f);
+                        any = true;
+                    }
+                    if (bAllowed && b.TrySocialDance(a.FeetPosition, now, !bIsPlayer || playerCanJoin))
+                    {
+                        b.StateUntil = now + UnityEngine.Random.Range(1.6f, 3.0f);
+                        any = true;
+                    }
+
+                    if (any && ++started >= 2) return;
+                }
+            }
+        }
+
         sealed class NpcStuckState
         {
             public float StuckTimer;
@@ -1003,7 +1078,48 @@ namespace DaHilg
         void TryMelee()
         {
             if (m_ActiveActor == null) return;
-            if (m_ActiveActor.StartMelee(Time.time)) m_PendingMeleeHitAt = Time.time + 0.12f;
+            // Aim-assist runs only when a swing actually commits (StartMelee's 0.42s cooldown gates it),
+            // so the auto-attack-on-bump path doesn't snap the body's heading every frame. The strike's
+            // cone resolves 0.12s later off FacingYaw, and the A1 facing-freeze holds this aim through the
+            // windup — without it the swing fired at whatever heading the body held and constantly whiffed.
+            if (m_ActiveActor.StartMelee(Time.time))
+            {
+                AimMeleeAssist();
+                m_PendingMeleeHitAt = Time.time + 0.12f;
+            }
+        }
+
+        void AimMeleeAssist()
+        {
+            DaHilgActor a = m_ActiveActor;
+            Vector3 fwd = Quaternion.Euler(0f, a.FacingYaw, 0f) * Vector3.forward;
+            float reach = a.BodyRadius + 3.2f; // a touch beyond the strike reach so the turn leads it
+            float best = float.MaxValue;
+            Vector3 bestPos = Vector3.zero;
+            bool found = false;
+
+            for (int i = 0; i < m_Nibblers.Count; i++)
+            {
+                DaHilgNibblerAgent n = m_Nibblers[i];
+                if (!n.Active) continue;
+                Vector3 to = n.Position - a.FeetPosition; to.y = 0f;
+                float d = to.magnitude;
+                if (d > reach || d < 0.05f) continue;
+                if (Vector3.Dot(to / d, fwd) < -0.25f) continue; // ignore targets well behind the body
+                if (d < best) { best = d; bestPos = n.Position; found = true; }
+            }
+            for (int i = 0; i < m_Actors.Count; i++)
+            {
+                DaHilgActor t = m_Actors[i];
+                if (t == a) continue;
+                Vector3 to = t.FeetPosition - a.FeetPosition; to.y = 0f;
+                float d = to.magnitude;
+                if (d > reach || d < 0.05f) continue;
+                if (Vector3.Dot(to / d, fwd) < -0.25f) continue;
+                if (d < best) { best = d; bestPos = t.FeetPosition; found = true; }
+            }
+
+            if (found) a.AimFacingToward(bestPos);
         }
 
         // Resolves a single melee swing: a short forward cone in front of the active actor.
@@ -1023,7 +1139,8 @@ namespace DaHilg
                 if (target == a) continue;
                 if (InMeleeCone(a.FeetPosition, fwd, reach, target.FeetPosition))
                 {
-                    target.TakeHit(a.FeetPosition, 20f, 6.5f, false, Time.time);
+                    bool heavy = UnityEngine.Random.value < 0.45f || target.Health <= 24f;
+                    target.TakeHit(a.FeetPosition, 22f, heavy ? 9.0f : 6.8f, heavy, Time.time);
                     Score += 5;
                     hits++;
                 }
@@ -1066,7 +1183,11 @@ namespace DaHilg
             m_LastMeleeAt = Time.time;
             m_LastMeleeHits = hits;
             m_LastMeleeCrushes = crushed;
-            if (hits > 0) CameraRig?.Punch(0.05f + 0.015f * Mathf.Min(hits, 6), 1.4f + 0.45f * Mathf.Min(hits, 6));
+            if (hits > 0)
+            {
+                a.QueueCombatDance(Time.time + 0.68f);
+                CameraRig?.Punch(0.05f + 0.015f * Mathf.Min(hits, 6), 1.4f + 0.45f * Mathf.Min(hits, 6));
+            }
         }
 
         static bool InMeleeCone(Vector3 origin, Vector3 forward, float reach, Vector3 targetPos)
@@ -1289,6 +1410,10 @@ namespace DaHilg
         {
             if (m_CurrentLevel == null || m_ActiveActor == null) return;
             Bounds b = m_CurrentLevel.PlayBounds;
+            // An unset/degenerate PlayBounds (default Bounds = zero size) makes Contains() false for
+            // every point, which would Teleport (and zero the velocity of) every actor EVERY frame —
+            // a dead-frozen player. Treat a too-small box as "no clamp authored".
+            if (b.size.x < 1f || b.size.z < 1f) return;
             for (int i = 0; i < m_Actors.Count; i++)
             {
                 DaHilgActor actor = m_Actors[i];

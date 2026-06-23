@@ -30,7 +30,7 @@ namespace DaHilg
         const float k_AttachPad = 0.35f;
         const float k_LungeArc = 0.68f;
         const float k_ScatterTime = 1.2f;
-        const float k_OrbitEnterRadius = 3.6f;
+        const float k_OrbitEnterRadius = 2.9f; // tighter: commit to the lunge sooner, less wide ring-circling
         const float k_OrbitExitRadius = 5.8f;
 
         Transform m_Player;
@@ -78,6 +78,7 @@ namespace DaHilg
         float m_CrushSpin;
         float m_CrushDuration;
         float m_CrushSquash;
+        bool m_Pancake;
         string m_Anim;
 
         public GameObject Root { get; }
@@ -105,9 +106,9 @@ namespace DaHilg
             m_PrimaryMoveClip = m_Seed < 0.82f ? "Crawl" : "Run";
             m_SecondaryMoveClip = m_PrimaryMoveClip == "Crawl" ? "Run" : "Crawl";
             m_CurrentMoveClip = m_PrimaryMoveClip;
-            // Roughly half the clingers CLIMB the body (the rest BITE) so the pile reads as a mix of
-            // creatures scaling you and gnawing — more crawls/climbs than the old 1-in-4.
-            m_ClingClip = m_Seed < 0.5f ? "Climb" : "Bite";
+            // Most clingers keep crawling once attached; the rest bite. This makes the pile read as
+            // bodies actively scaling the player instead of parked decals.
+            m_ClingClip = m_Seed < 0.68f ? "Climb" : "Bite";
 
             // Controller root stays UNSCALED; the character is a CHILD that we scale. This matches the
             // player (capsule in metres on a scale-1 transform + native-scaled visual child) and avoids
@@ -122,8 +123,8 @@ namespace DaHilg
             SetLayerRecursive(visual, LayerMask.NameToLayer("Ignore Raycast"));
             visual.transform.localPosition = Vector3.zero;
             m_VisualT = visual.transform;
-            m_LeftFoot = FindDeepChild(m_VisualT, "LeftFoot");
-            m_RightFoot = FindDeepChild(m_VisualT, "RightFoot");
+            m_LeftFoot = ResolveFootContact(m_VisualT, true);
+            m_RightFoot = ResolveFootContact(m_VisualT, false);
             m_BaseScale = m_VisualT.localScale;
             m_AppliedScale = m_BaseScale * scale;
             m_VisualT.localScale = m_AppliedScale;
@@ -201,6 +202,14 @@ namespace DaHilg
             return null;
         }
 
+        static Transform ResolveFootContact(Transform visualRoot, bool left)
+        {
+            string side = left ? "Left" : "Right";
+            return FindDeepChild(visualRoot, side + "ToeBase")
+                ?? FindDeepChild(visualRoot, side + "Toe_End")
+                ?? FindDeepChild(visualRoot, side + "Foot");
+        }
+
         public void SetPlayer(Transform player)
         {
             // Character switch rebuilds the player's rig — drop off the old (now-dead) bones cleanly.
@@ -231,6 +240,7 @@ namespace DaHilg
         {
             Active = true;
             Attached = false;
+            m_Pancake = false; // clear any leftover steam-rolled-flat state from a pooled reuse
             if (!s_Active.Contains(this)) s_Active.Add(this);
             m_State = NibblerState.Chase;
             Root.SetActive(true);
@@ -411,7 +421,10 @@ namespace DaHilg
             m_State = NibblerState.Windup;
             m_StateTime = 0f;
             ChooseAttachAnchor(player, settings);
-            m_AttachY = k_ClingBottom;
+            // Keep the chosen bone's height (ChooseAttachAnchor set m_AttachY) so lunges land on varied
+            // body parts (feet/hips/shoulders/head) instead of all aiming at the ankle. Clamp to a
+            // reachable band. (Previously this was hard-overwritten to k_ClingBottom.)
+            m_AttachY = Mathf.Clamp(m_AttachY, k_ClingBottom, player.BodyHeight * 0.92f);
             FaceBody(player, 1f);
             Play("Jump", 0.05f);
         }
@@ -492,7 +505,11 @@ namespace DaHilg
             m_StateTime = 0f;
             m_LungeDuration = 0.30f + m_Seed * 0.12f;
             m_LungeStart = Root.transform.position;
-            m_LungeTarget = m_Player.TransformPoint(new Vector3(m_AttachBaseLocal.x, m_AttachY, m_AttachBaseLocal.z));
+            // Aim at the player's CENTRAL column (x=z=0 in player space) at the chosen bone height.
+            // The attach test (TickLunge) measures planar distance to the player's central axis, so a
+            // target carrying the bone's lateral offset landed off to the side and whiffed. The specific
+            // bone slot is still resolved by AttachToBone once we latch.
+            m_LungeTarget = m_Player.TransformPoint(new Vector3(0f, m_AttachY, 0f));
             m_VisualT.localScale = m_AppliedScale;
             if (!m_Controller.enabled) m_Controller.enabled = true;
             Play("Jump", 0.04f);
@@ -501,8 +518,13 @@ namespace DaHilg
         bool TickLunge(DaHilgActor player, DaHilgGameSettings settings, float dt)
         {
             float u = Mathf.Clamp01(m_StateTime / Mathf.Max(0.05f, m_LungeDuration));
-            // Ballistic arc toward the CAPTURED launch point (not homing). Move via the controller
-            // so the lunge respects geometry.
+            // Mild homing: bend the captured arc toward the player's CURRENT central column so an
+            // ordinary walking player is still caught. The lerp is gentle, so a fast roll/strafe-juke
+            // (the intended counter-play) still slips the strike.
+            Vector3 liveAxis = m_Player.TransformPoint(new Vector3(0f, m_AttachY, 0f));
+            m_LungeTarget = Vector3.Lerp(m_LungeTarget, liveAxis, 1f - Mathf.Exp(-7f * dt));
+            // Ballistic arc toward the (gently homing) launch point. Move via the controller so the
+            // lunge respects geometry.
             Vector3 desiredPos = Vector3.Lerp(m_LungeStart, m_LungeTarget, Smooth01(u)) + Vector3.up * Mathf.Sin(u * Mathf.PI) * k_LungeArc;
             if (m_Controller.enabled) m_Controller.Move(desiredPos - Root.transform.position);
             else Root.transform.position = desiredPos;
@@ -541,6 +563,8 @@ namespace DaHilg
             Vector3 rest = DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale);
             // Slide from the grab pose to the bone-local rest spot (the "climb on" settle), in bone space.
             Root.transform.localPosition = Vector3.MoveTowards(Root.transform.localPosition, rest, (m_ClimbSpeed + 0.6f) * dt);
+            Vector3 outwardLocal = m_AttachedParent.InverseTransformDirection(ClingOutward(player));
+            Root.transform.localPosition += outwardLocal * (Mathf.Sin(m_StateTime * 10f + m_Index) * 0.006f);
             Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, ClingLocalRotation(player, m_AttachedParent), 1f - Mathf.Exp(-14f * dt));
             Play("Climb", 0.12f);
             if (Vector3.Distance(Root.transform.localPosition, rest) < 0.01f) { m_State = NibblerState.Attached; m_StateTime = 0f; }
@@ -562,7 +586,9 @@ namespace DaHilg
             // Gravity-cling: a small "downward" (world) bias projected to bone-local so they hug the body
             // and a fast bend tugs them onto the surface instead of flinging them off.
             Vector3 gravLocal = m_AttachedParent.InverseTransformDirection(Vector3.down) * 0.01f;
-            Vector3 bob = gravLocal * (0.5f + 0.5f * Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index));
+            Vector3 crawlLocal = m_AttachedParent.InverseTransformDirection(Vector3.up) * (m_ClingClip == "Climb" ? 0.008f : 0.002f);
+            Vector3 bob = gravLocal * (0.5f + 0.5f * Mathf.Sin(Time.time * (3.2f + m_Seed) + m_Index))
+                + crawlLocal * Mathf.Sin(Time.time * (4.4f + m_Seed) + m_Index * 0.71f);
             Root.transform.localPosition = Vector3.Lerp(Root.transform.localPosition, rest + bob, 1f - Mathf.Exp(-18f * dt));
             Root.transform.localRotation = Quaternion.Slerp(Root.transform.localRotation, ClingLocalRotation(player, m_AttachedParent), 1f - Mathf.Exp(-10f * dt));
             if (m_StateTime > 0.8f && Mathf.Sin(Time.time * (1.5f + m_Seed) + m_Index) > 0.82f)
@@ -585,6 +611,8 @@ namespace DaHilg
             Vector3 ls = a.Bone.lossyScale;
             Root.transform.localScale = new Vector3(1f / Mathf.Max(1e-4f, ls.x), 1f / Mathf.Max(1e-4f, ls.y), 1f / Mathf.Max(1e-4f, ls.z));
             m_VisualT.localScale = m_AppliedScale;
+            m_VisualGroundOffset = 0f;
+            m_VisualT.localPosition = Vector3.zero;
         }
 
         void TickScatter(DaHilgActor player, DaHilgGameSettings settings, float dt)
@@ -673,7 +701,10 @@ namespace DaHilg
 
             if (!bodySideHit && !groundHit) return false;
 
-            Crush(crushCenter, true);
+            // A ground nibbler caught directly under the roll (not a body-side clinger) is steam-rolled:
+            // flatten it to a 2D splat in place. Side-clingers shaken off the body tumble away instead.
+            bool beneath = groundHit && !bodySideHit;
+            Crush(crushCenter, true, beneath);
             return true;
         }
 
@@ -684,13 +715,26 @@ namespace DaHilg
             return true;
         }
 
-        void Crush(Vector3 from, bool rolled)
+        void Crush(Vector3 from, bool rolled, bool flatten = false)
         {
             ReparentToWorld(); // un-child from the player bone FIRST
             Attached = false;
             m_State = NibblerState.Crushed;
             m_StateTime = 0f;
+            m_Pancake = flatten;
             if (!m_Controller.enabled) m_Controller.enabled = true;
+
+            if (flatten)
+            {
+                // Steam-rolled flat UNDER the body: no launch, no tumble — squash to a 2D splat in
+                // place, hold the pancake a beat, then vanish (the "welp, I'm a sticker now" gag).
+                m_Velocity = Vector3.down * 1.5f;
+                m_CrushSpin = (m_Seed < 0.5f ? -1f : 1f) * 70f; // a faint ground skid, not a tumble
+                m_CrushDuration = Random.Range(0.55f, 0.82f);
+                Play("Knockdown", 0.04f);
+                return;
+            }
+
             Vector3 away = Root.transform.position - from;
             away.y = 0f;
             if (away.sqrMagnitude < 0.1f)
@@ -725,10 +769,26 @@ namespace DaHilg
                 SnapToLevelGround(settings);
             }
 
-            // Pop/squash, then ease fully to 0 while tumbling. Roll hits flatten more;
-            // melee hits fly longer and shrink after the airborne read.
             float dur = Mathf.Max(0.12f, m_CrushDuration);
             float u = Mathf.Clamp01(m_StateTime / dur);
+            if (m_Pancake)
+            {
+                // Smash flat to a 2D splat (Y -> ~0, spread wide on X/Z), hold the pancake, then fade
+                // it away so a rolled-over nibbler literally becomes a sticker before it disappears.
+                float flat = u < 0.22f ? Mathf.Lerp(1f, 0.05f, u / 0.22f) : 0.05f;
+                float spread = u < 0.22f ? Mathf.Lerp(1f, 1.8f, u / 0.22f) : 1.8f;
+                float fade = u > 0.72f ? Mathf.Lerp(1f, 0f, (u - 0.72f) / 0.28f) : 1f;
+                m_VisualT.localScale = new Vector3(
+                    m_AppliedScale.x * spread * fade,
+                    m_AppliedScale.y * flat * Mathf.Max(0.2f, fade),
+                    m_AppliedScale.z * spread * fade);
+                Root.transform.Rotate(Vector3.up, m_CrushSpin * dt, Space.World);
+                if (m_StateTime > dur) Despawn();
+                return;
+            }
+
+            // Pop/squash, then ease fully to 0 while tumbling. Roll hits flatten more;
+            // melee hits fly longer and shrink after the airborne read.
             float pop = u < 0.18f ? Mathf.Lerp(1f, 1.26f, u / 0.18f) : Mathf.Lerp(1.26f, 0f, (u - 0.18f) / 0.82f);
             float squash = 1f - m_CrushSquash * Mathf.Sin(Mathf.Clamp01(u * 2f) * Mathf.PI);
             m_VisualT.localScale = new Vector3(
@@ -801,7 +861,7 @@ namespace DaHilg
             m_AttachBaseLocal = player.transform.InverseTransformPoint(boneWorld);
             m_AttachY = m_AttachBaseLocal.y;
             m_AttachTargetY = m_AttachBaseLocal.y;
-            m_ClimbSpeed = 0.62f + m_Seed * 0.38f;
+            m_ClimbSpeed = 0.88f + m_Seed * 0.58f;
         }
 
         int CountAttachedSlots()
@@ -837,17 +897,22 @@ namespace DaHilg
         // bone's local space so it composes with the childed transform.
         Quaternion ClingLocalRotation(DaHilgActor player, Transform bone)
         {
-            float h = Mathf.Clamp(Root.transform.position.y - player.FeetPosition.y, 0.1f, Mathf.Max(0.2f, player.BodyHeight));
-            Vector3 axisPoint = player.FeetPosition + Vector3.up * h;
-            Vector3 outward = Root.transform.position - axisPoint;
-            outward.y *= 0.25f; // mostly horizontal — hug the roughly cylindrical torso
-            if (outward.sqrMagnitude < 1e-4f) outward = -(Quaternion.Euler(0f, player.FacingYaw, 0f) * Vector3.forward);
-            outward.Normalize();
+            Vector3 outward = ClingOutward(player);
             Vector3 forward = Vector3.Cross(outward, Vector3.up);
             if (forward.sqrMagnitude < 1e-4f) forward = Vector3.Cross(outward, Vector3.forward);
             forward.Normalize();
             Quaternion world = Quaternion.LookRotation(forward, outward); // up = outward => head out, feet on body
             return Quaternion.Inverse(bone.rotation) * world;
+        }
+
+        Vector3 ClingOutward(DaHilgActor player)
+        {
+            float h = Mathf.Clamp(Root.transform.position.y - player.FeetPosition.y, 0.1f, Mathf.Max(0.2f, player.BodyHeight));
+            Vector3 axisPoint = player.FeetPosition + Vector3.up * h;
+            Vector3 outward = Root.transform.position - axisPoint;
+            outward.y *= 0.25f; // mostly horizontal — hug the roughly cylindrical torso
+            if (outward.sqrMagnitude < 1e-4f) outward = -(Quaternion.Euler(0f, player.FacingYaw, 0f) * Vector3.forward);
+            return outward.normalized;
         }
 
         void Play(string state, float fade)
@@ -865,7 +930,10 @@ namespace DaHilg
         {
             if (forceNew || Time.time >= m_NextMoveClipSwap)
             {
-                m_CurrentMoveClip = Random.value < Mathf.Lerp(0.2f, 0.62f, m_Seed) ? m_SecondaryMoveClip : m_PrimaryMoveClip;
+                // Bias hard toward the primary clip (Crawl for 82% of the swarm). The old 0.2..0.62
+                // ceiling flipped a crawl-primary nibbler to Run up to 62% of the time, so the swarm
+                // read as "running in a line". Keep the secondary an occasional change-up, not the norm.
+                m_CurrentMoveClip = Random.value < Mathf.Lerp(0.1f, 0.28f, m_Seed) ? m_SecondaryMoveClip : m_PrimaryMoveClip;
                 m_NextMoveClipSwap = Time.time + Random.Range(1.3f, 4.2f);
             }
             return m_CurrentMoveClip;
@@ -918,7 +986,8 @@ namespace DaHilg
                 float minFootY = Mathf.Min(m_LeftFoot.position.y, m_RightFoot.position.y);
                 float skin = settings != null ? Mathf.Max(0.008f, settings.GroundSkin * 0.22f) : 0.01f;
                 float correction = Root.transform.position.y + skin - minFootY;
-                m_VisualGroundOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -0.18f, 0.18f);
+                float maxCorrection = Mathf.Max(0.22f, m_Controller.height * 0.85f);
+                m_VisualGroundOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -maxCorrection, maxCorrection);
             }
 
             Vector3 local = m_VisualT.localPosition;
