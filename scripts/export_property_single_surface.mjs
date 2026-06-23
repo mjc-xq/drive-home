@@ -32,6 +32,7 @@ import { loadDEM, makeGeo, buildTerrainMesh } from './lib/terrain_mesh.mjs';
 import { gradeDemUnderRoads } from './lib/dem_road_grade.mjs';
 import { buildRoadNetwork, buildPlantingStripPoints } from './lib/road_network.mjs';
 import { buildRoadGeometryLayer } from './lib/road_geometry.mjs';
+import { buildManualStructures } from './lib/manual_structures.mjs';
 import { curbLinesFromRoads } from './road_prep.mjs';
 import { bakeGroundAtlas } from './lib/ground_atlas.mjs';
 import { buildSurfaceAnnotation } from './lib/surface_annotation.mjs';
@@ -451,7 +452,24 @@ try {
     if (stripPts.some(q => Math.hypot(q.x - x, q.z - z) < 5)) continue;   // natural min spacing
     stripPts.push({ x, z });
   }
-} catch (e) { console.warn('  ! planting-strip canopy sampling skipped:', e.message); }
+  // CAMPUS canopy fill (schools): grid-sample the aerial across the patch and plant a tree wherever there
+  // is real tree canopy that isn't on a building / paving — fills the between-buildings vegetation visible
+  // in the satellite (LiDAR misses the campus interior). Schools only; deduped + capped to avoid density.
+  if (LEVEL === 'stanton' || LEVEL === 'canyon') {
+    const inB = (x, z) => (bres.buildingPolys || []).some((r) => ptInRing(x, z, r));
+    const onP = (x, z) => (ground.pavedPolys || []).some((r) => ptInRing(x, z, r));
+    const STEP = 8; let added = 0;
+    for (let z = z0 + 6; z < z1 - 6 && added < 500; z += STEP) for (let x = x0 + 6; x < x1 - 6; x += STEP) {
+      if (Math.abs(x) > clipHalf - 8 || Math.abs(z) > clipHalf - 8) continue;
+      if (!canopyAt(x, z)) continue;
+      const jx = x + (rnd() - 0.5) * 5, jz = z + (rnd() - 0.5) * 5;
+      if (inB(jx, jz) || onP(jx, jz)) continue;
+      if (stripPts.some(q => Math.hypot(q.x - jx, q.z - jz) < 7)) continue;   // min spacing among canopy trees
+      stripPts.push({ x: jx, z: jz }); added++;
+    }
+    console.log(`campus canopy trees: +${added}`);
+  }
+} catch (e) { console.warn('  ! canopy sampling skipped:', e.message); }
 const frontPts = [];
 if (LEVEL === 'dahill') {
   const ownerLot = fillParcels.find((p) => p.apn === '416-120-67');   // house lot; ring is world XZ
@@ -485,6 +503,16 @@ console.log(`trees: ${tres.nTrees} (own 'Trees' layer), shrubs: ${tres.nShrubs},
 // painted roads on the ground bed underneath.
 const rgeo = buildRoadGeometryLayer({ THREE, scene, network, curbLines, terrainAt });
 console.log(`road geometry: ${rgeo.added} meshes under 'RoadLayer' (draped on surface; paint beneath)`);
+
+// ---- MANUAL structures (gazebos/awnings) — hand-authored, persist through regen --------
+{
+  const msPath = R('exports', SET.slug, 'manual_structures.json');
+  if (existsSync(msPath)) {
+    const structs = JSON.parse(readFileSync(msPath, 'utf8')).structures || [];
+    const sres = buildManualStructures({ THREE, scene, structures: structs, terrainAt });
+    if (sres.added) console.log(`manual structures: +${sres.added} (manual_structures.json)`);
+  }
+}
 
 // ---- collision proxies (invisible; runtime bakes a trimesh + hides these) -----------
 function proxyMesh(pos, idx, name) {
