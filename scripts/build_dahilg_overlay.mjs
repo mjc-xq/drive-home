@@ -42,6 +42,10 @@ const MINIMAP_BY_OUT = {
 // also upscales grass clumps into tall spiky blades, which read as ugly weeds). Trees, creek, reeds,
 // shrubs/bushes and fences stay.
 const KEEP = /(creek|tree|shrub|reed|foliage|bush|plant|hedge|canopy|trunk|fence|gate|rail|railing|barrier)/i;
+// Hard grass strip: the user wants NO grass-like vegetation anywhere. This overrides KEEP, so even
+// Creek_Reeds (kept via "creek") and the scattered Shrubs get removed — leaving trees, fences, and the
+// creek WATER/banks/rocks/flowlines. Thin reed/shrub blades read as weeds, which is exactly what's unwanted.
+const STRIP_GRASS = /reed|shrub|grass|clump|weed/i;
 
 function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
   const minimapName = MINIMAP_BY_OUT[out];
@@ -325,7 +329,7 @@ for (const { out, master } of MASTERS) {
     const name = node.getName() || '';
     const mesh = node.getMesh();
     if (mesh) {
-      if (KEEP.test(name)) {
+      if (KEEP.test(name) && !STRIP_GRASS.test(name)) {
         if (/acacia/i.test(mesh.getName() || '')) debladeAcacia(mesh);
         kept++;
       } else { node.setMesh(null); stripped++; }
