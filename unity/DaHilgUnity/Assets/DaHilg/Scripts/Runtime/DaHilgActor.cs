@@ -781,16 +781,18 @@ namespace DaHilg
             }
             if (!hasFoot) return;
 
-            // The CharacterController holds the capsule (and thus FeetPosition) skinWidth above the
+            // The CharacterController rests with the capsule bottom (= FeetPosition.y) skinWidth ABOVE the
             // collider, and the collider IS the visual surface (build asserts Collision_Terrain==Terrain).
-            // So plant the lowest foot at FeetPosition.y - skinWidth — i.e. on the actual ground — instead
-            // of FeetPosition.y + skin, which stacked the skinWidth gap into a visible hover.
+            // The foot BONE sits ~at FeetPosition.y, but the foot MESH SOLE hangs a couple cm below the
+            // bone — so planting the bone at FeetPosition.y-skinWidth pushed the sole THROUGH the floor,
+            // while FeetPosition.y+skin floated it. Plant the bone a hair ABOVE ground (subtract LESS than
+            // a full skinWidth) so the sole rests on the surface.
             float skin = m_Controller != null ? Mathf.Max(0.01f, m_Controller.skinWidth) : 0.06f;
-            float targetY = FeetPosition.y - skin;
+            float targetY = FeetPosition.y - Mathf.Max(0.012f, skin - m_Settings.GroundSkin * 0.35f);
             float correction = targetY - minFootY;
-            // Lower freely (a ground-skinned rig needs up to ~rig-height of drop); raise only a little
-            // (raising just pulls a penetrating foot out of the floor, which is always a few cm).
-            float maxLower = Mathf.Max(1.0f, m_BodyHeight * 1.05f);
+            // Lower enough for a ground-skinned rig to settle, but bounded so one bad foot read can't yank
+            // the whole body a body-height into the floor.
+            float maxLower = Mathf.Max(0.34f, m_BodyHeight * 0.22f);
             float maxRaise = 0.25f;
             float desiredOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -maxLower, maxRaise);
             // Snap on the first pinned frame (spawn / landing) so the body never renders a float frame;

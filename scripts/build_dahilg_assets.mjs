@@ -618,7 +618,7 @@ const PLAYER_ANIMS = [
 const PLAYER_OVERRIDES = [
   // mike — solid BOXER: jab/cross/hook combo, low kick, uppercut finisher, bob-and-weave guard idle
   { id: 'mike', key: 'Idle',      src: LIB('locomotion/idle/Bouncing_Fight_Idle_With_Guard_Up.glb'), clip: 'Bouncing_Fight_Idle_With_Guard_Up' },
-  { id: 'mike', key: 'Walk',      src: LIB('locomotion/walk/Walking_With_A_Swagger.glb'), clip: 'Walking_With_A_Swagger', stripRootXZ: true, loop: true },
+  { id: 'mike', key: 'Walk',      src: LIB('locomotion/walk/Male_Brutal_Walk.glb'), clip: 'Male_Brutal_Walk', stripRootXZ: true, loop: true }, // distinct + upright (swagger retargets upside-down, trips the validator)
   { id: 'mike', key: 'Run',       src: LIB('locomotion/run/Male_Weighted_Run.glb'), clip: 'Male_Weighted_Run', stripRootXZ: true, loop: true },
   { id: 'mike', key: 'Attack',    src: LIB('combat/unarmed/attacks/Boxing_Leading_Hand_Jab.glb'), clip: 'Boxing_Leading_Hand_Jab', stripRootXZ: true, noLoop: true },
   { id: 'mike', key: 'Attack2',   src: LIB('combat/unarmed/attacks/A_Cross_Punch.glb'), clip: 'A_Cross_Punch', stripRootXZ: true, noLoop: true },
@@ -644,7 +644,7 @@ const PLAYER_OVERRIDES = [
   { id: 'kelli', key: 'Dance',     src: LIB('dance/Bboy_Hip_Hop_Variation_One.glb'), clip: 'Bboy_Hip_Hop_Variation_One', loop: true },
   // cece — BREAKDANCE-FIGHTER: capoeira kicks + leg sweep, breakdance finisher, capoeira idle
   { id: 'cece', key: 'Idle',      src: LIB('locomotion/idle/Capoeira_Idle.glb'), clip: 'Capoeira_Idle' },
-  { id: 'cece', key: 'Walk',      src: LIB('locomotion/walk/Walking_With_A_Swagger.glb'), clip: 'Walking_With_A_Swagger', stripRootXZ: true, loop: true },
+  { id: 'cece', key: 'Walk',      src: LIB('locomotion/walk/Female_Walk_Forward.glb'), clip: 'Female_Walk_Forward', stripRootXZ: true, loop: true }, // distinct + upright (was the swagger modeling-ish walk)
   { id: 'cece', key: 'Run',       src: LIB('locomotion/run/Female_Run_Forward.glb'), clip: 'Female_Run_Forward', stripRootXZ: true, loop: true },
   // cece — capoeira, all GROUNDED standing kicks (no floor/ground-spin moves — those would be
   // lifted weirdly by the Hips-Y flatten that keeps the feet planted).
@@ -1113,6 +1113,11 @@ async function buildLevelMeta({ src, out, metaSource }, pavedMask) {
     houseBox,
     spawns,
     npcSpawns,
+    // Street spawn + facing: the player should start ON THE STREET facing the house, not at spawns[0]
+    // which sits jammed between buildings (the reported "spawned inside"). dahill only; recentered
+    // coords + world yaw. The builder prepends this and reads facing when present.
+    streetSpawn: out === 'level' ? [17.29, 0.05, 16.29] : null,
+    facing: out === 'level' ? 46.7 : null,
     // Grass occlusion: the top-down paved/built mask sidecar + the recentered DEM rect it covers.
     // null pavedMask => the sidecar was missing; the web grass occlusion then stays off (no mask).
     pavedMask: pavedMask || null,

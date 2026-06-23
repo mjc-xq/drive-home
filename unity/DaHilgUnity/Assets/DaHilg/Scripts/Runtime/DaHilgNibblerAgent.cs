@@ -126,15 +126,31 @@ namespace DaHilg
             m_LeftFoot = ResolveFootContact(m_VisualT, true);
             m_RightFoot = ResolveFootContact(m_VisualT, false);
             m_BaseScale = m_VisualT.localScale;
-            m_AppliedScale = m_BaseScale * scale;
+            // Per-seed size variety so the swarm reads as a mix of creatures, not identical clones. Apply
+            // the SAME multiplier to the visual AND the capsule so grounding (Root.y vs foot) stays coupled.
+            float sizeVar = Mathf.Lerp(0.82f, 1.28f, Hash01(index, 23.7f));
+            float cScale = scale * sizeVar;
+            m_AppliedScale = m_BaseScale * cScale;
             m_VisualT.localScale = m_AppliedScale;
+            // Hue-shift the single body for visual variety (MaterialPropertyBlock = no new materials; a
+            // missing color property just no-ops). Cover both glTFast/Built-in (_BaseColor) and URP/_Color.
+            var smr = m_VisualT.GetComponentInChildren<SkinnedMeshRenderer>(true);
+            if (smr != null)
+            {
+                var mpb = new MaterialPropertyBlock();
+                smr.GetPropertyBlock(mpb);
+                Color tint = Color.HSVToRGB(Hash01(index, 41.3f), 0.22f, 1f);
+                mpb.SetColor("_BaseColor", tint);
+                mpb.SetColor("_Color", tint);
+                smr.SetPropertyBlock(mpb);
+            }
 
             // Capsule in metres on the unscaled root: ~0.55m tall, sits ON the ground.
             m_Controller = Root.AddComponent<CharacterController>();
-            m_Controller.height = 1.7f * scale;
-            m_Controller.radius = 0.3f * scale;
-            m_Controller.center = new Vector3(0f, 0.85f * scale, 0f);
-            m_Controller.stepOffset = 0.15f * scale;
+            m_Controller.height = 1.7f * cScale;
+            m_Controller.radius = 0.3f * cScale;
+            m_Controller.center = new Vector3(0f, 0.85f * cScale, 0f);
+            m_Controller.stepOffset = 0.15f * cScale;
             m_Controller.slopeLimit = 55f;
             m_Controller.minMoveDistance = 0f;
             m_Controller.skinWidth = Mathf.Max(0.01f, m_Controller.radius * 0.2f);
@@ -148,7 +164,9 @@ namespace DaHilg
                 if (childAnimator != m_Animator) childAnimator.enabled = false;
             }
             m_Animator.applyRootMotion = false;
-            m_Animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms; // don't animate the off-screen swarm
+            // AlwaysAnimate: at the nibbler's sub-centimetre skinned bounds the cull test is unreliable
+            // and froze limbs (the swarm slid without animating). The pool is capped (mobile<=12, desktop 36).
+            m_Animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
             m_Animator.speed = 0.78f + m_Seed * 0.62f;
             if (animatorController != null) m_Animator.runtimeAnimatorController = animatorController;
 
@@ -560,7 +578,7 @@ namespace DaHilg
         {
             if (m_AttachedParent == null) { m_State = NibblerState.Chase; return false; }
             DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
-            Vector3 rest = DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale);
+            Vector3 rest = ClingRestLocal(player, a); // sit on the SKIN surface, not the buried bone joint
             // Slide from the grab pose to the bone-local rest spot (the "climb on" settle), in bone space.
             Root.transform.localPosition = Vector3.MoveTowards(Root.transform.localPosition, rest, (m_ClimbSpeed + 0.6f) * dt);
             Vector3 outwardLocal = m_AttachedParent.InverseTransformDirection(ClingOutward(player));
@@ -582,7 +600,7 @@ namespace DaHilg
                 return false;
             }
             DaHilgActor.BoneAnchor a = player.GetNibblerBone(m_BoneSlot);
-            Vector3 rest = DaHilgActor.DivScale(a.LocalOffset, a.Bone.lossyScale);
+            Vector3 rest = ClingRestLocal(player, a); // sit on the SKIN surface, not the buried bone joint
             // Gravity-cling: a small "downward" (world) bias projected to bone-local so they hug the body
             // and a fast bend tugs them onto the surface instead of flinging them off.
             Vector3 gravLocal = m_AttachedParent.InverseTransformDirection(Vector3.down) * 0.01f;
@@ -913,6 +931,22 @@ namespace DaHilg
             outward.y *= 0.25f; // mostly horizontal — hug the roughly cylindrical torso
             if (outward.sqrMagnitude < 1e-4f) outward = -(Quaternion.Euler(0f, player.FacingYaw, 0f) * Vector3.forward);
             return outward.normalized;
+        }
+
+        // Bone-LOCAL rest on the player's SKIN, not the buried bone joint. The k_BoneSpec offsets are tiny
+        // (<=0.13m) world-metres, so resting at bone+offset put the nibbler INSIDE the body (occluded =
+        // "invisible when latched", and all clustered on the spine axis = "cloud"). Instead project the
+        // nibbler's current angle+height onto a cylinder at ~BodyRadius so it sits ON the visible surface
+        // and rides outward. InverseTransformPoint folds in the bone's full world scale, so it stays
+        // size-correct on any rig.
+        Vector3 ClingRestLocal(DaHilgActor player, DaHilgActor.BoneAnchor a)
+        {
+            float h = Mathf.Clamp(Root.transform.position.y - player.FeetPosition.y, 0.1f, Mathf.Max(0.2f, player.BodyHeight));
+            Vector3 axisPoint = player.FeetPosition + Vector3.up * h;
+            Vector3 outward = ClingOutward(player);
+            float surfaceR = Mathf.Max(0.18f, player.BodyRadius * 0.9f);
+            Vector3 worldRest = axisPoint + outward * surfaceR;
+            return a.Bone.InverseTransformPoint(worldRest);
         }
 
         void Play(string state, float fade)

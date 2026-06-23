@@ -8,7 +8,7 @@
 import { NodeIO, Logger } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { dedup, meshopt, prune, reorder, weld } from '@gltf-transform/functions';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
@@ -51,9 +51,26 @@ const PLAYER_STATES = [
 // PER-CHARACTER OVERRIDE files (Pass 2, design C) -> public/da-hilg/anims/<id>_<state>.glb. Derived
 // from the roster manifest `clips` map (the source of truth) so this stays in lockstep with the
 // JS asset build. The C# builder prefers '<id>_<state>' over the shared '<state>' per (char,state).
-const PLAYER_OVERRIDE_FILES = ROSTER.characters.flatMap((c) =>
-  Object.keys(c.clips || {}).map((state) => `anims/${c.id}_${state}.glb`.toLowerCase()),
-);
+const PLAYER_OVERRIDE_FILES = (() => {
+  const set = new Set(
+    ROSTER.characters.flatMap((c) =>
+      Object.keys(c.clips || {}).map((state) => `anims/${c.id}_${state}.glb`.toLowerCase())),
+  );
+  // The roster `clips` map omits cece/mike idle/walk/run, so deriving the staging list from it alone
+  // left those per-character GLBs unstaged and the characters fell back to the SHARED catwalk/modeling
+  // walk. Also stage every per-PLAYER override GLB the asset build actually produced so the two lists
+  // can't drift again.
+  const playerIds = ROSTER.characters.filter((c) => c.role === 'player').map((c) => c.id);
+  const animsDir = SRC('anims');
+  if (existsSync(animsDir)) {
+    for (const f of readdirSync(animsDir)) {
+      if (f.endsWith('.glb') && playerIds.some((id) => f.startsWith(id + '_'))) {
+        set.add(`anims/${f}`.toLowerCase());
+      }
+    }
+  }
+  return [...set];
+})();
 // NIBBLER motion states (drew) -> public/da-hilg/nibbler-anims/<State>.glb. Player & nibbler
 // share state NAMES (Idle/Run/Climb/Jump/Knockdown) so they MUST live in separate folders.
 const NIBBLER_STATES = ['Idle', 'Run', 'Crawl', 'Climb', 'Bite', 'Jump', 'Knockdown'];
