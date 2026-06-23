@@ -458,7 +458,7 @@ namespace DaHilg
             // stepping DOWN the slope along the flow. Shared corner heights are averaged so the surface is
             // continuous (no terracing). Logged for in-engine tuning.
             Dictionary<int, float> waterCornerY = null;
-            const float k_WaterDepth = 0.7f;
+            const float k_WaterDepth = 1.4f;
             int stride = n + 1;
             if (water)
             {

@@ -46,6 +46,10 @@ const KEEP = /(creek|tree|shrub|reed|foliage|bush|plant|hedge|canopy|trunk|fence
 // Creek_Reeds (kept via "creek") and the scattered Shrubs get removed — leaving trees, fences, and the
 // creek WATER/banks/rocks/flowlines. Thin reed/shrub blades read as weeds, which is exactly what's unwanted.
 const STRIP_GRASS = /reed|shrub|grass|clump|weed/i;
+// Hard drop: Creek_Banks matches KEEP via "creek" but the streamed overlay should not carry it
+// (the single-surface env already provides the channel bed/banks). This overrides KEEP, so the
+// banks mesh is stripped + pruned while Creek_SanLorenzo / FlowLines / Rocks / Reeds stay.
+const DROP = /creek_banks/i;
 
 function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
   const minimapName = MINIMAP_BY_OUT[out];
@@ -180,7 +184,7 @@ for (const { out, master } of MASTERS) {
             const envDoc = await io.read(envPath);
             const ev = [0, 0, 0];
             for (const node of envDoc.getRoot().listNodes()) {
-              if (!/buildings?_walls|house_walls/i.test(node.getName() || '') || !node.getMesh()) continue;
+              if (!/_walls/i.test(node.getName() || '') || !node.getMesh()) continue;   // Building_<ib>_walls / House_walls (+ legacy Buildings_walls)
               const wm = node.getWorldMatrix();
               for (const prim of node.getMesh().listPrimitives()) {
                 const pos = prim.getAttribute('POSITION'); if (!pos) continue;
@@ -329,7 +333,7 @@ for (const { out, master } of MASTERS) {
     const name = node.getName() || '';
     const mesh = node.getMesh();
     if (mesh) {
-      if (KEEP.test(name) && !STRIP_GRASS.test(name)) {
+      if (KEEP.test(name) && !STRIP_GRASS.test(name) && !DROP.test(name)) {
         if (/acacia/i.test(mesh.getName() || '')) debladeAcacia(mesh);
         kept++;
       } else { node.setMesh(null); stripped++; }

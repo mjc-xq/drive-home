@@ -148,7 +148,7 @@ function bakeCollider(scene) {
 function isBuilt(name) {
   if (!name) return false;
   return (
-    name.startsWith('Buildings') || // Buildings group + Buildings_walls/_roofs
+    name.startsWith('Building') || // per-building Building_<ib>_walls/_roof groups (+ legacy Buildings_*)
     name.startsWith('House_') ||    // owner-house walls/roof
     name === 'Doors' ||
     name.startsWith('Doors_') ||

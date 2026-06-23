@@ -1,0 +1,19 @@
+Da Hilg pipeline | stages: unitybuild | levels: dahill, canyon, stanton, meemaw, xq
+
+======================================================================
+▶ UNITY BUILD — WebGL (streaming + atlas + menus)
+======================================================================
+  $ "/Applications/Unity/Hub/Editor/6000.5.0f1/Unity.app/Contents/MacOS/Unity" -batchmode -quit -projectPath unity/DaHilgUnity -executeMethod DaHilg.Editor.DaHilgProjectBuilder.BuildWebGLExport -logFile unity-build.log
+  split data.unityweb into 7 chunks (28.8 MB total).
+  Unity build verified (success marker present; data.unityweb split for deploy upload).
+
+======================================================================
+▶ DONE
+======================================================================
+elapsed: 3.1 min
+  data.unityweb parts  4.2 MB first chunk
+  StreamingAssets/dahill.glb  51.2 MB
+  StreamingAssets/canyon.glb  13.7 MB
+  StreamingAssets/stanton.glb  13.7 MB
+  StreamingAssets/meemaw.glb  10.6 MB
+  StreamingAssets/xq.glb  13.1 MB

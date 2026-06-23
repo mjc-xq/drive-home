@@ -74,11 +74,11 @@
     ]
   ],
   "streetSpawn": [
-    18.65,
+    11.59,
     0.05,
-    24.18
+    18.33
   ],
-  "facing": 37.7,
+  "facing": 32.3,
   "pavedMask": "level.paved_mask.png",
   "pavedMaskRect": {
     "min": [

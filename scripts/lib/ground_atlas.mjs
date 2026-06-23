@@ -92,6 +92,40 @@ function paintFeatures(canvas, map, network, curbLines, fine) {
     if (p.rings) for (const r of p.rings) paint([r], rgb);
     if (p.lines) for (const ln of p.lines) { const ring = bandToRing(ln, p.width || 0.12); if (ring) paint([ring], rgb); }
   }
+  // Sidewalk PANEL SEAMS (fine/CORE only): so concrete reads as scored squares, not flat grey.
+  // Walk each curb/sidewalk-edge centerline by arc length and, every ~1.5 m, stamp a short thin
+  // line ACROSS the sidewalk width (perpendicular to the local tangent), in a slightly darker
+  // concrete. Tiny stamps, paint-only — no geometry. cl.side biases the seam toward the sidewalk.
+  if (fine) {
+    const SW_WIDTH = 1.8;                              // sidewalk width the seam spans (m)
+    const SEAM_GAP = 1.5;                              // scoring interval along the walk (m)
+    const SEAM_W = 0.06;                               // seam stroke width (m)
+    const c = MAT.concrete.rgb;
+    const seamRgb = [c[0] * 0.82, c[1] * 0.82, c[2] * 0.82];   // subtle darker scored line
+    for (const cl of curbLines) {
+      const ln = cl.line; if (!ln || ln.length < 2) continue;
+      const off = cl.side === 'right' ? -1 : 1;        // which side the sidewalk sits on
+      let acc = 0;                                     // cumulative arc length since last seam
+      for (let i = 1; i < ln.length; i++) {
+        const ax = ln[i - 1][0], az = ln[i - 1][1], bx = ln[i][0], bz = ln[i][1];
+        let dx = bx - ax, dz = bz - az; const segL = Math.hypot(dx, dz);
+        if (segL < 1e-6) continue;                     // skip degenerate segment
+        dx /= segL; dz /= segL;
+        const nx = -dz, nz = dx;                       // unit perpendicular (sidewalk normal)
+        let d = SEAM_GAP - acc;                        // distance into this segment to first seam
+        while (d <= segL) {
+          const px = ax + dx * d, pz = az + dz * d;    // point on the centerline
+          // seam line crosses the sidewalk: from the curb edge outward across SW_WIDTH
+          const s0 = [px, pz];
+          const s1 = [px + nx * off * SW_WIDTH, pz + nz * off * SW_WIDTH];
+          const ring = bandToRing([s0, s1], SEAM_W);
+          if (ring) paint([ring], seamRgb, 0.85);
+          d += SEAM_GAP;
+        }
+        acc = (acc + segL) % SEAM_GAP;
+      }
+    }
+  }
 }
 
 export async function bakeGroundAtlas({

@@ -1,0 +1,779 @@
+Da Hilg pipeline | stages: assets -> unitysrc -> unitybuild | levels: dahill, canyon, stanton, meemaw, xq
+
+======================================================================
+▶ ASSETS — atlas + meshopt + KTX2 + minimaps
+======================================================================
+  (mixamo convert: bodies fresh — skipped; pass --convert to force)
+  $ npm run build:dahilg-assets
+
+> dahill-3d@0.1.0 build:dahilg-assets
+> node scripts/build_dahilg_assets.mjs
+
+objc[11302]: Class GNotificationCenterDelegate is implemented in both /Users/mcohen/dev/home/node_modules/ndarray-pixels/node_modules/@img/sharp-libvips-darwin-arm64/lib/libvips-cpp.8.17.3.dylib (0x11e035978) and /Users/mcohen/dev/home/node_modules/@img/sharp-libvips-darwin-arm64/lib/libvips-cpp.42.dylib (0x11f141a28). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+
+=== Da Hilg asset build ===
+
+[1/4] level.glb  <- exports/dahill-single.glb
+  (LOD_Buildings_Low not present — nothing to drop)
+  preserved required nodes: Collision_Terrain, Collision_Buildings, Collision_Trees, House_walls (Collision_Roads optional — roads are on the terrain now)
+  collision==visual: |Collision_Terrain.minY - Terrain.minY| = 0.0000 m (< 0.05)
+  stripped material from 3 collision primitive(s)
+  GPU-instanced 1099 static nodes -> 51 EXT_mesh_gpu_instancing node(s) (1099 instances; 0 animated nodes left alone)
+    textures: KTX2/basisu x11 @cap 2048
+  wrote public/da-hilg/level.glb  178.94 MB  [meshopt=yes, ext=EXT_mesh_gpu_instancing,EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  round-trip OK: 81 meshes, bounds min=[-628.0,-1.0,-660.3] max=[622.6,97.0,632.6]
+  copied paved mask -> public/da-hilg/level.paved_mask.png (0.27 MB)
+
+[1/4] canyon.glb  <- exports/canyon-single.glb
+  (LOD_Buildings_Low not present — nothing to drop)
+  preserved required nodes: Collision_Terrain, Collision_Buildings, Collision_Trees, House_walls (Collision_Roads optional — roads are on the terrain now)
+  collision==visual: |Collision_Terrain.minY - Terrain.minY| = 0.0000 m (< 0.05)
+  stripped material from 3 collision primitive(s)
+  GPU-instanced 213 static nodes -> 37 EXT_mesh_gpu_instancing node(s) (213 instances; 0 animated nodes left alone)
+    textures: KTX2/basisu x3 @cap 2048
+  wrote public/da-hilg/canyon.glb  24.09 MB  [meshopt=yes, ext=EXT_mesh_gpu_instancing,EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  round-trip OK: 74 meshes, bounds min=[-360.0,-1.0,-358.6] max=[379.5,179.5,360.4]
+  copied paved mask -> public/da-hilg/canyon.paved_mask.png (0.11 MB)
+
+[1/4] stanton.glb  <- exports/stanton-single.glb
+  (LOD_Buildings_Low not present — nothing to drop)
+  preserved required nodes: Collision_Terrain, Collision_Buildings, Collision_Trees, House_walls (Collision_Roads optional — roads are on the terrain now)
+  collision==visual: |Collision_Terrain.minY - Terrain.minY| = 0.0000 m (< 0.05)
+  stripped material from 3 collision primitive(s)
+  GPU-instanced 197 static nodes -> 33 EXT_mesh_gpu_instancing node(s) (197 instances; 0 animated nodes left alone)
+    textures: KTX2/basisu x3 @cap 2048
+  wrote public/da-hilg/stanton.glb  37.17 MB  [meshopt=yes, ext=EXT_mesh_gpu_instancing,EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  round-trip OK: 74 meshes, bounds min=[-249.3,-1.0,-247.7] max=[256.8,117.5,249.6]
+  copied paved mask -> public/da-hilg/stanton.paved_mask.png (0.15 MB)
+
+[1/4] meemaw.glb  <- exports/meemaw-single.glb
+  (LOD_Buildings_Low not present — nothing to drop)
+  preserved required nodes: Collision_Terrain, Collision_Buildings, Collision_Trees, House_walls (Collision_Roads optional — roads are on the terrain now)
+  collision==visual: |Collision_Terrain.minY - Terrain.minY| = 0.0000 m (< 0.05)
+  stripped material from 3 collision primitive(s)
+  GPU-instanced 213 static nodes -> 38 EXT_mesh_gpu_instancing node(s) (213 instances; 0 animated nodes left alone)
+    textures: KTX2/basisu x3 @cap 2048
+  wrote public/da-hilg/meemaw.glb  32.00 MB  [meshopt=yes, ext=EXT_mesh_gpu_instancing,EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  round-trip OK: 75 meshes, bounds min=[-257.8,-1.0,-232.4] max=[237.4,88.8,245.1]
+  copied paved mask -> public/da-hilg/meemaw.paved_mask.png (0.12 MB)
+
+[1/4] xq.glb  <- exports/xq-single.glb
+  (LOD_Buildings_Low not present — nothing to drop)
+  preserved required nodes: Collision_Terrain, Collision_Buildings, Collision_Trees, House_walls (Collision_Roads optional — roads are on the terrain now)
+  collision==visual: |Collision_Terrain.minY - Terrain.minY| = 0.0000 m (< 0.05)
+  stripped material from 3 collision primitive(s)
+  GPU-instanced 837 static nodes -> 72 EXT_mesh_gpu_instancing node(s) (837 instances; 0 animated nodes left alone)
+    textures: KTX2/basisu x3 @cap 2048
+  wrote public/da-hilg/xq.glb  24.58 MB  [meshopt=yes, ext=EXT_mesh_gpu_instancing,EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  round-trip OK: 92 meshes, bounds min=[-417.8,-1.0,-438.1] max=[425.8,82.5,427.2]
+  copied paved mask -> public/da-hilg/xq.paved_mask.png (0.18 MB)
+
+[2/4] anims (clip-only GLBs)
+  -- player motion set (anims/) — shared defaults --
+    Idle: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Idle: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/idle.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Walk: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Walk: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Walk: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/walk.glb  0.34 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Run: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Run: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Run: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/run.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Jump: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Jump: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/jump.glb  0.12 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    JumpAlt: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    JumpAlt: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    JumpAlt: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/jumpalt.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Dance: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Dance: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/dance.glb  0.12 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Wave: dropped 23 non-Hips translation + 24 scale channel(s) (skin-safe retarget)
+    Wave: 25 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/wave.glb  0.44 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_materials_specular]
+    Cheer: dropped 23 non-Hips translation + 24 scale channel(s) (skin-safe retarget)
+    Cheer: 25 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cheer.glb  0.43 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_materials_specular]
+    Attack: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Attack: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/attack.glb  0.12 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack2: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack2: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/attack2.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack3: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack3: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/attack3.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack4: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack4: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack4: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/attack4.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack5: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack5: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack5: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/attack5.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Celebrate: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Celebrate: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Celebrate: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/celebrate.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Hit: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Hit: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/hit.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Stumble: dropped 23 non-Hips translation + 24 scale channel(s) (skin-safe retarget)
+    Stumble: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Stumble: 25 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/stumble.glb  0.33 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_materials_specular]
+    Knockdown: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Knockdown: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/knockdown.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Crawl: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Crawl: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Crawl: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/crawl.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Climb: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Climb: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/climb.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+  -- player motion set (anims/) — per-character overrides --
+    Idle: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Idle: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_idle.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Walk: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Walk: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Walk: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_walk.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Run: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Run: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Run: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_run.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_attack.glb  0.09 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack2: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack2: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack2: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_attack2.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack3: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack3: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack3: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_attack3.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack4: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack4: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack4: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_attack4.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack5: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack5: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack5: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_attack5.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Celebrate: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Celebrate: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Celebrate: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_celebrate.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Dance: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Dance: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/mike_dance.glb  0.05 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Idle: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Idle: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_idle.glb  0.12 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Walk: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Walk: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Walk: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_walk.glb  0.12 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_attack.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack2: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack2: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack2: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_attack2.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack3: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack3: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack3: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_attack3.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack4: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack4: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack4: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_attack4.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack5: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack5: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack5: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_attack5.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Celebrate: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Celebrate: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Celebrate: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_celebrate.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Dance: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Dance: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/kelli_dance.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Idle: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Idle: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_idle.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Walk: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Walk: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Walk: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_walk.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Run: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Run: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Run: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_run.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_attack.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack2: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack2: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack2: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_attack2.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack3: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack3: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack3: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_attack3.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack4: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack4: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack4: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_attack4.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack5: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack5: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack5: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_attack5.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Celebrate: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Celebrate: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Celebrate: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_celebrate.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Dance: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Dance: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/cece_dance.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Idle: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Idle: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_idle.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Walk: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Walk: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Walk: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_walk.glb  0.15 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Run: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Run: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Run: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_run.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_attack.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack2: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack2: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack2: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_attack2.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack3: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack3: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack3: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_attack3.glb  0.05 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack4: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack4: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack4: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_attack4.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Attack5: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Attack5: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Attack5: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_attack5.glb  0.03 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Celebrate: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Celebrate: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Celebrate: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_celebrate.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Dance: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Dance: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/anims/drew_dance.glb  0.04 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+  -- nibbler motion set (nibbler-anims/) --
+    Idle: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Idle: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/idle.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Run: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Run: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Run: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/run.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Crawl: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Crawl: stripRootXZ zeroed Hips X/Z on 1 track(s)
+    Crawl: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/crawl.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Climb: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Climb: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/climb.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Bite: dropped 40 non-Hips translation + 41 scale channel(s) (skin-safe retarget)
+    Bite: 42 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/bite.glb  0.27 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Jump: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Jump: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/jump.glb  0.12 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+    Knockdown: dropped 32 non-Hips translation + 33 scale channel(s) (skin-safe retarget)
+    Knockdown: 34 channels, 0 unmatched, only Hips translates, no scale (skin-safe)
+  wrote public/da-hilg/nibbler-anims/knockdown.glb  0.25 MB  [meshopt=yes, ext=EXT_meshopt_compression]
+  self-check OK: 19 player + 39 override + 7 nibbler motion GLBs present
+
+[3/4] characters (cece, mike, kelli, drew)
+  cece.glb <- src/assets/cece-mx.glb
+    grounded cece.glb: lowest foot joint 'RightToeBase' -0.940 m -> feet at y=0
+    simplify: cece.glb 5527 verts <= 40000 threshold — left untouched
+    textures: KTX2/basisu x2 @cap 1024
+  wrote public/da-hilg/cece.glb  2.20 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  mike.glb <- src/assets/mike-mx.glb
+    grounded mike.glb: lowest foot joint 'LeftToe_End' -0.947 m -> feet at y=0
+    simplify: mike.glb 3371 verts <= 40000 threshold — left untouched
+    textures: KTX2/basisu x3 @cap 1024
+  wrote public/da-hilg/mike.glb  1.89 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  kelli.glb <- src/assets/kelli-mx.glb
+    grounded kelli.glb: lowest foot joint 'LeftToeBase' -0.942 m -> feet at y=0
+    simplify: kelli.glb 9799 verts <= 40000 threshold — left untouched
+    textures: KTX2/basisu x3 @cap 1024
+  wrote public/da-hilg/kelli.glb  1.90 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+  drew.glb <- src/assets/drew-mx.glb
+    grounded drew.glb: lowest foot joint 'LeftToeBase' -0.940 m -> feet at y=0
+    simplify: drew.glb 13087 verts <= 40000 threshold — left untouched
+    textures: KTX2/basisu x2 @cap 1024
+  wrote public/da-hilg/drew.glb  1.56 MB  [meshopt=yes, ext=EXT_meshopt_compression,KHR_mesh_quantization,KHR_texture_basisu]
+
+[4/4] level.meta.json  <- exports/dahill-single.glb
+  computed meta:
+    offset      = [-0.095, 33.073, -0.695]   (subtract from level world coords)
+    groundY     = 33.073   (Collision_Terrain min Y, original coords)
+    houseCenter = [-0.095, 49.285, -0.695]   (House_walls center, original coords)
+    houseBox    = min[-12.155, 13.522, -9.315] max[12.155, 18.903, 9.315]   (recentered)
+    spawns      = 3 pts, e.g. [0, 0.05, 12.315]   (recentered)
+    npcSpawns   = 6 pts within ~25 m of origin (recentered)
+    pavedMask   = level.paved_mask.png   rect min[-599.905, -599.305] size[1198, 1198] (recentered)
+
+[4/4] canyon.meta.json  <- exports/canyon-single.glb
+  computed meta:
+    offset      = [-72.31, 61.055, -1.945]   (subtract from level world coords)
+    groundY     = 61.055   (Collision_Terrain min Y, original coords)
+    houseCenter = [-72.31, 119.837, -1.945]   (House_walls center, original coords)
+    houseBox    = min[-40.64, 55.604, -23.235] max[40.64, 61.961, 23.235]   (recentered)
+    spawns      = 3 pts, e.g. [0, 0.05, 26.235]   (recentered)
+    npcSpawns   = 6 pts within ~25 m of origin (recentered)
+    pavedMask   = canyon.paved_mask.png   rect min[-287.69, -356.055] size[720, 718] (recentered)
+
+[4/4] stanton.meta.json  <- exports/stanton-single.glb
+  computed meta:
+    offset      = [-26.245, 58.525, 50.17]   (subtract from level world coords)
+    groundY     = 58.525   (Collision_Terrain min Y, original coords)
+    houseCenter = [-26.245, 75.598, 50.17]   (House_walls center, original coords)
+    houseBox    = min[-27.585, 14.164, -21.17] max[27.585, 19.983, 21.17]   (recentered)
+    spawns      = 3 pts, e.g. [0, 0.05, 24.17]   (recentered)
+    npcSpawns   = 6 pts within ~25 m of origin (recentered)
+    pavedMask   = stanton.paved_mask.png   rect min[-203.755, -280.17] size[458, 458] (recentered)
+
+[4/4] meemaw.meta.json  <- exports/meemaw-single.glb
+  computed meta:
+    offset      = [35.35, 59.243, 6.125]   (subtract from level world coords)
+    groundY     = 59.243   (Collision_Terrain min Y, original coords)
+    houseCenter = [35.35, 69.338, 6.125]   (House_walls center, original coords)
+    houseBox    = min[-8.46, 7.141, -9.645] max[8.46, 13.051, 9.645]   (recentered)
+    spawns      = 3 pts, e.g. [0, 0.05, 12.645]   (recentered)
+    npcSpawns   = 6 pts within ~25 m of origin (recentered)
+    pavedMask   = meemaw.paved_mask.png   rect min[-265.35, -236.125] size[460, 460] (recentered)
+
+[4/4] xq.meta.json  <- exports/xq-single.glb
+  computed meta:
+    offset      = [-39.165, 0.845, 31.22]   (subtract from level world coords)
+    groundY     = 0.845   (Collision_Terrain min Y, original coords)
+    houseCenter = [-39.165, 17.34, 31.22]   (House_walls center, original coords)
+    houseBox    = min[-27.425, 8.838, -23.9] max[27.425, 24.152, 23.9]   (recentered)
+    spawns      = 3 pts, e.g. [0, 0.05, 26.9]   (recentered)
+    npcSpawns   = 6 pts within ~25 m of origin (recentered)
+    pavedMask   = xq.paved_mask.png   rect min[-260.835, -331.22] size[600, 600] (recentered)
+
+=== SUMMARY ===
+  public/da-hilg/level.glb            178.94 MB
+  public/da-hilg/level.paved_mask.png    0.27 MB
+  public/da-hilg/canyon.glb            24.09 MB
+  public/da-hilg/canyon.paved_mask.png    0.11 MB
+  public/da-hilg/stanton.glb           37.17 MB
+  public/da-hilg/stanton.paved_mask.png    0.15 MB
+  public/da-hilg/meemaw.glb            32.00 MB
+  public/da-hilg/meemaw.paved_mask.png    0.12 MB
+  public/da-hilg/xq.glb                24.58 MB
+  public/da-hilg/xq.paved_mask.png      0.18 MB
+  public/da-hilg/anims/idle.glb         0.25 MB
+  public/da-hilg/anims/walk.glb         0.34 MB
+  public/da-hilg/anims/run.glb          0.27 MB
+  public/da-hilg/anims/jump.glb         0.12 MB
+  public/da-hilg/anims/jumpalt.glb      0.03 MB
+  public/da-hilg/anims/dance.glb        0.12 MB
+  public/da-hilg/anims/wave.glb         0.44 MB
+  public/da-hilg/anims/cheer.glb        0.43 MB
+  public/da-hilg/anims/attack.glb       0.12 MB
+  public/da-hilg/anims/attack2.glb      0.25 MB
+  public/da-hilg/anims/attack3.glb      0.25 MB
+  public/da-hilg/anims/attack4.glb      0.03 MB
+  public/da-hilg/anims/attack5.glb      0.03 MB
+  public/da-hilg/anims/celebrate.glb    0.03 MB
+  public/da-hilg/anims/hit.glb          0.25 MB
+  public/da-hilg/anims/stumble.glb      0.33 MB
+  public/da-hilg/anims/knockdown.glb    0.25 MB
+  public/da-hilg/anims/crawl.glb        0.27 MB
+  public/da-hilg/anims/climb.glb        0.27 MB
+  public/da-hilg/anims/mike_idle.glb    0.03 MB
+  public/da-hilg/anims/mike_walk.glb    0.03 MB
+  public/da-hilg/anims/mike_run.glb     0.03 MB
+  public/da-hilg/anims/mike_attack.glb    0.09 MB
+  public/da-hilg/anims/mike_attack2.glb    0.03 MB
+  public/da-hilg/anims/mike_attack3.glb    0.03 MB
+  public/da-hilg/anims/mike_attack4.glb    0.03 MB
+  public/da-hilg/anims/mike_attack5.glb    0.03 MB
+  public/da-hilg/anims/mike_celebrate.glb    0.03 MB
+  public/da-hilg/anims/mike_dance.glb    0.05 MB
+  public/da-hilg/anims/kelli_idle.glb    0.12 MB
+  public/da-hilg/anims/kelli_walk.glb    0.12 MB
+  public/da-hilg/anims/kelli_attack.glb    0.04 MB
+  public/da-hilg/anims/kelli_attack2.glb    0.03 MB
+  public/da-hilg/anims/kelli_attack3.glb    0.03 MB
+  public/da-hilg/anims/kelli_attack4.glb    0.03 MB
+  public/da-hilg/anims/kelli_attack5.glb    0.03 MB
+  public/da-hilg/anims/kelli_celebrate.glb    0.03 MB
+  public/da-hilg/anims/kelli_dance.glb    0.03 MB
+  public/da-hilg/anims/cece_idle.glb    0.04 MB
+  public/da-hilg/anims/cece_walk.glb    0.03 MB
+  public/da-hilg/anims/cece_run.glb     0.03 MB
+  public/da-hilg/anims/cece_attack.glb    0.03 MB
+  public/da-hilg/anims/cece_attack2.glb    0.03 MB
+  public/da-hilg/anims/cece_attack3.glb    0.03 MB
+  public/da-hilg/anims/cece_attack4.glb    0.04 MB
+  public/da-hilg/anims/cece_attack5.glb    0.03 MB
+  public/da-hilg/anims/cece_celebrate.glb    0.03 MB
+  public/da-hilg/anims/cece_dance.glb    0.03 MB
+  public/da-hilg/anims/drew_idle.glb    0.03 MB
+  public/da-hilg/anims/drew_walk.glb    0.15 MB
+  public/da-hilg/anims/drew_run.glb     0.03 MB
+  public/da-hilg/anims/drew_attack.glb    0.04 MB
+  public/da-hilg/anims/drew_attack2.glb    0.03 MB
+  public/da-hilg/anims/drew_attack3.glb    0.05 MB
+  public/da-hilg/anims/drew_attack4.glb    0.04 MB
+  public/da-hilg/anims/drew_attack5.glb    0.03 MB
+  public/da-hilg/anims/drew_celebrate.glb    0.04 MB
+  public/da-hilg/anims/drew_dance.glb    0.04 MB
+  public/da-hilg/nibbler-anims/idle.glb    0.25 MB
+  public/da-hilg/nibbler-anims/run.glb    0.27 MB
+  public/da-hilg/nibbler-anims/crawl.glb    0.27 MB
+  public/da-hilg/nibbler-anims/climb.glb    0.27 MB
+  public/da-hilg/nibbler-anims/bite.glb    0.27 MB
+  public/da-hilg/nibbler-anims/jump.glb    0.12 MB
+  public/da-hilg/nibbler-anims/knockdown.glb    0.25 MB
+  public/da-hilg/cece.glb               2.20 MB
+  public/da-hilg/mike.glb               1.89 MB
+  public/da-hilg/kelli.glb              1.90 MB
+  public/da-hilg/drew.glb               1.56 MB
+  public/da-hilg/level.meta.json        0.00 MB
+  public/da-hilg/canyon.meta.json       0.00 MB
+  public/da-hilg/stanton.meta.json      0.00 MB
+  public/da-hilg/meemaw.meta.json       0.00 MB
+  public/da-hilg/xq.meta.json           0.00 MB
+
+  total output (incl. anims + meta): 312.58 MB
+  level + 4 chars:  sources 175.49 MB -> outputs 186.49 MB  (-6.3% smaller)
+
+  meta: offset=[-0.095, 33.073, -0.695] groundY=33.073 houseCenter=[-0.095, 49.285, -0.695]
+
+ALL ASSERTIONS PASSED
+  $ node scripts/build_minimap.mjs dahill
+
+=== Da Hilg minimap build (dahill) ===
+  offset = [-0.095, 33.105, -0.695]  (subtract from world coords)
+  Roads              -> road    1337748 tris -> 73552 boundary -> 67625 segs (fill)
+  Driveways          -> drive   1176 tris -> 1176 boundary -> 1176 segs (fill)
+  Driveways_Mapped   -> drive   203038 tris -> 27863 boundary -> 25701 segs (fill)
+  Sidewalks          -> walk    827324 tris -> 6846 boundary -> 6093 segs (fill)
+  RoadCurbs          -> curb    474984 tris -> 3112 boundary -> 2020 segs (fill)
+  RoadLines          -> line    4840 tris -> 9090 boundary -> 6720 segs (fill)
+  Creek_SanLorenzo   -> creek   2795 segs (clipped to ±608 m)
+  road  fill: 27352 / 147456 cells set (384x384 grid)
+  drive fill: 8256 / 147456 cells set (384x384 grid)
+  walk  fill: 27133 / 147456 cells set (384x384 grid)
+  curb  fill: 12505 / 147456 cells set (384x384 grid)
+  line  fill: 1477 / 147456 cells set (384x384 grid)
+  water fill: 1805 / 147456 cells set (384x384 grid)
+
+=== ASSERTIONS ===
+  [pass] 2795 segments + 78528 fill cells
+  [pass] all 6 named road meshes found
+  [pass] bounds contain all segment endpoints
+  [pass] worldHalfExtent = 608 (plausible)
+
+=== SUMMARY ===
+  layer road       0 segments
+  layer drive      0 segments
+  layer walk       0 segments
+  layer curb       0 segments
+  layer line       0 segments
+  layer creek   2795 segments
+  bounds  minX=-606 minZ=-601.5 maxX=602 maxZ=607.5
+  worldHalfExtent=608  offset=[-0.09, 33.1, -0.7]
+  wrote public/da-hilg/minimap.json  214.3 KB
+
+ALL ASSERTIONS PASSED
+  $ node scripts/build_minimap.mjs canyon
+
+=== Da Hilg minimap build (canyon) ===
+  offset = [-72.310, 61.480, -1.945]  (subtract from world coords)
+  Roads              -> road    301048 tris -> 14598 boundary -> 13551 segs (fill)
+  Driveways          -> drive   60 tris -> 60 boundary -> 60 segs (fill)
+  Driveways_Mapped   -> drive   49892 tris -> 6640 boundary -> 6112 segs (fill)
+  Sidewalks          -> walk    149756 tris -> 872 boundary -> 790 segs (fill)
+  RoadCurbs          -> curb    102272 tris -> 420 boundary -> 281 segs (fill)
+  RoadLines          -> line    1156 tris -> 2214 boundary -> 1615 segs (fill)
+  ! Creek mesh not found — no creek on this minimap
+  road  fill: 13170 / 147456 cells set (384x384 grid)
+  drive fill: 3900 / 147456 cells set (384x384 grid)
+  walk  fill: 9792 / 147456 cells set (384x384 grid)
+  curb  fill: 5879 / 147456 cells set (384x384 grid)
+  line  fill: 907 / 147456 cells set (384x384 grid)
+  water fill: 0 / 147456 cells set (384x384 grid)
+
+=== ASSERTIONS ===
+  [pass] 0 segments + 33648 fill cells
+  [pass] all 6 named road meshes found
+  [pass] bounds contain all segment endpoints
+  [pass] worldHalfExtent = 437 (plausible)
+
+=== SUMMARY ===
+  layer road       0 segments
+  layer drive      0 segments
+  layer walk       0 segments
+  layer curb       0 segments
+  layer line       0 segments
+  layer creek      0 segments
+  bounds  minX=-285.5 minZ=-363.5 maxX=437 maxZ=369.5
+  worldHalfExtent=437  offset=[-72.31, 61.48, -1.94]
+  wrote public/da-hilg/canyon.minimap.json  144.6 KB
+
+ALL ASSERTIONS PASSED
+  $ node scripts/build_minimap.mjs stanton
+
+=== Da Hilg minimap build (stanton) ===
+  offset = [-26.245, 58.540, 50.170]  (subtract from world coords)
+  Roads              -> road    250780 tris -> 12516 boundary -> 11568 segs (fill)
+  Driveways          -> drive   84 tris -> 84 boundary -> 84 segs (fill)
+  Driveways_Mapped   -> drive   4564 tris -> 642 boundary -> 581 segs (fill)
+  Sidewalks          -> walk    146704 tris -> 1152 boundary -> 1040 segs (fill)
+  RoadCurbs          -> curb    86328 tris -> 560 boundary -> 393 segs (fill)
+  RoadLines          -> line    928 tris -> 1792 boundary -> 1352 segs (fill)
+  ! Creek mesh not found — no creek on this minimap
+  road  fill: 23431 / 147456 cells set (384x384 grid)
+  drive fill: 843 / 147456 cells set (384x384 grid)
+  walk  fill: 18230 / 147456 cells set (384x384 grid)
+  curb  fill: 12169 / 147456 cells set (384x384 grid)
+  line  fill: 1966 / 147456 cells set (384x384 grid)
+  water fill: 0 / 147456 cells set (384x384 grid)
+
+=== ASSERTIONS ===
+  [pass] 0 segments + 56639 fill cells
+  [pass] all 6 named road meshes found
+  [pass] bounds contain all segment endpoints
+  [pass] worldHalfExtent = 284 (plausible)
+
+=== SUMMARY ===
+  layer road       0 segments
+  layer drive      0 segments
+  layer walk       0 segments
+  layer curb       0 segments
+  layer line       0 segments
+  layer creek      0 segments
+  bounds  minX=-207.5 minZ=-284 maxX=262.5 maxZ=184
+  worldHalfExtent=284  offset=[-26.25, 58.54, 50.17]
+  wrote public/da-hilg/stanton.minimap.json  144.6 KB
+
+ALL ASSERTIONS PASSED
+  $ node scripts/build_minimap.mjs meemaw
+
+=== Da Hilg minimap build (meemaw) ===
+  offset = [35.350, 59.240, 6.125]  (subtract from world coords)
+  Roads              -> road    244456 tris -> 13230 boundary -> 12825 segs (fill)
+  Driveways          -> drive   24 tris -> 24 boundary -> 24 segs (fill)
+  Driveways_Mapped   -> drive   6756 tris -> 962 boundary -> 886 segs (fill)
+  Sidewalks          -> walk    155636 tris -> 1096 boundary -> 1005 segs (fill)
+  RoadCurbs          -> curb    94160 tris -> 536 boundary -> 396 segs (fill)
+  RoadLines          -> line    930 tris -> 1802 boundary -> 1292 segs (fill)
+  ! Creek mesh not found — no creek on this minimap
+  road  fill: 23705 / 147456 cells set (384x384 grid)
+  drive fill: 1010 / 147456 cells set (384x384 grid)
+  walk  fill: 19074 / 147456 cells set (384x384 grid)
+  curb  fill: 10968 / 147456 cells set (384x384 grid)
+  line  fill: 1860 / 147456 cells set (384x384 grid)
+  water fill: 0 / 147456 cells set (384x384 grid)
+
+=== ASSERTIONS ===
+  [pass] 0 segments + 56617 fill cells
+  [pass] all 6 named road meshes found
+  [pass] bounds contain all segment endpoints
+  [pass] worldHalfExtent = 263 (plausible)
+
+=== SUMMARY ===
+  layer road       0 segments
+  layer drive      0 segments
+  layer walk       0 segments
+  layer curb       0 segments
+  layer line       0 segments
+  layer creek      0 segments
+  bounds  minX=-263 minZ=-242 maxX=202 maxZ=221.5
+  worldHalfExtent=263  offset=[35.35, 59.24, 6.13]
+  wrote public/da-hilg/meemaw.minimap.json  144.6 KB
+
+ALL ASSERTIONS PASSED
+  $ node scripts/build_minimap.mjs xq
+
+=== Da Hilg minimap build (xq) ===
+  offset = [-39.165, 0.980, 31.220]  (subtract from world coords)
+  Roads              -> road    407176 tris -> 21962 boundary -> 19953 segs (fill)
+  Driveways          -> drive   432 tris -> 432 boundary -> 432 segs (fill)
+  Driveways_Mapped   -> drive   59605 tris -> 8413 boundary -> 7655 segs (fill)
+  Sidewalks          -> walk    221868 tris -> 2128 boundary -> 1800 segs (fill)
+  RoadCurbs          -> curb    145104 tris -> 844 boundary -> 437 segs (fill)
+  RoadLines          -> line    1354 tris -> 2600 boundary -> 2012 segs (fill)
+  ! Creek mesh not found — no creek on this minimap
+  road  fill: 24566 / 147456 cells set (384x384 grid)
+  drive fill: 6848 / 147456 cells set (384x384 grid)
+  walk  fill: 19402 / 147456 cells set (384x384 grid)
+  curb  fill: 13816 / 147456 cells set (384x384 grid)
+  line  fill: 1856 / 147456 cells set (384x384 grid)
+  water fill: 0 / 147456 cells set (384x384 grid)
+
+=== ASSERTIONS ===
+  [pass] 0 segments + 66488 fill cells
+  [pass] all 6 named road meshes found
+  [pass] bounds contain all segment endpoints
+  [pass] worldHalfExtent = 345 (plausible)
+
+=== SUMMARY ===
+  layer road       0 segments
+  layer drive      0 segments
+  layer walk       0 segments
+  layer curb       0 segments
+  layer line       0 segments
+  layer creek      0 segments
+  bounds  minX=-266 minZ=-336.5 maxX=345 maxZ=274
+  worldHalfExtent=345  offset=[-39.16, 0.98, 31.22]
+  wrote public/da-hilg/xq.minimap.json  144.6 KB
+
+ALL ASSERTIONS PASSED
+  $ node scripts/build_dahilg_overlay.mjs
+level: folded 46780 wall pts (master + env neighbours) into spawn clearance
+level: streetSpawn=[17.29,0.05,16.29] facing=46.7 clear=10.1m (front-clear)
+level_overlay.glb  8.9 MB  (kept 1437 veg/water nodes, 218 stripped, 554 meshes)  <- 1840-dahill-property-trees.glb
+canyon: folded 38778 wall pts (master + env neighbours) into spawn clearance
+canyon: streetSpawn=[-109.39,0.05,61.58] facing=299.4 clear=10.0m (front-clear)
+canyon_overlay.glb  2.2 MB  (kept 763 veg/water nodes, 31 stripped, 574 meshes)  <- canyon-middle-school-property.glb
+stanton: folded 1164958 wall pts (master + env neighbours) into spawn clearance
+stanton: streetSpawn=[25.66,0.05,72.48] facing=19.5 clear=9.9m (road-grid along=72.1 lateral=26.8)
+stanton_overlay.glb  2.2 MB  (kept 763 veg/water nodes, 157 stripped, 575 meshes)  <- stanton-elementary-property.glb
+meemaw: folded 706450 wall pts (master + env neighbours) into spawn clearance
+meemaw: streetSpawn=[-14.28,0.05,-23.72] facing=211.1 clear=10.7m (front-clear)
+meemaw_overlay.glb  2.2 MB  (kept 763 veg/water nodes, 126 stripped, 575 meshes)  <- meemaw-property.glb
+xq: folded 620588 wall pts (master + env neighbours) into spawn clearance
+xq: streetSpawn=[55.21,0.05,-21.73] facing=111.5 clear=10.6m (front-clear)
+xq_overlay.glb  2.2 MB  (kept 735 veg/water nodes, 33 stripped, 573 meshes)  <- xq-property.glb
+
+======================================================================
+▶ UNITY SOURCE — decode meshopt for editor import
+======================================================================
+  $ node scripts/build_dahilg_unity_assets.mjs
+unity vegetation level.glb: kept 513/1049 tree instances
+unity glb level.glb 210.63 MB <- public/da-hilg/level.glb
+unity vegetation canyon.glb: kept 102/213 tree instances
+unity glb canyon.glb 29.25 MB <- public/da-hilg/canyon.glb
+unity vegetation stanton.glb: kept 89/197 tree instances
+unity glb stanton.glb 40.14 MB <- public/da-hilg/stanton.glb
+unity glb cece.glb 2.29 MB <- public/da-hilg/cece.glb
+unity glb mike.glb 1.93 MB <- public/da-hilg/mike.glb
+unity glb kelli.glb 2.07 MB <- public/da-hilg/kelli.glb
+unity glb drew.glb 1.80 MB <- public/da-hilg/drew.glb
+unity vegetation meemaw.glb: kept 110/213 tree instances
+unity glb meemaw.glb 35.25 MB <- public/da-hilg/meemaw.glb
+unity glb xq.glb 32.47 MB <- public/da-hilg/xq.glb
+unity glb sun3d.glb 0.17 MB <- public/da-hilg/sun3d.glb
+unity glb anims/idle.glb 0.57 MB <- public/da-hilg/anims/idle.glb
+unity glb anims/walk.glb 0.57 MB <- public/da-hilg/anims/walk.glb
+unity glb anims/run.glb 0.38 MB <- public/da-hilg/anims/run.glb
+unity glb anims/jump.glb 0.16 MB <- public/da-hilg/anims/jump.glb
+unity glb anims/jumpalt.glb 0.04 MB <- public/da-hilg/anims/jumpalt.glb
+unity glb anims/dance.glb 0.18 MB <- public/da-hilg/anims/dance.glb
+unity glb anims/wave.glb 0.75 MB <- public/da-hilg/anims/wave.glb
+unity glb anims/cheer.glb 0.75 MB <- public/da-hilg/anims/cheer.glb
+unity glb anims/attack.glb 0.18 MB <- public/da-hilg/anims/attack.glb
+unity glb anims/attack2.glb 0.57 MB <- public/da-hilg/anims/attack2.glb
+unity glb anims/attack3.glb 0.57 MB <- public/da-hilg/anims/attack3.glb
+unity glb anims/attack4.glb 0.03 MB <- public/da-hilg/anims/attack4.glb
+unity glb anims/attack5.glb 0.03 MB <- public/da-hilg/anims/attack5.glb
+unity glb anims/celebrate.glb 0.04 MB <- public/da-hilg/anims/celebrate.glb
+unity glb anims/hit.glb 0.57 MB <- public/da-hilg/anims/hit.glb
+unity glb anims/stumble.glb 0.50 MB <- public/da-hilg/anims/stumble.glb
+unity glb anims/knockdown.glb 0.57 MB <- public/da-hilg/anims/knockdown.glb
+unity glb anims/crawl.glb 0.38 MB <- public/da-hilg/anims/crawl.glb
+unity glb anims/climb.glb 0.38 MB <- public/da-hilg/anims/climb.glb
+unity glb anims/cece_attack.glb 0.04 MB <- public/da-hilg/anims/cece_attack.glb
+unity glb anims/cece_attack2.glb 0.03 MB <- public/da-hilg/anims/cece_attack2.glb
+unity glb anims/cece_attack3.glb 0.03 MB <- public/da-hilg/anims/cece_attack3.glb
+unity glb anims/cece_attack4.glb 0.04 MB <- public/da-hilg/anims/cece_attack4.glb
+unity glb anims/cece_attack5.glb 0.03 MB <- public/da-hilg/anims/cece_attack5.glb
+unity glb anims/cece_celebrate.glb 0.04 MB <- public/da-hilg/anims/cece_celebrate.glb
+unity glb anims/cece_dance.glb 0.04 MB <- public/da-hilg/anims/cece_dance.glb
+unity glb anims/mike_attack.glb 0.15 MB <- public/da-hilg/anims/mike_attack.glb
+unity glb anims/mike_attack2.glb 0.03 MB <- public/da-hilg/anims/mike_attack2.glb
+unity glb anims/mike_attack3.glb 0.03 MB <- public/da-hilg/anims/mike_attack3.glb
+unity glb anims/mike_attack4.glb 0.03 MB <- public/da-hilg/anims/mike_attack4.glb
+unity glb anims/mike_attack5.glb 0.03 MB <- public/da-hilg/anims/mike_attack5.glb
+unity glb anims/mike_celebrate.glb 0.04 MB <- public/da-hilg/anims/mike_celebrate.glb
+unity glb anims/mike_dance.glb 0.08 MB <- public/da-hilg/anims/mike_dance.glb
+unity glb anims/kelli_idle.glb 0.16 MB <- public/da-hilg/anims/kelli_idle.glb
+unity glb anims/kelli_walk.glb 0.16 MB <- public/da-hilg/anims/kelli_walk.glb
+unity glb anims/kelli_attack.glb 0.06 MB <- public/da-hilg/anims/kelli_attack.glb
+unity glb anims/kelli_attack2.glb 0.04 MB <- public/da-hilg/anims/kelli_attack2.glb
+unity glb anims/kelli_attack3.glb 0.03 MB <- public/da-hilg/anims/kelli_attack3.glb
+unity glb anims/kelli_attack4.glb 0.04 MB <- public/da-hilg/anims/kelli_attack4.glb
+unity glb anims/kelli_attack5.glb 0.03 MB <- public/da-hilg/anims/kelli_attack5.glb
+unity glb anims/kelli_celebrate.glb 0.04 MB <- public/da-hilg/anims/kelli_celebrate.glb
+unity glb anims/kelli_dance.glb 0.04 MB <- public/da-hilg/anims/kelli_dance.glb
+unity glb anims/cece_idle.glb 0.04 MB <- public/da-hilg/anims/cece_idle.glb
+unity glb anims/cece_run.glb 0.03 MB <- public/da-hilg/anims/cece_run.glb
+unity glb anims/cece_walk.glb 0.03 MB <- public/da-hilg/anims/cece_walk.glb
+unity glb anims/kelli_hit.glb 0.16 MB <- public/da-hilg/anims/kelli_hit.glb
+unity glb anims/kelli_knockdown.glb 0.16 MB <- public/da-hilg/anims/kelli_knockdown.glb
+unity glb anims/kelli_run.glb 0.03 MB <- public/da-hilg/anims/kelli_run.glb
+unity glb anims/mike_idle.glb 0.04 MB <- public/da-hilg/anims/mike_idle.glb
+unity glb anims/mike_run.glb 0.03 MB <- public/da-hilg/anims/mike_run.glb
+unity glb anims/mike_walk.glb 0.03 MB <- public/da-hilg/anims/mike_walk.glb
+unity glb nibbler-anims/idle.glb 0.57 MB <- public/da-hilg/nibbler-anims/idle.glb
+unity glb nibbler-anims/run.glb 0.38 MB <- public/da-hilg/nibbler-anims/run.glb
+unity glb nibbler-anims/crawl.glb 0.38 MB <- public/da-hilg/nibbler-anims/crawl.glb
+unity glb nibbler-anims/climb.glb 0.38 MB <- public/da-hilg/nibbler-anims/climb.glb
+unity glb nibbler-anims/bite.glb 0.38 MB <- public/da-hilg/nibbler-anims/bite.glb
+unity glb nibbler-anims/jump.glb 0.16 MB <- public/da-hilg/nibbler-anims/jump.glb
+unity glb nibbler-anims/knockdown.glb 0.57 MB <- public/da-hilg/nibbler-anims/knockdown.glb
+Unity Da Hilg assets written to unity/DaHilgUnity/Library/DaHilgUnitySource
+stream: dahill.glb 51.23 MB <- exports/dahill-single.glb (meshopt geometry + jpeg/png textures) +overlay +meta +minimap
+stream: canyon.glb 13.65 MB <- exports/canyon-single.glb (meshopt geometry + jpeg/png textures) +overlay +meta +minimap
+stream: stanton.glb 13.67 MB <- exports/stanton-single.glb (meshopt geometry + jpeg/png textures) +overlay +meta +minimap
+stream: meemaw.glb 10.65 MB <- exports/meemaw-single.glb (meshopt geometry + jpeg/png textures) +overlay +meta +minimap
+stream: xq.glb 13.12 MB <- exports/xq-single.glb (meshopt geometry + jpeg/png textures) +overlay +meta +minimap
+StreamingAssets staged 5/5 streamed level GLB(s) -> unity/DaHilgUnity/Assets/StreamingAssets
+
+======================================================================
+▶ UNITY BUILD — WebGL (streaming + atlas + menus)
+======================================================================
+  $ "/Applications/Unity/Hub/Editor/6000.5.0f1/Unity.app/Contents/MacOS/Unity" -batchmode -quit -projectPath unity/DaHilgUnity -executeMethod DaHilg.Editor.DaHilgProjectBuilder.BuildWebGLExport -logFile unity-build.log
+  split data.unityweb into 7 chunks (28.8 MB total).
+  Unity build verified (success marker present; data.unityweb split for deploy upload).
+
+======================================================================
+▶ DONE
+======================================================================
+elapsed: 13.4 min
+  public/da-hilg/level.glb  178.9 MB
+  public/da-hilg/canyon.glb  24.1 MB
+  public/da-hilg/stanton.glb  37.2 MB
+  public/da-hilg/meemaw.glb  32.0 MB
+  public/da-hilg/xq.glb  24.6 MB
+  data.unityweb parts  4.2 MB first chunk
+  StreamingAssets/dahill.glb  51.2 MB
+  StreamingAssets/canyon.glb  13.7 MB
+  StreamingAssets/stanton.glb  13.7 MB
+  StreamingAssets/meemaw.glb  10.6 MB
+  StreamingAssets/xq.glb  13.1 MB

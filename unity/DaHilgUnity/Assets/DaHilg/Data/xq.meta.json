@@ -9,7 +9,7 @@
   "groundY": 0.845,
   "houseCenter": [
     -39.165,
-    17.592,
+    17.34,
     31.22
   ],
   "houseBox": {
@@ -20,7 +20,7 @@
     ],
     "max": [
       27.425,
-      24.656,
+      24.152,
       23.9
     ]
   },
@@ -73,6 +73,12 @@
       18
     ]
   ],
+  "streetSpawn": [
+    0,
+    0.05,
+    26.9
+  ],
+  "facing": 0,
   "pavedMask": "xq.paved_mask.png",
   "pavedMaskRect": {
     "min": [

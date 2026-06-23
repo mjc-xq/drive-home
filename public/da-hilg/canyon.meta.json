@@ -73,6 +73,12 @@
       18
     ]
   ],
+  "streetSpawn": [
+    0,
+    0.05,
+    26.24
+  ],
+  "facing": 0,
   "pavedMask": "canyon.paved_mask.png",
   "pavedMaskRect": {
     "min": [
