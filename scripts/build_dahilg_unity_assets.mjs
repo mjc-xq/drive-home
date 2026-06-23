@@ -17,7 +17,7 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC = (...p) => path.join(ROOT, 'public', 'da-hilg', ...p);
 
 // Roster manifest = single source of truth for the character set. We derive the character
-// GLB copy list from its ids (cece.glb, mike.glb, drew.glb — kelli is retired, NOT listed).
+// GLB copy list from its ids (cece.glb, mike.glb, kelli.glb players + drew.glb nibbler) — roster-driven.
 const ROSTER = JSON.parse(readFileSync(path.join(ROOT, 'config', 'dahilg-roster.json'), 'utf8'));
 const ROSTER_IDS = ROSTER.characters.map((c) => c.id);
 const EXPORT = (...p) => path.join(ROOT, 'exports', ...p);
@@ -44,7 +44,7 @@ mkdirSync(OUT('nibbler-anims'), { recursive: true });   // nibbler motion set (d
 // PLAYER motion states (shared defaults) -> public/da-hilg/anims/<State>.glb. Pass 2 added the
 // Attack2/Attack3 combo states (15 total).
 const PLAYER_STATES = [
-  'Idle', 'Walk', 'Run', 'Jump', 'Dance', 'Wave', 'Cheer',
+  'Idle', 'Walk', 'Run', 'Jump', 'JumpAlt', 'Dance', 'Wave', 'Cheer',
   'Attack', 'Attack2', 'Attack3', 'Attack4', 'Attack5', 'Celebrate',
   'Hit', 'Stumble', 'Knockdown', 'Crawl', 'Climb',
 ];
