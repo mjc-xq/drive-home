@@ -38,7 +38,10 @@ const MINIMAP_BY_OUT = {
 };
 
 // Keep ONLY vegetation + water. Buildings/ground/roads/terrain live in the single-surface env.
-const KEEP = /(creek|tree|shrub|grass|clump|reed|foliage|bush|plant|hedge|canopy|trunk|fence|gate|rail|railing|barrier)/i;
+// NOTE: grass/clump deliberately EXCLUDED — the user does not want any grass added to levels (the runtime
+// also upscales grass clumps into tall spiky blades, which read as ugly weeds). Trees, creek, reeds,
+// shrubs/bushes and fences stay.
+const KEEP = /(creek|tree|shrub|reed|foliage|bush|plant|hedge|canopy|trunk|fence|gate|rail|railing|barrier)/i;
 
 function refineStreetSpawnFromRoadGrid(out, meta, sx, sz) {
   const minimapName = MINIMAP_BY_OUT[out];
@@ -225,7 +228,10 @@ for (const { out, master } of MASTERS) {
             score += dot/d;
             const along = dx*nx + dz*nz;                    // signed distance out along the normal
             if (along < reach + 4) continue;                // reject points hugging / inside the wall line
-            if (wallClear(r[0], r[1]) < 7) continue;        // reject side-yard roads close to ANY wall
+            // dahill's street is narrow with houses close on both sides, so the normal 7 m clearance gate
+            // rejected every real road vertex and the spawn fell back to a synthesised point between the
+            // buildings. Relax it for dahill so the spawn lands on the actual asphalt (the user's blue dot).
+            if (wallClear(r[0], r[1]) < (out === 'level' ? 3.5 : 7)) continue;
             const err = Math.abs(along - target);
             if (err < bestErr) { bestErr = err; best = r; }
           }
@@ -250,10 +256,32 @@ for (const { out, master } of MASTERS) {
             sx = roadGridRefine.sx;
             sz = roadGridRefine.sz;
           }
-          // dahill's address sits in a deep side-gap, so the auto front-clear point ([17.29,16.29])
-          // lands between the buildings rather than on the street. Nudge the spawn the rest of the way
-          // out along the front normal onto the road (verified: walking forward from there reaches it).
-          if (out === 'level' && chosenN) { sx += chosenN[0] * 14; sz += chosenN[1] * 14; }
+          // Spawn on the NEAREST road vertex directly in front of the house (the real street). The generic
+          // reach+CLEAR point overshoots far past long/large buildings (esp. school campuses) and strands
+          // the player out in a field, so always prefer the closest in-front road.
+          {
+            const nrm = chosenN || normals[0];
+            let bestR = null, bestD = Infinity;
+            for (const r of roads) {
+              const dx = r[0]-cx, dz = r[1]-cz, d = Math.hypot(dx,dz);
+              if (d < 1 || d > 90) continue;
+              if (dx*nrm[0] + dz*nrm[1] < 3) continue;       // in front (street side)
+              if (wallClear(r[0], r[1]) < 3.5) continue;
+              if (d < bestD) { bestD = d; bestR = r; }
+            }
+            if (bestR) { sx = bestR[0] + nrm[0]*2.5; sz = bestR[1] + nrm[1]*2.5; }
+          }
+          // Validate: a real street spawn should be near the house and clear of walls. If it overshot far
+          // (big school campus where reach+CLEAR strands the player in a distant field) or it hugs a wall
+          // (camera would clip a building), fall back to the hand-authored front-yard spawn (meta.spawns[0])
+          // — near the house, facing it, camera clear. dahill/meemaw keep their on-street point.
+          {
+            const distHouse = Math.hypot(sx - hc[0], sz - hc[2]);
+            if ((distHouse > 35 || wallClear(sx, sz) < 5) && Array.isArray(meta.spawns) && meta.spawns[0]) {
+              sx = meta.spawns[0][0] + off[0];
+              sz = meta.spawns[0][2] + off[2];
+            }
+          }
           const lr = [sx-off[0], sz-off[2]];                 // recentered-local x,z
           const lh = [hc[0]-off[0], hc[2]-off[2]];
           const dx = lr[0]-lh[0], dz = lr[1]-lh[1];          // face out from the house toward the street
