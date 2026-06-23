@@ -1,7 +1,24 @@
 # Vercel CANNOT resolve Git LFS (its build checkout has no LFS remote: `git lfs pull` -> "Not in a
 # Git repository"), so any LFS-tracked file deploys as a 130-byte pointer and 404s/crashes at runtime.
 # The Unity game's served binaries (*.unityweb + StreamingAssets/*.glb) therefore MUST be regular git
-# blobs. Only the R3F app's public/da-hilg/*.glb and the non-deployed source GLBs stay in LFS.
+# blobs. The R3F app's deploy-served GLBs (characters + anims under public/da-hilg/) MUST be regular
+# blobs too, or they 404/crash on the live site. Only the non-deployed source/archive GLBs stay in LFS.
 public/da-hilg/*.glb filter=lfs diff=lfs merge=lfs -text
+
+# Deploy-critical R3F playable-character meshes (all < 3MB): keep as REGULAR git blobs (NOT LFS) so
+# Vercel serves real GLBs. xq.glb is intentionally NOT here: at 126MB it exceeds GitHub's 100MB
+# per-file limit, so it stays LFS like the other large level assets (level/canyon/meemaw/stanton).
+public/da-hilg/cece.glb -filter -diff -merge text=auto
+public/da-hilg/drew.glb -filter -diff -merge text=auto
+public/da-hilg/kelli.glb -filter -diff -merge text=auto
+public/da-hilg/mike.glb -filter -diff -merge text=auto
+
+# Deploy-critical R3F animation clips: served at runtime, must be REGULAR git blobs (NOT LFS).
+public/da-hilg/anims/*.glb -filter -diff -merge text=auto
+
 src/assets/anim/kelli-mx-anims.glb filter=lfs diff=lfs merge=lfs -text
 unity/DaHilgUnity/Assets/DaHilg/Art/Levels/*.glb filter=lfs diff=lfs merge=lfs -text
+
+# Non-deployed local Mixamo animation archive (~168MB, 2344 clips): keep in LFS so the flaky push
+# chunks/resumes and these never bloat git history. Never served to any deploy.
+mixamo-animation-library/**/*.glb filter=lfs diff=lfs merge=lfs -text
