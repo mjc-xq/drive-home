@@ -285,7 +285,8 @@ mkdirSync(DATA_DIR, { recursive: true });
 mkdirSync(STREAM_BUILD_DIR, { recursive: true });
 
 function unityStreamSourceName(lv) {
-  return lv.slug === 'dahill' ? 'dahill-single.glb' : `${lv.slug}-single.glb`;
+  // uncompressed editable master lives in its own per-level folder (see docs/LEVEL_GENERATOR.md)
+  return `${lv.slug}/${lv.slug}.level.glb`;
 }
 
 async function buildUnityStreamingGlb(lv) {

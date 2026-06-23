@@ -482,8 +482,11 @@ function proxyMesh(pos, idx, name) {
 scene.add(proxyMesh(terrain.collision.pos, terrain.collision.idx, 'Collision_Terrain'));
 
 // ---- 5) export GLB, then attach the ground textures via gltf-transform --------------
-mkdirSync(R('exports'), { recursive: true });
-const outGlb = R('exports', `${SET.slug}-single.glb`);
+// Each level's uncompressed editable MASTER lands in its OWN folder with a clear name:
+//   exports/<slug>/<slug>.level.glb   (PLAIN glb — Blender/QuickLook readable; the compress step
+// downstream produces the meshopt/webp game assets). See docs/LEVEL_GENERATOR.md.
+mkdirSync(R('exports', SET.slug), { recursive: true });
+const outGlb = R('exports', SET.slug, `${SET.slug}.level.glb`);
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
 const doc = await io.readBinary(new Uint8Array(glb));
 
