@@ -80,7 +80,10 @@ function paintFeatures(canvas, map, network, curbLines, fine) {
   const paint = (rings, rgb, a = 1) => fillPolygon(canvas, rings, { r: rgb[0], g: rgb[1], b: rgb[2], a }, map, { ssY: ss });
   const byKind = (k) => network.surfaces.filter((s) => s.kind === k);
   for (const s of byKind('asphalt')) paint(surfaceRings(s), MAT.asphalt.rgb);
-  for (const s of byKind('driveway')) paint(surfaceRings(s), MAT['asphalt-light'].rgb);
+  // Driveways/parking lots: do NOT flat-grey them. Without painted parking-line detail the grey
+  // [96,96,99] reads as featureless blobs over the real Google aerial; letting the satellite show
+  // through (real lots, stalls, cars) looks far better. Roads keep their asphalt + lane paint.
+  // (Driveways stay in the paved-mask loop below so vegetation is still suppressed on them.)
   for (const cl of curbLines) { const r = bandToRing(cl.line, 0.55); if (r) paint([r], MAT['concrete-curb'].rgb); }
   for (const s of byKind('concrete-sidewalk')) paint(surfaceRings(s), MAT.concrete.rgb);
   for (const s of byKind('crosswalk')) paint(surfaceRings(s), MAT['concrete-light'].rgb);
@@ -135,7 +138,7 @@ export async function bakeGroundAtlas({
   const paintOrm = (rings, rough, ao = 255) =>
     fillPolygon(orm, rings, { rough: Math.round(rough * 255), ao, a: 1 }, ormMap);
   for (const s of byKind('asphalt')) paintOrm(surfaceRings(s), MAT.asphalt.rough);
-  for (const s of byKind('driveway')) paintOrm(surfaceRings(s), MAT['asphalt-light'].rough);
+  // (no driveway ORM override — see albedo note above; the aerial reads as its own surface)
   for (const cl of curbLines) { const r = bandToRing(cl.line, 0.55); if (r) paintOrm([r], MAT['concrete-curb'].rough); }
   for (const s of byKind('concrete-sidewalk')) paintOrm(surfaceRings(s), MAT.concrete.rough);
   for (const s of byKind('crosswalk')) paintOrm(surfaceRings(s), MAT['concrete-light'].rough);
