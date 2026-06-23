@@ -1,0 +1,14 @@
+{
+ "source": "manual (stanton — turn the solar-panel array NE of Building_18 into a solar shade gazebo kids walk under)",
+ "frame": "WORLD XZ (same frame as the master GLB)",
+ "structures": [
+  {
+   "type": "shade",
+   "footprint": [[22.33, -15.13], [32.83, -24.37], [15.67, -43.87], [5.17, -34.63]],
+   "roofClear": 3.0,
+   "postR": 0.16,
+   "roofColor": [0.10, 0.13, 0.30],
+   "note": "solar shade structure — flat solar-navy roof on corner posts, open underneath"
+  }
+ ]
+}
