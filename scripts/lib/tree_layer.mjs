@@ -19,7 +19,10 @@ import path from 'node:path';
 import { emitGroundRibbon, fanDisc, offsetLine, snapCreekToChannel } from '../road_prep.mjs';
 
 const CREEK_WIDTH = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 7.5;
-const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.05;
+// CREEK_DEPTH = how high the FLAT water surface sits ABOVE the channel floor (a ~2 ft creek ≈ 0.5 m).
+// Water finds a level: a flat plane this far above the bed fills the channel bank-to-bank; the banks
+// (higher terrain) naturally occlude the ribbon edges. (Was 0.05 m BELOW the floor → a sliver puddle.)
+const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.5;
 
 const inPoly = (x, z, ring) => {
   let inside = false;
@@ -158,7 +161,7 @@ function flatWaterRibbon(lineW, width, lift, terrainAt, posArr, idxArr) {
     if (run.length < 2) continue;
     const ys = run.map(k => elev[k]).sort((a, b) => a - b);
     const runFloor = ys[Math.floor(0.15 * (ys.length - 1))];
-    const surfaceY = runFloor - lift;
+    const surfaceY = runFloor + lift;   // water surface sits ABOVE the channel floor (flat, fills the channel)
     let prevOff = null;
     for (const k of run) {
       const [x, z] = dense[k], p = dense[Math.max(0, k - 1)], q = dense[Math.min(dense.length - 1, k + 1)];
@@ -243,7 +246,8 @@ export async function buildTreeLayer({
           reedPos.push(x - nx * ww, y, z - nz * ww, x + nx * ww, y, z + nz * ww, x + dx * 0.08, y + h, z + dz * 0.08);
         }
       }
-      if (bankIdx.length) scene.add(mkMesh(bankPos, bankIdx, 0x5a6b46, 'Creek_Banks', { rough: 1.0 }));
+      // Creek_Banks (the olive boundary lip) intentionally NOT emitted — it read as a flat painted
+      // boundary polygon over the aerial ("poop"). The DEM channel + reeds/rocks carry the bank read.
       if (rockIdx.length) scene.add(mkMesh(rockPos, rockIdx, 0x77786f, 'Creek_Rocks'));
       if (reedPos.length) scene.add(mkMesh(reedPos, null, 0x607a3d, 'Creek_Reeds'));
     }
