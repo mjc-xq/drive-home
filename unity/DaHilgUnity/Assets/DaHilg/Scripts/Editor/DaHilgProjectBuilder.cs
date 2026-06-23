@@ -753,6 +753,11 @@ body {
   position: fixed;
   inset: 0;
   background: #05070b;
+  /* Pad to the device safe area so the in-canvas HUD clears the notch / home indicator.
+     UIToolkit can't read env() and Screen.safeArea is inert in WebGL, so the canvas itself
+     is inset (viewport-fit=cover is set on the meta viewport). */
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 #unity-canvas {

@@ -67,5 +67,14 @@ namespace DaHilg
         // Segmented strip cell tuning (mirrors .ssCell.trip / .dashCol).
         public const int FontCellValue = 17;     // bold AGC value sitting under a kicker (.tripNum ≈ 18px)
         public const float StripRadius = 12f;     // thin strip corner — between .actionBtn(10) and .chip(14)
+
+        // ── Top-right action chips (drive .actionBtn icon row) ───────────────────
+        // Small rounded glass chips in a tight row: a glyph over a tiny ALL-CAPS label.
+        // Sized for a ≥44px tap target even at the compact desktop/portrait scale.
+        public const float ChipSize = 50f;        // chip height (also ~min width) — ≥44px tap target
+        public const float ChipSizeTouch = 48f;    // slightly tighter on touch layouts
+        public const float ChipGap = 6f;           // gap between chips in the row
+        public const int FontChipGlyph = 18;      // the unicode glyph line
+        public const int FontChipLabel = 8;        // the tiny ALL-CAPS label under the glyph
     }
 }

@@ -36,6 +36,11 @@ namespace DaHilg
         static readonly int s_CutoffId = Shader.PropertyToID("_Cutoff");
         static readonly int s_AlphaClipId = Shader.PropertyToID("_AlphaClip");
         static readonly int s_ModeId = Shader.PropertyToID("_Mode");
+        // glTFast 6.14.1 Built-in (GLTFAST_BUILTIN_RP) material property ids. The Built-in
+        // glTF shaders expose baseColorFactor/alphaCutoff/baseColorTexture (NOT _BaseColor/_Cutoff),
+        // so the _-prefixed writes above silently no-op on them. These are the real slots.
+        static readonly int s_GltfBaseColorId = Shader.PropertyToID("baseColorFactor");
+        static readonly int s_GltfAlphaCutoffId = Shader.PropertyToID("alphaCutoff");
         static readonly HashSet<Collider> s_LevelColliders = new HashSet<Collider>();
         static readonly HashSet<Material> s_ConfiguredVegetationMaterials = new HashSet<Material>();
         static readonly HashSet<Material> s_DetailNormaledTerrainMaterials = new HashSet<Material>();
@@ -402,8 +407,12 @@ namespace DaHilg
                 0.074f, new Color(0.78f, 0.77f, 0.70f, 1f), 0.28f, (int)RenderQueue.Geometry + 28, false);
             BuildMaskSurfaceOverlay(levelRoot, "PavedOverlay_Lines", s_SurfaceMaskLine, n, minX, minZ, maxX, maxZ,
                 0.084f, new Color(0.95f, 0.72f, 0.18f, 1f), 0.20f, (int)RenderQueue.Geometry + 29, false);
+            // Procedural creek: a FLAT waterline filling the channel (computed inside the builder from
+            // the channel-floor distribution), not a sheet draped over the floor. The `lift` arg is
+            // ignored for water. dahill-only: gated by fillWater cells, so other levels (0 water cells ->
+            // BuildMaskSurfaceOverlay returns false) cannot regress.
             bool water = BuildMaskSurfaceOverlay(levelRoot, "ProceduralCreekWater", s_SurfaceMaskWater, n, minX, minZ, maxX, maxZ,
-                Mathf.Clamp(profile.WaterHeightOffset, 0.045f, 0.16f), new Color(0.10f, 0.46f, 0.78f, 0.96f), 0.88f,
+                0f, new Color(0.10f, 0.46f, 0.78f, 0.96f), 0.88f,
                 (int)RenderQueue.Geometry + 35, true);
             s_ProceduralCreekWaterActive = water;
         }
@@ -442,6 +451,33 @@ namespace DaHilg
         {
             if (bits == null || bits.Length == 0) return false;
 
+            // Flat creek surface. Roads/sidewalks drape over the ground (floor + lift), but standing
+            // water needs ONE flat waterline filling the channel — draping the sheet over the uneven
+            // channel floor is exactly why it never read as a creek. Sample the channel floor under every
+            // water cell, then set the surface near the top of that range so the channel reads as filled
+            // with a flat top (a real creek's surface). Logged so the fill depth can be tuned in-engine.
+            float waterline = 0f;
+            if (water)
+            {
+                List<float> floorYs = new List<float>(2048);
+                for (int wr = 0; wr < n; wr++)
+                    for (int wc = 0; wc < n; wc++)
+                        if (RoadBit(bits, n, wc, wr))
+                        {
+                            float cx = Mathf.Lerp(minX, maxX, (wc + 0.5f) / n);
+                            float cz = Mathf.Lerp(minZ, maxZ, (wr + 0.5f) / n);
+                            floorYs.Add(GroundSpawn(new Vector3(cx, 0f, cz)).y);
+                        }
+                if (floorYs.Count == 0) return false;
+                floorYs.Sort();
+                float Pct(float p) => floorYs[Mathf.Clamp(Mathf.RoundToInt(p * (floorYs.Count - 1)), 0, floorYs.Count - 1)];
+                float floorMin = floorYs[0];
+                // Fill ~82% of the channel footprint (flat top), but guarantee a creek-like minimum depth
+                // at the deepest point so it never collapses back to a thin floor-hugging skin.
+                waterline = Mathf.Max(Pct(0.82f), floorMin + 0.6f);
+                Debug.Log($"[DaHilg] Creek water: cells={floorYs.Count} floorMin={floorMin:F2} median={Pct(0.5f):F2} p82={Pct(0.82f):F2} floorMax={floorYs[floorYs.Count - 1]:F2} -> waterline={waterline:F2} (maxDepth={waterline - floorMin:F2}m)");
+            }
+
             List<Vector3> vertices = new List<Vector3>(8192);
             List<int> triangles = new List<int>(12288);
             for (int row = 0; row < n; row++)
@@ -460,11 +496,16 @@ namespace DaHilg
                     float z0 = Mathf.Lerp(minZ, maxZ, row / (float)n);
                     float z1 = Mathf.Lerp(minZ, maxZ, (row + 1) / (float)n);
 
-                    AddSurfaceQuad(vertices, triangles,
-                        GroundSpawn(new Vector3(x0, 0f, z0)) + Vector3.up * lift,
-                        GroundSpawn(new Vector3(x1, 0f, z0)) + Vector3.up * lift,
-                        GroundSpawn(new Vector3(x1, 0f, z1)) + Vector3.up * lift,
-                        GroundSpawn(new Vector3(x0, 0f, z1)) + Vector3.up * lift);
+                    if (water)
+                        AddSurfaceQuad(vertices, triangles,
+                            new Vector3(x0, waterline, z0), new Vector3(x1, waterline, z0),
+                            new Vector3(x1, waterline, z1), new Vector3(x0, waterline, z1));
+                    else
+                        AddSurfaceQuad(vertices, triangles,
+                            GroundSpawn(new Vector3(x0, 0f, z0)) + Vector3.up * lift,
+                            GroundSpawn(new Vector3(x1, 0f, z0)) + Vector3.up * lift,
+                            GroundSpawn(new Vector3(x1, 0f, z1)) + Vector3.up * lift,
+                            GroundSpawn(new Vector3(x0, 0f, z1)) + Vector3.up * lift);
                 }
             }
 
@@ -476,6 +517,15 @@ namespace DaHilg
                 indexFormat = vertices.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16
             };
             mesh.SetVertices(vertices);
+            if (water)
+            {
+                // Planar world-XZ UVs so the scrolling creek-flow texture (set in ConfigureWaterMaterial,
+                // stretched 5.5x1.6 = ripples elongated along flow) actually maps and animates. Without
+                // UVs the flow texture sampled (0,0) everywhere and the creek read as a dead blue slab.
+                Vector2[] uv = new Vector2[vertices.Count];
+                for (int i = 0; i < vertices.Count; i++) uv[i] = new Vector2(vertices[i].x * 0.05f, vertices[i].z * 0.05f);
+                mesh.SetUVs(0, uv);
+            }
             mesh.SetTriangles(triangles, 0, true);
             mesh.RecalculateBounds();
             mesh.RecalculateNormals();
@@ -983,11 +1033,18 @@ namespace DaHilg
             renderer.shadowCastingMode = isTree ? ShadowCastingMode.On : ShadowCastingMode.Off;
             renderer.receiveShadows = false;
 
-            Material material = renderer.sharedMaterial;
-            if (material != null && s_ConfiguredVegetationMaterials.Add(material))
+            // Configure EVERY submaterial (e.g. the acacia's separate leaf material), not just
+            // sharedMaterial[0]; de-duped via the shared set so each is configured once per session.
+            Material[] materials = renderer.sharedMaterials;
+            if (materials != null)
             {
-                ConfigureVegetationMaterial(material, useCutout);
+                foreach (Material m in materials)
+                {
+                    if (m != null && s_ConfiguredVegetationMaterials.Add(m))
+                        ConfigureVegetationMaterial(m, useCutout);
+                }
             }
+            Material material = renderer.sharedMaterial;
 
             // The overhang cull (absolute-y thresholds tuned for the baked env, whose ground sits
             // near y=0 after its huge span inflates levelScale) WRONGLY hides EVERY overlay tree:
@@ -1017,6 +1074,12 @@ namespace DaHilg
             Color tint = isTree ? new Color(0.20f, 0.42f, 0.16f, 1f) : new Color(0.30f, 0.55f, 0.20f, 1f);
             if (material != null && material.HasProperty(s_BaseColorId)) block.SetColor(s_BaseColorId, tint);
             if (material != null && material.HasProperty(s_ColorId)) block.SetColor(s_ColorId, tint);
+            // glTFast Built-in trees use baseColorFactor, not _BaseColor/_Color. GATE the tint to
+            // dahill's TEXTURED trees only (material carries a baseColorTexture): tinting the other
+            // 4 levels' solid-color placeholder trees would wrongly recolor them.
+            if (material != null && material.HasProperty(s_GltfBaseColorId)
+                && material.HasProperty("baseColorTexture") && material.GetTexture("baseColorTexture") != null)
+                block.SetColor(s_GltfBaseColorId, tint);
             renderer.SetPropertyBlock(block);
         }
 
@@ -1054,6 +1117,9 @@ namespace DaHilg
             if (material.HasProperty("_ZWrite")) material.SetInt("_ZWrite", 1);
             if (material.HasProperty(s_AlphaClipId)) material.SetFloat(s_AlphaClipId, useCutout ? 1f : 0f);
             if (material.HasProperty(s_CutoffId)) material.SetFloat(s_CutoffId, useCutout ? 0.38f : 0.5f);
+            // glTFast Built-in trees use the alphaCutoff slot, not _Cutoff (the write above no-ops
+            // on them). Safe on textureless trees too: their alpha samples to 1.0 so clip never fires.
+            if (material.HasProperty(s_GltfAlphaCutoffId)) material.SetFloat(s_GltfAlphaCutoffId, useCutout ? 0.4f : 0.5f);
             material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
             if (useCutout) material.EnableKeyword("_ALPHATEST_ON");
             else material.DisableKeyword("_ALPHATEST_ON");
