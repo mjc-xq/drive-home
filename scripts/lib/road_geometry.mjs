@@ -14,13 +14,17 @@
 //   Roads_curb       RAISED curb lip (top face + vertical faces) along every curb line
 //   Roads_markings   proud lane paint (double-yellow / dashes / edge lines / stop bars / xwalk stripes)
 
-const ASPHALT_Y   = 0.030;   // carriageway sits just proud of the painted bed
-const DRIVEWAY_Y  = 0.028;
-const SIDEWALK_Y  = 0.055;   // a touch above the road; kept LOW so the slab hugs the grass (no float)
-const CROSSWALK_Y = 0.050;
-const MARKING_Y   = 0.060;   // lane paint rides just above the asphalt geometry
-const CURB_H      = 0.130;   // raised curb lip height
-const SEG_MAX     = 2.0;     // densify polygon edges to <= this (m) so edges follow terrain curvature
+// NOTE: these are a STOPGAP. The robust fix for terrain poking through the road is to FLATTEN the
+// terrain under the carriageway (the DEM road-grade) and/or tessellate the road interior so it
+// conforms to the terrain mesh exactly. Until then, a generous lift clears the terrain micro-relief
+// so the asphalt reads solid (no gray showing through); curbs cover the raised edge.
+const ASPHALT_Y   = 0.11;    // carriageway lifted clear of terrain bumps (was 0.03 -> terrain poked through)
+const DRIVEWAY_Y  = 0.10;
+const SIDEWALK_Y  = 0.11;
+const CROSSWALK_Y = 0.125;
+const MARKING_Y   = 0.14;    // lane paint rides just above the asphalt geometry
+const CURB_H      = 0.17;    // raised curb lip top — above the lifted asphalt
+const SEG_MAX     = 1.0;     // densify polygon edges to <= this (m) so edges follow terrain curvature
 
 const COL = {
   asphalt:        [0.205, 0.205, 0.220],
