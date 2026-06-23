@@ -217,12 +217,16 @@ export function buildBuildingLayer({
   // Seat the floor AT/just-below the LOW grade (10th-pct, spike-robust) so houses sit ON the lot,
   // BUT never more than BASE_CLAMP below the footprint's EDGE-median grade — so a creek-channel
   // (or any steep grade break crossed by the footprint) can't sink the house off its pad.
-  const BASE_CLAMP = 1.0;
   const buildingBase = (ringW) => {
+    // Seat the floor at the PERIMETER (edge) grade where the building actually meets the ground —
+    // NOT the interior 10th-pct low. The old low-seat buried the uphill side wherever terrain rose
+    // or roads were graded up (the "buildings lower than the surface" bug, worst in xq downtown).
+    // Clamp to the interior low so a perimeter berm can't float the whole pad; the foundation skirt
+    // (MAX_FOUNDATION) covers any downhill gap.
     const ys = footprintTerrainSamples(ringW).sort((a, b) => a - b);
     const lo = ys[Math.min(ys.length - 1, Math.floor(0.10 * (ys.length - 1)))];
     const edgeMed = median(footprintEdgeSamples(ringW));
-    return Math.max(lo, edgeMed - BASE_CLAMP) - 0.12;
+    return Math.max(lo, edgeMed) - 0.12;
   };
 
   // ---- roof generators -----------------------------------------------------------------

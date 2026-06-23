@@ -50,7 +50,7 @@ const SETS = {
   canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
   stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
-  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: true },
+  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: true, photorealMinH: 4 },
 };
 const SET = SETS[LEVEL] || SETS.dahill;
 const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
@@ -238,10 +238,13 @@ if (SET.photoreal) {
     console.warn(`  ! photoreal GLB missing (${path.relative(ROOT, prPath)}) — falling back to extruded towers`);
   } else {
     try {
-      // (a) tall footprints (towers): b.h > 20. World polygon via w2; remember their ib + centroid.
+      // (a) footprints to cover with photoreal: b.h > photorealMinH (default 20 = towers only).
+      // xq sets it low (4) so SHORT downtown buildings also get the real photogrammetry mesh —
+      // which is also seated on the terrain, fixing the "buildings sink below the surface" look.
+      const MIN_PR_H = SET.photorealMinH ?? 20;
       const tallPolys = [];                      // [{ib, ring:[[x,z]...], cen:[x,z]}]
       (S.buildings || []).forEach((b, ib) => {
-        if (!b || !b.p || b.p.length < 3 || !(b.h > 20)) return;
+        if (!b || !b.p || b.p.length < 3 || !(b.h > MIN_PR_H)) return;
         const ring = b.p.map(([e, n]) => w2(e, n));
         const cen = ring.reduce((a, p) => [a[0] + p[0] / ring.length, a[1] + p[1] / ring.length], [0, 0]);
         tallPolys.push({ ib, ring, cen });

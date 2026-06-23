@@ -45,7 +45,8 @@ mkdirSync(OUT('nibbler-anims'), { recursive: true });   // nibbler motion set (d
 // Attack2/Attack3 combo states (15 total).
 const PLAYER_STATES = [
   'Idle', 'Walk', 'Run', 'Jump', 'Dance', 'Wave', 'Cheer',
-  'Attack', 'Attack2', 'Attack3', 'Hit', 'Stumble', 'Knockdown', 'Crawl', 'Climb',
+  'Attack', 'Attack2', 'Attack3', 'Attack4', 'Attack5', 'Celebrate',
+  'Hit', 'Stumble', 'Knockdown', 'Crawl', 'Climb',
 ];
 // PER-CHARACTER OVERRIDE files (Pass 2, design C) -> public/da-hilg/anims/<id>_<state>.glb. Derived
 // from the roster manifest `clips` map (the source of truth) so this stays in lockstep with the

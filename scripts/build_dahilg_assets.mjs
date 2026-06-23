@@ -630,22 +630,26 @@ const PLAYER_OVERRIDES = [
   { id: 'kelli', key: 'Idle',      src: LIB('locomotion/idle/Bouncing_Fight_Idle_With_Guard_Up.glb'), clip: 'Bouncing_Fight_Idle_With_Guard_Up' },
   { id: 'kelli', key: 'Walk',      src: LIB('locomotion/walk/Female_Ninja_Walk_Forward_Arc_Left.glb'), clip: 'Female_Ninja_Walk_Forward_Arc_Left', stripRootXZ: true, loop: true },
   { id: 'kelli', key: 'Run',       src: LIB('locomotion/run/Female_Ninja_Run.glb'), clip: 'Female_Ninja_Run', stripRootXZ: true, loop: true },
+  // kelli — high-kick striker, all GROUNDED standing kicks (Hips stay at rest so the Y-flatten
+  // keeps her feet planted; true aerial kicks need foot-IK, a deferred Tier-2 follow-up).
   { id: 'kelli', key: 'Attack',    src: LIB('combat/unarmed/attacks/Mma_High_Kick.glb'), clip: 'Mma_High_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'kelli', key: 'Attack2',   src: LIB('combat/unarmed/attacks/Spinning_Flip_Kick.glb'), clip: 'Spinning_Flip_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'kelli', key: 'Attack3',   src: LIB('combat/unarmed/attacks/Flying_Hurricane_Kick.glb'), clip: 'Flying_Hurricane_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'kelli', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Flying_Sidekick_From_A_Run.glb'), clip: 'Flying_Sidekick_From_A_Run', stripRootXZ: true, noLoop: true },
-  { id: 'kelli', key: 'Attack5',   src: LIB('combat/unarmed/attacks/Flying_Bicycle_Kick.glb'), clip: 'Flying_Bicycle_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'kelli', key: 'Celebrate', src: LIB('emotes/Ecstatic_Jumping_With_Both_Legs_And_Arms.glb'), clip: 'Ecstatic_Jumping_With_Both_Legs_And_Arms', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack2',   src: LIB('combat/unarmed/attacks/A_Roundhouse_Kick_To_The_Side_Of_An_Opponent.glb'), clip: 'A_Roundhouse_Kick_To_The_Side_Of_An_Opponent', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack3',   src: LIB('combat/unarmed/attacks/Double_Front_Snap_Kick.glb'), clip: 'Double_Front_Snap_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Kicking_With_Lead_Foot.glb'), clip: 'Kicking_With_Lead_Foot', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Attack5',   src: LIB('combat/unarmed/attacks/Capoeira_High_Kick.glb'), clip: 'Capoeira_High_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'kelli', key: 'Celebrate', src: LIB('emotes/Victory_From_A_Boxing_Win.glb'), clip: 'Victory_From_A_Boxing_Win', stripRootXZ: true, noLoop: true },
   { id: 'kelli', key: 'Dance',     src: LIB('dance/Bboy_Hip_Hop_Variation_One.glb'), clip: 'Bboy_Hip_Hop_Variation_One', loop: true },
   // cece — BREAKDANCE-FIGHTER: capoeira kicks + leg sweep, breakdance finisher, capoeira idle
   { id: 'cece', key: 'Idle',      src: LIB('locomotion/idle/Capoeira_Idle.glb'), clip: 'Capoeira_Idle' },
   { id: 'cece', key: 'Walk',      src: LIB('locomotion/walk/Walking_With_A_Swagger.glb'), clip: 'Walking_With_A_Swagger', stripRootXZ: true, loop: true },
   { id: 'cece', key: 'Run',       src: LIB('locomotion/run/Female_Run_Forward.glb'), clip: 'Female_Run_Forward', stripRootXZ: true, loop: true },
+  // cece — capoeira, all GROUNDED standing kicks (no floor/ground-spin moves — those would be
+  // lifted weirdly by the Hips-Y flatten that keeps the feet planted).
   { id: 'cece', key: 'Attack',    src: LIB('combat/unarmed/attacks/Capoeira_Side_Step_Front_Kick.glb'), clip: 'Capoeira_Side_Step_Front_Kick', stripRootXZ: true, noLoop: true },
   { id: 'cece', key: 'Attack2',   src: LIB('combat/unarmed/attacks/Capoeira_Spin_Kick.glb'), clip: 'Capoeira_Spin_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'cece', key: 'Attack3',   src: LIB('combat/unarmed/attacks/360_Leg_Sweep_Kick.glb'), clip: '360_Leg_Sweep_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'cece', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Capoeira_Ground_Spin_Kick.glb'), clip: 'Capoeira_Ground_Spin_Kick', stripRootXZ: true, noLoop: true },
-  { id: 'cece', key: 'Attack5',   src: LIB('dance/Breakdance_Finishing_Combo_Var_1.glb'), clip: 'Breakdance_Finishing_Combo_Var_1', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack3',   src: LIB('combat/unarmed/attacks/Capoeira_Side_Kick.glb'), clip: 'Capoeira_Side_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack4',   src: LIB('combat/unarmed/attacks/Capoeira_Forward_Kick.glb'), clip: 'Capoeira_Forward_Kick', stripRootXZ: true, noLoop: true },
+  { id: 'cece', key: 'Attack5',   src: LIB('combat/unarmed/attacks/Capoeira_Thrust_Kick.glb'), clip: 'Capoeira_Thrust_Kick', stripRootXZ: true, noLoop: true },
   { id: 'cece', key: 'Celebrate', src: LIB('emotes/Turning_Head_To_The_Side_In_A_Cocky_Manner.glb'), clip: 'Turning_Head_To_The_Side_In_A_Cocky_Manner', stripRootXZ: true, noLoop: true },
   { id: 'cece', key: 'Dance',     src: LIB('dance/Breakdance_Flair.glb'), clip: 'Breakdance_Flair', loop: true },
   // drew — FLAMBOYANT/SEDUCTIVE: catwalk strut, open-palm + backhand + elbow combo, jazz kick, kiss taunt
