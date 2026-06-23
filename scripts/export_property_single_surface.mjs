@@ -11,6 +11,7 @@
 //   level (dahill default) selects the input set; output -> exports/<slug>-single.glb (+ sidecars)
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -50,7 +51,7 @@ const SETS = {
   canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
   stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
-  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: true, photorealMinH: 4 },
+  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: false },
 };
 const SET = SETS[LEVEL] || SETS.dahill;
 const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
@@ -461,6 +462,26 @@ for (const m of doc.getRoot().listMaterials()) {
 }
 writeFileSync(outGlb, Buffer.from(await io.writeBinary(doc)));
 console.log(`wrote ${path.relative(ROOT, outGlb)} (${(statSync(outGlb).size / 1e6).toFixed(1)} MB)`);
+
+// ---- 5b) DAHILL OWNER-LOT FENCES (post-step): tile the back/side-yard fence runs onto the
+// just-written single-surface GLB via Blender. dahill-only — the runs are hardcoded in
+// dahill's world frame + DEM, so we never run it for the other levels (place_fences.py also
+// self-guards on the scene slug). Blender re-exports raw (no meshopt); build_dahilg_assets
+// re-compresses, and the required collision/House_walls nodes survive the round-trip.
+if (LEVEL === 'dahill') {
+  const BLENDER = process.env.BLENDER || '/Applications/Blender.app/Contents/MacOS/Blender';
+  if (existsSync(BLENDER)) {
+    try {
+      console.log('fences: tiling dahill back/side-yard runs via Blender...');
+      execFileSync(BLENDER, ['--background', '--python', R('scripts/place_fences.py'), '--', outGlb],
+        { stdio: ['ignore', 'inherit', 'inherit'] });
+    } catch (e) {
+      console.warn('  ! fence post-step failed (continuing without fences):', e.message);
+    }
+  } else {
+    console.warn(`  ! Blender not found at ${BLENDER}; skipping dahill fences`);
+  }
+}
 
 // ---- 6) surface annotation sidecar (vegetation) ------------------------------------
 const buildingFootprintsWorld = (S.buildings || []).map(b => (b.p || []).map(([e, n]) => w2(e, n)));

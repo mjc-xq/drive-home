@@ -83,12 +83,8 @@ RUNS = [
     # bank, inside the property, off the creek ribbon.
     {"name": "FenceRed", "glb": f"{DL}/Fence.glb",
      "polyline": [[-28.83, -22.64], [-17.11, -39.91]]},
-    # front-yard picket on the DOOR half (SW); garage is the road/NE end. ONE straight
-    # ~5 m run (matches the picket asset's section length so it tiles as a clean,
-    # undistorted picket, not a yawed corner blob), offset ~2 m into the front yard;
-    # the open NE end is the GATE on the door->driveway path.
-    {"name": "FenceBlack", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[4.5, -11.3], [7.6, -7.2]]},
+    # NOTE: the old FenceBlack front-yard picket run was dropped per the owner — fences
+    # belong in the BACK/SIDE yards, not across the front of the house.
 ]
 
 # per-asset unit scale (-> meters), whether the native run axis is Y not X, and a
@@ -235,32 +231,45 @@ def point_at(pl, cum, s):
     return (pl[-1][0], pl[-1][1])
 
 
+# tiny end-overlap so adjacent panels share their seam even if an asset's visible
+# rails/pickets sit a hair inside its bound-box edge — kills hairline gaps without
+# a visible double post.
+OVERLAP = 1.03
+
+
 def emit(src, name, p0, p1, L, n):
     """Place one panel spanning world points p0->p1 (a single resampled span of the
-    run). Fitted in X to the span length, yawed to the chord, and PITCHED about its
-    run axis so its base follows the terrain slope between p0 and p1 (no float/bury
-    on banks). The panel origin (local X=0, base Z=0) sits on grade at p0."""
+    run). The panel is oriented by an explicit 3D basis: local +X is mapped to the
+    FULL 3D run direction (including the terrain rise from p0 to p1), so the far end
+    lands EXACTLY on grade at p1 and the next panel — which starts at that same p1 —
+    meets it with no gap. (The old Euler pitch-about-world-Y only worked for an
+    axis-aligned run; every Dahill run is ~45 deg diagonal, so it tilted the panel
+    sideways -> floats, buries, and seams that don't meet.) Local +Z is the panel's
+    up, tilting with the slope; local +Y (thickness) stays horizontal."""
     x0, z0 = p0; x1, z1 = p1
-    dx, dz = x1 - x0, z1 - z0
-    span = math.hypot(dx, dz)
-    if span < 1e-6:
+    if math.hypot(x1 - x0, z1 - z0) < 1e-6:
         return None
-    ux, uz = dx / span, dz / span
-    y0 = terrain_at(x0, z0)
-    y1 = terrain_at(x1, z1)
-    yaw = math.atan2(-uz, ux)                      # world (x,z)->Blender (x,-z)
-    # tilt base to follow the slope: with mode 'ZYX' the local +X (run) far end
-    # rises by -sin(ry)*L, so negate so the panel end lands at the uphill height.
-    pitch = -math.atan2(y1 - y0, span)
+    # world glTF (X, up, Z) -> Blender (X, -Z, up); sample terrain for the up coord.
+    p0b = mathutils.Vector((x0, -z0, terrain_at(x0, z0)))
+    p1b = mathutils.Vector((x1, -z1, terrain_at(x1, z1)))
+    run = p1b - p0b
+    span3 = run.length
+    if span3 < 1e-6:
+        return None
+    ax = run / span3                               # local +X -> 3D run (slope incl.)
+    up = mathutils.Vector((0.0, 0.0, 1.0))
+    ay = up.cross(ax)                              # local +Y -> horizontal, perp to run
+    ay = ay.normalized() if ay.length > 1e-6 else mathutils.Vector((0.0, 1.0, 0.0))
+    az = ax.cross(ay).normalized()                # local +Z -> panel up (tilts w/ slope)
+    basis = mathutils.Matrix((ax, ay, az)).transposed().to_4x4()  # columns = ax,ay,az
     inst = src.copy()                              # separate object, shared mesh
     coll.objects.link(inst)
     inst.hide_set(False)
     inst.parent = parent
     inst.name = f"{name}_{n:04d}"
-    inst.rotation_mode = 'ZYX'                     # apply yaw(Z) first, then pitch(Y)
-    inst.rotation_euler = (0.0, pitch, yaw)
-    inst.scale = (span / L, 1.0, 1.0)              # X-fit; height/posts stay upright
-    inst.location = (x0, -z0, y0)                  # base on terrain at the span start
+    sx = (span3 / L) * OVERLAP                     # X-fit (+overlap); thickness/height native
+    inst.matrix_world = (mathutils.Matrix.Translation(p0b) @ basis
+                         @ mathutils.Matrix.Diagonal((sx, 1.0, 1.0, 1.0)))
     return inst
 
 
@@ -273,8 +282,10 @@ def place(run):
     # ~0.35 m stubs) into full-length panels instead of crushing each segment to a
     # spiky fragment, and gives clean even panels that terminate exactly at the end.
     # Cap the panel length at PANEL_MAX so panels stay short enough to TRACK CORNERS
-    # (each panel is a chord of an arc-length span; long panels would cut bends).
-    PANEL_MAX = 6.0
+    # AND the terrain (each panel is a straight chord between two grade samples; a long
+    # chord floats over bumps / buries in dips between its endpoints). 3 m hugs a yard's
+    # gentle undulation closely while keeping picket spacing believable.
+    PANEL_MAX = 3.0
     cum, total = cum_lengths(pl)
     if total < 1e-6:
         counts[name] = n
