@@ -62,7 +62,7 @@ namespace DaHilg
         int m_ComboStep;
         // Combo strike clips indexed by m_ComboStep (0/1/2). Must match the player
         // states added in DaHilgProjectBuilder.s_CharacterAnimationStates.
-        static readonly string[] s_ComboStates = { "Attack", "Attack2", "Attack3" };
+        static readonly string[] s_ComboStates = { "Attack", "Attack2", "Attack3", "Attack4", "Attack5" };
         static readonly string[] s_DanceStates = { "Dance", "DanceAlt", "DanceAlt2" };
         static readonly string[] s_WalkStates = { "Walk", "WalkAlt" };
         float m_StaggerUntil;
@@ -373,7 +373,7 @@ namespace DaHilg
             m_ComboStep = (m_ComboStep + 1) % s_ComboStates.Length;
             m_LastMeleeStartedAt = now;
             m_EmoteUntil = 0f;
-            SetAnimatorSpeed(step == 2 ? 1.18f : 1f, Time.deltaTime);
+            SetAnimatorSpeed(step >= 3 ? 1.18f : 1f, Time.deltaTime);
             // 3-hit combo: first swing is Attack, then Attack2/Attack3 while chained.
             // PlayAnim is HasState-guarded, so older controllers fall back safely.
             PlayAnim(ResolveFirstAvailable(s_ComboStates[step], "Attack"), 0.05f);
@@ -693,7 +693,12 @@ namespace DaHilg
                     return 2.4f;
                 case "Wave": return 1.45f;
                 case "Cheer": return 1.6f;
-                case "Attack": return 1.05f;
+                case "Celebrate": return 1.6f;   // victory taunt
+                case "Attack":
+                case "Attack2":
+                case "Attack3":
+                case "Attack4": return 1.05f;
+                case "Attack5": return 1.25f;    // finisher reads a touch longer
                 default: return 1.2f;
             }
         }

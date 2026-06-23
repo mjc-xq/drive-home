@@ -53,6 +53,9 @@ namespace DaHilg.Editor
             "Attack",
             "Attack2",
             "Attack3",
+            "Attack4",
+            "Attack5",
+            "Celebrate",
             "Hit",
             "Knockdown",
             "Crawl",
@@ -222,6 +225,16 @@ namespace DaHilg.Editor
             "Wave",
             "Cheer",
             "Attack",
+            // The full 5-hit combo + the victory taunt must flatten Hips-Y like the base Attack, or
+            // strikes 2-5 ship their raw Mixamo Hips dip and the feet sink through the mesh (the
+            // foot-through-ground bug). Listed by LITERAL state name — NOT via a CanonicalStateName
+            // alias, which would also collapse SourceClipCandidates' per-character clip lookup.
+            "Attack2",
+            "Attack3",
+            "Attack4",
+            "Attack5",
+            "Celebrate",
+            "Crawl",
             "Hit",
             "Stumble"
         };
@@ -232,6 +245,11 @@ namespace DaHilg.Editor
             "Wave",
             "Cheer",
             "Attack",
+            "Attack2",
+            "Attack3",
+            "Attack4",
+            "Attack5",
+            "Celebrate",
             "Hit"
         };
         // Emote/idle states whose feet should stay planted near the ground. Dance and Attack are
@@ -305,6 +323,11 @@ namespace DaHilg.Editor
             PlayerSettings.productName = "Da Hilg Unity";
             PlayerSettings.companyName = "Da Hilg";
             PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.WebGL, "com.dahilg.unity");
+            // glTFast needs the SAME defines on WebGL as the desktop build (BuildMacStandalone sets
+            // them): GLTFAST_BUILTIN_RP for the Built-in RP, and GLTFAST_KEEP_MESH_DATA so streamed
+            // terrain meshes stay READABLE and bake MeshColliders — without it the WebGL build strips
+            // the mesh CPU data, the collider is skipped, and actors fall THROUGH the streamed ground.
+            PlayerSettings.SetScriptingDefineSymbols(NamedBuildTarget.WebGL, "GLTFAST_BUILTIN_RP;GLTFAST_KEEP_MESH_DATA");
             PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
             PlayerSettings.WebGL.dataCaching = true;
             PlayerSettings.WebGL.decompressionFallback = true;
