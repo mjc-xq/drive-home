@@ -90,6 +90,13 @@ function mul4(a, b) {
 }
 
 const MS = existsSync(pick('map_surfaces_osm.json')) ? JSON.parse(readFileSync(pick('map_surfaces_osm.json'), 'utf8')) : {};
+// MANUAL paving suppression: drop specific OSM driveway/parking polygons that are actually BUILDINGS
+// (re-added via manual_buildings.json) so the pipeline stops painting them as pavement. Keyed by OSM
+// id — level-agnostic + precise. (stanton 569765775+558986022 = the 4-portables footprint mis-read as parking.)
+const SUPPRESS_PAVING_IDS = new Set([569765775, 558986022]);
+for (const k of ['drivewayPolygons', 'parkingAreas', 'driveways']) {
+  if (Array.isArray(MS[k])) MS[k] = MS[k].filter((s) => !SUPPRESS_PAVING_IDS.has(s.id));
+}
 const AB = JSON.parse(readFileSync(pick('google_aerial.json'), 'utf8'));
 const aerialPath = pick('google_aerial.jpg');
 
@@ -192,6 +199,18 @@ const filled = await fillMissingBuildings({
   S, parcels: fillParcels, aerialPath, aerialBounds: AB, C, demRect: terrain.demRect, w2, env: fillEnv,
 }).catch(e => { console.warn('  ! fill-missing skipped:', e.message); return null; });
 if (filled) { S.buildings = filled.buildings; console.log(`fill-missing: +${filled.added} buildings (${filled.notes})`); }
+
+// MANUAL buildings sidecar: hand-authored footprints the detector missed or mis-read (e.g. school
+// portables). ENU `p` like scene.json; NO `r` field -> flat roof (correct for portables). Appended at
+// the END so existing Building_<ib> labels stay stable. Reusable for any level (place its sidecar).
+{
+  const manualPath = R('exports', SET.slug, 'manual_buildings.json');   // hand edits live in the TRACKED per-level folder
+  if (existsSync(manualPath)) {
+    const mb = JSON.parse(readFileSync(manualPath, 'utf8')).buildings || [];
+    for (const b of mb) if (Array.isArray(b.p) && b.p.length >= 3) S.buildings.push({ p: b.p, h: b.h ?? 3.3 });
+    if (mb.length) console.log(`manual buildings: +${mb.length} (${path.basename(manualPath)})`);
+  }
+}
 
 // CREEK-CHANNEL EXCLUSION: no building belongs in the creekbed. Drop any footprint whose centroid
 // sits within the creek channel (CREEK_KEEPOUT m of the snapped centreline) — removes both stray

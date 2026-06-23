@@ -1,0 +1,106 @@
+{
+ "source": "manual (stanton portables — added over the mis-detected parking-aisle footprint between Building_16/19/189)",
+ "frame": "ENU [e,n] like scene.json buildings (w2 applied at export)",
+ "buildings": [
+  {
+   "id": "stanton_portable_1",
+   "kind": "portable",
+   "p": [
+    [
+     -2280.17,
+     1938.88
+    ],
+    [
+     -2264.86,
+     1945.17
+    ],
+    [
+     -2260.93,
+     1936.4
+    ],
+    [
+     -2276.31,
+     1930.24
+    ]
+   ],
+   "h": 3.3,
+   "roof": "flat",
+   "note": "public-school portable classroom (flat roof)"
+  },
+  {
+   "id": "stanton_portable_2",
+   "kind": "portable",
+   "p": [
+    [
+     -2275.97,
+     1929.41
+    ],
+    [
+     -2260.59,
+     1935.57
+    ],
+    [
+     -2256.65,
+     1926.79
+    ],
+    [
+     -2272.1,
+     1920.77
+    ]
+   ],
+   "h": 3.3,
+   "roof": "flat",
+   "note": "public-school portable classroom (flat roof)"
+  },
+  {
+   "id": "stanton_portable_3",
+   "kind": "portable",
+   "p": [
+    [
+     -2271.77,
+     1919.94
+    ],
+    [
+     -2256.32,
+     1925.96
+    ],
+    [
+     -2252.38,
+     1917.19
+    ],
+    [
+     -2267.9,
+     1911.3
+    ]
+   ],
+   "h": 3.3,
+   "roof": "flat",
+   "note": "public-school portable classroom (flat roof)"
+  },
+  {
+   "id": "stanton_portable_4",
+   "kind": "portable",
+   "p": [
+    [
+     -2267.57,
+     1910.47
+    ],
+    [
+     -2252.05,
+     1916.36
+    ],
+    [
+     -2248.1,
+     1907.58
+    ],
+    [
+     -2263.69,
+     1901.83
+    ]
+   ],
+   "h": 3.3,
+   "roof": "flat",
+   "note": "public-school portable classroom (flat roof)"
+  }
+ ]
+}
