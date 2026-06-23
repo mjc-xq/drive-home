@@ -298,13 +298,15 @@ export function Level({ onReady }) {
   // Hide proxies/LOD + tune materials once (full anisotropy from the live GPU caps).
   useMemo(() => processScene(scene, gl.capabilities.getMaxAnisotropy()), [scene, gl]);
 
-  // Photo-facade toggle: the SV photos are SEPARATE overlay quads (nodes named 'SVFacade_page*')
-  // riding in front of the always-present windowed-stucco walls. Flip every SVFacade* node's
-  // visibility as a group — ON (default) the photos cover the windows; OFF reveals the windowed
-  // stucco wall underneath (no geometry goes missing). Re-runs when the toggle or scene changes.
+  // Photo-facade toggle: the SV photos are SEPARATE, flush quad meshes (the exporter names them
+  // 'Buildings_facade_page*'; older builds used 'SVFacade_page*') riding on the wall plane with the
+  // windowed-stucco wall recessed just behind them. Flip every facade-page node's visibility as a
+  // group — ON (default) the photos show; OFF reveals the windowed stucco wall underneath (no
+  // geometry goes missing). Re-runs when the toggle or scene changes.
   useEffect(() => {
     scene.traverse((o) => {
-      if (o.isMesh && (o.name || '').startsWith('SVFacade')) o.visible = showFacades;
+      const n = o.name || '';
+      if (o.isMesh && (n.startsWith('Buildings_facade') || n.startsWith('SVFacade'))) o.visible = showFacades;
     });
   }, [scene, showFacades]);
 

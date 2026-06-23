@@ -347,14 +347,15 @@ namespace DaHilg
                 //   - the welded 'Terrain' material gets a tiling detail-normal so asphalt/concrete
                 //     read as a surface (not flat paint) at the driving camera;
                 //   - window-glass nodes get a glassy (low-roughness/metallic) material;
-                //   - SVFacade_page* photo-overlay renderers are collected for SetFacadesVisible
-                //     (left visible by default — photo mode on).
+                //   - Buildings_facade_page* (older builds: SVFacade_page*) photo renderers are
+                //     collected for SetFacadesVisible (left visible by default — photo mode on).
                 if (!isCollisionProxy)
                 {
                     string fname = filter.name;
                     if (lower.StartsWith("terrain")) ApplyTerrainDetailNormal(filter);
                     if (lower.Contains("window")) ApplyGlassSurface(filter);
-                    if (fname.StartsWith("SVFacade", StringComparison.OrdinalIgnoreCase)
+                    if ((fname.StartsWith("Buildings_facade", StringComparison.OrdinalIgnoreCase)
+                         || fname.StartsWith("SVFacade", StringComparison.OrdinalIgnoreCase))
                         && filter.TryGetComponent(out Renderer facadeRenderer))
                     {
                         s_FacadeRenderers.Add(facadeRenderer);
