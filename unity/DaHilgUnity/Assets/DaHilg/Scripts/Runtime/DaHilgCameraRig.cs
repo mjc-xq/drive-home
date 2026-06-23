@@ -45,6 +45,17 @@ namespace DaHilg
         const float k_VisualOcclusionRefreshInterval = 1.25f;
         const float k_VisualOcclusionPollInterval = 0.08f;
         const int k_MaxVisualOccludersHidden = 20;
+        const float k_CanonicalHeight = 1.7f;   // reference rig height (matches DaHilgActor); per-rig pivot scale = BodyHeight / this
+
+        // Scales head/eye/shoulder pivot heights to the target's measured body height so a 1.4m kid and a
+        // 2.0m adult are both framed at the head, not the chest or above the scalp. Clamped to keep extreme
+        // rigs sane. For an exactly-1.7m rig this returns 1.0 → byte-identical framing to before.
+        float HeightScale()
+        {
+            return (m_Target != null && m_Target.BodyHeight > 0.1f)
+                ? Mathf.Clamp(m_Target.BodyHeight / k_CanonicalHeight, 0.75f, 1.25f)
+                : 1f;
+        }
 
         public DaHilgActor Target
         {
@@ -55,7 +66,7 @@ namespace DaHilg
                 m_Target = value;
                 if (m_Target != null && m_FollowTarget != null)
                 {
-                    Vector3 pivot = m_Target.FeetPosition + Vector3.up * 1.5f;
+                    Vector3 pivot = m_Target.FeetPosition + Vector3.up * (1.5f * HeightScale());
                     m_FollowTarget.SetPositionAndRotation(pivot, Quaternion.Euler(Pitch, Yaw, 0f));
                     m_VirtualCamera?.OnTargetObjectWarped(m_FollowTarget, Vector3.zero);
                 }
@@ -75,7 +86,7 @@ namespace DaHilg
             if (m_Target == null || m_FollowTarget == null) return;
             CameraPreset preset = PresetFor(Mode, null);
             m_CurrentDistance = preset.Distance;
-            Vector3 pivot = m_Target.FeetPosition + Vector3.up * preset.PivotHeight;
+            Vector3 pivot = m_Target.FeetPosition + Vector3.up * preset.ResolvePivotHeight(HeightScale());
             m_FollowTarget.SetPositionAndRotation(pivot, Quaternion.Euler(Pitch, Yaw, 0f));
             if (m_VirtualCamera != null)
             {
@@ -288,11 +299,12 @@ namespace DaHilg
                 Yaw = Mathf.LerpAngle(Yaw, Target.FacingYaw, 1f - Mathf.Exp(-m_RecenterRate * dt));
             }
 
-            Vector3 pivot = Target.FeetPosition + Vector3.up * preset.PivotHeight;
+            float pivotHeight = preset.ResolvePivotHeight(HeightScale());
+            Vector3 pivot = Target.FeetPosition + Vector3.up * pivotHeight;
             if (Mode == DaHilgCameraMode.FirstPerson)
             {
                 Quaternion yawOnly = Quaternion.Euler(0f, Yaw, 0f);
-                pivot = Target.FeetPosition + Vector3.up * preset.PivotHeight + yawOnly * Vector3.forward * 0.08f;
+                pivot = Target.FeetPosition + Vector3.up * pivotHeight + yawOnly * Vector3.forward * 0.08f;
             }
 
             Vector3 shakeOffset = Vector3.zero;
@@ -335,7 +347,7 @@ namespace DaHilg
             m_VisualOcclusionPollAt = now + k_VisualOcclusionPollInterval;
 
             Vector3 cameraPos = m_Camera.transform.position;
-            Vector3 targetPos = m_Target.FeetPosition + Vector3.up * 1.12f;
+            Vector3 targetPos = m_Target.FeetPosition + Vector3.up * (1.12f * HeightScale());
             Vector3 sight = targetPos - cameraPos;
             float distance = sight.magnitude;
             if (distance <= 0.2f)
@@ -544,7 +556,8 @@ namespace DaHilg
                 case DaHilgCameraMode.High:
                     return new CameraPreset
                     {
-                        PivotHeight = pivotHeight + 0.55f,
+                        PivotHeight = pivotHeight,
+                        PivotAltitudeOffset = 0.55f,
                         Distance = Mathf.Max(6.2f, thirdDistance + 2.5f),
                         ShoulderOffset = new Vector3(0.12f, 0.42f, 0f),
                         VerticalArm = 0.36f,
@@ -557,7 +570,8 @@ namespace DaHilg
                 case DaHilgCameraMode.TopDown:
                     return new CameraPreset
                     {
-                        PivotHeight = pivotHeight + 0.75f,
+                        PivotHeight = pivotHeight,
+                        PivotAltitudeOffset = 0.75f,
                         Distance = 8.4f,
                         ShoulderOffset = Vector3.zero,
                         VerticalArm = 0f,
@@ -598,7 +612,10 @@ namespace DaHilg
 
         struct CameraPreset
         {
+            // Head/eye-relative base height above the feet; scales with the target's body height.
             public float PivotHeight;
+            // Absolute world-altitude bump for bird's-eye views (High/TopDown); NOT height-scaled.
+            public float PivotAltitudeOffset;
             public float Distance;
             public Vector3 ShoulderOffset;
             public float VerticalArm;
@@ -607,6 +624,10 @@ namespace DaHilg
             public float MinPitch;
             public float MaxPitch;
             public float ChangeSpeed;
+
+            // Final pivot height above the feet: scale the head-relative base, then add the
+            // unscaled bird's-eye altitude offset. For hScale == 1 this equals PivotHeight + PivotAltitudeOffset.
+            public float ResolvePivotHeight(float hScale) => PivotHeight * hScale + PivotAltitudeOffset;
         }
     }
 }

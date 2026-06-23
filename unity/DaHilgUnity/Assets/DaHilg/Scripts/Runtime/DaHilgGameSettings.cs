@@ -83,7 +83,7 @@ namespace DaHilg
         public float ControllerSkinWidth = 0.06f;
         public float GroundProbeHeight = 1.8f;
         public float GroundSnapDistance = 1.25f;
-        public float GroundSkin = 0.05f;
+        public float GroundSkin = 0.06f;   // synonym for ControllerSkinWidth — keep equal (capsule-to-ground gap)
 
         [Header("Camera")]
         public float CameraSensitivity = 0.12f;

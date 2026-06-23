@@ -26,6 +26,7 @@ namespace DaHilg
         const float k_FaceLerp = 12f;
         const float k_GroundNormalLerp = 18f;
         const float k_GroundedTolerance = 0.14f;
+        const float k_CanonicalHeight = 1.7f;   // reference height; per-rig scale = measured / this
 
         CharacterController m_Controller;
         Transform m_VisualRoot;
@@ -48,8 +49,14 @@ namespace DaHilg
         float m_VisualYawOffset;
         float m_BodyHeight = 1.7f;
         float m_BodyRadius = 0.3f;
+        float m_MeasuredHeight = 1.7f;  // raw measured rig height (head-to-sole) at spawn
+        float m_HipHeight = 0.95f;      // measured hip height above the sole at spawn
         float m_VisualGroundOffset;
         float m_BoneAboveSole = 0.018f; // per-rig: foot SOLE drop below the foot BONE (measured at spawn)
+        // The single source of truth for the capsule-to-ground gap: the CharacterController rests with its
+        // capsule bottom exactly skinWidth above the collider, so the gap IS skinWidth. Every snap/rescue/
+        // grounded-check rest target routes through this (was two disagreeing fields, GroundSkin vs skinWidth).
+        float CapsuleGroundGap => m_Controller != null ? m_Controller.skinWidth : 0.06f;
         bool m_FootPinPrimed;
         string m_CurrentAnim;
         float m_EmoteUntil;
@@ -145,7 +152,19 @@ namespace DaHilg
                 m_Animator = animatorRoot.GetComponent<Animator>();
                 m_LeftFoot = ResolveFootContact(visual.transform, true);
                 m_RightFoot = ResolveFootContact(visual.transform, false);
-                m_BoneAboveSole = MeasureBoneAboveSole(visual.transform);
+                // Measure this rig and RESIZE the capsule to fit it, so different character heights don't
+                // matter — a 1.4m kid and a 2.0m adult each get a capsule/camera sized to their own mesh
+                // (the seed sizing above from settings.PlayerHeight stays for a rig with no skinned mesh).
+                RigMetrics rig = MeasureRig(visual.transform);
+                m_BoneAboveSole = rig.BoneAboveSole;
+                m_MeasuredHeight = rig.FullHeight;
+                m_HipHeight = rig.HipHeight;
+                m_BodyHeight = Mathf.Clamp(rig.FullHeight, 1.1f, 2.6f);
+                m_BodyRadius = Mathf.Clamp(settings.PlayerRadius, 0.16f, m_BodyHeight * 0.18f);
+                m_Controller.height = m_BodyHeight;
+                m_Controller.center = new Vector3(0f, m_BodyHeight * 0.5f, 0f);
+                m_Controller.radius = m_BodyRadius;
+                m_Controller.skinWidth = Mathf.Max(0.035f, settings.ControllerSkinWidth, m_BodyRadius * 0.12f);
                 m_NibblerBones = BuildNibblerBones(visual.transform);
                 VisualGeneration++;
                 if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
@@ -202,15 +221,23 @@ namespace DaHilg
                 ?? FindDeepChild(visualRoot, side + "Foot");
         }
 
-        // Per-rig calibration: how far the foot MESH SOLE hangs below the foot BONE, measured in the
-        // visual's local frame at bind pose. cece/mike/drew differ by ~1cm; guessing one constant for all
-        // was what kept sinking or floating a character. Bakes the skinned mesh once at spawn, finds the
-        // lowest vertex (the sole), and returns its drop below the foot bone. Falls back to a sane default.
-        float MeasureBoneAboveSole(Transform visualRoot)
+        struct RigMetrics { public float BoneAboveSole; public float FullHeight; public float HipHeight; }
+
+        // Per-rig calibration so CHARACTER HEIGHT/PROPORTIONS don't matter: bake the skinned mesh once at
+        // spawn and measure, in the visual's local frame, (1) the foot SOLE drop below the foot bone — so
+        // the foot-plant lands the sole on the ground for any rig (cece/mike/drew differ ~1cm), (2) the full
+        // head-to-sole height — so the capsule/camera fit a kid or an adult, and (3) the hip height. One bake,
+        // three measurements. Falls back to the settings height if there is no skinned mesh.
+        RigMetrics MeasureRig(Transform visualRoot)
         {
+            RigMetrics m = new RigMetrics
+            {
+                BoneAboveSole = 0.018f,
+                FullHeight = m_Settings != null ? m_Settings.PlayerHeight : 1.7f,
+                HipHeight = (m_Settings != null ? m_Settings.PlayerHeight : 1.7f) * 0.55f,
+            };
             Transform footBone = m_LeftFoot != null ? m_LeftFoot : m_RightFoot;
-            if (footBone == null) return 0.018f;
-            float minSoleY = float.PositiveInfinity;
+            float minSoleY = float.PositiveInfinity, maxTopY = float.NegativeInfinity;
             foreach (SkinnedMeshRenderer smr in visualRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
             {
                 if (smr.sharedMesh == null) continue;
@@ -222,12 +249,20 @@ namespace DaHilg
                 {
                     float y = toLocal.MultiplyPoint3x4(verts[i]).y;
                     if (y < minSoleY) minSoleY = y;
+                    if (y > maxTopY) maxTopY = y;
                 }
                 Destroy(baked);
             }
-            if (float.IsInfinity(minSoleY)) return 0.018f;
-            float footLocalY = visualRoot.InverseTransformPoint(footBone.position).y;
-            return Mathf.Clamp(footLocalY - minSoleY, 0f, 0.06f);
+            if (!float.IsInfinity(minSoleY) && !float.IsInfinity(maxTopY))
+            {
+                m.FullHeight = Mathf.Clamp(maxTopY - Mathf.Min(0f, minSoleY), 0.6f, 3.0f);
+                if (footBone != null)
+                    m.BoneAboveSole = Mathf.Clamp(visualRoot.InverseTransformPoint(footBone.position).y - minSoleY, 0f, 0.06f);
+            }
+            Transform hips = FindDeepChild(visualRoot, "Hips");
+            if (hips != null)
+                m.HipHeight = Mathf.Clamp(visualRoot.InverseTransformPoint(hips.position).y - Mathf.Min(0f, minSoleY), 0.3f, 2.0f);
+            return m;
         }
 
         // Back-weighted, off-center bone slots (WORLD-metre offsets) so a swarm distributes over the
@@ -264,7 +299,7 @@ namespace DaHilg
         {
             // Anchors are authored for a ~1.7m rig; scale the WORLD-metre offsets by the real body height
             // so they track a taller/shorter Mixamo rig (e.g. a 1.9m dad) instead of clustering low.
-            float heightScale = m_BodyHeight / 1.7f;
+            float heightScale = m_BodyHeight / k_CanonicalHeight;
             List<BoneAnchor> list = new List<BoneAnchor>(k_BoneSpec.Length);
             for (int i = 0; i < k_BoneSpec.Length; i++)
             {
@@ -818,7 +853,7 @@ namespace DaHilg
             // hair) above the surface so the SOLE of THIS rig rests on the ground.
             float groundY;
             if (TryFindLevelGround(m_Settings, out RaycastHit groundHit)) groundY = groundHit.point.y;
-            else groundY = FeetPosition.y - Mathf.Max(0.01f, m_Settings.GroundSkin);
+            else groundY = FeetPosition.y - CapsuleGroundGap;
             float targetY = groundY + m_BoneAboveSole + 0.004f;
             float correction = targetY - minFootY;
             // Lower enough for a ground-skinned rig to settle, but bounded so one bad foot read can't yank
@@ -860,7 +895,7 @@ namespace DaHilg
             if (m_VerticalVelocity > 0.1f) return false;
             if (!TryFindLevelGround(settings, out RaycastHit hit)) return false;
 
-            float targetY = hit.point.y + Mathf.Max(0.01f, settings.GroundSkin);
+            float targetY = hit.point.y + CapsuleGroundGap;
             float deltaY = targetY - transform.position.y;
             return deltaY >= -Mathf.Max(k_GroundedTolerance, settings.StepOffset)
                 && deltaY <= Mathf.Max(settings.GroundSnapDistance, settings.StepOffset);
@@ -871,7 +906,7 @@ namespace DaHilg
             if (m_Controller == null || !m_Controller.enabled) return false;
             if (!TryFindLevelGround(settings, out RaycastHit hit)) return false;
 
-            float targetY = hit.point.y + Mathf.Max(0.01f, settings.GroundSkin);
+            float targetY = hit.point.y + CapsuleGroundGap;
             float deltaY = targetY - transform.position.y;
             float maxLift = Mathf.Max(settings.GroundSnapDistance * 1.8f, settings.StepOffset + settings.ControllerSkinWidth);
             float maxDrop = Mathf.Max(settings.StepOffset + settings.ControllerSkinWidth, 0.55f);
@@ -901,7 +936,7 @@ namespace DaHilg
             float maxLift = Mathf.Max(8f, settings.GroundProbeHeight * 4f, m_BodyHeight * 6f);
             if (!TryFindRescueGround(settings, maxLift, out RaycastHit hit)) return false;
 
-            float targetY = hit.point.y + Mathf.Max(0.01f, settings.GroundSkin);
+            float targetY = hit.point.y + CapsuleGroundGap;
             float deltaY = targetY - transform.position.y;
             float minLift = Mathf.Max(settings.GroundSnapDistance * 1.85f, settings.StepOffset + settings.ControllerSkinWidth + 0.15f);
             if (deltaY < minLift || deltaY > maxLift) return false;

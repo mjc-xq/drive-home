@@ -1,0 +1,19 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the Da Hilg character bone-name contract. ALL characters (players, NPCs, the nibbler swarm) share ONE canonical skeleton: the standard Mixamo rig with the 'mixamorig:' prefix stripped to plain bone names. This file is consumed by EVERY pipeline stage so the contract cannot drift: scripts/convert_mixamo_fbx.py (CORE_BONES assertion at FBX->GLB convert time), scripts/build_dahilg_assets.mjs (CORE_BONES + NEVER_PRESTRIP at retarget/strip time), and unity/DaHilgUnity/Assets/DaHilg/Scripts/Editor/DaHilgProjectBuilder.cs (validates CanonicalBoneAlias against this file and guards retarget bone-binding at Unity build time). 'root' = the single skeleton root. 'canonicalBones' = the CORE bones present on ALL rigs (finger/thumb/*_End leaf bones differ per rig and are intentionally NOT listed). 'neverPrestrip' = trunk bones that must never be pre-stripped even when a particular rig is missing a leaf, because they carry the waist/neck motion. 'aliases' = donor-rig trunk names mapped onto canonical bones (legacy non-Mixamo donor GLBs name the trunk Spine01/Spine02/neck etc.). Edit HERE and only here; the C# build throws if its CanonicalBoneAlias switch disagrees with this file.",
+  "root": "Hips",
+  "canonicalBones": [
+    "Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
+    "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+    "RightShoulder", "RightArm", "RightForeArm", "RightHand",
+    "LeftUpLeg", "LeftLeg", "LeftFoot",
+    "RightUpLeg", "RightLeg", "RightFoot"
+  ],
+  "neverPrestrip": ["Hips", "Spine", "Spine1", "Spine2", "Neck"],
+  "aliases": {
+    "Spine01": "Spine1",
+    "Spine02": "Spine2",
+    "Spine03": "Spine2",
+    "neck": "Neck",
+    "Neck01": "Neck"
+  }
+}

@@ -715,15 +715,14 @@ export function assertAnimOutputsExist() {
 // GLB we resolve its companion rig and load its skin joint names ONCE. Mapping:
 //   <id>-mx-anims.glb -> <id>-mx.glb (the converted Mixamo body for that id)
 //   any other (donor) GLB -> the donor GLB itself (it carries its own skinned mesh + skin)
-const CORE_BONES = new Set([
-  'Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head',
-  'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
-  'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand',
-  'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot',
-]);
-// Never PRE-STRIP these even if a particular rig is missing a leaf — they carry the trunk
-// motion and stripping one would tear the retarget at the waist/neck.
-const NEVER_PRESTRIP = new Set(['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck']);
+// SINGLE SOURCE OF TRUTH for the bone-name contract: config/dahilg-skeleton.json is shared
+// with the Python FBX converter and the C# Unity build so the canonical bone set can't drift
+// across pipeline stages. CORE_BONES = the trunk/core bones present on every rig; NEVER_PRESTRIP
+// = the trunk bones we must keep even if a rig is missing a leaf (stripping one would tear the
+// retarget at the waist/neck).
+const SKELETON = JSON.parse(readFileSync(SRC('config', 'dahilg-skeleton.json'), 'utf8'));
+const CORE_BONES = new Set(SKELETON.canonicalBones);
+const NEVER_PRESTRIP = new Set(SKELETON.neverPrestrip);
 
 const rigJointsCache = new Map();   // sourceGLB rel path -> Set<boneName>
 function rigGlbForSource(src) {
