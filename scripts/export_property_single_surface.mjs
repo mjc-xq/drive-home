@@ -549,13 +549,15 @@ console.log(`wrote ${path.relative(ROOT, outGlb)} (${(statSync(outGlb).size / 1e
 // dahill's world frame + DEM, so we never run it for the other levels (place_fences.py also
 // self-guards on the scene slug). Blender re-exports raw (no meshopt); build_dahilg_assets
 // re-compresses, and the required collision/House_walls nodes survive the round-trip.
-if (LEVEL === 'dahill') {
+if (LEVEL === 'dahill' && !process.env.SKIP_FENCES) {
   const BLENDER = process.env.BLENDER || '/Applications/Blender.app/Contents/MacOS/Blender';
   if (existsSync(BLENDER)) {
     try {
       console.log('fences: tiling dahill back/side-yard runs via Blender...');
+      // timeout: Blender re-exports the (large) GLB raw which can take ~70s; cap at 4 min so a genuinely
+      // hung Blender (the script has no console) can't block the whole export forever (try/catch continues).
       execFileSync(BLENDER, ['--background', '--python', R('scripts/place_fences.py'), '--', outGlb],
-        { stdio: ['ignore', 'inherit', 'inherit'] });
+        { stdio: ['ignore', 'inherit', 'inherit'], timeout: 240000 });
     } catch (e) {
       console.warn('  ! fence post-step failed (continuing without fences):', e.message);
     }
