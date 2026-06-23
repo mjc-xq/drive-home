@@ -1,8 +1,11 @@
-# Vercel CANNOT resolve Git LFS (its build checkout has no LFS remote: `git lfs pull` -> "Not in a
-# Git repository"), so any LFS-tracked file deploys as a 130-byte pointer and 404s/crashes at runtime.
-# The Unity game's served binaries (*.unityweb + StreamingAssets/*.glb) therefore MUST be regular git
-# blobs. The R3F app's deploy-served GLBs (characters + anims under public/da-hilg/) MUST be regular
-# blobs too, or they 404/crash on the live site. Only the non-deployed source/archive GLBs stay in LFS.
+# NOTE (2026-06-23): Vercel Git LFS support is now ENABLED on this project
+# (https://vercel.com/changelog/git-lfs-support) — Vercel resolves LFS pointers at build time and
+# serves the real binaries, so LFS-tracked files DO deploy correctly now. The de-LFS rules below are
+# kept because they still work AND regular blobs sidestep the flaky-network LFS *upload* problem
+# (see docs/DEPLOY.md), NOT because Vercel can't serve LFS. Files >100 MB must stay LFS (GitHub's
+# regular-blob limit) and now deploy fine once the LFS object reaches the remote.
+# (History: before this, Vercel served LFS as a ~133-byte pointer -> 404/crash, so the deploy-served
+# binaries below — *.unityweb, StreamingAssets/*.glb, and public/da-hilg/ GLBs — were de-LFS'd.)
 public/da-hilg/*.glb filter=lfs diff=lfs merge=lfs -text
 
 # Deploy-critical R3F playable-character meshes (all < 3MB): keep as REGULAR git blobs (NOT LFS) so

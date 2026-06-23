@@ -3,18 +3,25 @@
 How the site deploys, and how to push large assets over this flaky network without
 fighting it for an hour. Read this before touching `public/` binaries.
 
-## The two hard constraints
+## The two constraints (one now relaxed)
 
-1. **Vercel cannot resolve Git LFS.** Its build checkout has no LFS remote
-   (`git lfs pull` → "Not in a Git repository"), so any **LFS-tracked** file is served
-   as a ~133-byte *pointer* and the asset 404s / fails to load at runtime
-   (e.g. the R3F levels showed "3D unavailable", the Unity StreamingAssets streamed garbage).
-   → **Every deploy-served asset MUST be a regular git blob, not LFS.** See `.gitattributes`:
-   the level GLBs (`public/da-hilg/*.glb`), Unity `*.unityweb`, and Unity `StreamingAssets/*.glb`
-   are all de-LFS'd on purpose.
+1. **Vercel Git LFS support is ENABLED** (2026-06-23 — https://vercel.com/changelog/git-lfs-support).
+   Vercel now resolves LFS pointers at build time and serves the real binaries, so LFS-tracked assets
+   deploy correctly. This **removes the old hard rule** that every deploy-served asset had to be a
+   regular git blob. (History: before this, Vercel served LFS files as ~133-byte pointers → 404s /
+   "3D unavailable" / garbage StreamingAssets, which is why the level GLBs, `*.unityweb`, and
+   `StreamingAssets/*.glb` were de-LFS'd in `.gitattributes`.)
+   - Existing deploy assets can stay regular blobs — they work, and regular blobs sidestep the
+     flaky-network LFS *upload* problem (below). No migration is required.
+   - LFS is now a valid choice for deploy assets, and is the **only** option for anything > 100 MB
+     (constraint #2): e.g. `public/da-hilg/level.glb` (~172 MB) can deploy as LFS once its object is
+     uploaded to the remote.
+   - Still verify: a served `content-length: 133` means a **stale pointer** (the LFS object never
+     reached the remote) — push the object (playbook #3) and redeploy.
 
-2. **GitHub rejects single files > 100 MB.** So a deploy asset must be **both** regular-git
-   **and** < 100 MB. Keep level GLBs well under that (see "Keep assets small" below).
+2. **GitHub rejects single *regular* files > 100 MB.** LFS files have no such limit. So: a regular
+   blob must be < 100 MB; anything larger must be LFS (now that Vercel serves LFS). Keep regular level
+   GLBs well under 100 MB (see "Keep assets small" below).
 
 ## The flaky-network push playbook
 
@@ -38,10 +45,21 @@ In rough order of what to reach for:
    The **first attempt often fails** with `LibreSSL ... bad record mac` — just retry; attempt 2–3
    usually lands it. Forcing HTTP/1.1 (not HTTP/2) is the key part for large uploads.
 
-3. **`git lfs push` resumes/chunks.** For genuinely large files that must live in LFS (non-deployed
-   source/archive GLBs), `git lfs push origin main` retries object-by-object and survives drops
-   (a 280 MB LFS push eventually completed in ~3 tries). **Do NOT** use LFS for anything Vercel must
-   serve (constraint #1).
+3. **`git lfs push` survives drops — object-by-object retry.** `git lfs push origin main` (or
+   `git lfs push --object-id origin <oid>` to target one object) retries per object and **banks each
+   completed one**, so a multi-object push finishes across several tries (a 280 MB LFS push landed in
+   ~3 tries; a 31 MB object lands in 1). Now that Vercel resolves LFS (constraint #1) this works for
+   **deploy assets too**, not just archive GLBs. Harden it for the flaky link first:
+   ```bash
+   git config lfs.concurrenttransfers 1     # single stream = fewer connections to drop
+   git config lfs.transfer.maxretries 10    # retry each object many times
+   git config lfs.activitytimeout 120
+   for i in $(seq 1 20); do git lfs push --object-id origin <oid> && break || sleep 8; done
+   ```
+   **Caveat — a single object is NOT byte-resumable:** each retry re-sends the whole object, so a file
+   too big to upload within one stable window (this link drops ~30 s / ~170 MB in) may never complete.
+   Empirically ≤~50 MB lands reliably; ~172 MB needs a lucky window or a trim. For oversized single
+   files, shrink them (compress the facade atlas, playbook below) or push from a stable connection.
 
 4. **Split into ~4 MB parts + reassemble client-side** — the proven pattern for the Unity engine
    data blob: `da-hilg.data.unityweb` is committed as `…part0`…`part6` (exactly 4 MB each) and the
