@@ -95,9 +95,9 @@ const glbs = [
 
 const sourceOverrides = useRawUnityLevelSources
   ? new Map([
-    ['level.glb', EXPORT('1840-dahill-property.glb')],
-    ['canyon.glb', EXPORT('canyon-middle-school-property.glb')],
-    ['stanton.glb', EXPORT('stanton-elementary-property.glb')],
+    ['level.glb', EXPORT('_legacy/1840-dahill-property.glb')],
+    ['canyon.glb', EXPORT('_legacy/canyon-middle-school-property.glb')],
+    ['stanton.glb', EXPORT('_legacy/stanton-elementary-property.glb')],
   ])
   : new Map();
 

@@ -301,7 +301,7 @@ export async function buildTreeLayer({
     const placed = [...fileTrees, ...extraTrees];   // LiDAR-detected trees + procedural front-yard/planting-strip points
     const libDir = (dir && existsSync(path.join(dir, 'tree_lib', 'manifest.json')))
       ? path.join(dir, 'tree_lib')
-      : path.join(ROOT, 'exports/tree_lib');
+      : path.join(ROOT, 'exports/_shared/tree_lib');
     const templates = await loadTreeTemplates(THREE, libDir);
     if (templates && templates.length && placed.length) {
       const treesGroup = new THREE.Group(); treesGroup.name = 'Trees';

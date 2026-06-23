@@ -54,7 +54,7 @@ LAT0, LON0 = 37.6835313, -122.0686199
 COSLAT = math.cos(LAT0 * math.pi / 180)
 
 # ---- terrain height sampler — replicate export_property_glb.mjs terrainAt -----
-D = json.load(open(os.path.join(ROOT, "exports/dem_1m.json")))
+D = json.load(open(os.path.join(ROOT, "exports/dahill/dem_1m.json")))   # dahill sidecars consolidated into exports/dahill/
 DCOLS, DROWS, DH = D["cols"], D["rows"], D["h"]
 DLAT = D["latN"] - D["latS"]
 DLON = D["lonE"] - D["lonW"]

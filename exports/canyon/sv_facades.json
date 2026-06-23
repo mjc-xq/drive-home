@@ -1,0 +1,713 @@
+{
+ "note": "Street View facades for playable-core walls; consumed by export_property_glb.mjs",
+ "scene_fingerprint": "ad21e2c0c1c11ceb681e6edb3d581afda50f9082",
+ "crop_kind": "wall-only-ground-to-eave",
+ "uv": "U wall-left-to-right, V 0=eave, V 1=ground",
+ "targets": [
+  20,
+  7,
+  10,
+  9,
+  14,
+  13,
+  18,
+  4,
+  16,
+  11,
+  1,
+  3,
+  8,
+  5,
+  15,
+  33,
+  32,
+  31,
+  30,
+  59,
+  58,
+  21,
+  56,
+  57,
+  38,
+  55,
+  61,
+  54,
+  52,
+  53,
+  63,
+  62,
+  48,
+  49,
+  47,
+  50,
+  46,
+  51,
+  40,
+  45,
+  44
+ ],
+ "house_idx": 20,
+ "count": 15,
+ "walls": [
+  {
+   "building": 15,
+   "edge": 1,
+   "house": false,
+   "A": [
+    1485.31,
+    2337.35
+   ],
+   "B": [
+    1461.1,
+    2337.25
+   ],
+   "image": "sv_facades/b15_e1.jpg",
+   "wallH": 4.74,
+   "heading": 349.2,
+   "fov": 64.1,
+   "dist": 19.3,
+   "wallW": 24.2,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2022-04",
+   "openings": [
+    {
+     "kind": "door",
+     "x0": 0.09,
+     "y0": 0.28,
+     "x1": 0.24,
+     "y1": 0.78
+    },
+    {
+     "kind": "window",
+     "x0": 0.18,
+     "y0": 0.03,
+     "x1": 0.28,
+     "y1": 0.18
+    },
+    {
+     "kind": "door",
+     "x0": 0.83,
+     "y0": 0.3,
+     "x1": 0.94,
+     "y1": 0.8
+    },
+    {
+     "kind": "window",
+     "x0": 0.82,
+     "y0": 0.03,
+     "x1": 0.92,
+     "y1": 0.22
+    }
+   ]
+  },
+  {
+   "building": 57,
+   "edge": 3,
+   "house": false,
+   "A": [
+    1868.03,
+    2326.79
+   ],
+   "B": [
+    1867.95,
+    2322.27
+   ],
+   "image": "sv_facades/b57_e3.jpg",
+   "wallH": 4.9,
+   "heading": 224.3,
+   "fov": 35.0,
+   "dist": 33.6,
+   "wallW": 4.5,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2011-05",
+   "openings": [
+    {
+     "kind": "garage",
+     "x0": 0.02,
+     "y0": 0.48,
+     "x1": 0.49,
+     "y1": 0.92
+    },
+    {
+     "kind": "garage",
+     "x0": 0.51,
+     "y0": 0.48,
+     "x1": 0.98,
+     "y1": 0.92
+    }
+   ]
+  },
+  {
+   "building": 52,
+   "edge": 0,
+   "house": false,
+   "A": [
+    1903.26,
+    2388.38
+   ],
+   "B": [
+    1918.13,
+    2396.79
+   ],
+   "image": "sv_facades/b52_e0.jpg",
+   "wallH": 4.18,
+   "heading": 128.4,
+   "fov": 73.8,
+   "dist": 11.4,
+   "wallW": 17.1,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2011-05",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.03,
+     "y0": 0.05,
+     "x1": 0.45,
+     "y1": 0.44
+    },
+    {
+     "kind": "door",
+     "x0": 0.43,
+     "y0": 0.25,
+     "x1": 0.54,
+     "y1": 0.62
+    },
+    {
+     "kind": "garage",
+     "x0": 0.63,
+     "y0": 0.15,
+     "x1": 0.82,
+     "y1": 0.86
+    },
+    {
+     "kind": "garage",
+     "x0": 0.82,
+     "y0": 0.15,
+     "x1": 0.99,
+     "y1": 0.86
+    }
+   ]
+  },
+  {
+   "building": 63,
+   "edge": 1,
+   "house": false,
+   "A": [
+    1951.19,
+    2454.78
+   ],
+   "B": [
+    1957.0,
+    2439.0
+   ],
+   "image": "sv_facades/b63_e1.jpg",
+   "wallH": 4.74,
+   "heading": 231.2,
+   "fov": 72.6,
+   "dist": 11.5,
+   "wallW": 16.8,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2019-04",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.06,
+     "y0": 0.03,
+     "x1": 0.18,
+     "y1": 0.11
+    },
+    {
+     "kind": "window",
+     "x0": 0.18,
+     "y0": 0.03,
+     "x1": 0.3,
+     "y1": 0.11
+    },
+    {
+     "kind": "window",
+     "x0": 0.3,
+     "y0": 0.03,
+     "x1": 0.42,
+     "y1": 0.11
+    },
+    {
+     "kind": "window",
+     "x0": 0.42,
+     "y0": 0.03,
+     "x1": 0.54,
+     "y1": 0.11
+    },
+    {
+     "kind": "window",
+     "x0": 0.76,
+     "y0": 0.03,
+     "x1": 0.92,
+     "y1": 0.12
+    },
+    {
+     "kind": "garage",
+     "x0": 0.7,
+     "y0": 0.2,
+     "x1": 0.85,
+     "y1": 0.85
+    },
+    {
+     "kind": "garage",
+     "x0": 0.85,
+     "y0": 0.2,
+     "x1": 0.99,
+     "y1": 0.85
+    }
+   ]
+  },
+  {
+   "building": 48,
+   "edge": 1,
+   "house": false,
+   "A": [
+    1029.79,
+    1968.66
+   ],
+   "B": [
+    1039.79,
+    1967.24
+   ],
+   "image": "sv_facades/b48_e1.jpg",
+   "wallH": 3.86,
+   "heading": 345.1,
+   "fov": 41.0,
+   "dist": 13.5,
+   "wallW": 10.1,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": []
+  },
+  {
+   "building": 48,
+   "edge": 5,
+   "house": false,
+   "A": [
+    1021.29,
+    1967.28
+   ],
+   "B": [
+    1029.43,
+    1966.12
+   ],
+   "image": "sv_facades/b48_e5.jpg",
+   "wallH": 3.86,
+   "heading": 346.0,
+   "fov": 35.0,
+   "dist": 13.7,
+   "wallW": 8.2,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "garage",
+     "x0": 0.16,
+     "y0": 0.06,
+     "x1": 0.47,
+     "y1": 0.95
+    },
+    {
+     "kind": "garage",
+     "x0": 0.47,
+     "y0": 0.06,
+     "x1": 0.82,
+     "y1": 0.95
+    }
+   ]
+  },
+  {
+   "building": 49,
+   "edge": 0,
+   "house": false,
+   "A": [
+    1002.02,
+    1969.21
+   ],
+   "B": [
+    1011.62,
+    1968.26
+   ],
+   "image": "sv_facades/b49_e0.jpg",
+   "wallH": 4.26,
+   "heading": 353.0,
+   "fov": 35.0,
+   "dist": 18.7,
+   "wallW": 9.6,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.04,
+     "y0": 0.02,
+     "x1": 0.46,
+     "y1": 0.18
+    },
+    {
+     "kind": "door",
+     "x0": 0.7,
+     "y0": 0.12,
+     "x1": 0.86,
+     "y1": 0.58
+    }
+   ]
+  },
+  {
+   "building": 47,
+   "edge": 3,
+   "house": false,
+   "A": [
+    1042.07,
+    1943.29
+   ],
+   "B": [
+    1034.17,
+    1941.61
+   ],
+   "image": "sv_facades/b47_e3.jpg",
+   "wallH": 4.74,
+   "heading": 180.7,
+   "fov": 35.9,
+   "dist": 12.5,
+   "wallW": 8.1,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "garage",
+     "x0": 0.02,
+     "y0": 0.35,
+     "x1": 0.48,
+     "y1": 0.98
+    },
+    {
+     "kind": "garage",
+     "x0": 0.52,
+     "y0": 0.35,
+     "x1": 0.98,
+     "y1": 0.98
+    }
+   ]
+  },
+  {
+   "building": 50,
+   "edge": 0,
+   "house": false,
+   "A": [
+    974.64,
+    1973.97
+   ],
+   "B": [
+    986.55,
+    1972.69
+   ],
+   "image": "sv_facades/b50_e0.jpg",
+   "wallH": 4.66,
+   "heading": 309.0,
+   "fov": 35.0,
+   "dist": 36.7,
+   "wallW": 12.0,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.05,
+     "y0": 0.18,
+     "x1": 0.18,
+     "y1": 0.6
+    },
+    {
+     "kind": "door",
+     "x0": 0.32,
+     "y0": 0.28,
+     "x1": 0.5,
+     "y1": 0.78
+    },
+    {
+     "kind": "garage",
+     "x0": 0.62,
+     "y0": 0.32,
+     "x1": 0.98,
+     "y1": 0.72
+    }
+   ]
+  },
+  {
+   "building": 50,
+   "edge": 1,
+   "house": false,
+   "A": [
+    986.55,
+    1972.69
+   ],
+   "B": [
+    986.27,
+    1970.13
+   ],
+   "image": "sv_facades/b50_e1.jpg",
+   "wallH": 4.66,
+   "heading": 313.1,
+   "fov": 35.0,
+   "dist": 31.1,
+   "wallW": 2.6,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "garage",
+     "x0": 0.08,
+     "y0": 0.48,
+     "x1": 0.92,
+     "y1": 0.96
+    }
+   ]
+  },
+  {
+   "building": 50,
+   "edge": 2,
+   "house": false,
+   "A": [
+    986.27,
+    1970.13
+   ],
+   "B": [
+    996.78,
+    1968.99
+   ],
+   "image": "sv_facades/b50_e2.jpg",
+   "wallH": 4.66,
+   "heading": 317.8,
+   "fov": 35.0,
+   "dist": 26.1,
+   "wallW": 10.6,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "garage",
+     "x0": 0.18,
+     "y0": 0.48,
+     "x1": 0.66,
+     "y1": 0.8
+    }
+   ]
+  },
+  {
+   "building": 51,
+   "edge": 0,
+   "house": false,
+   "A": [
+    1053.74,
+    1910.82
+   ],
+   "B": [
+    1052.51,
+    1916.32
+   ],
+   "image": "sv_facades/b51_e0.jpg",
+   "wallH": 5.06,
+   "heading": 270.8,
+   "fov": 35.0,
+   "dist": 13.4,
+   "wallW": 5.6,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.28,
+     "y0": 0.18,
+     "x1": 0.72,
+     "y1": 0.53
+    }
+   ]
+  },
+  {
+   "building": 51,
+   "edge": 4,
+   "house": false,
+   "A": [
+    1052.06,
+    1918.1
+   ],
+   "B": [
+    1050.51,
+    1925.04
+   ],
+   "image": "sv_facades/b51_e4.jpg",
+   "wallH": 5.06,
+   "heading": 263.2,
+   "fov": 35.0,
+   "dist": 13.1,
+   "wallW": 7.1,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "garage",
+     "x0": 0.12,
+     "y0": 0.22,
+     "x1": 0.88,
+     "y1": 0.78
+    }
+   ]
+  },
+  {
+   "building": 40,
+   "edge": 2,
+   "house": false,
+   "A": [
+    1057.43,
+    1893.96
+   ],
+   "B": [
+    1054.71,
+    1907.99
+   ],
+   "image": "sv_facades/b40_e2.jpg",
+   "wallH": 4.5,
+   "heading": 248.6,
+   "fov": 57.5,
+   "dist": 13.0,
+   "wallW": 14.3,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2021-02",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.06,
+     "y0": 0.16,
+     "x1": 0.44,
+     "y1": 0.72
+    },
+    {
+     "kind": "door",
+     "x0": 0.49,
+     "y0": 0.14,
+     "x1": 0.61,
+     "y1": 0.86
+    },
+    {
+     "kind": "garage",
+     "x0": 0.65,
+     "y0": 0.12,
+     "x1": 0.98,
+     "y1": 0.84
+    }
+   ]
+  },
+  {
+   "building": 45,
+   "edge": 3,
+   "house": false,
+   "A": [
+    1013.85,
+    1937.16
+   ],
+   "B": [
+    1007.77,
+    1937.99
+   ],
+   "image": "sv_facades/b45_e3.jpg",
+   "wallH": 3.94,
+   "heading": 172.3,
+   "fov": 35.0,
+   "dist": 12.7,
+   "wallW": 6.1,
+   "crop_kind": "wall-only-ground-to-eave",
+   "crop_v": [
+    0.0,
+    1.0
+   ],
+   "date": "2025-04",
+   "openings": [
+    {
+     "kind": "window",
+     "x0": 0.18,
+     "y0": 0.08,
+     "x1": 0.82,
+     "y1": 0.56
+    },
+    {
+     "kind": "door",
+     "x0": 0.88,
+     "y0": 0.18,
+     "x1": 0.995,
+     "y1": 0.82
+    }
+   ]
+  }
+ ],
+ "vision_filter": {
+  "model": "gpt-5-mini",
+  "min_quality": 0.6,
+  "kept": 15,
+  "rejected": 29,
+  "errors": 0
+ },
+ "openings_model": {
+  "model": "gpt-5-mini",
+  "errors": 0
+ }
+}

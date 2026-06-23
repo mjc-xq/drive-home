@@ -19,8 +19,8 @@ Output: exports/1840-dahill-property-trees.glb  (open in Blender; delete any tre
 import bpy, os, json, math, random
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROP = os.path.join(ROOT, "exports/1840-dahill-property.glb")
-OUT = os.path.join(ROOT, "exports/1840-dahill-property-trees.glb")
+PROP = os.path.join(ROOT, "exports/_legacy/1840-dahill-property.glb")
+OUT = os.path.join(ROOT, "exports/_legacy/1840-dahill-property-trees.glb")
 LIB = os.path.join(ROOT, "exports/tree_lib")
 MANIFEST = json.load(open(os.path.join(LIB, "manifest.json")))
 PLACED = json.load(open(os.path.join(ROOT, "exports/trees_placed.json")))["trees"]

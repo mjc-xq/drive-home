@@ -22,11 +22,11 @@ const OUT = (...p) => path.join(ROOT, 'public', 'da-hilg', ...p);
 
 // level slug -> rich master that still has the named creek/tree/grass meshes
 const MASTERS = [
-  { out: 'level',   master: '1840-dahill-property-trees.glb' },
-  { out: 'canyon',  master: 'canyon-middle-school-property.glb' },
-  { out: 'stanton', master: 'stanton-elementary-property.glb' },
-  { out: 'meemaw',  master: 'meemaw-property.glb' },
-  { out: 'xq',      master: 'xq-property.glb' },
+  { out: 'level',   master: '_legacy/1840-dahill-property-trees.glb' },
+  { out: 'canyon',  master: '_legacy/canyon-middle-school-property.glb' },
+  { out: 'stanton', master: '_legacy/stanton-elementary-property.glb' },
+  { out: 'meemaw',  master: '_legacy/meemaw-property.glb' },
+  { out: 'xq',      master: '_legacy/xq-property.glb' },
 ];
 
 const MINIMAP_BY_OUT = {

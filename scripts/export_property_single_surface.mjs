@@ -50,8 +50,8 @@ const LEVEL = process.argv[2] || 'dahill';
 // input set per level (dahill = working scene at root; others = exports/<dir>/ sidecars)
 const SETS = {
   dahill:  { scene: 'src/assets/scene.json', dir: 'exports/dahill',              slug: 'dahill' },
-  canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
-  stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
+  canyon:  { scene: 'exports/canyon/scene.json',  dir: 'exports/canyon',  slug: 'canyon' },
+  stanton: { scene: 'exports/stanton/scene.json', dir: 'exports/stanton', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
   xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: false },
 };
@@ -551,7 +551,7 @@ const facadeTexes = await Promise.all(facade.pages.map((p) => jtex(p, 85)));
 const stuccoTex = existsSync(facade.stuccoTile) ? await jtex(facade.stuccoTile, 88) : null;
 // shared roof-tile texture (clay/shingle), tinted per-building by the real roof colour (roofColor
 // factor) the same way the stucco tile is tinted by wallColor — fixes the flat untextured "wood" roofs.
-const roofTilePath = R('exports/roof_tile.png');
+const roofTilePath = R('exports/_shared/roof_tile.png');   // shared roof tile (all levels)
 const roofTex = existsSync(roofTilePath) ? await jtex(roofTilePath, 90) : null;
 // photoreal tower textures: re-create each group's baseColor image (raw bytes from the source GLB)
 // as a doc texture, keyed by the THREE material name we gave it, to attach in the loop below.

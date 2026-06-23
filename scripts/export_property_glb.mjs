@@ -1883,7 +1883,7 @@ const shingleTex = await makeTileTex('shingle', (u, v) => {
 //  PNG bytes directly.) aerial -> Terrain + all roofs; facade -> all walls.
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false, animations });
 mkdirSync(path.join(ROOT, 'exports'), { recursive: true });
-const out = path.join(ROOT, 'exports', '1840-dahill-property.glb');
+const out = path.join(ROOT, 'exports', '_legacy', '1840-dahill-property.glb');   // legacy master -> _legacy/
 
 const { NodeIO } = await import('@gltf-transform/core');
 const io = new NodeIO();

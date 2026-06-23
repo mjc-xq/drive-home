@@ -50,8 +50,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // streamed: true => shipped to StreamingAssets + loaded at runtime (NOT baked into data.unityweb)
 const LEVELS = [
   { slug: 'dahill',  glb: 'level',   working: true,                    streamed: true },
-  { slug: 'canyon',  glb: 'canyon',  region: 'canyon-middle-school',   streamed: true },
-  { slug: 'stanton', glb: 'stanton', region: 'stanton-elementary',     streamed: true },
+  { slug: 'canyon',  glb: 'canyon',  region: 'canyon',                 streamed: true },
+  { slug: 'stanton', glb: 'stanton', region: 'stanton',               streamed: true },
   { slug: 'meemaw',  glb: 'meemaw',  region: 'meemaw',                 streamed: true },
   // 'xq' (807 Broadway, Oakland): its single-surface master (exports/xq-single.glb) is produced
   // out-of-band, so it has NO working/region export step here — the `assets` stage reads it

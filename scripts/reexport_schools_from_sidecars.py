@@ -21,10 +21,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # region slug -> (sidecar dir under exports/, output property glb name under exports/)
+# (sidecar_dir under exports/, legacy property-glb output name under exports/_legacy/)
 REGIONS = {
-    "canyon": ("canyon-middle-school", "canyon-middle-school-property.glb"),
-    "stanton": ("stanton-elementary", "stanton-elementary-property.glb"),
-    "meemaw": ("meemaw", "meemaw-property.glb"),
+    "canyon": ("canyon", "_legacy/canyon-middle-school-property.glb"),
+    "stanton": ("stanton", "_legacy/stanton-elementary-property.glb"),
+    "meemaw": ("meemaw", "_legacy/meemaw-property.glb"),
 }
 
 # fixed working files the exporter reads, and where each sidecar lands.
@@ -161,7 +162,7 @@ def export_region(slug):
     env["SHOW_LOTLINES"] = "true"
     run(["node", "scripts/export_property_glb.mjs"], env=env)
 
-    produced = ROOT / "exports" / "1840-dahill-property.glb"
+    produced = ROOT / "exports" / "_legacy" / "1840-dahill-property.glb"
     if not produced.exists():
         sys.exit(f"exporter did not produce {produced}")
     out = ROOT / "exports" / out_name
