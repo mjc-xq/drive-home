@@ -41,6 +41,9 @@ function inPoly(x, z, ring) {
   }
   return inside;
 }
+// is a world-XZ point inside the axis-aligned demRect? (used by dropOffPatch to drop any footprint
+// that isn't ENTIRELY in-patch — geometry test, robust to clip vertex-count coincidences.)
+const isInRect = (x, z, r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
 // Sutherland-Hodgman: clip a CLOSED polygon (world XZ ring) against the axis-aligned demRect.
 // Returns the clipped ring (>=3 pts) or null if nothing survives. This is the MISSING-BUILDINGS
 // fix: instead of dropping a footprint with any corner off-patch, we emit only the in-rect part.
@@ -740,8 +743,14 @@ export function buildBuildingLayer({
     let ring = b.p.map(([e, n]) => w2(e, n));
     const cr = clipPolyToRect(ring, demRect);
     if (!cr) { skipped++; return; }            // fully outside the DEM rect -> skip
-    if (cr.length !== ring.length) {           // footprint crosses the patch edge
-      if (dropOffPatch) { skipped++; return; } // downtown: remove it entirely (no sliced edge boxes)
+    // dropOffPatch (downtown/xq): REMOVE any footprint not ENTIRELY inside the demRect. We test the
+    // GEOMETRY (every original corner in-rect), NOT the clipped vertex count — clipping a quad whose
+    // corner pokes past the edge can return another 4-vertex quad, so the old `cr.length !== ring.length`
+    // test let edge-crossing buildings slip through (their roof rects + eave overhang then hang past
+    // the terrain). Any building touching/crossing the edge is dropped outright (no sliced edge boxes).
+    const fullyInRect = ring.every(([x, z]) => isInRect(x, z, demRect));
+    if (!fullyInRect) {
+      if (dropOffPatch) { skipped++; return; } // downtown: remove it entirely
       clipped++;                               // suburban: keep the in-patch part (missing-buildings fix)
     }
     ring = cr;

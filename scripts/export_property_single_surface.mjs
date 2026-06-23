@@ -160,8 +160,18 @@ if (terrain.farPrim.idx.length) scene.add(meshFromPrim(terrain.farPrim, 'Terrain
 
 // ---- 4b) houses + trees + creek (the eye-level vertical structure) ------------------
 const houseIndex = (S.buildings || []).findIndex((b) => b.house);
+// SV facade walls: the active sv_facades.json can be a STUB (count:0, walls:[]) that a colour-only
+// re-run left behind, which silently drops every photo facade. Fall back to the rectified-photo
+// sidecar (sv_facades.withphotos.json) whenever the primary file carries no walls, so the SV facade
+// photo tiles come back onto the extruded building walls. Both crop dirs (sv_facades/) are shared.
+const readWalls = (p) => (existsSync(p) ? (JSON.parse(readFileSync(p, 'utf8')).walls || []) : []);
 const svFacadesPath = pick('sv_facades.json');
-const svWalls = existsSync(svFacadesPath) ? (JSON.parse(readFileSync(svFacadesPath, 'utf8')).walls || []) : [];
+let svWalls = readWalls(svFacadesPath);
+if (!svWalls.length) {
+  const withPhotos = pick('sv_facades.withphotos.json');
+  const fb = readWalls(withPhotos);
+  if (fb.length) { svWalls = fb; console.log(`facade: sv_facades.json has no walls — using ${path.basename(withPhotos)} (${fb.length} walls)`); }
+}
 const facadeDir = SET.dir === 'exports' ? R('exports/_facades') : R(SET.dir, '_facades');
 const facade = svWalls.length
   ? await bakeFacadeAtlas({ buildings: S.buildings, svWalls, svDir: R(SET.dir), houseIndex, demRect: terrain.demRect, w2, outDir: facadeDir })
@@ -553,6 +563,9 @@ const stuccoTex = existsSync(facade.stuccoTile) ? await jtex(facade.stuccoTile, 
 // factor) the same way the stucco tile is tinted by wallColor — fixes the flat untextured "wood" roofs.
 const roofTilePath = R('exports/_shared/roof_tile.png');   // shared roof tile (all levels)
 const roofTex = existsSync(roofTilePath) ? await jtex(roofTilePath, 90) : null;
+// solar-panel tile for shade gazebos (manual_structures Shade_<i>_roof) — embed the PNG crisp (no JPEG blur on the cell grid)
+const solarTilePath = R('exports', SET.slug, 'solar_panel.png');
+const solarTex = existsSync(solarTilePath) ? doc.createTexture('solar_panel').setImage(new Uint8Array(readFileSync(solarTilePath))).setMimeType('image/png') : null;
 // photoreal tower textures: re-create each group's baseColor image (raw bytes from the source GLB)
 // as a doc texture, keyed by the THREE material name we gave it, to attach in the loop below.
 const photorealTexByMat = new Map();
@@ -584,6 +597,9 @@ for (const m of doc.getRoot().listMaterials()) {
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
     } else if (/_roofs?_\d+$/.test(n) && roofTex) {   // per-building Building_<ib>_roof / House_roof material — tiled roof tile x per-building roofColor (KEEP the factor so the real roof colour tints the tile)
       m.setBaseColorTexture(roofTex);
+      m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
+    } else if (/^Shade_\d+_roof_mat$/.test(n) && solarTex) {   // gazebo roof = tiled solar-panel texture
+      m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(solarTex);
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
     } else if (photorealTexByMat.has(n)) {   // Google-photoreal tower: re-attach the baked baseColor texture
       m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(photorealTexByMat.get(n));

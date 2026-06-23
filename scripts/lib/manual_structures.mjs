@@ -36,18 +36,29 @@ export function buildManualStructures({ THREE, scene, structures = [], terrainAt
   shades.forEach((s, idx) => {
     const fp = s.footprint;
     const roofY = Math.max(...fp.map(([x, z]) => terrainAt(x, z))) + (s.roofClear ?? 3.0);
-    const roof = [];
+    // UV axes from the footprint edges so a (tiled) solar-panel texture aligns to the roof's own
+    // long/short axes regardless of world rotation. `Shade_<i>_roof_mat` is matched by the exporter,
+    // which attaches exports/<slug>/solar_panel.png (REPEAT) when s.texture is set.
+    const U = [fp[1][0] - fp[0][0], fp[1][1] - fp[0][1]]; const Ul = Math.hypot(U[0], U[1]) || 1; U[0] /= Ul; U[1] /= Ul;
+    const V = [fp[3][0] - fp[0][0], fp[3][1] - fp[0][1]]; const Vl = Math.hypot(V[0], V[1]) || 1; V[0] /= Vl; V[1] /= Vl;
+    const TILE = s.tile ?? 2.6;
+    const uvOf = (x, z) => [((x - fp[0][0]) * U[0] + (z - fp[0][1]) * U[1]) / TILE, ((x - fp[0][0]) * V[0] + (z - fp[0][1]) * V[1]) / TILE];
+    const roof = [], roofUV = [];
     for (let i = 1; i < fp.length - 1; i++) {            // fan-triangulate the (convex) footprint
       const a = fp[0], b = fp[i], c = fp[i + 1];
-      roof.push(a[0], roofY, a[1], c[0], roofY, c[1], b[0], roofY, b[1]);             // top (up)
-      roof.push(a[0], roofY - 0.14, a[1], b[0], roofY - 0.14, b[1], c[0], roofY - 0.14, c[1]); // underside
+      for (const p of [a, c, b]) { roof.push(p[0], roofY, p[1]); roofUV.push(...uvOf(p[0], p[1])); }            // top (up)
+      for (const p of [a, b, c]) { roof.push(p[0], roofY - 0.14, p[1]); roofUV.push(...uvOf(p[0], p[1])); }     // underside
     }
+    const rg = new THREE.BufferGeometry();
+    rg.setAttribute('position', new THREE.Float32BufferAttribute(roof, 3));
+    rg.setAttribute('uv', new THREE.Float32BufferAttribute(roofUV, 2));
+    rg.computeVertexNormals();
+    const rgb = s.roofColor || [0.10, 0.13, 0.30];        // solar navy (tints the texture, or stands alone)
+    const rmat = new THREE.MeshStandardMaterial({ name: `Shade_${idx}_roof_mat`, color: new THREE.Color(rgb[0], rgb[1], rgb[2]), roughness: 0.22, metalness: 0.25, side: THREE.DoubleSide });
+    const rm = new THREE.Mesh(rg, rmat); rm.name = `Shade_${idx}_roof`; grp.add(rm);
     const posts = [];
     const pr = s.postR ?? 0.16;
     for (const [x, z] of fp) pushBoxColumn(posts, x, z, pr, terrainAt(x, z), roofY - 0.12);
-    const rgb = s.roofColor || [0.10, 0.13, 0.30];        // solar navy
-    const rm = mesh(THREE, roof, rgb, `Shade_${idx}_roof`, 0.22, 0.25);  // glossy panels
-    if (rm) grp.add(rm);
     const pm = mesh(THREE, posts, [0.32, 0.32, 0.34], `Shade_${idx}_posts`, 0.7);
     if (pm) grp.add(pm);
   });
