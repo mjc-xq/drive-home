@@ -627,9 +627,11 @@ const PLAYER_OVERRIDES = [
   { id: 'mike', key: 'Celebrate', src: LIB('emotes/Victory_From_A_Boxing_Win.glb'), clip: 'Victory_From_A_Boxing_Win', stripRootXZ: true, noLoop: true },
   { id: 'mike', key: 'Dance',     src: LIB('dance/Step_Hip_Hop_Dance.glb'), clip: 'Step_Hip_Hop_Dance', loop: true },
   // kelli — AERIAL striker: high/spin/hurricane kicks (grounded-pinned), bouncy guard idle, ninja walk
-  { id: 'kelli', key: 'Idle',      src: LIB('locomotion/idle/Bouncing_Fight_Idle_With_Guard_Up.glb'), clip: 'Bouncing_Fight_Idle_With_Guard_Up' },
-  { id: 'kelli', key: 'Walk',      src: LIB('locomotion/walk/Female_Ninja_Walk_Forward_Arc_Left.glb'), clip: 'Female_Ninja_Walk_Forward_Arc_Left', stripRootXZ: true, loop: true },
-  { id: 'kelli', key: 'Run',       src: LIB('locomotion/run/Female_Ninja_Run.glb'), clip: 'Female_Ninja_Run', stripRootXZ: true, loop: true },
+  // kelli idle/walk = her ORIGINAL upright clips (these passed the upright-orientation validator).
+  // They double as the shared IdleAlt/WalkAlt variant for ALL characters (SourceClipCandidates maps
+  // *Alt -> kelli_*), so the idle/walk rotation has real variety without tripping the validator.
+  { id: 'kelli', key: 'Idle',      src: KELLI_ANIMS, clip: 'Nervously_Look_Around' },
+  { id: 'kelli', key: 'Walk',      src: KELLI_ANIMS, clip: 'Female_Locomotion_Pose', stripRootXZ: true, loop: true },
   // kelli — high-kick striker, all GROUNDED standing kicks (Hips stay at rest so the Y-flatten
   // keeps her feet planted; true aerial kicks need foot-IK, a deferred Tier-2 follow-up).
   { id: 'kelli', key: 'Attack',    src: LIB('combat/unarmed/attacks/Mma_High_Kick.glb'), clip: 'Mma_High_Kick', stripRootXZ: true, noLoop: true },
