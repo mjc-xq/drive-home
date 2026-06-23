@@ -16,6 +16,15 @@ public/da-hilg/mike.glb -filter -diff -merge text=auto
 # Deploy-critical R3F animation clips: served at runtime, must be REGULAR git blobs (NOT LFS).
 public/da-hilg/anims/*.glb -filter -diff -merge text=auto
 
+# Deploy-served LEVEL meshes that now fit under GitHub's 100MB limit (xq/canyon/stanton/meemaw
+# dropped well below 100MB once the Google photoreal mesh was removed): de-LFS so Vercel serves
+# real bytes instead of a 133-byte pointer. dahill (level.glb) is still ~170MB > 100MB, so it must
+# stay in LFS until its facade-atlas textures are trimmed under the limit.
+public/da-hilg/xq.glb -filter -diff -merge text=auto
+public/da-hilg/canyon.glb -filter -diff -merge text=auto
+public/da-hilg/stanton.glb -filter -diff -merge text=auto
+public/da-hilg/meemaw.glb -filter -diff -merge text=auto
+
 src/assets/anim/kelli-mx-anims.glb filter=lfs diff=lfs merge=lfs -text
 unity/DaHilgUnity/Assets/DaHilg/Art/Levels/*.glb filter=lfs diff=lfs merge=lfs -text
 
