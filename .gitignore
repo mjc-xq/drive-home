@@ -12,6 +12,15 @@ exports/*
 exports/**/_renders/
 exports/**/*.verify.jpg
 exports/**/*.verify.png
+# regenerable bake OUTPUTS inside the tracked level folders (large atlases/masks, rebuilt every bake) — keep ignored
+exports/*/_ground/
+exports/*/_facades/
+exports/*/*.vegetation.json
+exports/*/*.surface_class*.png
+# large re-fetchable SOURCE imagery (the master GLB already bakes it in) — too big to track as git blobs
+exports/**/*_sv_wide/
+exports/**/sv_facades/
+exports/*/google_aerial.jpg
 scripts/.venv/
 scripts/_cache/
 .DS_Store

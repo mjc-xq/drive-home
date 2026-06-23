@@ -48,7 +48,7 @@ const LEVEL = process.argv[2] || 'dahill';
 
 // input set per level (dahill = working scene at root; others = exports/<dir>/ sidecars)
 const SETS = {
-  dahill:  { scene: 'src/assets/scene.json', dir: 'exports',                     slug: 'dahill' },
+  dahill:  { scene: 'src/assets/scene.json', dir: 'exports/dahill',              slug: 'dahill' },
   canyon:  { scene: 'exports/canyon-middle-school/scene.json', dir: 'exports/canyon-middle-school', slug: 'canyon' },
   stanton: { scene: 'exports/stanton-elementary/scene.json', dir: 'exports/stanton-elementary', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },

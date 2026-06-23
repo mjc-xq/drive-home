@@ -87,7 +87,7 @@ const DRACO_EXT = 'KHR_draco_mesh_compression';
 //                   and referenced from the .meta.json (the web grass occlusion samples it — the
 //                   old paved mask was rendered from Roads/Sidewalks meshes that no longer exist).
 const LEVELS = [
-  { src: 'dahill/dahill.level.glb',   out: 'level',   metaSource: 'dahill/dahill.level.glb',   pavedMaskSrc: '_ground/paved_mask.png' },
+  { src: 'dahill/dahill.level.glb',   out: 'level',   metaSource: 'dahill/dahill.level.glb',   pavedMaskSrc: 'dahill/_ground/paved_mask.png' },
   { src: 'canyon/canyon.level.glb',   out: 'canyon',  metaSource: 'canyon/canyon.level.glb',   pavedMaskSrc: 'canyon-middle-school/_ground/paved_mask.png' },
   { src: 'stanton/stanton.level.glb', out: 'stanton', metaSource: 'stanton/stanton.level.glb', pavedMaskSrc: 'stanton-elementary/_ground/paved_mask.png' },
   { src: 'meemaw/meemaw.level.glb',   out: 'meemaw',  metaSource: 'meemaw/meemaw.level.glb',   pavedMaskSrc: 'meemaw/_ground/paved_mask.png' },
