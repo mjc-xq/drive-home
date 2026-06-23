@@ -250,6 +250,10 @@ for (const { out, master } of MASTERS) {
             sx = roadGridRefine.sx;
             sz = roadGridRefine.sz;
           }
+          // dahill's address sits in a deep side-gap, so the auto front-clear point ([17.29,16.29])
+          // lands between the buildings rather than on the street. Nudge the spawn the rest of the way
+          // out along the front normal onto the road (verified: walking forward from there reaches it).
+          if (out === 'level' && chosenN) { sx += chosenN[0] * 8; sz += chosenN[1] * 8; }
           const lr = [sx-off[0], sz-off[2]];                 // recentered-local x,z
           const lh = [hc[0]-off[0], hc[2]-off[2]];
           const dx = lr[0]-lh[0], dz = lr[1]-lh[1];          // face out from the house toward the street
