@@ -48,15 +48,19 @@ const R = (...p) => path.join(ROOT, ...p);
 const LEVEL = process.argv[2] || 'dahill';
 
 // input set per level (dahill = working scene at root; others = exports/<dir>/ sidecars)
+// Per-level folder layout: exports/<slug>/{<slug>.level.glb (the final master at top), data/ (inputs +
+// regenerable atlases), logs/, game/}. dahill keeps its working scene at src/assets/scene.json.
 const SETS = {
-  dahill:  { scene: 'src/assets/scene.json', dir: 'exports/dahill',              slug: 'dahill' },
-  canyon:  { scene: 'exports/canyon/scene.json',  dir: 'exports/canyon',  slug: 'canyon' },
-  stanton: { scene: 'exports/stanton/scene.json', dir: 'exports/stanton', slug: 'stanton' },
-  meemaw:  { scene: 'exports/meemaw/scene.json', dir: 'exports/meemaw', slug: 'meemaw' },
-  xq:      { scene: 'exports/xq/scene.json', dir: 'exports/xq', slug: 'xq', dropOffPatch: true, photoreal: false },
+  dahill:  { scene: 'src/assets/scene.json',          dir: 'exports/dahill',  slug: 'dahill' },
+  canyon:  { scene: 'exports/canyon/data/scene.json',  dir: 'exports/canyon',  slug: 'canyon' },
+  stanton: { scene: 'exports/stanton/data/scene.json', dir: 'exports/stanton', slug: 'stanton' },
+  meemaw:  { scene: 'exports/meemaw/data/scene.json',  dir: 'exports/meemaw',  slug: 'meemaw' },
+  xq:      { scene: 'exports/xq/data/scene.json',      dir: 'exports/xq',      slug: 'xq', dropOffPatch: true, photoreal: false },
 };
 const SET = SETS[LEVEL] || SETS.dahill;
-const pick = (name) => existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name);
+const dataDir = path.join(SET.dir, 'data');   // RELATIVE segment (R() prepends ROOT) — all sidecars/inputs + regenerable atlases under <level>/data/
+// read order: <level>/data/<name>  ->  <level>/<name>  ->  exports/<name>  (the fallbacks are safety nets)
+const pick = (name) => existsSync(R(dataDir, name)) ? R(dataDir, name) : (existsSync(R(SET.dir, name)) ? R(SET.dir, name) : R('exports', name));
 
 const S = JSON.parse(readFileSync(R(SET.scene), 'utf8'));
 const C = S.center;
@@ -130,7 +134,7 @@ const curbLines = curbLinesFromRoads(S.roads || [], w2, { clipHalf });
 console.log(`network: ${network.surfaces.length} surfaces, ${network.paint.length} paint groups, ${curbLines.length} curb lines`);
 
 // ---- 3) bake ground textures (de-roaded aerial bed + painted features) -------------
-const groundDir = R(SET.dir === 'exports' ? 'exports/_ground' : path.join(SET.dir, '_ground'));
+const groundDir = R(dataDir, '_ground');   // regenerable ground atlas (gitignored within data/)
 const ground = await bakeGroundAtlas({
   aerialPath, aerialBounds: AB, C, demRect: terrain.demRect, texCoreHalf: terrain.texCoreHalf,
   network, curbLines, outDir: groundDir, coreSize: 6144, farSize: 2048,
@@ -172,9 +176,9 @@ if (!svWalls.length) {
   const fb = readWalls(withPhotos);
   if (fb.length) { svWalls = fb; console.log(`facade: sv_facades.json has no walls — using ${path.basename(withPhotos)} (${fb.length} walls)`); }
 }
-const facadeDir = SET.dir === 'exports' ? R('exports/_facades') : R(SET.dir, '_facades');
+const facadeDir = R(dataDir, '_facades');   // regenerable facade atlas (gitignored within data/)
 const facade = svWalls.length
-  ? await bakeFacadeAtlas({ buildings: S.buildings, svWalls, svDir: R(SET.dir), houseIndex, demRect: terrain.demRect, w2, outDir: facadeDir })
+  ? await bakeFacadeAtlas({ buildings: S.buildings, svWalls, svDir: R(dataDir), houseIndex, demRect: terrain.demRect, w2, outDir: facadeDir })
   : { pages: [], rectByWall: {}, heroBuildings: [], stuccoTile: R('exports/facade.png') };
 console.log(`facade: ${facade.pages.length} atlas page(s), ${Object.keys(facade.rectByWall).length} hero walls (toggleable photo overlay; windowed stucco underneath)`);
 
@@ -215,7 +219,7 @@ if (filled) { S.buildings = filled.buildings; console.log(`fill-missing: +${fill
 // portables). ENU `p` like scene.json; NO `r` field -> flat roof (correct for portables). Appended at
 // the END so existing Building_<ib> labels stay stable. Reusable for any level (place its sidecar).
 {
-  const manualPath = R('exports', SET.slug, 'manual_buildings.json');   // hand edits live in the TRACKED per-level folder
+  const manualPath = R(dataDir, 'manual_buildings.json');   // hand edits live in the TRACKED per-level data/ folder
   if (existsSync(manualPath)) {
     const mb = JSON.parse(readFileSync(manualPath, 'utf8')).buildings || [];
     for (const b of mb) if (Array.isArray(b.p) && b.p.length >= 3) S.buildings.push({ p: b.p, h: b.h ?? 3.3 });
@@ -267,7 +271,7 @@ if (LEVEL === 'dahill') {
 // Colour sidecars load from THIS level's dir ONLY (never the root pick() fallback): a missing
 // per-level colour file must yield {} -> tasteful fallback palette, NOT another level's colour map.
 // (That cross-contamination is exactly why meemaw/xq rendered with dahill's stale 108-entry file.)
-const pickColor = (name) => R(SET.dir, name);
+const pickColor = (name) => R(dataDir, name);
 const { wallColor, roofColor } = makeBuildingColor(pickColor);
 const isSchool = S.meta?.kind === 'school-region-export';
 
@@ -516,7 +520,7 @@ console.log(`road geometry: ${rgeo.added} meshes under 'RoadLayer' (draped on su
 
 // ---- MANUAL structures (gazebos/awnings) — hand-authored, persist through regen --------
 {
-  const msPath = R('exports', SET.slug, 'manual_structures.json');
+  const msPath = R(dataDir, 'manual_structures.json');
   if (existsSync(msPath)) {
     const structs = JSON.parse(readFileSync(msPath, 'utf8')).structures || [];
     const sres = buildManualStructures({ THREE, scene, structures: structs, terrainAt });
@@ -564,7 +568,7 @@ const stuccoTex = existsSync(facade.stuccoTile) ? await jtex(facade.stuccoTile, 
 const roofTilePath = R('exports/_shared/roof_tile.png');   // shared roof tile (all levels)
 const roofTex = existsSync(roofTilePath) ? await jtex(roofTilePath, 90) : null;
 // solar-panel tile for shade gazebos (manual_structures Shade_<i>_roof) — embed the PNG crisp (no JPEG blur on the cell grid)
-const solarTilePath = R('exports', SET.slug, 'solar_panel.png');
+const solarTilePath = R(dataDir, 'solar_panel.png');
 const solarTex = existsSync(solarTilePath) ? doc.createTexture('solar_panel').setImage(new Uint8Array(readFileSync(solarTilePath))).setMimeType('image/png') : null;
 // photoreal tower textures: re-create each group's baseColor image (raw bytes from the source GLB)
 // as a doc texture, keyed by the THREE material name we gave it, to attach in the loop below.

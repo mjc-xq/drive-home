@@ -1,0 +1,10 @@
+{
+  "building": 112,
+  "edge": 7,
+  "reject": true,
+  "reason": "Wall is a very narrow end-face viewed from far down the street; too small, distant, and heavily occluded by cars and road to yield a usable facade quad",
+  "corners": [],
+  "wall_color": "#8a7a6a",
+  "occlusion": "high",
+  "confidence": 0.15
+}

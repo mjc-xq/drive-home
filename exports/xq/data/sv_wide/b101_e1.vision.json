@@ -1,0 +1,1 @@
+{"building":101,"edge":1,"reject":true,"reason":"Wall is steeply oblique/nearly edge-on; prior quad corners far outside image bounds; no usable flat wall plane visible","corners":[],"wall_color":"#9E7B5C","occlusion":"high","confidence":0.1}

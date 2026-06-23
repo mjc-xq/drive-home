@@ -1,0 +1,16 @@
+{
+ "building": 251,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b251_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Target building not in frame, indicated by off-screen magenta quad coordinates.",
+ "corners": [],
+ "wall_color": "#000000",
+ "occlusion": "none",
+ "confidence": 0.0
+}

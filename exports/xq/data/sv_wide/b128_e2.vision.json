@@ -1,0 +1,33 @@
+{
+ "building": 128,
+ "edge": 2,
+ "model": "gemini-2.5-flash",
+ "image": "b128_e2_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade extracted.",
+ "corners": [
+  [
+   240,
+   100
+  ],
+  [
+   640,
+   70
+  ],
+  [
+   640,
+   410
+  ],
+  [
+   230,
+   340
+  ]
+ ],
+ "wall_color": "#E0E0E0",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

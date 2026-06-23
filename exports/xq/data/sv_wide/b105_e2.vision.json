@@ -1,0 +1,10 @@
+{
+  "building": 105,
+  "edge": 2,
+  "reject": true,
+  "reason": "Wall is steeply oblique and B side is almost entirely off-frame; only a narrow sliver (~50px wide) of the face is visible at the right edge of the image",
+  "corners": [],
+  "wall_color": "#c8b99a",
+  "occlusion": "medium",
+  "confidence": 0.25
+}

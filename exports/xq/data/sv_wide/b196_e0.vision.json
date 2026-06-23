@@ -1,0 +1,33 @@
+{
+ "building": 196,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b196_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade extracted",
+ "corners": [
+  [
+   75,
+   65
+  ],
+  [
+   560,
+   60
+  ],
+  [
+   575,
+   415
+  ],
+  [
+   70,
+   410
+  ]
+ ],
+ "wall_color": "#DCC8AA",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

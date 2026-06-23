@@ -1,0 +1,33 @@
+{
+ "building": 86,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b86_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade clearly visible, with minor occlusion at base.",
+ "corners": [
+  [
+   25,
+   105
+  ],
+  [
+   538,
+   108
+  ],
+  [
+   545,
+   415
+  ],
+  [
+   20,
+   420
+  ]
+ ],
+ "wall_color": "#D1C2AA",
+ "occlusion": "high",
+ "confidence": 0.9
+}

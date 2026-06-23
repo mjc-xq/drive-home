@@ -1,0 +1,33 @@
+{
+ "building": 322,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b322_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade is visible across the entire image width, with significant occlusion at the base.",
+ "corners": [
+  [
+   0,
+   239
+  ],
+  [
+   639,
+   244
+  ],
+  [
+   639,
+   320
+  ],
+  [
+   0,
+   325
+  ]
+ ],
+ "wall_color": "#3D3D3D",
+ "occlusion": "high",
+ "confidence": 0.8
+}

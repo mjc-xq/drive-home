@@ -1,0 +1,33 @@
+{
+ "building": 227,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b227_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade extracted from the building on the left.",
+ "corners": [
+  [
+   0,
+   98
+  ],
+  [
+   310,
+   120
+  ],
+  [
+   310,
+   390
+  ],
+  [
+   0,
+   390
+  ]
+ ],
+ "wall_color": "#D0BC8A",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

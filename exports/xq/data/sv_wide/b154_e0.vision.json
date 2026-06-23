@@ -1,0 +1,16 @@
+{
+ "building": 154,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b154_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "No discernible building features; image is a uniform gray.",
+ "corners": [],
+ "wall_color": "#AAAAAA",
+ "occlusion": "none",
+ "confidence": 0.0
+}

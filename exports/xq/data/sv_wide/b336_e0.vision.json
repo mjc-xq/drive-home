@@ -1,0 +1,16 @@
+{
+ "building": 336,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b336_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Target building 'b336 e0' cannot be identified; its described dimensions (3.86m tall) contradict the visible two-story buildings, and the magenta quad is misleading.",
+ "corners": [],
+ "wall_color": "#6B809B",
+ "occlusion": "high",
+ "confidence": 0.2
+}

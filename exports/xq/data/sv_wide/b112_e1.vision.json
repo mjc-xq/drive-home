@@ -1,0 +1,10 @@
+{
+  "building": 112,
+  "edge": 1,
+  "reject": true,
+  "reason": "Wall is nearly edge-on from camera; prior quad B corner at x=7462 indicating extremely oblique angle; no usable flat wall plane visible",
+  "corners": [],
+  "wall_color": "#7a8c5e",
+  "occlusion": "high",
+  "confidence": 0.15
+}

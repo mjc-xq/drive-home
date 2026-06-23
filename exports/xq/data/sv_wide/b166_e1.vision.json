@@ -1,0 +1,33 @@
+{
+ "building": 166,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b166_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Usable building face present, heavy occlusion by pole on left side.",
+ "corners": [
+  [
+   385,
+   188
+  ],
+  [
+   639,
+   188
+  ],
+  [
+   639,
+   511
+  ],
+  [
+   385,
+   511
+  ]
+ ],
+ "wall_color": "#EEE0B4",
+ "occlusion": "high",
+ "confidence": 0.7
+}

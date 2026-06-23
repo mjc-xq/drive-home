@@ -1,0 +1,33 @@
+{
+ "building": 248,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b248_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Left building identified, magenta hint aligns with its right edge.",
+ "corners": [
+  [
+   0,
+   240
+  ],
+  [
+   320,
+   245
+  ],
+  [
+   320,
+   320
+  ],
+  [
+   0,
+   320
+  ]
+ ],
+ "wall_color": "#504B46",
+ "occlusion": "medium",
+ "confidence": 0.8
+}

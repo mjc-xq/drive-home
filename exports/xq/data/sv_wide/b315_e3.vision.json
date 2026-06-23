@@ -1,0 +1,33 @@
+{
+ "building": 315,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b315_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Full facade extracted, top and sides corrected from hint.",
+ "corners": [
+  [
+   0,
+   10
+  ],
+  [
+   500,
+   10
+  ],
+  [
+   500,
+   398
+  ],
+  [
+   40,
+   398
+  ]
+ ],
+ "wall_color": "#904F44",
+ "occlusion": "low",
+ "confidence": 0.9
+}

@@ -1,0 +1,16 @@
+{
+ "building": 196,
+ "edge": 2,
+ "model": "gemini-2.5-flash",
+ "image": "b196_e2_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Building facade is cut off by image boundary.",
+ "corners": [],
+ "wall_color": "#DCCAB6",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

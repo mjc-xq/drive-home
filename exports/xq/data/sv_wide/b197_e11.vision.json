@@ -1,0 +1,33 @@
+{
+ "building": 197,
+ "edge": 11,
+ "model": "gemini-2.5-flash",
+ "image": "b197_e11_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade heavily occluded at ground level.",
+ "corners": [
+  [
+   75,
+   155
+  ],
+  [
+   575,
+   155
+  ],
+  [
+   580,
+   490
+  ],
+  [
+   72,
+   490
+  ]
+ ],
+ "wall_color": "#FFFFFF",
+ "occlusion": "high",
+ "confidence": 0.8
+}

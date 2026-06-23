@@ -1,0 +1,33 @@
+{
+ "building": 135,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b135_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade visible despite high occlusion.",
+ "corners": [
+  [
+   85,
+   200
+  ],
+  [
+   515,
+   205
+  ],
+  [
+   515,
+   485
+  ],
+  [
+   85,
+   485
+  ]
+ ],
+ "wall_color": "#E0E0E0",
+ "occlusion": "high",
+ "confidence": 0.6
+}

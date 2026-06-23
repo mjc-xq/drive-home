@@ -1,0 +1,16 @@
+{
+ "building": 154,
+ "edge": 2,
+ "model": "gemini-2.5-flash",
+ "image": "b154_e2_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Left side of building is too blurry to define extent or extract usable texture.",
+ "corners": [],
+ "wall_color": "#CDCDC8",
+ "occlusion": "high",
+ "confidence": 0.1
+}

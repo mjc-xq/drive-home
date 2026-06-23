@@ -1,0 +1,33 @@
+{
+ "building": 146,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b146_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Main facade of pink building on left, heavily occluded.",
+ "corners": [
+  [
+   0,
+   105
+  ],
+  [
+   200,
+   110
+  ],
+  [
+   200,
+   400
+  ],
+  [
+   0,
+   400
+  ]
+ ],
+ "wall_color": "#D19B8B",
+ "occlusion": "high",
+ "confidence": 0.6
+}

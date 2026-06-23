@@ -1,0 +1,33 @@
+{
+ "building": 341,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b341_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Main building facade including concrete base and glass upper structure.",
+ "corners": [
+  [
+   0,
+   100
+  ],
+  [
+   639,
+   0
+  ],
+  [
+   639,
+   300
+  ],
+  [
+   0,
+   511
+  ]
+ ],
+ "wall_color": "#919799",
+ "occlusion": "low",
+ "confidence": 0.8
+}

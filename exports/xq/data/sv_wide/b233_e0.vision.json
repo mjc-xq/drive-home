@@ -1,0 +1,33 @@
+{
+ "building": 233,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b233_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade present but heavily occluded.",
+ "corners": [
+  [
+   57,
+   125
+  ],
+  [
+   510,
+   150
+  ],
+  [
+   510,
+   485
+  ],
+  [
+   57,
+   512
+  ]
+ ],
+ "wall_color": "#C7B99B",
+ "occlusion": "high",
+ "confidence": 0.6
+}

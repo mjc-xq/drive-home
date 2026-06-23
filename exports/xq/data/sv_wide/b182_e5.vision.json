@@ -1,0 +1,16 @@
+{
+ "building": 182,
+ "edge": 5,
+ "model": "gemini-2.5-flash",
+ "image": "b182_e5_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Significant occlusion by foreground object (truck) prevents identification of the building's complete ground-floor base as required by the task definition.",
+ "corners": [],
+ "wall_color": "#D8D8D8",
+ "occlusion": "high",
+ "confidence": 1.0
+}

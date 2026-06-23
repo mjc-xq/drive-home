@@ -1,0 +1,16 @@
+{
+ "building": 322,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b322_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "The target indicated by the magenta quad is an elevated freeway support structure, not a building facade with stories, a roofline, or a ground-floor base as required by the task instructions for facade texture extraction.",
+ "corners": [],
+ "wall_color": "#90969A",
+ "occlusion": "high",
+ "confidence": 0.0
+}

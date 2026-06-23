@@ -1,0 +1,10 @@
+{
+  "building": 112,
+  "edge": 0,
+  "reject": false,
+  "reason": "Wall visible from left edge to B-corner; upper green stucco floors usable above awning level; strong perspective but rectifiable",
+  "corners": [[0, 22], [495, 95], [510, 230], [0, 245]],
+  "wall_color": "#7a8c5e",
+  "occlusion": "medium",
+  "confidence": 0.52
+}

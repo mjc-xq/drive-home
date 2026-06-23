@@ -1,0 +1,10 @@
+{
+  "building": 112,
+  "edge": 3,
+  "reject": false,
+  "reason": "Clean head-on white stucco wall with good coverage; bottom raised above green awning; left edge partially occluded by tree and street pole but upper wall mostly clean",
+  "corners": [[108, 20], [538, 20], [560, 255], [78, 255]],
+  "wall_color": "#d8d4c8",
+  "occlusion": "low",
+  "confidence": 0.82
+}

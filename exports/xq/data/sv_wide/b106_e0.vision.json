@@ -1,0 +1,10 @@
+{
+  "building": 106,
+  "edge": 0,
+  "reject": false,
+  "reason": "Ground-floor facade is mostly garage door with small wall strips; usable flat wall area is limited but wall plane is clear",
+  "corners": [[163, 252], [542, 252], [542, 480], [163, 480]],
+  "wall_color": "#5a5a58",
+  "occlusion": "medium",
+  "confidence": 0.62
+}

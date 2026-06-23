@@ -1,0 +1,33 @@
+{
+ "building": 196,
+ "edge": 4,
+ "model": "gemini-2.5-flash",
+ "image": "b196_e4_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "",
+ "corners": [
+  [
+   259.0,
+   0.0
+  ],
+  [
+   382.0,
+   0.0
+  ],
+  [
+   385.2,
+   442.8
+  ],
+  [
+   255.9,
+   441.1
+  ]
+ ],
+ "wall_color": "#D9D2C5",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

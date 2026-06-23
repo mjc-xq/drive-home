@@ -1,0 +1,1 @@
+{"building":103,"edge":0,"reject":true,"reason":"extremely wide FOV (110°) shot from inside a gas station; building is far left at small scale, steeply oblique, and the prior projection goes far off-screen; not usable","corners":[],"wall_color":"#d4cfc0","occlusion":"high","confidence":0.15}

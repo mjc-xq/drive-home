@@ -1,0 +1,10 @@
+{
+  "building": 112,
+  "edge": 9,
+  "reject": false,
+  "reason": "Light gray/beige multi-story facade; upper wall is clean above the awnings; lower ground-floor is occluded by awnings and signage",
+  "corners": [[220, 22], [500, 8], [508, 215], [215, 218]],
+  "wall_color": "#c8c4bc",
+  "occlusion": "low",
+  "confidence": 0.82
+}

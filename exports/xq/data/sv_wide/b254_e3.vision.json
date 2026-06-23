@@ -1,0 +1,33 @@
+{
+ "building": 254,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b254_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade visible but heavily occluded by foreground objects.",
+ "corners": [
+  [
+   28,
+   210
+  ],
+  [
+   536,
+   225
+  ],
+  [
+   536,
+   340
+  ],
+  [
+   28,
+   360
+  ]
+ ],
+ "wall_color": "#306090",
+ "occlusion": "high",
+ "confidence": 0.8
+}

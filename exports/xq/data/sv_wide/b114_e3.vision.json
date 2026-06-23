@@ -1,0 +1,33 @@
+{
+ "building": 114,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b114_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Visible portion of the first house on the right, clipped to image boundaries.",
+ "corners": [
+  [
+   555,
+   180
+  ],
+  [
+   639,
+   178
+  ],
+  [
+   639,
+   308
+  ],
+  [
+   555,
+   308
+  ]
+ ],
+ "wall_color": "#E6D7BE",
+ "occlusion": "low",
+ "confidence": 0.9
+}

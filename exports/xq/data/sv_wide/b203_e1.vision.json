@@ -1,0 +1,33 @@
+{
+ "building": 203,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b203_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade extracted.",
+ "corners": [
+  [
+   62,
+   102
+  ],
+  [
+   533,
+   102
+  ],
+  [
+   534,
+   500
+  ],
+  [
+   62,
+   500
+  ]
+ ],
+ "wall_color": "#DAD4C8",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

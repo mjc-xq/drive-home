@@ -1,0 +1,16 @@
+{
+ "building": 288,
+ "edge": 7,
+ "model": "gemini-2.5-flash",
+ "image": "b288_e7_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "The image is a close-up of a reflective glass facade, making it impossible to determine the building's true roofline, ground-floor base, or complete side edges as required. Additionally, the highly reflective surface prevents identification of a dominant flat wall material color.",
+ "corners": [],
+ "wall_color": "#192328",
+ "occlusion": "high",
+ "confidence": 0.1
+}

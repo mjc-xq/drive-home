@@ -1,0 +1,10 @@
+{
+  "building": 107,
+  "edge": 0,
+  "reject": true,
+  "reason": "Left side wall is steeply oblique; camera is positioned to the right of the building so this face is seen almost edge-on — B side is entirely off-frame and only a narrow near-corner sliver is visible",
+  "corners": [],
+  "wall_color": "#e8e2d4",
+  "occlusion": "low",
+  "confidence": 0.2
+}

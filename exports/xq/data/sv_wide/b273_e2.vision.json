@@ -1,0 +1,33 @@
+{
+ "building": 273,
+ "edge": 2,
+ "model": "gemini-2.5-flash",
+ "image": "b273_e2_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade clearly visible.",
+ "corners": [
+  [
+   108.0,
+   249.0
+  ],
+  [
+   495.5,
+   249.0
+  ],
+  [
+   499.1,
+   613.8
+  ],
+  [
+   102.7,
+   654.0
+  ]
+ ],
+ "wall_color": "#9EA8B0",
+ "occlusion": "low",
+ "confidence": 0.9
+}

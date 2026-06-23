@@ -1,0 +1,33 @@
+{
+ "building": 220,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b220_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Main facade of the building.",
+ "corners": [
+  [
+   185,
+   205
+  ],
+  [
+   435,
+   215
+  ],
+  [
+   438,
+   415
+  ],
+  [
+   188,
+   418
+  ]
+ ],
+ "wall_color": "#D0C4AD",
+ "occlusion": "medium",
+ "confidence": 0.8
+}

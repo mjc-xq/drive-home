@@ -1,0 +1,33 @@
+{
+ "building": 198,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b198_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade clearly visible, but bottom heavily occluded by market stalls.",
+ "corners": [
+  [
+   0,
+   170
+  ],
+  [
+   640,
+   170
+  ],
+  [
+   640,
+   370
+  ],
+  [
+   0,
+   370
+  ]
+ ],
+ "wall_color": "#DCDCD7",
+ "occlusion": "high",
+ "confidence": 0.8
+}

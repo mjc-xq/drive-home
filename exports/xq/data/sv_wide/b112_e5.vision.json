@@ -1,0 +1,10 @@
+{
+  "building": 112,
+  "edge": 5,
+  "reject": false,
+  "reason": "Large red stucco wall visible; tree partially occludes left, green awning and gate occlude lower-right",
+  "corners": [[148, 62], [555, 62], [555, 250], [140, 370]],
+  "wall_color": "#b54d3a",
+  "occlusion": "medium",
+  "confidence": 0.72
+}

@@ -1,0 +1,16 @@
+{
+ "building": 192,
+ "edge": 15,
+ "model": "gemini-2.5-flash",
+ "image": "b192_e15_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "No usable building face present for b192 e15. The magenta quad outlines a vehicle. Distant background buildings are too blurry, small, and heavily occluded to extract a facade texture.",
+ "corners": [],
+ "wall_color": "#D4C9B0",
+ "occlusion": "high",
+ "confidence": 0.0
+}

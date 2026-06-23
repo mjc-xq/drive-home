@@ -1,0 +1,33 @@
+{
+ "building": 155,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b155_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade extracted.",
+ "corners": [
+  [
+   395,
+   178
+  ],
+  [
+   590,
+   175
+  ],
+  [
+   595,
+   365
+  ],
+  [
+   398,
+   368
+  ]
+ ],
+ "wall_color": "#8D5A32",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

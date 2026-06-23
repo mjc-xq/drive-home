@@ -1,0 +1,33 @@
+{
+ "building": 44,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b44_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Main building facade",
+ "corners": [
+  [
+   40,
+   110
+  ],
+  [
+   425,
+   125
+  ],
+  [
+   428,
+   345
+  ],
+  [
+   45,
+   395
+  ]
+ ],
+ "wall_color": "#8B4030",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

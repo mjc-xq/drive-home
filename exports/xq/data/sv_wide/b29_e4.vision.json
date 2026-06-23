@@ -1,0 +1,16 @@
+{
+ "building": 29,
+ "edge": 4,
+ "model": "gemini-2.5-flash",
+ "image": "b29_e4_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Facade heavily obscured by dense tree foliage, making it unusable for texture extraction.",
+ "corners": [],
+ "wall_color": "#E0E0D0",
+ "occlusion": "high",
+ "confidence": 0.9
+}

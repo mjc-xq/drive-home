@@ -1,0 +1,33 @@
+{
+ "building": 32,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b32_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade clearly visible and extractable.",
+ "corners": [
+  [
+   32,
+   183
+  ],
+  [
+   548,
+   190
+  ],
+  [
+   549,
+   338
+  ],
+  [
+   33,
+   350
+  ]
+ ],
+ "wall_color": "#7C878F",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

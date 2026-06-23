@@ -1,0 +1,33 @@
+{
+ "building": 215,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b215_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "",
+ "corners": [
+  [
+   58,
+   158
+  ],
+  [
+   550,
+   158
+  ],
+  [
+   560,
+   370
+  ],
+  [
+   50,
+   380
+  ]
+ ],
+ "wall_color": "#E0DDCF",
+ "occlusion": "high",
+ "confidence": 0.9
+}

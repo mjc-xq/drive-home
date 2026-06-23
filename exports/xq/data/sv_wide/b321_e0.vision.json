@@ -1,0 +1,33 @@
+{
+ "building": 321,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b321_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade extracted from visible structure under elevated road.",
+ "corners": [
+  [
+   74,
+   124
+  ],
+  [
+   459,
+   209
+  ],
+  [
+   460,
+   309
+  ],
+  [
+   55,
+   306
+  ]
+ ],
+ "wall_color": "#333333",
+ "occlusion": "high",
+ "confidence": 0.7
+}

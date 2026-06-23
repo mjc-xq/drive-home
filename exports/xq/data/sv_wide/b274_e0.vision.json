@@ -1,0 +1,17 @@
+{
+ "building": 274,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b274_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "error:TimeoutError",
+ "corners": [],
+ "wall_color": null,
+ "occlusion": "unknown",
+ "confidence": 0.0,
+ "_err": "The read operation timed out"
+}

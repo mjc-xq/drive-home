@@ -87,11 +87,11 @@ const DRACO_EXT = 'KHR_draco_mesh_compression';
 //                   and referenced from the .meta.json (the web grass occlusion samples it — the
 //                   old paved mask was rendered from Roads/Sidewalks meshes that no longer exist).
 const LEVELS = [
-  { src: 'dahill/dahill.level.glb',   out: 'level',   metaSource: 'dahill/dahill.level.glb',   pavedMaskSrc: 'dahill/_ground/paved_mask.png' },
-  { src: 'canyon/canyon.level.glb',   out: 'canyon',  metaSource: 'canyon/canyon.level.glb',   pavedMaskSrc: 'canyon/_ground/paved_mask.png' },
-  { src: 'stanton/stanton.level.glb', out: 'stanton', metaSource: 'stanton/stanton.level.glb', pavedMaskSrc: 'stanton/_ground/paved_mask.png' },
-  { src: 'meemaw/meemaw.level.glb',   out: 'meemaw',  metaSource: 'meemaw/meemaw.level.glb',   pavedMaskSrc: 'meemaw/_ground/paved_mask.png' },
-  { src: 'xq/xq.level.glb',           out: 'xq',      metaSource: 'xq/xq.level.glb',           pavedMaskSrc: 'xq/_ground/paved_mask.png' },
+  { src: 'dahill/dahill.level.glb',   out: 'level',   metaSource: 'dahill/dahill.level.glb',   pavedMaskSrc: 'dahill/data/_ground/paved_mask.png' },
+  { src: 'canyon/canyon.level.glb',   out: 'canyon',  metaSource: 'canyon/canyon.level.glb',   pavedMaskSrc: 'canyon/data/_ground/paved_mask.png' },
+  { src: 'stanton/stanton.level.glb', out: 'stanton', metaSource: 'stanton/stanton.level.glb', pavedMaskSrc: 'stanton/data/_ground/paved_mask.png' },
+  { src: 'meemaw/meemaw.level.glb',   out: 'meemaw',  metaSource: 'meemaw/meemaw.level.glb',   pavedMaskSrc: 'meemaw/data/_ground/paved_mask.png' },
+  { src: 'xq/xq.level.glb',           out: 'xq',      metaSource: 'xq/xq.level.glb',           pavedMaskSrc: 'xq/data/_ground/paved_mask.png' },
 ].filter((lv) => {
   // DAHILG_ONLY=xq[,canyon...] restricts the LEVELS build (and meta pass) to the named outputs —
   // a targeted rebuild after re-exporting one level, so the others' GLBs aren't rewritten.

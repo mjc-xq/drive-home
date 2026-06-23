@@ -1,0 +1,16 @@
+{
+ "building": 129,
+ "edge": 4,
+ "model": "gemini-2.5-flash",
+ "image": "b129_e4_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "No building visible in the image.",
+ "corners": [],
+ "wall_color": "#C8C0B3",
+ "occlusion": "none",
+ "confidence": 0.0
+}

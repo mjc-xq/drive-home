@@ -1,0 +1,33 @@
+{
+ "building": 218,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b218_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade clearly visible, bottom partially occluded by car.",
+ "corners": [
+  [
+   98,
+   218
+  ],
+  [
+   582,
+   218
+  ],
+  [
+   582,
+   390
+  ],
+  [
+   98,
+   390
+  ]
+ ],
+ "wall_color": "#DCD0B4",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

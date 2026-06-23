@@ -1,0 +1,33 @@
+{
+ "building": 211,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b211_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade clearly visible.",
+ "corners": [
+  [
+   72,
+   112
+  ],
+  [
+   452,
+   122
+  ],
+  [
+   452,
+   498
+  ],
+  [
+   72,
+   508
+  ]
+ ],
+ "wall_color": "#DDC99F",
+ "occlusion": "high",
+ "confidence": 0.9
+}

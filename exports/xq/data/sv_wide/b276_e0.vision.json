@@ -1,0 +1,33 @@
+{
+ "building": 276,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b276_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade extracted, bottom and right side heavily occluded by cars and tree.",
+ "corners": [
+  [
+   68,
+   190
+  ],
+  [
+   580,
+   188
+  ],
+  [
+   585,
+   400
+  ],
+  [
+   65,
+   405
+  ]
+ ],
+ "wall_color": "#B2BCC1",
+ "occlusion": "high",
+ "confidence": 0.7
+}

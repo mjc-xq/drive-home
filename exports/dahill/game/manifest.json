@@ -1,0 +1,224 @@
+{
+  "version": "1.0",
+  "level": "dahill",
+  "master": "dahill.level.glb",
+  "masterBytes": 229973536,
+  "masterTris": 3423284,
+  "exportDate": "2026-06-23T22:09:15.783Z",
+  "offset": [
+    -0.095,
+    33.073,
+    -0.695
+  ],
+  "worldBounds": {
+    "min": [
+      -627.92333984375,
+      -1,
+      -603.7375898448229
+    ],
+    "max": [
+      620.6919555664062,
+      97.05271308041617,
+      613.7018242509822
+    ]
+  },
+  "heightfield": {
+    "file": "heightfield.bin",
+    "format": "uint16",
+    "origin": [
+      -600,
+      -600
+    ],
+    "posting": 2,
+    "cols": 600,
+    "rows": 600,
+    "minY": 33.0726,
+    "maxY": 93.7525,
+    "bounds": {
+      "min": [
+        -600,
+        33.072593688964844,
+        -600
+      ],
+      "max": [
+        598,
+        93.75250244140625,
+        598
+      ]
+    },
+    "bytes": 720000
+  },
+  "layers": [
+    {
+      "name": "collision",
+      "file": "collision.glb",
+      "bytes": 790844,
+      "tris": 19212,
+      "required": true,
+      "priority": 0,
+      "toggleable": false,
+      "noTextures": true,
+      "boxes": 1601,
+      "bounds": {
+        "min": [
+          -627.92333984375,
+          34.07522805117563,
+          -602.0260430009822
+        ],
+        "max": [
+          600.4000244140625,
+          97.05271308041617,
+          613.7018242509822
+        ]
+      }
+    },
+    {
+      "name": "terrain",
+      "file": "terrain.glb",
+      "bytes": 6975916,
+      "tris": 249999,
+      "required": true,
+      "priority": 0,
+      "toggleable": false,
+      "bounds": {
+        "min": [
+          -600,
+          33.066773352822494,
+          -600
+        ],
+        "max": [
+          598,
+          93.7583227775486,
+          598
+        ]
+      }
+    },
+    {
+      "name": "roads",
+      "file": "roads.glb",
+      "bytes": 1133072,
+      "tris": 299350,
+      "required": false,
+      "priority": 2,
+      "toggleable": true,
+      "bounds": {
+        "min": [
+          -607.328369140625,
+          33.15329000039935,
+          -603.7375898448229
+        ],
+        "max": [
+          603.962646484375,
+          92.30521045329472,
+          607.4055585948229
+        ]
+      }
+    },
+    {
+      "name": "buildings",
+      "file": "buildings.glb",
+      "bytes": 10847044,
+      "tris": 194674,
+      "required": true,
+      "priority": 1,
+      "toggleable": false,
+      "bounds": {
+        "min": [
+          -627.92333984375,
+          34.15013489360301,
+          -601.9510698045187
+        ],
+        "max": [
+          600.4003081347681,
+          96.9795817804692,
+          613.6278669576906
+        ]
+      }
+    },
+    {
+      "name": "trees",
+      "file": "trees.glb",
+      "bytes": 499012,
+      "tris": 138095,
+      "required": false,
+      "priority": 3,
+      "toggleable": true,
+      "bounds": {
+        "min": [
+          -528.7423350003858,
+          -1,
+          -571.1204833984375
+        ],
+        "max": [
+          318.4533945706983,
+          52.90888013393546,
+          340.6298522949219
+        ]
+      },
+      "instanced": true
+    },
+    {
+      "name": "creek",
+      "file": "creek.glb",
+      "bytes": 45940,
+      "tris": 6528,
+      "required": false,
+      "priority": 3,
+      "toggleable": true,
+      "bounds": {
+        "min": [
+          -608.6236572265625,
+          33.890039690081494,
+          -334.91323435293816
+        ],
+        "max": [
+          620.6919555664062,
+          54.8983018321353,
+          430.2060199974694
+        ]
+      }
+    },
+    {
+      "name": "fences",
+      "file": "fences.glb",
+      "bytes": 31580,
+      "tris": 1272,
+      "required": false,
+      "priority": 3,
+      "toggleable": true,
+      "bounds": {
+        "min": [
+          -35.43046343418041,
+          39.81645837166372,
+          -41.19801801076997
+        ],
+        "max": [
+          18.386033895782568,
+          49.910016612599286,
+          20.37268957843834
+        ]
+      }
+    }
+  ],
+  "loadOrder": [
+    [
+      "collision",
+      "terrain"
+    ],
+    [
+      "buildings"
+    ],
+    [
+      "roads"
+    ],
+    [
+      "trees",
+      "creek",
+      "fences"
+    ]
+  ],
+  "totalBytes": 21043408,
+  "requiredBytes": 19333804,
+  "reductionPercent": 90.8,
+  "ungrouped": []
+}

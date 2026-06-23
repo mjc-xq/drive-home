@@ -1,0 +1,16 @@
+{
+ "building": 265,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b265_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "Building facade heavily occluded by dense foliage, no complete face visible for extraction.",
+ "corners": [],
+ "wall_color": "#F5F5DC",
+ "occlusion": "high",
+ "confidence": 0.1
+}

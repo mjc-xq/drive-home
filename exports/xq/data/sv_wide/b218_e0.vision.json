@@ -1,0 +1,16 @@
+{
+ "building": 218,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b218_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "The building facade is almost entirely obscured by a large foreground tree, making it impossible to accurately define its complete and coherent boundaries.",
+ "corners": [],
+ "wall_color": "#D1C7A4",
+ "occlusion": "high",
+ "confidence": 0.1
+}

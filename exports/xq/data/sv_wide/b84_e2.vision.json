@@ -1,0 +1,33 @@
+{
+ "building": 84,
+ "edge": 2,
+ "model": "gemini-2.5-flash",
+ "image": "b84_e2_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Glass facade, fence occlusion.",
+ "corners": [
+  [
+   149,
+   0
+  ],
+  [
+   486,
+   0
+  ],
+  [
+   492,
+   460
+  ],
+  [
+   143,
+   462
+  ]
+ ],
+ "wall_color": "#D8D8D8",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

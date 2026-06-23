@@ -1,0 +1,16 @@
+{
+ "building": 268,
+ "edge": 1,
+ "model": "gemini-2.5-flash",
+ "image": "b268_e1_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "No discernible building facade due to extreme blurring.",
+ "corners": [],
+ "wall_color": "#A0A0A0",
+ "occlusion": "none",
+ "confidence": 0.0
+}

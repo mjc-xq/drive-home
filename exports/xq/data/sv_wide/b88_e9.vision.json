@@ -1,0 +1,33 @@
+{
+ "building": 88,
+ "edge": 9,
+ "model": "gemini-2.5-flash",
+ "image": "b88_e9_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Facade extracted.",
+ "corners": [
+  [
+   70,
+   179
+  ],
+  [
+   565,
+   178
+  ],
+  [
+   573,
+   404
+  ],
+  [
+   65,
+   404
+  ]
+ ],
+ "wall_color": "#A8BEC7",
+ "occlusion": "low",
+ "confidence": 0.9
+}

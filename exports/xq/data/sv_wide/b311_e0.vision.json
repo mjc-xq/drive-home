@@ -1,0 +1,33 @@
+{
+ "building": 311,
+ "edge": 0,
+ "model": "gemini-2.5-flash",
+ "image": "b311_e0_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Full facade including upper stories, respecting perspective and neighbor exclusion.",
+ "corners": [
+  [
+   0.0,
+   10.0
+  ],
+  [
+   580.0,
+   10.0
+  ],
+  [
+   640.0,
+   330.0
+  ],
+  [
+   0.0,
+   330.0
+  ]
+ ],
+ "wall_color": "#C7B9A7",
+ "occlusion": "high",
+ "confidence": 0.8
+}

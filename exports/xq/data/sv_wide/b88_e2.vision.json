@@ -1,0 +1,33 @@
+{
+ "building": 88,
+ "edge": 2,
+ "model": "gemini-2.5-flash",
+ "image": "b88_e2_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Corrected top, left, and bottom right based on visible building features and perspective, raising the top to the roofline and extending the left edge to the building's true boundary.",
+ "corners": [
+  [
+   191,
+   101
+  ],
+  [
+   380,
+   101
+  ],
+  [
+   380,
+   423
+  ],
+  [
+   191,
+   491
+  ]
+ ],
+ "wall_color": "#E1DACE",
+ "occlusion": "high",
+ "confidence": 0.8
+}

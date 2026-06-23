@@ -1,0 +1,33 @@
+{
+ "building": 282,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b282_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Main bay window facade extracted.",
+ "corners": [
+  [
+   198,
+   107
+  ],
+  [
+   562,
+   102
+  ],
+  [
+   570,
+   495
+  ],
+  [
+   205,
+   500
+  ]
+ ],
+ "wall_color": "#2A4866",
+ "occlusion": "medium",
+ "confidence": 0.9
+}

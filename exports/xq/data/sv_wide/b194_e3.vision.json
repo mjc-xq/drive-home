@@ -1,0 +1,33 @@
+{
+ "building": 194,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b194_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade visible but left side heavily occluded.",
+ "corners": [
+  [
+   160,
+   231
+  ],
+  [
+   399,
+   275
+  ],
+  [
+   399,
+   378
+  ],
+  [
+   160,
+   431
+  ]
+ ],
+ "wall_color": "#BEC3C6",
+ "occlusion": "medium",
+ "confidence": 0.6
+}

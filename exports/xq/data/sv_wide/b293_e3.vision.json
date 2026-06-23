@@ -1,0 +1,16 @@
+{
+ "building": 293,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b293_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": true,
+ "reason": "The area indicated by the magenta quad is an empty lot with a fence and distant structures, not a single usable building facade.",
+ "corners": [],
+ "wall_color": "#808080",
+ "occlusion": "none",
+ "confidence": 1.0
+}

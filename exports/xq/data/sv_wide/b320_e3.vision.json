@@ -1,0 +1,33 @@
+{
+ "building": 320,
+ "edge": 3,
+ "model": "gemini-2.5-flash",
+ "image": "b320_e3_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Building facade is present, but bottom is heavily occluded and clipped by image boundary.",
+ "corners": [
+  [
+   60,
+   360
+  ],
+  [
+   565,
+   368
+  ],
+  [
+   565,
+   512
+  ],
+  [
+   60,
+   512
+  ]
+ ],
+ "wall_color": "#DCDCDC",
+ "occlusion": "high",
+ "confidence": 0.75
+}

@@ -1,0 +1,33 @@
+{
+ "building": 25,
+ "edge": 5,
+ "model": "gemini-2.5-flash",
+ "image": "b25_e5_wide.jpg",
+ "image_size": [
+  640,
+  512
+ ],
+ "reject": false,
+ "reason": "Heavy tree occlusion on left side, inferred full extent.",
+ "corners": [
+  [
+   170,
+   308
+  ],
+  [
+   490,
+   300
+  ],
+  [
+   490,
+   410
+  ],
+  [
+   170,
+   418
+  ]
+ ],
+ "wall_color": "#DCD2C3",
+ "occlusion": "high",
+ "confidence": 0.6
+}
