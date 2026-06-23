@@ -15,9 +15,11 @@ parked-look*.jpeg
 scoop-*.jpeg
 drive-*.jpeg
 
-# scratch screenshots at repo root (debug only)
+# scratch screenshots + temp scripts at repo root (debug only)
 /*.jpeg
 /*.png
+/tmp-*
+/tmp_*
 /.playwright-mcp/
 .vercel
 
@@ -34,10 +36,9 @@ drive-*.jpeg
 /unity/DaHilgUnity/*.csproj
 /unity/DaHilgUnity/*.sln
 /unity/DaHilgUnity/*.sln.DotSettings.user
-unity-create.log
-unity-build.log
-unity-build-mac.log
-unity-import.log
+
+# build/render logs are debug scratch — never commit (was committing rebuild/render/etc.)
+*.log
 
 # Local macOS standalone build (secondary target, not deployed)
 /build/
