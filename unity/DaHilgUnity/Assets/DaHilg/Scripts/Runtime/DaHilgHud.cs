@@ -11,24 +11,24 @@ namespace DaHilg
     [RequireComponent(typeof(UIDocument))]
     public sealed class DaHilgHud : MonoBehaviour
     {
-        // ── Driving-game theme tokens (mirrors src/styles.css :root) ─────────────
-        // Square chrome (radius 0), nav-app glass panels, AGC numbers + Chakra-style
-        // kicker labels. Every color below is the hex from styles.css converted to
-        // Unity's 0..1 RGBA so the Unity HUD reads as the same product.
-        static readonly Color k_Nav = new Color(0.176f, 0.549f, 1f, 1f);        // --nav  #2D8CFF
-        static readonly Color k_Go = new Color(0.169f, 0.910f, 0.310f, 1f);     // --go   #2BE84F
-        static readonly Color k_Coin = new Color(1f, 0.784f, 0.239f, 1f);       // --coin #FFC83D
-        static readonly Color k_Reverse = new Color(1f, 0.322f, 0.278f, 1f);    // --reverse #FF5247
-        static readonly Color k_Jump = new Color(0.608f, 0.482f, 1f, 1f);       // --jump #9B7BFF
-        static readonly Color k_Glass = new Color(0.031f, 0.039f, 0.055f, 0.66f); // --hud-glass
-        static readonly Color k_GlassDeep = new Color(0.039f, 0.047f, 0.063f, 0.82f);
-        static readonly Color k_PanelDeep = new Color(0.039f, 0.047f, 0.063f, 0.95f);
-        static readonly Color k_Line = new Color(1f, 1f, 1f, 0.18f);            // --hud-line
-        static readonly Color k_Text = new Color(0.957f, 0.945f, 0.917f, 1f);   // --txt
-        static readonly Color k_TextDim = new Color(1f, 1f, 1f, 0.5f);
-        static readonly Color k_TextFaint = new Color(1f, 1f, 1f, 0.62f);
-        static readonly Color k_Fill = new Color(1f, 1f, 1f, 0.05f);
-        static readonly Color k_FillHi = new Color(1f, 1f, 1f, 0.1f);
+        // ── Driving-game theme tokens ─────────────────────────────────────────────
+        // SINGLE SOURCE OF TRUTH lives in DaHilgHudTheme; these aliases keep the rest of
+        // the file terse. The drive HUD uses rounded glass chrome + neutral control fills
+        // and reserves the bright accents for ACTIVE states only — see DaHilgHudTheme.
+        static readonly Color k_Nav = DaHilgHudTheme.Nav;          // --nav  #2D8CFF
+        static readonly Color k_Go = DaHilgHudTheme.Go;            // --go   #2BE84F
+        static readonly Color k_Coin = DaHilgHudTheme.Coin;        // --coin #FFC83D
+        static readonly Color k_Reverse = DaHilgHudTheme.Reverse;  // --reverse #FF5247
+        static readonly Color k_Jump = DaHilgHudTheme.Jump;        // --jump #9B7BFF
+        static readonly Color k_Glass = DaHilgHudTheme.Glass;      // --hud-glass
+        static readonly Color k_GlassDeep = DaHilgHudTheme.GlassDeep;
+        static readonly Color k_PanelDeep = DaHilgHudTheme.PanelDeep;
+        static readonly Color k_Line = DaHilgHudTheme.Line;        // --hud-line
+        static readonly Color k_Text = DaHilgHudTheme.Text;        // --txt
+        static readonly Color k_TextDim = DaHilgHudTheme.TextDim;
+        static readonly Color k_TextFaint = DaHilgHudTheme.TextFaint;
+        static readonly Color k_Fill = DaHilgHudTheme.Fill;
+        static readonly Color k_FillHi = DaHilgHudTheme.FillHi;
 
         DaHilgGameManager m_Manager;
         DaHilgInputRouter m_Input;
@@ -172,10 +172,15 @@ namespace DaHilg
                 string id = button.userData as string;
                 bool active = id == actor.Id;
                 button.EnableInClassList("active", active);
-                button.style.borderTopColor = active ? Color.white : new Color(1f, 1f, 1f, 0.25f);
-                button.style.borderBottomColor = button.style.borderTopColor.value;
-                button.style.borderLeftColor = button.style.borderTopColor.value;
-                button.style.borderRightColor = button.style.borderTopColor.value;
+                // Active = tinted glass + colored accent ring (drive HUD .charOpt.on); resting
+                // is plain neutral glass. Colour lives on state, not on the resting fill.
+                Color accent = CharacterAccent(id);
+                button.style.backgroundColor = active ? WithAlpha(accent, 0.22f) : k_Fill;
+                Color border = active ? new Color(accent.r, accent.g, accent.b, 0.9f) : k_Line;
+                button.style.borderTopColor = border;
+                button.style.borderBottomColor = border;
+                button.style.borderLeftColor = border;
+                button.style.borderRightColor = border;
                 button.style.borderTopWidth = active ? 2 : 1;
                 button.style.borderBottomWidth = button.style.borderTopWidth.value;
                 button.style.borderLeftWidth = button.style.borderTopWidth.value;
@@ -551,6 +556,7 @@ namespace DaHilg
             m_MarkLabel.style.paddingBottom = 7;
             m_MarkLabel.style.backgroundColor = WithAlpha(k_Reverse, 0.86f);
             m_MarkLabel.style.letterSpacing = 2f;
+            RoundCorners(m_MarkLabel, DaHilgHudTheme.Radius);
             ApplyFont(m_MarkLabel, m_AgcHeavyFont);
             m_MarkLabel.style.display = DisplayStyle.None;
             m_Root.Add(m_MarkLabel);
@@ -568,6 +574,7 @@ namespace DaHilg
             m_Prompt.style.paddingBottom = 9;
             m_Prompt.style.backgroundColor = k_Glass;
             ApplyBorder(m_Prompt, k_Line, 1);
+            RoundCorners(m_Prompt, DaHilgHudTheme.RadiusLg);
             m_Prompt.pickingMode = PickingMode.Ignore; // pure readout — must not eat desktop clicks
             m_Root.Add(m_Prompt);
 
@@ -620,7 +627,7 @@ namespace DaHilg
         void BuildTopPanel()
         {
             // ── TOP-LEFT collapsible status panel ─────────────────────────────────
-            // Square nav-app glass card holding title/mode/score, the horizontal health
+            // Rounded nav-app glass card holding title/mode/score, the horizontal health
             // row, the nibbler counter chip and the framed minimap. A small ▾ toggle
             // collapses it to a one-line strip so the screen frees up.
             m_TopPanel = Panel();
@@ -658,11 +665,12 @@ namespace DaHilg
             m_TopCollapseButton.style.paddingTop = 0;
             m_TopCollapseButton.style.paddingBottom = 0;
             m_TopCollapseButton.style.flexShrink = 0;
-            m_TopCollapseButton.style.fontSize = 12;
+            m_TopCollapseButton.style.fontSize = 14;
             m_TopCollapseButton.style.color = k_Text;
             m_TopCollapseButton.style.backgroundColor = k_Fill;
             m_TopCollapseButton.style.unityTextAlign = TextAnchor.MiddleCenter;
             ApplyBorder(m_TopCollapseButton, k_Line, 1);
+            RoundCorners(m_TopCollapseButton, 8f);
             header.Add(m_TopCollapseButton);
 
             // Collapsed one-line strip (hidden until collapsed).
@@ -804,6 +812,7 @@ namespace DaHilg
             m_CharacterBar.style.flexDirection = FlexDirection.Row;
             m_CharacterBar.style.backgroundColor = k_Glass;
             ApplyBorder(m_CharacterBar, k_Line, 1);
+            RoundCorners(m_CharacterBar, DaHilgHudTheme.RadiusLg);
             m_CharacterBar.style.paddingLeft = 6;
             m_CharacterBar.style.paddingRight = 6;
             m_CharacterBar.style.paddingTop = 6;
@@ -819,19 +828,13 @@ namespace DaHilg
                 Action activate = () => m_Manager.SwitchTo(slotId);
                 Button button = new Button(activate) { text = slot.Label };
                 button.userData = slot.Id;
-                button.focusable = true;
                 button.tabIndex = i;
+                // Neutral glass like the drive HUD's .charSwitch — the per-character accent
+                // only shows on the ACTIVE outline (set in Refresh), never as a pastel fill.
+                StyleHudButton(button, DaHilgHudTheme.TouchTarget, DaHilgHudTheme.FontLabel);
                 button.style.marginLeft = 4;
                 button.style.marginRight = 4;
-                button.style.height = 34;
                 button.style.minWidth = 66;
-                button.style.unityFontStyleAndWeight = FontStyle.Bold;
-                button.style.backgroundColor = new Color(slot.Accent.r, slot.Accent.g, slot.Accent.b, 0.72f);
-                button.style.color = Color.white;
-                button.style.borderTopWidth = 1;
-                button.style.borderBottomWidth = 1;
-                button.style.borderLeftWidth = 1;
-                button.style.borderRightWidth = 1;
                 m_CharacterBar.Add(button);
                 m_CharacterButtons.Add(button);
             }
@@ -986,7 +989,7 @@ namespace DaHilg
 
             if (landscape)
             {
-                ApplyCompactBarSizing(42f, 9.5f);
+                ApplyCompactBarSizing(46f, 10f);
                 SetPanelFrame(m_TopPanel, 12, StyleKeyword.Auto, 12, StyleKeyword.Auto, 210, StyleKeyword.Auto);
                 // Minimap owns the upper-right; the segmented menu bar drops below it.
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 12, 12, StyleKeyword.Auto, 174, 120);
@@ -1025,7 +1028,7 @@ namespace DaHilg
             }
             else if (touch)
             {
-                ApplyCompactBarSizing(40f, 9f);
+                ApplyCompactBarSizing(46f, 9.5f);
                 SetPanelFrame(m_TopPanel, 16, StyleKeyword.Auto, 16, StyleKeyword.Auto, 218, StyleKeyword.Auto);
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 16, 16, StyleKeyword.Auto, 136, 108);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
@@ -1064,7 +1067,7 @@ namespace DaHilg
             }
             else
             {
-                ApplyCompactBarSizing(48f, 11f);
+                ApplyCompactBarSizing(50f, 11f);
                 SetPanelFrame(m_TopPanel, 18, StyleKeyword.Auto, 18, StyleKeyword.Auto, 232, StyleKeyword.Auto);
                 SetPanelFrame(m_Minimap, StyleKeyword.Auto, 18, 18, StyleKeyword.Auto, 190, 148);
                 SetBarFrame(m_CharacterBar, Length.Percent(50), StyleKeyword.Auto, StyleKeyword.Auto, 24, new Translate(Length.Percent(-50), 0));
@@ -1229,6 +1232,7 @@ namespace DaHilg
             m_EmoteBar.style.flexDirection = FlexDirection.Row;
             m_EmoteBar.style.backgroundColor = k_Glass;
             ApplyBorder(m_EmoteBar, k_Line, 1);
+            RoundCorners(m_EmoteBar, DaHilgHudTheme.RadiusLg);
             m_EmoteBar.style.paddingLeft = 5;
             m_EmoteBar.style.paddingRight = 5;
             m_EmoteBar.style.paddingTop = 5;
@@ -1242,16 +1246,11 @@ namespace DaHilg
                 int index = i;
                 Action activate = () => m_Input.QueueTouchEmote(index);
                 Button button = new Button(activate) { text = labels[i] };
-                button.focusable = true;
                 button.tabIndex = 10 + i;
+                StyleHudButton(button, DaHilgHudTheme.TouchTarget, 12);
                 button.style.marginLeft = 3;
                 button.style.marginRight = 3;
-                button.style.height = 30;
                 button.style.minWidth = 58;
-                button.style.unityFontStyleAndWeight = FontStyle.Bold;
-                button.style.backgroundColor = k_Fill;
-                button.style.color = Color.white;
-                ApplyBorder(button, k_Line, 1);
                 m_EmoteBar.Add(button);
                 m_EmoteButtons.Add(button);
             }
@@ -1269,6 +1268,7 @@ namespace DaHilg
             m_CameraBar.style.flexDirection = FlexDirection.Row;
             m_CameraBar.style.backgroundColor = k_Glass;
             ApplyBorder(m_CameraBar, k_Line, 1);
+            RoundCorners(m_CameraBar, DaHilgHudTheme.RadiusLg);
             m_CameraBar.style.paddingLeft = 5;
             m_CameraBar.style.paddingRight = 5;
             m_CameraBar.style.paddingTop = 5;
@@ -1295,6 +1295,7 @@ namespace DaHilg
             m_LevelBar.style.flexDirection = FlexDirection.Row;
             m_LevelBar.style.backgroundColor = k_Glass;
             ApplyBorder(m_LevelBar, k_Line, 1);
+            RoundCorners(m_LevelBar, DaHilgHudTheme.RadiusLg);
             m_LevelBar.style.paddingLeft = 5;
             m_LevelBar.style.paddingRight = 5;
             m_LevelBar.style.paddingTop = 5;
@@ -1318,7 +1319,7 @@ namespace DaHilg
         void BuildCompactControls()
         {
             // ── TOP-RIGHT segmented action bar (VIEW / PLAYER / LEVEL / ACTIONS) ──
-            // Square glass strip mirroring the driving game's .segBar; segments stack a
+            // Rounded glass strip mirroring the driving game's .segBar; segments stack a
             // tiny kicker over a value.
             m_CompactBar = new VisualElement();
             m_CompactBar.style.position = Position.Absolute;
@@ -1329,7 +1330,8 @@ namespace DaHilg
             m_CompactBar.style.alignItems = Align.Stretch;
             m_CompactBar.style.backgroundColor = k_Glass;
             ApplyBorder(m_CompactBar, k_Line, 1);
-            m_CompactBar.style.overflow = Overflow.Hidden;
+            RoundCorners(m_CompactBar, DaHilgHudTheme.RadiusLg);
+            m_CompactBar.style.overflow = Overflow.Hidden; // clips segments to the rounded outer frame, like .segBar
             m_CompactBar.style.paddingLeft = 0;
             m_CompactBar.style.paddingRight = 0;
             m_CompactBar.style.paddingTop = 0;
@@ -1388,6 +1390,7 @@ namespace DaHilg
             m_CompactPanel.style.maxHeight = 430;
             m_CompactPanel.style.backgroundColor = k_GlassDeep;
             ApplyBorder(m_CompactPanel, k_Line, 1);
+            RoundCorners(m_CompactPanel, DaHilgHudTheme.RadiusLg);
             m_CompactPanel.style.paddingLeft = 8;
             m_CompactPanel.style.paddingRight = 8;
             m_CompactPanel.style.paddingTop = 8;
@@ -1412,15 +1415,19 @@ namespace DaHilg
 
         static void MakeBarSegment(Button button)
         {
+            // Segments tile edge-to-edge inside the rounded+clipped .segBar container, so they
+            // drop their own border AND radius — the outer frame supplies both.
             if (button == null) return;
             button.style.flexGrow = 1;
             button.style.flexBasis = 0;
             button.style.minWidth = 0;
-            button.style.height = 48;
+            button.style.height = 50;
+            button.style.minHeight = 50;
             button.style.borderTopWidth = 0;
             button.style.borderBottomWidth = 0;
             button.style.borderLeftWidth = 0;
             button.style.borderRightWidth = 0;
+            RoundCorners(button, 0f);
         }
 
         void AddCompactActionSection()
@@ -1520,7 +1527,7 @@ namespace DaHilg
             m_LevelDialogPanel.style.paddingTop = 16;
             m_LevelDialogPanel.style.paddingBottom = 16;
             m_LevelDialogPanel.style.backgroundColor = k_PanelDeep;
-            // Square sheet with a nav top accent, like the driving game's #carCard.
+            // Rounded sheet with a nav top accent, like the driving game's #carCard.
             m_LevelDialogPanel.style.borderTopWidth = 2;
             m_LevelDialogPanel.style.borderBottomWidth = 1;
             m_LevelDialogPanel.style.borderLeftWidth = 1;
@@ -1529,6 +1536,7 @@ namespace DaHilg
             m_LevelDialogPanel.style.borderBottomColor = k_Line;
             m_LevelDialogPanel.style.borderLeftColor = k_Line;
             m_LevelDialogPanel.style.borderRightColor = k_Line;
+            RoundCorners(m_LevelDialogPanel, DaHilgHudTheme.RadiusLg);
             m_LevelDialog.Add(m_LevelDialogPanel);
 
             m_LevelDialogTitle = Label("CHANGE LEVEL", 18, FontStyle.Bold);
@@ -1752,9 +1760,10 @@ namespace DaHilg
             VisualElement section = new VisualElement();
             section.style.flexDirection = FlexDirection.Column;
             section.style.marginBottom = 8;
-            Label label = Label(title, 8, FontStyle.Bold);
+            // Drive HUD .actionKick: a tiny ALL-CAPS tracked kicker over the grid.
+            Label label = Label(title, DaHilgHudTheme.FontKicker, FontStyle.Bold);
             label.style.color = k_TextDim;
-            label.style.letterSpacing = 1.5f;
+            label.style.letterSpacing = DaHilgHudTheme.KickerTracking;
             label.style.marginBottom = 6;
             section.Add(label);
             return section;
@@ -1791,22 +1800,15 @@ namespace DaHilg
             }
 
             Button button = new Button(ActivateOnce) { text = text };
-            button.focusable = true;
+            StyleHudButton(button, DaHilgHudTheme.TouchTarget, 12);
             button.style.minWidth = minWidth;
-            button.style.height = 44;
             button.style.marginLeft = 0;
             button.style.marginRight = 0;
             button.style.marginTop = 0;
             button.style.marginBottom = 0;
             button.style.paddingLeft = 9;
             button.style.paddingRight = 9;
-            button.style.backgroundColor = k_Fill;
-            button.style.color = Color.white;
-            button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            button.style.unityTextAlign = TextAnchor.MiddleCenter;
             button.style.whiteSpace = WhiteSpace.Normal;
-            button.style.fontSize = 11;
-            ApplyBorder(button, k_Line, 1);
             button.RegisterCallback<PointerDownEvent>(e =>
             {
                 ActivateOnce();
@@ -1820,16 +1822,11 @@ namespace DaHilg
             Action activate = () => m_Manager.SetCameraMode(mode);
             Button button = new Button(activate) { text = label };
             button.userData = mode;
-            button.focusable = true;
             button.tabIndex = 20 + column;
+            StyleHudButton(button, DaHilgHudTheme.TouchTarget, 12);
             button.style.marginLeft = 3;
             button.style.marginRight = 3;
-            button.style.height = 30;
             button.style.minWidth = 58;
-            button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            button.style.backgroundColor = k_Fill;
-            button.style.color = Color.white;
-            ApplyBorder(button, k_Line, 1);
             m_CameraBar.Add(button);
             m_CameraButtons.Add(button);
         }
@@ -1840,16 +1837,11 @@ namespace DaHilg
             Action activate = () => m_Manager.SetLevel(slug);
             Button button = new Button(activate) { text = LevelButtonLabel(profile) };
             button.userData = slug;
-            button.focusable = true;
             button.tabIndex = 30 + column;
+            StyleHudButton(button, DaHilgHudTheme.TouchTarget, 12);
             button.style.marginLeft = 3;
             button.style.marginRight = 3;
-            button.style.height = 30;
             button.style.minWidth = 68;
-            button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            button.style.backgroundColor = k_Fill;
-            button.style.color = Color.white;
-            ApplyBorder(button, k_Line, 1);
             m_LevelBar.Add(button);
             m_LevelButtons.Add(button);
         }
@@ -2347,9 +2339,45 @@ namespace DaHilg
             element.style.borderRightColor = color;
         }
 
+        // Rounded glass corners — the drive HUD theme rounds every control / panel
+        // (10–14px). Routing this through one helper keeps the radius consistent.
+        static void RoundCorners(VisualElement element, float radius)
+        {
+            if (element == null) return;
+            element.style.borderTopLeftRadius = radius;
+            element.style.borderTopRightRadius = radius;
+            element.style.borderBottomLeftRadius = radius;
+            element.style.borderBottomRightRadius = radius;
+        }
+
+        // The one true HUD button styling. Every interactive button (bars, menus,
+        // dialog, compact panel) routes through here so they share the drive theme:
+        // neutral translucent fill, rounded corners, hairline border, bold AGC text,
+        // and a guaranteed ≥44px touch target.
+        void StyleHudButton(Button button, float minHeight = DaHilgHudTheme.TouchTarget, int fontSize = DaHilgHudTheme.FontLabel)
+        {
+            if (button == null) return;
+            button.focusable = true;
+            button.style.minHeight = minHeight;
+            button.style.height = StyleKeyword.Auto;
+            button.style.backgroundColor = k_Fill;
+            button.style.color = Color.white;
+            button.style.unityFontStyleAndWeight = FontStyle.Bold;
+            button.style.unityTextAlign = TextAnchor.MiddleCenter;
+            button.style.fontSize = fontSize;
+            button.style.letterSpacing = 0.4f;
+            button.style.paddingLeft = 12;
+            button.style.paddingRight = 12;
+            button.style.paddingTop = 6;
+            button.style.paddingBottom = 6;
+            ApplyBorder(button, k_Line, 1);
+            RoundCorners(button, DaHilgHudTheme.Radius);
+            ApplyFont(button, m_AgcFont);
+        }
+
         static VisualElement Panel()
         {
-            // Square nav-app glass card (radius 0), matching the driving game's .glass/.panel.
+            // Rounded nav-app glass card, matching the driving game's .glass/.panel.
             VisualElement panel = new VisualElement();
             panel.style.position = Position.Absolute;
             panel.style.paddingLeft = 13;
@@ -2358,6 +2386,7 @@ namespace DaHilg
             panel.style.paddingBottom = 12;
             panel.style.backgroundColor = k_Glass;
             ApplyBorder(panel, k_Line, 1);
+            RoundCorners(panel, DaHilgHudTheme.RadiusLg);
             return panel;
         }
 
@@ -2370,7 +2399,7 @@ namespace DaHilg
             return label;
         }
 
-        // Square pill counter chip with a colored kicker accent (mirrors .ssCell / chips).
+        // Rounded pill counter chip with a colored accent border (mirrors .ssCell / .chip).
         Label Chip(string text, Color accent)
         {
             Label label = Label(text, 12, FontStyle.Bold);
@@ -2382,29 +2411,33 @@ namespace DaHilg
             label.style.letterSpacing = 1f;
             label.style.backgroundColor = WithAlpha(accent, 0.16f);
             ApplyBorder(label, WithAlpha(accent, 0.55f), 1);
+            RoundCorners(label, DaHilgHudTheme.RadiusLg);
             label.style.color = Color.white;
             return label;
         }
 
         Button TouchButton(string text, Color accent)
         {
-            // Larger circular discs: action buttons must be thumb targets first, decoration second.
+            // Circular thumb disc. The drive theme keeps the resting fill NEUTRAL glass and
+            // uses the accent only as a colored ring + label tint — so the on-screen action
+            // pad reads as the clean driving HUD, not a row of candy buttons.
             const float d = 72f;
             Button button = new Button { text = text };
+            button.focusable = true;
             button.style.position = Position.Absolute;
             button.style.width = d;
             button.style.height = d;
-            button.style.borderTopLeftRadius = d * 0.5f;
-            button.style.borderTopRightRadius = d * 0.5f;
-            button.style.borderBottomLeftRadius = d * 0.5f;
-            button.style.borderBottomRightRadius = d * 0.5f;
+            RoundCorners(button, DaHilgHudTheme.RadiusPill);
             button.style.paddingLeft = 0;
             button.style.paddingRight = 0;
-            button.style.backgroundColor = WithAlpha(accent, 0.82f);
+            button.style.paddingTop = 0;
+            button.style.paddingBottom = 0;
+            button.style.backgroundColor = k_Fill;
             button.style.color = Color.white;
-            button.style.fontSize = 12;
+            button.style.fontSize = 13;
+            button.style.letterSpacing = 0.5f;
             button.style.unityFontStyleAndWeight = FontStyle.Bold;
-            ApplyBorder(button, WithAlpha(Color.white, 0.32f), 2);
+            ApplyBorder(button, WithAlpha(accent, 0.8f), 2);
             ApplyFont(button, m_AgcFont);
             return button;
         }

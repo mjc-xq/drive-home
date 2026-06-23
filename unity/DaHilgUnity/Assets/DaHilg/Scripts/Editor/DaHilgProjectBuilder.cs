@@ -851,8 +851,9 @@ body {
                 throw new DirectoryNotFoundException("Unity source asset bridge did not produce " + source);
             }
 
-            // The character allowlist is the roster's player ids PLUS the nibbler id (cece + mike +
-            // drew). kelli is retired: not in the allowlist, so it is neither copied in nor kept.
+            // The character allowlist is the roster's player ids PLUS the nibbler id — currently
+            // cece + mike + kelli (players) + drew (nibbler). It is roster-derived, so adding/removing
+            // a player in dahilg-roster.json is all it takes; no id is hard-excluded here.
             string[] characterIds = CharacterAllowlist();
             string charactersDir = Path.Combine(Application.dataPath, "DaHilg/Art/Characters");
             CopyFiles(source, charactersDir, "*.glb", characterIds);
@@ -1129,9 +1130,16 @@ body {
             switch (stateName)
             {
                 case "IdleAlt":
-                    return new[] { "kelli_idle", id + "_idle", "idle" };
+                    // kelli's upright idle is the shared variety alt for cece/mike (whose own idle is the
+                    // primary). For kelli herself kelli_idle IS her primary Idle, so fall to the shared
+                    // idle instead — otherwise her "alt" duplicated her idle and the rotation did nothing.
+                    return id == "kelli"
+                        ? new[] { "idle", "kelli_idle" }
+                        : new[] { "kelli_idle", id + "_idle", "idle" };
                 case "WalkAlt":
-                    return new[] { "kelli_walk", id + "_walk", "walk" };
+                    return id == "kelli"
+                        ? new[] { "walk", "kelli_walk" }
+                        : new[] { "kelli_walk", id + "_walk", "walk" };
                 case "DanceAlt":
                     if (id == "cece") return new[] { "dance", "mike_dance", "cece_dance" };
                     if (id == "mike") return new[] { "dance", "cece_dance", "mike_dance" };
@@ -1251,11 +1259,17 @@ body {
             clip.name = characterId + "_" + stateName;
             clip.ClearCurves();
             clip.frameRate = source.frameRate;
-            clip.wrapMode = source.wrapMode;
             clip.legacy = false;
 
             AnimationClipSettings settings = AnimationUtility.GetAnimationClipSettings(source);
+            bool loop = ShouldLoopState(stateName);
+            settings.loopTime = loop;
+            settings.loopBlend = loop;
+            settings.loopBlendOrientation = false;
+            settings.loopBlendPositionY = false;
+            settings.loopBlendPositionXZ = false;
             AnimationUtility.SetAnimationClipSettings(clip, settings);
+            clip.wrapMode = loop ? WrapMode.Loop : WrapMode.Once;
 
             Dictionary<string, AnimationCurve[]> rotationCurves = new Dictionary<string, AnimationCurve[]>();
             Dictionary<string, AnimationCurve[]> positionCurves = new Dictionary<string, AnimationCurve[]>();
@@ -1334,6 +1348,18 @@ body {
             AnimationUtility.SetAnimationEvents(clip, AnimationUtility.GetAnimationEvents(source));
             EditorUtility.SetDirty(clip);
             return clip;
+        }
+
+        static bool ShouldLoopState(string stateName)
+        {
+            string canonical = CanonicalStateName(stateName);
+            return canonical.Equals("Idle", StringComparison.OrdinalIgnoreCase)
+                || canonical.Equals("Walk", StringComparison.OrdinalIgnoreCase)
+                || canonical.Equals("Run", StringComparison.OrdinalIgnoreCase)
+                || canonical.Equals("Dance", StringComparison.OrdinalIgnoreCase)
+                || canonical.Equals("Crawl", StringComparison.OrdinalIgnoreCase)
+                || canonical.Equals("Climb", StringComparison.OrdinalIgnoreCase)
+                || canonical.Equals("Bite", StringComparison.OrdinalIgnoreCase);
         }
 
         static bool TryFindRetargetBones(Transform sourceRoot, Transform targetRoot, string sourcePath, out Transform sourceBone, out Transform targetBone)

@@ -49,6 +49,7 @@ namespace DaHilg
         float m_BodyHeight = 1.7f;
         float m_BodyRadius = 0.3f;
         float m_VisualGroundOffset;
+        bool m_FootPinPrimed;
         string m_CurrentAnim;
         float m_EmoteUntil;
         float m_RollUntil;
@@ -70,6 +71,11 @@ namespace DaHilg
         Vector3 m_HitVel;
         float m_HitVelUntil;
         float m_LastMeleeStartedAt = -100f;
+        float m_QueuedCombatDanceAt = -100f;
+        float m_NextSocialDanceAt;
+        float m_KnockdownStartedAt = -100f;
+        float m_KnockdownUntil = -100f;
+        float m_KnockdownSide = 1f;
         float m_AnimSeed;
         float m_NpcAnimSpeedBias = 1f;
         float m_IdleSince;
@@ -134,8 +140,8 @@ namespace DaHilg
                 m_VisualRoot = visual.transform;
                 Transform animatorRoot = ResolveAnimatorRoot(visual.transform);
                 m_Animator = animatorRoot.GetComponent<Animator>();
-                m_LeftFoot = FindDeepChild(visual.transform, "LeftFoot");
-                m_RightFoot = FindDeepChild(visual.transform, "RightFoot");
+                m_LeftFoot = ResolveFootContact(visual.transform, true);
+                m_RightFoot = ResolveFootContact(visual.transform, false);
                 m_NibblerBones = BuildNibblerBones(visual.transform);
                 VisualGeneration++;
                 if (m_Animator == null) m_Animator = animatorRoot.gameObject.AddComponent<Animator>();
@@ -182,6 +188,14 @@ namespace DaHilg
                 if (found != null) return found;
             }
             return null;
+        }
+
+        static Transform ResolveFootContact(Transform visualRoot, bool left)
+        {
+            string side = left ? "Left" : "Right";
+            return FindDeepChild(visualRoot, side + "ToeBase")
+                ?? FindDeepChild(visualRoot, side + "Toe_End")
+                ?? FindDeepChild(visualRoot, side + "Foot");
         }
 
         // Back-weighted, off-center bone slots (WORLD-metre offsets) so a swarm distributes over the
@@ -268,11 +282,13 @@ namespace DaHilg
                 m_RollUntil = 0f;
                 m_IdleSince = now;
                 m_NextIdleDanceAt = now + Random.Range(4.5f, 9.5f);
+                m_NextSocialDanceAt = now + Random.Range(2.2f, 4.6f);
                 PlayAnim("Idle", 0.1f);
             }
             else
             {
                 m_NextIdleDanceAt = now + Random.Range(2.5f, 8f);
+                m_NextSocialDanceAt = now + Random.Range(1.6f, 4.2f);
             }
         }
 
@@ -290,8 +306,12 @@ namespace DaHilg
             m_EmoteUntil = 0f;
             m_RollUntil = 0f;
             m_VisualGroundOffset = 0f;
+            m_QueuedCombatDanceAt = -100f;
+            m_KnockdownStartedAt = -100f;
+            m_KnockdownUntil = -100f;
             m_IdleSince = Time.time;
             m_NextIdleDanceAt = Time.time + Random.Range(4.5f, 9.5f);
+            m_NextSocialDanceAt = Time.time + Random.Range(1.6f, 4.2f);
             m_WasMoving = false;
             if (m_VisualRoot != null) m_VisualRoot.localPosition = Vector3.zero;
         }
@@ -377,15 +397,53 @@ namespace DaHilg
             m_LastMeleeStartedAt = now;
             m_EmoteUntil = 0f;
             SetAnimatorSpeed(step >= 3 ? 1.18f : 1f, Time.deltaTime);
-            // 3-hit combo: first swing is Attack, then Attack2/Attack3 while chained.
+            // 5-hit combo: first swing is Attack, then Attack2..Attack5 while chained.
             // PlayAnim is HasState-guarded, so older controllers fall back safely.
-            PlayAnim(ResolveFirstAvailable(s_ComboStates[step], "Attack"), 0.05f);
+            PlayAnim(ResolveFirstAvailable(s_ComboStates[step], "Attack"), 0.05f, true);
             return true;
         }
 
         public bool MeleeActive(float now) => now < m_MeleeActiveUntil;
 
+        // Snap the body heading toward a world point — used as melee aim-assist at the start of a swing
+        // so the strike (and its forward cone) commit toward the target the player meant to hit.
+        public void AimFacingToward(Vector3 worldPos)
+        {
+            Vector3 to = worldPos - FeetPosition;
+            to.y = 0f;
+            if (to.sqrMagnitude > 0.0004f)
+                m_FacingYaw = Quaternion.LookRotation(to.normalized, Vector3.up).eulerAngles.y;
+        }
+
         public bool Staggered(float now) => now < m_StaggerUntil;
+
+        public void QueueCombatDance(float atTime)
+        {
+            if (Health <= 0f || Rolling) return;
+            m_QueuedCombatDanceAt = Mathf.Max(m_QueuedCombatDanceAt, atTime);
+        }
+
+        public bool TrySocialDance(Vector3 faceTarget, float now, bool allowPlayer)
+        {
+            if (Role == DaHilgActorRole.Player && !allowPlayer) return false;
+            if (Health <= 0f || AttachedNibblers > 0 || Rolling || !Grounded || now < m_StaggerUntil) return false;
+            if (now < m_NextSocialDanceAt || now < m_EmoteUntil || Speed > 0.55f) return false;
+
+            Vector3 to = faceTarget - FeetPosition;
+            to.y = 0f;
+            if (to.sqrMagnitude > 0.0001f)
+            {
+                m_FacingYaw = Quaternion.LookRotation(to.normalized, Vector3.up).eulerAngles.y;
+            }
+
+            m_HorizontalVelocity *= 0.2f;
+            string dance = PickDanceState();
+            m_EmoteUntil = now + Random.Range(1.45f, 2.45f);
+            m_NextSocialDanceAt = now + Random.Range(5.5f, 10.5f);
+            SetAnimatorSpeed(Random.Range(0.94f, 1.1f), Time.deltaTime);
+            PlayAnim(dance, 0.12f, true);
+            return true;
+        }
 
         public void TakeHit(Vector3 fromPos, float damage, float knockback, bool heavy, float now)
         {
@@ -403,9 +461,18 @@ namespace DaHilg
             dir.Normalize();
 
             m_HitVel = dir * knockback;
-            m_HitVelUntil = now + 0.30f;
-            m_StaggerUntil = now + (heavy ? 1.1f : 0.45f);
+            bool falls = heavy || Health <= 0f || (damage >= 15f && Random.value < 0.55f);
+            float staggerSeconds = falls ? Random.Range(0.95f, 1.45f) : 0.50f;
+            m_HitVelUntil = now + (falls ? 0.46f : 0.30f);
+            m_StaggerUntil = now + staggerSeconds;
+            if (falls)
+            {
+                m_KnockdownStartedAt = now;
+                m_KnockdownUntil = now + staggerSeconds;
+                m_KnockdownSide = Random.value < 0.5f ? -1f : 1f;
+            }
             m_EmoteUntil = 0f;
+            m_QueuedCombatDanceAt = -100f;
 
             // Face the attacker so the hit reads as a reaction.
             Vector3 toAttacker = fromPos - FeetPosition;
@@ -416,7 +483,7 @@ namespace DaHilg
             }
 
             SetAnimatorSpeed(1f, Time.deltaTime);
-            PlayAnim(heavy ? ResolveFirstAvailable("Knockdown", "Stumble") : PickHitReaction(), 0.06f);
+            PlayAnim(falls ? ResolveFirstAvailable("Knockdown", "Stumble", "Hit") : PickHitReaction(), 0.06f, true);
         }
 
         public void TickHitMotion(float dt, float now)
@@ -479,8 +546,9 @@ namespace DaHilg
             }
             else if (now < m_StaggerUntil)
             {
-                desiredDirection *= 0.25f;
-                speedCap *= 0.45f;
+                bool knockedDown = now < m_KnockdownUntil;
+                desiredDirection *= knockedDown ? 0.08f : 0.25f;
+                speedCap *= knockedDown ? 0.18f : 0.45f;
                 m_EmoteUntil = 0f;
             }
 
@@ -499,7 +567,7 @@ namespace DaHilg
                 Grounded = false;
                 WasJumpStartedThisFrame = true;
                 SetAnimatorSpeed(1f, dt);
-                PlayAnim(PickAirborneState(), 0.05f);
+                PlayAnim(PickAirborneState(), 0.05f, true);
             }
 
             if (Grounded && m_VerticalVelocity < 0f) m_VerticalVelocity = -2f;
@@ -535,10 +603,13 @@ namespace DaHilg
                 float targetYaw = Quaternion.LookRotation(new Vector3(faceVelocity.x, 0f, faceVelocity.z)).eulerAngles.y;
                 m_FacingYaw = Mathf.LerpAngle(m_FacingYaw, targetYaw, 1f - Mathf.Exp(-k_FaceLerp * dt));
             }
-            else if (playerFacing && Time.time >= m_EmoteUntil)
+            else if (playerFacing && Time.time >= m_EmoteUntil && !MeleeActive(now))
             {
                 // Hold the player's heading while an emote plays so the body doesn't swing
                 // to camera-forward; movement (Speed>0.2) clears m_EmoteUntil and resumes aiming.
+                // Suppressed during a melee swing so the strike's facing (set at StartMelee, toward the
+                // nearest target) is held for the whole windup — otherwise the cone drifted to the
+                // camera yaw and the hit landed in the wrong direction / whiffed.
                 m_FacingYaw = Mathf.LerpAngle(m_FacingYaw, playerYaw, 1f - Mathf.Exp(-k_FaceLerp * dt));
             }
 
@@ -547,6 +618,7 @@ namespace DaHilg
                 Quaternion yaw = Quaternion.Euler(0f, m_FacingYaw + m_VisualYawOffset, 0f);
                 Quaternion groundTilt = Quaternion.FromToRotation(Vector3.up, m_GroundNormal);
                 Quaternion rollTilt = Quaternion.identity;
+                Quaternion hitTilt = Quaternion.identity;
                 if (rolling)
                 {
                     float u = Mathf.InverseLerp(m_RollStartedAt, Mathf.Max(m_RollStartedAt + 0.01f, m_RollUntil), now);
@@ -555,10 +627,21 @@ namespace DaHilg
                     float tumbleAngle = Mathf.Sin(u * Mathf.PI * 2f) * 16f;
                     rollTilt = Quaternion.Euler(0f, 0f, -(sideAngle + tumbleAngle) * RollSideSign);
                 }
-                m_VisualRoot.rotation = Quaternion.Slerp(m_VisualRoot.rotation, groundTilt * yaw * rollTilt, 1f - Mathf.Exp(18f * -dt));
+                if (now < m_KnockdownUntil)
+                {
+                    float duration = Mathf.Max(0.1f, m_KnockdownUntil - m_KnockdownStartedAt);
+                    float u = Mathf.Clamp01((now - m_KnockdownStartedAt) / duration);
+                    float down = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0f, 0.28f, u));
+                    float recover = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.58f, 1f, u));
+                    float fall = down * (1f - recover);
+                    hitTilt = Quaternion.Euler(-78f * fall, 0f, 20f * m_KnockdownSide * fall);
+                }
+                m_VisualRoot.rotation = Quaternion.Slerp(m_VisualRoot.rotation, groundTilt * yaw * rollTilt * hitTilt, 1f - Mathf.Exp(18f * -dt));
             }
 
             UpdateIdleDance(Time.time, settings, playerFacing);
+
+            TryPlayQueuedCombatDance(now, settings);
 
             if (now < m_StaggerUntil)
             {
@@ -595,7 +678,28 @@ namespace DaHilg
             string state = ResolveEmoteState(emote);
             m_EmoteUntil = Time.time + EmoteDuration(state);
             SetAnimatorSpeed(1f, Time.deltaTime);
-            PlayAnim(state, 0.12f);
+            PlayAnim(state, 0.12f, true);
+        }
+
+        bool TryPlayQueuedCombatDance(float now, DaHilgGameSettings settings)
+        {
+            if (m_QueuedCombatDanceAt < -1f || now < m_QueuedCombatDanceAt) return false;
+            if (now > m_QueuedCombatDanceAt + 1.25f)
+            {
+                m_QueuedCombatDanceAt = -100f;
+                return false;
+            }
+            if (!Grounded || Rolling || now < m_StaggerUntil || Time.time < m_EmoteUntil || AttachedNibblers > 0) return false;
+            if (settings != null && Speed > settings.WalkSpeed * 0.45f) return false;
+
+            string state = Random.value < 0.6f
+                ? ResolveFirstAvailable("Celebrate", "Cheer", "Dance")
+                : PickDanceState();
+            m_QueuedCombatDanceAt = -100f;
+            m_EmoteUntil = now + Mathf.Min(1.25f, EmoteDuration(state));
+            SetAnimatorSpeed(Random.Range(0.96f, 1.12f), Time.deltaTime);
+            PlayAnim(state, 0.08f, true);
+            return true;
         }
 
         void UpdateIdleDance(float now, DaHilgGameSettings settings, bool playerFacing)
@@ -647,15 +751,16 @@ namespace DaHilg
         {
             if (m_VisualRoot == null || m_Settings == null) return;
 
-            bool canPin = Grounded && !Rolling && !WasJumpStartedThisFrame && m_VerticalVelocity <= 0.1f;
+            // Foot-planting is suspended only while genuinely airborne (jump/roll/rising). The grounded
+            // stick velocity is -2, so the gate must allow small downward speeds — gating on <= 0.1f let
+            // a single jitter frame snap the visual back to the raw rig, which on a ground-skinned rig
+            // floats ~1 m. Use a generous downward window so it stays pinned through ground jitter.
+            bool canPin = Grounded && !Rolling && !WasJumpStartedThisFrame && m_VerticalVelocity <= 1.0f;
             if (!canPin)
             {
                 m_VisualGroundOffset = Mathf.Lerp(m_VisualGroundOffset, 0f, 1f - Mathf.Exp(-16f * Mathf.Max(0f, dt)));
-                Vector3 local = m_VisualRoot.localPosition;
-                local.x = 0f;
-                local.y = m_VisualGroundOffset;
-                local.z = 0f;
-                m_VisualRoot.localPosition = local;
+                m_VisualRoot.localPosition = new Vector3(0f, m_VisualGroundOffset, 0f);
+                m_FootPinPrimed = false;
                 return;
             }
 
@@ -673,17 +778,25 @@ namespace DaHilg
             }
             if (!hasFoot) return;
 
-            float targetY = FeetPosition.y + Mathf.Max(0.012f, m_Settings.GroundSkin * 0.35f);
+            // The CharacterController holds the capsule (and thus FeetPosition) skinWidth above the
+            // collider, and the collider IS the visual surface (build asserts Collision_Terrain==Terrain).
+            // So plant the lowest foot at FeetPosition.y - skinWidth — i.e. on the actual ground — instead
+            // of FeetPosition.y + skin, which stacked the skinWidth gap into a visible hover.
+            float skin = m_Controller != null ? Mathf.Max(0.01f, m_Controller.skinWidth) : 0.06f;
+            float targetY = FeetPosition.y - skin;
             float correction = targetY - minFootY;
-            float desiredOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -0.34f, 0.34f);
-            float k = 1f - Mathf.Exp(-24f * Mathf.Max(0f, dt));
+            // Lower freely (a ground-skinned rig needs up to ~rig-height of drop); raise only a little
+            // (raising just pulls a penetrating foot out of the floor, which is always a few cm).
+            float maxLower = Mathf.Max(1.0f, m_BodyHeight * 1.05f);
+            float maxRaise = 0.25f;
+            float desiredOffset = Mathf.Clamp(m_VisualGroundOffset + correction, -maxLower, maxRaise);
+            // Snap on the first pinned frame (spawn / landing) so the body never renders a float frame;
+            // smooth afterwards so a stride's lowest-foot swap doesn't pop the body.
+            float k = m_FootPinPrimed ? 1f - Mathf.Exp(-24f * Mathf.Max(0f, dt)) : 1f;
             m_VisualGroundOffset = Mathf.Lerp(m_VisualGroundOffset, desiredOffset, k);
+            m_FootPinPrimed = true;
 
-            Vector3 adjusted = m_VisualRoot.localPosition;
-            adjusted.x = 0f;
-            adjusted.y = m_VisualGroundOffset;
-            adjusted.z = 0f;
-            m_VisualRoot.localPosition = adjusted;
+            m_VisualRoot.localPosition = new Vector3(0f, m_VisualGroundOffset, 0f);
         }
 
         static float EmoteDuration(string emote)
@@ -744,6 +857,10 @@ namespace DaHilg
         {
             if (m_Controller == null || !m_Controller.enabled) return false;
             if (m_VerticalVelocity > 0.1f) return false;
+            // Only a true fell-through-the-world recovery. If any ground is within normal snap range
+            // below us, this is NOT a rescue case — bailing here stops the teleport from yanking the
+            // body up onto an overhead surface (a roof eave / bridge) during ordinary walking.
+            if (IsCloseToLevelGround(settings)) return false;
 
             float maxLift = Mathf.Max(8f, settings.GroundProbeHeight * 4f, m_BodyHeight * 6f);
             if (!TryFindRescueGround(settings, maxLift, out RaycastHit hit)) return false;
@@ -897,8 +1014,8 @@ namespace DaHilg
         {
             bool moving = Speed > 0.2f || m_HorizontalVelocity.sqrMagnitude > 0.06f;
             return moving
-                ? ResolveFirstAvailable("Run", "Walk", "Idle")
-                : ResolveFirstAvailable("Idle", "Run");
+                ? ResolveFirstAvailable("Jump", "Run", "Walk", "Idle")
+                : ResolveFirstAvailable("Jump", "Idle", "Run");
         }
 
         string ResolveEmoteState(string emote)
@@ -922,14 +1039,15 @@ namespace DaHilg
             else m_Animator.speed = Mathf.Lerp(m_Animator.speed, speed, 1f - Mathf.Exp(-10f * dt));
         }
 
-        void PlayAnim(string stateName, float fade)
+        void PlayAnim(string stateName, float fade, bool restartSame = false)
         {
-            if (m_Animator == null || string.IsNullOrEmpty(stateName) || m_CurrentAnim == stateName) return;
+            if (m_Animator == null || string.IsNullOrEmpty(stateName)) return;
+            if (m_CurrentAnim == stateName && !restartSame) return;
 
             int hash = Animator.StringToHash("Base Layer." + stateName);
             if (m_Animator.HasState(0, hash))
             {
-                m_Animator.CrossFade(hash, fade);
+                m_Animator.CrossFadeInFixedTime(hash, fade, 0, 0f);
                 m_CurrentAnim = stateName;
             }
         }
