@@ -73,6 +73,12 @@
       18
     ]
   ],
+  "streetSpawn": [
+    0,
+    0.05,
+    26.9
+  ],
+  "facing": 0,
   "pavedMask": "xq.paved_mask.png",
   "pavedMaskRect": {
     "min": [
@@ -83,11 +89,5 @@
       600,
       600
     ]
-  },
-  "streetSpawn": [
-    55.21,
-    0.05,
-    -21.73
-  ],
-  "facing": 111.5
+  }
 }

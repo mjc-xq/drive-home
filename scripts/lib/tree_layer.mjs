@@ -174,7 +174,7 @@ function flatWaterRibbon(lineW, width, lift, terrainAt, posArr, idxArr) {
 
 export async function buildTreeLayer({
   THREE, scene, w2, terrainAt, demRect, ROOT, dir,
-  treesPlacedPath, creek, buildingPolys, pavedPolys = [],
+  treesPlacedPath, creek, buildingPolys, pavedPolys = [], extraTrees = [],
 }) {
   const rng = (() => { let a = 1840; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
   const { x0, x1, z0, z1 } = demRect;
@@ -292,8 +292,9 @@ export async function buildTreeLayer({
   };
 
   let nTrees = 0;
-  if (existsSync(placedPath)) {
-    const placed = (JSON.parse(readFileSync(placedPath, 'utf8')).trees) || [];
+  {
+    const fileTrees = existsSync(placedPath) ? ((JSON.parse(readFileSync(placedPath, 'utf8')).trees) || []) : [];
+    const placed = [...fileTrees, ...extraTrees];   // LiDAR-detected trees + procedural front-yard/planting-strip points
     const libDir = (dir && existsSync(path.join(dir, 'tree_lib', 'manifest.json')))
       ? path.join(dir, 'tree_lib')
       : path.join(ROOT, 'exports/tree_lib');
@@ -305,8 +306,8 @@ export async function buildTreeLayer({
       const normalTpls = templates.filter(t => !t.feature);
       const featureTpls = templates.filter(t => t.feature);
       const pool = normalTpls.length ? normalTpls : templates;
-      const pickTemplate = (height, h) => {
-        if (featureTpls.length && (h % 9) === 0) return featureTpls[(h >>> 8) % featureTpls.length];
+      const pickTemplate = (height, h, small) => {
+        if (!small && featureTpls.length && (h % 9) === 0) return featureTpls[(h >>> 8) % featureTpls.length];  // big feature blobs only for non-procedural trees
         const ranked = [...pool].sort((a, b) => Math.abs((a.height_m || 6) - height) - Math.abs((b.height_m || 6) - height));
         const k = Math.min(3, ranked.length);
         return ranked[(h >>> 4) % k];
@@ -321,7 +322,7 @@ export async function buildTreeLayer({
         if (onPaved(x, z)) continue;                          // no trees on roads/intersections/sidewalks
         const idxKey = t.i ?? nTrees;
         const h = hashOf(idxKey);
-        const tmpl = pickTemplate(height, h);
+        const tmpl = pickTemplate(height, h, t.small);
         const s = Math.max(0.1, height / (tmpl.height_m || 6));
         const variantArr = tmpl.variants[(h >>> 12) % tmpl.variants.length];
         const m = new THREE.Mesh(tmpl.geom, variantArr);   // SHARE geom + variant array by reference

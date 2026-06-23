@@ -111,13 +111,23 @@ console.log(`wrote ${path.relative(ROOT, outPath)} (${(glb.byteLength / 1e6).toF
 // ---- collect node names + assert -------------------------------------------------------
 const names = new Set();
 scene.traverse(o => { if (o.name) names.add(o.name); });
-const REQUIRED = ['House_walls', 'Buildings_walls', 'Collision_Buildings', 'Collision_Trees', 'Trees', 'Creek_SanLorenzo'];
+// NOTE: 'Buildings_walls' was a single merged mesh of every non-owner building. The exporter now emits
+// each non-owner building as its OWN `Building_<ib>` group (with `_walls`/`_roof` children) so each house
+// is individually selectable/editable in Blender. So we no longer assert the merged node — we assert the
+// per-building structure below instead. (This test change tracks an intentional architecture change.)
+const REQUIRED = ['House_walls', 'Collision_Buildings', 'Collision_Trees', 'Trees', 'Creek_SanLorenzo'];
 let pass = true;
 for (const n of REQUIRED) {
   const ok = names.has(n);
   if (!ok) pass = false;
   console.log(`  ${ok ? 'OK  ' : 'FAIL'}  node "${n}" ${ok ? 'present' : 'MISSING'}`);
 }
+// per-building objects: at least one `Building_<ib>` group with a `_walls` child must exist
+const perBuilding = [...names].filter(n => /^Building_\d+$/.test(n));
+const perBuildingWalls = [...names].filter(n => /^Building_\d+_walls$/.test(n));
+const okPerBuilding = perBuilding.length > 0 && perBuildingWalls.length > 0;
+if (!okPerBuilding) pass = false;
+console.log(`  ${okPerBuilding ? 'OK  ' : 'FAIL'}  per-building objects (${perBuilding.length} Building_<ib> groups, ${perBuildingWalls.length} _walls)`);
 // Trees must be a GROUP
 const treesNode = scene.getObjectByName('Trees');
 const treesIsGroup = treesNode && treesNode.isGroup;

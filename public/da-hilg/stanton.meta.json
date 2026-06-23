@@ -73,6 +73,12 @@
       18
     ]
   ],
+  "streetSpawn": [
+    0,
+    0.05,
+    24.17
+  ],
+  "facing": 0,
   "pavedMask": "stanton.paved_mask.png",
   "pavedMaskRect": {
     "min": [

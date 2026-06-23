@@ -30,7 +30,8 @@ const io = new NodeIO();   // shared: reads the photoreal GLB (4b-ii) AND the ex
 
 import { loadDEM, makeGeo, buildTerrainMesh } from './lib/terrain_mesh.mjs';
 import { gradeDemUnderRoads } from './lib/dem_road_grade.mjs';
-import { buildRoadNetwork } from './lib/road_network.mjs';
+import { buildRoadNetwork, buildPlantingStripPoints } from './lib/road_network.mjs';
+import { buildRoadGeometryLayer } from './lib/road_geometry.mjs';
 import { curbLinesFromRoads } from './road_prep.mjs';
 import { bakeGroundAtlas } from './lib/ground_atlas.mjs';
 import { buildSurfaceAnnotation } from './lib/surface_annotation.mjs';
@@ -217,6 +218,22 @@ if (S.creek && Array.isArray(S.creek.p) && S.creek.p.length > 1) {
   if (before - S.buildings.length) console.log(`creek exclusion: dropped ${before - S.buildings.length} building(s) in the creek channel`);
 }
 
+// BACKYARD PHANTOM EXCLUSION (dahill only): a real OSM building (b1013) landed in the owner's
+// back lot / pig yard, where there should be open yard. Drop it by world-XZ centroid so it never
+// renders OR collides. Tight radius — only this one footprint; never runs on other levels.
+if (LEVEL === 'dahill') {
+  const EXCLUDE_XZ = [[-15.0, -19.9]];   // b1511 — inferred-aerial phantom (oversized rectangle behind house, toward creek)
+  const EXCLUDE_R = 6.0;
+  const beforeEx = S.buildings.length;
+  S.buildings = S.buildings.filter((b) => {
+    if (!b.p || b.p.length < 3) return true;
+    const cen = b.p.reduce((a, p) => [a[0] + p[0] / b.p.length, a[1] + p[1] / b.p.length], [0, 0]);
+    const [X, Z] = w2(cen[0], cen[1]);
+    return !EXCLUDE_XZ.some(([ex, ez]) => Math.hypot(X - ex, Z - ez) < EXCLUDE_R);
+  });
+  if (beforeEx - S.buildings.length) console.log(`backyard exclusion: dropped ${beforeEx - S.buildings.length} building(s)`);
+}
+
 // Colour sidecars load from THIS level's dir ONLY (never the root pick() fallback): a missing
 // per-level colour file must yield {} -> tasteful fallback palette, NOT another level's colour map.
 // (That cross-contamination is exactly why meemaw/xq rendered with dahill's stale 108-entry file.)
@@ -390,8 +407,65 @@ const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terra
   photorealFootprints });
 console.log(`buildings: emitted=${bres.counts.emitted} skipped=${bres.counts.skipped} clipped=${bres.counts.clipped} (drop ${(100 * bres.counts.skipped / Math.max(1, bres.counts.emitted + bres.counts.skipped)).toFixed(1)}%)`);
 
-const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys, pavedPolys: ground.pavedPolys });
+// ---- procedural trees: planting-strip (curb<->sidewalk, all levels) + owner front-yard (dahill) --
+const ptInRing = (x, z, ring) => { let c = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const xi = ring[i][0], zi = ring[i][1], xj = ring[j][0], zj = ring[j][1]; if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) c = !c; } return c; };
+// VEGETATION-DRIVEN street trees: sample the aerial along the planting strip and place a tree ONLY
+// where there's real tree canopy (dark green) — natural clusters, NOT even spacing.
+const stripPts = [];
+try {
+  const fa = await sharp(ground.far.albedo).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const FW = fa.info.width, FH = fa.info.height, FD = fa.data;
+  const { x0, x1, z0, z1 } = terrain.demRect;
+  const canopyAt = (x, z) => {
+    const u = (x - x0) / (x1 - x0), v = (z - z0) / (z1 - z0);
+    if (u < 0 || u > 1 || v < 0 || v > 1) return false;
+    const px = Math.min(FW - 1, (u * FW) | 0), py = Math.min(FH - 1, (v * FH) | 0);
+    const i = (py * FW + px) * 3;
+    const r = FD[i], g = FD[i + 1], b = FD[i + 2];
+    return g > r + 6 && g > b + 6 && (r + g + b) / 3 < 115;   // green-dominant + darkish = canopy (not bright grass/paint)
+  };
+  const cand = buildPlantingStripPoints(S, { w2, clipHalf }, [], { spacing: 5 });   // dense candidates
+  let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (const p of cand) {
+    if (!canopyAt(p.x, p.z)) continue;                          // only where the aerial shows tree canopy
+    const x = p.x + (rnd() - 0.5) * 2.5, z = p.z + (rnd() - 0.5) * 2.5;   // jitter off the perfect line
+    if (stripPts.some(q => Math.hypot(q.x - x, q.z - z) < 5)) continue;   // natural min spacing
+    stripPts.push({ x, z });
+  }
+} catch (e) { console.warn('  ! planting-strip canopy sampling skipped:', e.message); }
+const frontPts = [];
+if (LEVEL === 'dahill') {
+  const ownerLot = fillParcels.find((p) => p.apn === '416-120-67');   // house lot; ring is world XZ
+  if (ownerLot && Array.isArray(ownerLot.ring) && ownerLot.ring.length >= 3) {
+    const ring = ownerLot.ring;
+    let lo0 = 1e9, lo1 = 1e9, hi0 = -1e9, hi1 = -1e9;
+    for (const [x, z] of ring) { lo0 = Math.min(lo0, x); lo1 = Math.min(lo1, z); hi0 = Math.max(hi0, x); hi1 = Math.max(hi1, z); }
+    const inB = (x, z) => (bres.buildingPolys || []).some((r) => ptInRing(x, z, r));
+    const onP = (x, z) => (ground.pavedPolys || []).some((r) => ptInRing(x, z, r));
+    let seed = 1840; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (let t = 0; frontPts.length < 3 && t < 600; t++) {
+      const x = lo0 + rnd() * (hi0 - lo0), z = lo1 + rnd() * (hi1 - lo1);
+      if (!ptInRing(x, z, ring) || inB(x, z) || onP(x, z)) continue;
+      if (frontPts.some((q) => Math.hypot(q.x - x, q.z - z) < 4)) continue;
+      frontPts.push({ x, z });
+    }
+  }
+}
+const extraTrees = [
+  ...stripPts.map((p, k) => ({ x: p.x, z: p.z, height: 6, i: 100000 + k, small: true })),  // street/strip trees (small, no blobs)
+  ...frontPts.map((p, k) => ({ x: p.x, z: p.z, height: 4.5, i: 200000 + k, small: true })),// front-yard ornamentals
+];
+console.log(`extra trees: ${stripPts.length} planting-strip + ${frontPts.length} front-yard`);
+const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys, pavedPolys: ground.pavedPolys, extraTrees });
 console.log(`trees: ${tres.nTrees} (own 'Trees' layer), shrubs: ${tres.nShrubs}, creek: ${tres.hasCreek}`);
+
+// ---- ROAD GEOMETRY layer (removable; paint stays beneath) -------------------------------
+// Streets + raised curbs + sidewalks + lane markings as real geometry, draped EXACTLY on the welded
+// terrain (samples terrainAt — no approximation), reusing the same polygons the ground atlas painted.
+// Grouped under node 'RoadLayer': keep it for crisp asphalt/curbs, or delete the group to reveal the
+// painted roads on the ground bed underneath.
+const rgeo = buildRoadGeometryLayer({ THREE, scene, network, curbLines, terrainAt });
+console.log(`road geometry: ${rgeo.added} meshes under 'RoadLayer' (draped on surface; paint beneath)`);
 
 // ---- collision proxies (invisible; runtime bakes a trimesh + hides these) -----------
 function proxyMesh(pos, idx, name) {
@@ -458,7 +532,7 @@ for (const m of doc.getRoot().listMaterials()) {
     } else if (/^Stucco_b\d+_mat$/.test(n) && stuccoTex) {   // tiled window/stucco x per-building wallColor (the always-present wall)
       m.setBaseColorTexture(stuccoTex);
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
-    } else if (/^(Buildings_roofs|House_roof)_\d+$/.test(n) && roofTex) {   // tiled roof tile x per-building roofColor — KEEP the factor so the real roof colour tints the tile
+    } else if (/_roofs?_\d+$/.test(n) && roofTex) {   // per-building Building_<ib>_roof / House_roof material — tiled roof tile x per-building roofColor (KEEP the factor so the real roof colour tints the tile)
       m.setBaseColorTexture(roofTex);
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
     } else if (photorealTexByMat.has(n)) {   // Google-photoreal tower: re-attach the baked baseColor texture

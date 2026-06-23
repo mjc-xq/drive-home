@@ -20,12 +20,12 @@ MonoBehaviour:
   Minimap: {fileID: 4900000, guid: 63616b6e08b604a1f937600615de3cef, type: 3}
   LevelOffset: {x: -26.245, y: 58.525, z: 50.17}
   PlayerSpawns:
-  - {x: 25.66, y: 0.05, z: 72.48}
+  - {x: 0, y: 0.05, z: 24.17}
   - {x: 0, y: 0.05, z: 24.17}
   - {x: 30.585, y: 0.05, z: 0}
   - {x: -30.585, y: 0.05, z: -2}
   HasPlayerSpawnYaw: 1
-  PlayerSpawnYaw: 19.5
+  PlayerSpawnYaw: 0
   WaterHeightOffset: 0.1
   NpcSpawns:
   - {x: 33.585, y: 0.05, z: 27.17}
@@ -37,12 +37,12 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 16.8555, z: 0}
-    Size: {x: 65.17, y: 9.383001, z: 52.34}
+    Center: {x: 0, y: 17.0735, z: 0}
+    Size: {x: 65.17, y: 9.819, z: 52.34}
   NibblerSafeZones:
   - Id: safe_start
     Label: Start
-    Center: {x: 25.66, y: 6, z: 72.48}
+    Center: {x: 0, y: 6, z: 24.17}
     Size: {x: 36, y: 18, z: 36}
   - Id: safe_home
     Label: Home

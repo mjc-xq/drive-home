@@ -73,6 +73,12 @@
       18
     ]
   ],
+  "streetSpawn": [
+    -3.94,
+    0.05,
+    -18.44
+  ],
+  "facing": 192,
   "pavedMask": "meemaw.paved_mask.png",
   "pavedMaskRect": {
     "min": [

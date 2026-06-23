@@ -729,13 +729,10 @@ export function buildBuildingLayer({
   }
 
   // ---- other buildings -----------------------------------------------------------------
-  const bRf = { pos: [] };
-  // SHARED facade detail bucket for every non-owner building — one mesh per kind at the end.
-  // door/doorTrim/garage/garageTrim carry the SV-detected 3D openings (Doors/GarageDoors meshes).
+  // SHARED facade detail bucket for every non-owner building — window/trim/siding decoration emitted
+  // once per kind at the end (it's surface detail; the per-building MASSING below is what identifies a
+  // house). door/doorTrim/garage/garageTrim carry the SV-detected 3D openings (Doors/GarageDoors).
   const bD = { glass: [], trim: [], siding: [], door: [], doorTrim: [], garage: [], garageTrim: [] };
-  // per-building wall groups: each building gets its own stucco material slot (its real paint).
-  const stuccoBuckets = [];   // [{pos, uv, material}] one per building (always-present stucco walls)
-  const roofGroups = [];      // [start, count, col]
 
   S.buildings.forEach((b, ib) => {
     if (b.house) return;
@@ -761,28 +758,27 @@ export function buildBuildingLayer({
       emitted++;
       return;
     }
-    // emit this building's walls into a FRESH per-building stucco bucket so each keeps its own paint
+    // INDIVIDUAL building object: emit this building's walls + roof into FRESH per-building buckets and
+    // add them under their OWN named group `Building_<ib>` (with `_walls` + `_roof` mesh children). Each
+    // house is then a separately selectable/editable object in Blender, trivial to point at and discuss
+    // ("delete Building_1511"). Facade window detail stays shared (emitted once below) — it's decoration.
     const localW = { stucco: { pos: [], uv: [], material: stuccoMaterial(ib) } };
-    const rs = bRf.pos.length / 3;
-    const emittedRing = emitRing(ring, base, h, b.r, ib, localW, bRf, buildingPolys, bD);
+    const localRf = { pos: [] };
+    const emittedRing = emitRing(ring, base, h, b.r, ib, localW, localRf, buildingPolys, bD);
     buildingPolys.push(emittedRing); ringToIb.set(emittedRing, ib);
     buildingCollision.push({ ring: emittedRing, base, h });
-    // facade detail: window grid on EVERY wall edge (+ shell trim). Windows live UNDER the photo
-    // overlay, so a hero wall keeps its grid (shown when photo mode is OFF). No per-edge skip.
     emitFacadeDetails(emittedRing, base, h, bD, { ib });
-    if (localW.stucco.pos.length) stuccoBuckets.push(localW.stucco);
-    roofGroups.push([rs, bRf.pos.length / 3 - rs, roofColor(ib)]);
+    const label = `Building_${ib}`;
+    const grp = new THREE.Group();
+    grp.name = label;
+    grp.userData = { buildingIndex: ib, source: b.source || 'osm' };
+    const wm = wallMeshFromBuckets([localW.stucco], `${label}_walls`);
+    if (wm) grp.add(wm);
+    const rm = roofMeshFromGroups(localRf.pos, [[0, localRf.pos.length / 3, roofColor(ib)]], `${label}_roof`);
+    if (rm) grp.add(rm);
+    if (grp.children.length) scene.add(grp);
     emitted++;
   });
-
-  if (stuccoBuckets.length) {
-    const wallsMesh = wallMeshFromBuckets(stuccoBuckets, 'Buildings_walls');
-    if (wallsMesh) scene.add(wallsMesh);
-  }
-  if (bRf.pos.length) {
-    const roofsMesh = roofMeshFromGroups(bRf.pos, roofGroups, 'Buildings_roofs');
-    if (roofsMesh) scene.add(roofsMesh);
-  }
   // shared building facade detail meshes (legacy node names + colours)
   const addB = (m) => { if (m) scene.add(m); };
   addB(simpleMesh(bD.siding, 0xb6ad9f, 'Buildings_siding_lines'));

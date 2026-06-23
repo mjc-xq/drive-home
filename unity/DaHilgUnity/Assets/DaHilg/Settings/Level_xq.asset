@@ -21,9 +21,10 @@ MonoBehaviour:
   LevelOffset: {x: -39.165, y: 0.845, z: 31.22}
   PlayerSpawns:
   - {x: 0, y: 0.05, z: 26.9}
+  - {x: 0, y: 0.05, z: 26.9}
   - {x: 30.425, y: 0.05, z: 0}
   - {x: -30.425, y: 0.05, z: -2}
-  HasPlayerSpawnYaw: 0
+  HasPlayerSpawnYaw: 1
   PlayerSpawnYaw: 0
   WaterHeightOffset: 0.1
   NpcSpawns:
@@ -36,8 +37,8 @@ MonoBehaviour:
   GreetSafeZones:
   - Id: home_safe
     Label: Home
-    Center: {x: 0, y: 16.747, z: 0}
-    Size: {x: 64.85, y: 19.818, z: 57.8}
+    Center: {x: 0, y: 16.495, z: 0}
+    Size: {x: 64.85, y: 19.314, z: 57.8}
   NibblerSafeZones:
   - Id: safe_start
     Label: Start

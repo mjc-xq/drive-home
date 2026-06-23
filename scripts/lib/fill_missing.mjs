@@ -253,6 +253,10 @@ export async function fillMissingBuildings({ S, parcels, aerialPath, aerialBound
     }
     let w = (u1 - u0) - 2 * INSET, d = (v1 - v0) - 2 * INSET;
     if (w < 3 || d < 3) return null;                            // degenerate after inset
+    if (w * d > 300) return null;                               // reject oversized INFERRED footprints —
+                                                                // real houses are <300m², so big blobs are
+                                                                // church/parking/shadow phantoms, not buildings.
+                                                                // (real OSM buildings bypass this path entirely)
     const cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
     const cx = cu * ca - cv * sa, cz = cu * sa + cv * ca;        // rect center back in world XZ
     // build the 4 corners in world XZ

@@ -9,7 +9,7 @@
   "groundY": 59.243,
   "houseCenter": [
     35.35,
-    68.956,
+    69.338,
     6.125
   ],
   "houseBox": {
@@ -20,7 +20,7 @@
     ],
     "max": [
       8.46,
-      12.287,
+      13.051,
       9.645
     ]
   },
@@ -73,6 +73,12 @@
       18
     ]
   ],
+  "streetSpawn": [
+    -3.94,
+    0.05,
+    -18.44
+  ],
+  "facing": 192,
   "pavedMask": "meemaw.paved_mask.png",
   "pavedMaskRect": {
     "min": [
@@ -83,12 +89,5 @@
       460,
       460
     ]
-  },
-  "streetSpawn": [
-    -14.28,
-    0.05,
-    -23.72
-  ],
-  "facing": 211.1,
-  "waterHeightOffset": 0.1
+  }
 }

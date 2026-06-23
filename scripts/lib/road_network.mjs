@@ -21,7 +21,7 @@ import {
 
 // ---- constants (locked by the design doc) --------------------------------
 const SW_WIDTH = 1.8;            // sidewalk concrete width
-const SW_GAP = 2.2;              // gap from road edge to walk CENTRELINE
+const SW_GAP = 1.6;              // gap from road edge to walk CENTRELINE (tightened — was too far out)
 const CURB_WIDTH = 0.55;         // painted curb band width
 const CURB_RETURN_R = { tertiary: 6, residential: 4, default: 4.5 }; // fillet radius by class
 const R_MIN = 1.5;              // quarter-disc fallback radius (degenerate corners)
@@ -184,6 +184,48 @@ export function buildSidewalkRuns(scene, env, junctions) {
     }
   }
   return runs;
+}
+
+// Tree points for the PLANTING STRIP (the grass band between curb and sidewalk), one row per road
+// side, spaced along the strip centreline. Returns plain {x,z} world points; the tree layer drops
+// any that land on pavement (onPaved) or inside a building, so driveway/junction overlaps self-clean.
+export function buildPlantingStripPoints(scene, env, junctions, { spacing = 9 } = {}) {
+  const roads = scene.roads || [];
+  const half = env.clipHalf;
+  const jc = (junctions || []).map(j => [j.x, j.z]);
+  const nearJunction = (x, z) => jc.some(c => Math.hypot(c[0] - x, c[1] - z) < R_TRIM);
+  const out = [];
+  for (const r of roads) {
+    const spec = roadSpec(r);
+    if (spec.isService) continue;
+    const pl = r.p || r;
+    if (!Array.isArray(pl) || pl.length < 2) continue;
+    const lw = pl.map(([e, n]) => env.w2(e, n));
+    const pieces = Number.isFinite(half) ? clipPolylineToBox(lw, half) : [lw];
+    const off = spec.width / 2 + 0.35;           // planting strip between curb (w/2) and walk inner edge
+    for (let piece of pieces) {
+      piece = smoothLine(piece, { lo: 6, hi: 135 });
+      if (piece.length < 2) continue;
+      for (const side of [1, -1]) {
+        const strip = offsetLine(piece, off * side);
+        if (!Array.isArray(strip) || strip.length < 2) continue;
+        let acc = spacing * 0.5;                  // first tree set in from the start
+        for (let i = 1; i < strip.length; i++) {
+          const a = strip[i - 1], b = strip[i];
+          const segLen = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          let d = acc;
+          while (d <= segLen) {
+            const t = d / (segLen || 1);
+            const x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t;
+            if (!nearJunction(x, z)) out.push({ x, z });
+            d += spacing;
+          }
+          acc = d - segLen;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // Trim a run's endpoints inward when the endpoint sits near a junction centre, so the
@@ -449,23 +491,31 @@ export function buildCulDeSacRings(scene, env, junctions) {
   }
   const rings = [];
   for (const r of roads) {
-    if (!isCulDeSacRoad(r)) continue;
     const pl = r.p || r;
     if (!Array.isArray(pl) || pl.length < 2) continue;
     const spec = roadSpec(r);
-    for (const end of [0, pl.length - 1]) {
+    if (spec.isService) continue;     // GEOMETRIC cul-de-sac: any non-service dead-end tip inside the box
+    for (const end of [0, pl.length - 1]) {            // (road name data is absent, so name-based detection failed)
       const tip = w2(...pl[end]);
-      if (Number.isFinite(half) && (Math.abs(tip[0]) > half || Math.abs(tip[1]) > half)) continue;
+      if (Number.isFinite(half) && (Math.abs(tip[0]) > half || Math.abs(tip[1]) > half)) continue;  // clipped edge, not a real terminus
       const k = vkey(tip[0], tip[1]);
-      if ((hit.get(k) || 0) > 1) continue;
-      const bulbR = spec.width / 2 + 4;               // bulb pad radius (matches asphalt bulb)
-      const rIn = bulbR + SW_GAP - SW_WIDTH / 2;
-      const rOut = bulbR + SW_GAP + SW_WIDTH / 2;
-      const outer = arcPts(tip, rOut, 0, Math.PI * 2, 40).filter(finite);
-      const inner = arcPts(tip, rIn, 0, Math.PI * 2, 40).filter(finite);
-      // close the curb loop so the painted band has no seam at the 0/2π join
-      const curb = inner.length >= 3 ? inner.concat([inner[0]]) : null;
-      if (outer.length >= 3 && inner.length >= 3) rings.push({ polygon: outer, holes: [inner], curb });
+      if ((hit.get(k) || 0) > 1) continue;             // shared vertex = not a dead end
+      const bulbR = spec.width / 2 + 3;               // approx turnaround bulb radius
+      const rIn = bulbR + 0.3;                        // HUG the bulb edge (small gutter) — not far out
+      const rOut = rIn + SW_WIDTH;
+      const rMid = (rIn + rOut) / 2;
+      // The street enters the bulb from the adjacent vertex. Leave a THROAT GAP there so the sidewalk
+      // wraps the bulb as an OPEN "C" (not a closed circle) and its two ends meet the street-side runs.
+      const prev = w2(...pl[end === 0 ? 1 : pl.length - 2]);
+      const tIn = norm([tip[0] - prev[0], tip[1] - prev[1]]);    // direction INTO the bulb
+      const throatAng = Math.atan2(-tIn[1], -tIn[0]);            // back toward the street = gap centre
+      const throatHalf = Math.min(Math.PI * 0.55, Math.asin(Math.min(0.99, (spec.width / 2 + SW_GAP) / rMid)) + 0.35);
+      const a0 = throatAng + throatHalf, sweep = Math.PI * 2 - 2 * throatHalf;   // wrap all but the throat
+      const outer = arcPts(tip, rOut, a0, sweep, 32).filter(finite);
+      const inner = arcPts(tip, rIn, a0 + sweep, -sweep, 32).filter(finite);    // back along the inner edge
+      const poly = outer.concat(inner);                          // open C-band (one polygon, no hole)
+      const curb = arcPts(tip, rIn, a0, sweep, 32).filter(finite);  // street-side edge → continuous curb stroke
+      if (poly.length >= 4) rings.push({ polygon: poly, curb: curb.length >= 2 ? curb : null });
     }
   }
   return rings;
@@ -784,8 +834,8 @@ export function buildRoadNetwork(scene, mapSurfaces, env) {
   const cway = buildCarriageway(scene, env);               // asphalt keep-out (segments + bulbs)
   const runs = buildSidewalkRuns(scene, env, junctions);
   const corners = buildCurbReturns(junctions);
-  const caps = buildDeadEndCaps(scene, env, junctions);
-  const culRings = buildCulDeSacRings(scene, env, junctions);
+  const caps = [];      // no dead-end semicircle caps
+  const culRings = buildCulDeSacRings(scene, env, junctions);  // dead-end bulb wrap: hugs the bulb edge, throat open
   const { surfaces: swPolys, curbLines: curbFromRuns } = stitchSidewalkNetwork(runs, corners, caps, culRings, cway);
 
   // --- inferred paint
