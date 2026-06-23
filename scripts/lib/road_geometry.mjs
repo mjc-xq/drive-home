@@ -14,16 +14,15 @@
 //   Roads_curb       RAISED curb lip (top face + vertical faces) along every curb line
 //   Roads_markings   proud lane paint (double-yellow / dashes / edge lines / stop bars / xwalk stripes)
 
-// NOTE: these are a STOPGAP. The robust fix for terrain poking through the road is to FLATTEN the
-// terrain under the carriageway (the DEM road-grade) and/or tessellate the road interior so it
-// conforms to the terrain mesh exactly. Until then, a generous lift clears the terrain micro-relief
-// so the asphalt reads solid (no gray showing through); curbs cover the raised edge.
-const ASPHALT_Y   = 0.11;    // carriageway lifted clear of terrain bumps (was 0.03 -> terrain poked through)
-const DRIVEWAY_Y  = 0.10;
-const SIDEWALK_Y  = 0.11;
-const CROSSWALK_Y = 0.125;
-const MARKING_Y   = 0.14;    // lane paint rides just above the asphalt geometry
-const CURB_H      = 0.17;    // raised curb lip top — above the lifted asphalt
+// Small lifts: the fill now CONFORMS to the terrain (drapedFill subdivides + drapes interior vertices),
+// so the asphalt hugs the surface — only a hair of lift is needed to beat z-fighting with the painted
+// bed, and a small lift keeps the edges from floating over the grass.
+const ASPHALT_Y   = 0.06;    // carriageway just above the painted bed (covers coarser-conform error)
+const DRIVEWAY_Y  = 0.05;
+const SIDEWALK_Y  = 0.06;
+const CROSSWALK_Y = 0.07;
+const MARKING_Y   = 0.08;    // lane paint rides just above the asphalt geometry
+const CURB_H      = 0.14;    // raised curb lip top
 const SEG_MAX     = 1.0;     // densify polygon edges to <= this (m) so edges follow terrain curvature
 
 const COL = {
@@ -66,19 +65,39 @@ function densify(ring) {
   return out;
 }
 
-// triangulate a (densified) ring with optional holes and DRAPE every vertex on the terrain surface.
+// triangulate a (densified) ring with optional holes, then SUBDIVIDE each triangle until its edges
+// are <= MAX_SUB and DRAPE every (incl. interior) vertex on the terrain — so the fill CONFORMS to the
+// terrain surface (grade + crown + micro-relief), not just at the outline. This is what stops the
+// terrain poking through a flat-fan interior; with it, only a hair of lift is needed.
 // NB: ShapeUtils.triangulateShape needs real THREE.Vector2 points (it calls .equals()), not {x,y}.
+const MAX_SUB = 2.5;   // subdivide road triangles to <= this edge length (m); ~terrain resolution. Finer
+                       // (1.6) conforms tighter but ~doubles tris -> a heavier Blender master; 2.5 + the
+                       // modest lift above keeps roads solid with a much lighter mesh.
 function drapedFill(THREE, ShapeUtils, ring, holes, terrainAt, yOff, pos) {
-  const contour = densify(ring).map(([x, z]) => new THREE.Vector2(x, z));
-  const holeContours = (holes || []).map((h) => densify(h).map(([x, z]) => new THREE.Vector2(x, z)));
+  // NB: do NOT densify before triangulating — the longest-edge bisection below refines the whole fill
+  // (boundary included) to MAX_SUB, so pre-densifying just multiplies the triangle count.
+  const contour = ring.map(([x, z]) => new THREE.Vector2(x, z));
+  const holeContours = (holes || []).map((h) => h.map(([x, z]) => new THREE.Vector2(x, z)));
   if (contour.length < 3) return;
   let tris;
   try { tris = ShapeUtils.triangulateShape(contour, holeContours); } catch { return; }
   const all = contour.concat(...holeContours);
+  const drape = (p) => pos.push(p[0], terrainAt(p[0], p[1]) + yOff, p[1]);   // p = [x, z]
+  const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  const d2 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  // LONGEST-EDGE BISECTION: split only the longest edge each step. This refines long road polygons
+  // along their length WITHOUT exploding thin ones (4-way midpoint split made 131k verts per sidewalk).
+  // Preserves orientation; leaf pushes reversed (a,c,b) for Y-up normals.
+  const emit = (a, b, c, d) => {
+    const eab = d2(a, b), ebc = d2(b, c), eca = d2(c, a), maxE = Math.max(eab, ebc, eca);
+    if (d <= 0 || maxE <= MAX_SUB) { drape(a); drape(c); drape(b); return; }
+    if (eab === maxE)      { const m = mid(a, b); emit(a, m, c, d - 1); emit(m, b, c, d - 1); }
+    else if (ebc === maxE) { const m = mid(b, c); emit(a, b, m, d - 1); emit(a, m, c, d - 1); }
+    else                   { const m = mid(c, a); emit(a, b, m, d - 1); emit(b, c, m, d - 1); }
+  };
   for (const [ia, ib, ic] of tris) {
-    for (const idx of [ia, ic, ib]) {        // reversed -> upward-facing winding for Y-up
-      const p = all[idx]; pos.push(p.x, terrainAt(p.x, p.y) + yOff, p.y);   // p.y holds the world Z
-    }
+    const a = all[ia], b = all[ib], c = all[ic];
+    emit([a.x, a.y], [b.x, b.y], [c.x, c.y], 9);   // depth cap guards pathological tris (~512 leaves max)
   }
 }
 
