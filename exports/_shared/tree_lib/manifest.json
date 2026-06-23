@@ -1,0 +1,55 @@
+{
+  "up_axis": "+Y (glTF, export_yup=True); trunk base at origin, canopy along +Y",
+  "note": "Every source mesh is a single tree (see _investigation.json). Trees.glb=5 normal trees, Acacia.glb=1 large umbrella acacia.",
+  "count": 6,
+  "trees": [
+    {
+      "id": 0,
+      "file": "tree_00.glb",
+      "source": "NormalTree_1",
+      "height_m": 6.87,
+      "canopy_w_m": 4.05,
+      "feature": false
+    },
+    {
+      "id": 1,
+      "file": "tree_01.glb",
+      "source": "NormalTree_2",
+      "height_m": 6.56,
+      "canopy_w_m": 4.55,
+      "feature": false
+    },
+    {
+      "id": 2,
+      "file": "tree_02.glb",
+      "source": "NormalTree_3",
+      "height_m": 5.28,
+      "canopy_w_m": 5.04,
+      "feature": false
+    },
+    {
+      "id": 3,
+      "file": "tree_03.glb",
+      "source": "NormalTree_4",
+      "height_m": 5.1,
+      "canopy_w_m": 5.67,
+      "feature": false
+    },
+    {
+      "id": 4,
+      "file": "tree_04.glb",
+      "source": "NormalTree_5",
+      "height_m": 2.98,
+      "canopy_w_m": 3.1,
+      "feature": false
+    },
+    {
+      "id": 5,
+      "file": "tree_05.glb",
+      "source": "Acacia_Mesh",
+      "height_m": 10.2,
+      "canopy_w_m": 23.32,
+      "feature": true
+    }
+  ]
+}

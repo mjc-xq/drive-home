@@ -33,6 +33,7 @@ import { gradeDemUnderRoads } from './lib/dem_road_grade.mjs';
 import { buildRoadNetwork, buildPlantingStripPoints } from './lib/road_network.mjs';
 import { buildRoadGeometryLayer } from './lib/road_geometry.mjs';
 import { buildManualStructures } from './lib/manual_structures.mjs';
+import { buildManualProps } from './lib/manual_props.mjs';
 import { curbLinesFromRoads } from './road_prep.mjs';
 import { bakeGroundAtlas } from './lib/ground_atlas.mjs';
 import { buildSurfaceAnnotation } from './lib/surface_annotation.mjs';
@@ -525,6 +526,18 @@ console.log(`road geometry: ${rgeo.added} meshes under 'RoadLayer' (draped on su
     const structs = JSON.parse(readFileSync(msPath, 'utf8')).structures || [];
     const sres = buildManualStructures({ THREE, scene, structures: structs, terrainAt });
     if (sres.added) console.log(`manual structures: +${sres.added} (manual_structures.json)`);
+  }
+}
+
+// ---- MANUAL props (basketball hoops, benches, ...) — hand-placed instances of shared component GLBs,
+// re-applied every bake so the placement persists. Mirrors manual_structures/manual_buildings; the
+// component GLBs are read with the SAME NodeIO `io` used for photoreal. ----------------------------
+{
+  const mpPath = R(dataDir, 'manual_props.json');
+  if (existsSync(mpPath)) {
+    const propList = JSON.parse(readFileSync(mpPath, 'utf8')).props || [];
+    const pres = await buildManualProps({ THREE, scene, props: propList, terrainAt, ROOT, io, existsSync, path });
+    if (pres.added) console.log(`manual props: ${pres.instances} instance(s) across ${pres.added} component(s) (manual_props.json)`);
   }
 }
 

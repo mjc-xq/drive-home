@@ -1,0 +1,183 @@
+{
+  "meshes": [
+    {
+      "source": "Trees.glb",
+      "name": "NormalTree_1",
+      "dims_xyz": [
+        4.05,
+        2.74,
+        6.87
+      ],
+      "loose_parts": 1900,
+      "materials": [
+        "NormalTree_Bark",
+        "NormalTree_Leaves"
+      ],
+      "clusters_by_link_dist": {
+        "1.5": 1,
+        "2.5": 1,
+        "4.0": 1,
+        "6.0": 1
+      },
+      "clusters_at_4m": 1,
+      "cluster_footprints": [
+        {
+          "parts": 1900,
+          "cx": 200.37,
+          "cy": 0.13,
+          "w": 4.05,
+          "h": 6.87
+        }
+      ]
+    },
+    {
+      "source": "Trees.glb",
+      "name": "NormalTree_2",
+      "dims_xyz": [
+        4.55,
+        2.79,
+        6.56
+      ],
+      "loose_parts": 1411,
+      "materials": [
+        "NormalTree_Bark",
+        "NormalTree_Leaves"
+      ],
+      "clusters_by_link_dist": {
+        "1.5": 1,
+        "2.5": 1,
+        "4.0": 1,
+        "6.0": 1
+      },
+      "clusters_at_4m": 1,
+      "cluster_footprints": [
+        {
+          "parts": 1411,
+          "cx": 205.52,
+          "cy": -0.0,
+          "w": 4.55,
+          "h": 6.56
+        }
+      ]
+    },
+    {
+      "source": "Trees.glb",
+      "name": "NormalTree_3",
+      "dims_xyz": [
+        5.04,
+        2.88,
+        5.28
+      ],
+      "loose_parts": 1121,
+      "materials": [
+        "NormalTree_Bark",
+        "NormalTree_Leaves"
+      ],
+      "clusters_by_link_dist": {
+        "1.5": 1,
+        "2.5": 1,
+        "4.0": 1,
+        "6.0": 1
+      },
+      "clusters_at_4m": 1,
+      "cluster_footprints": [
+        {
+          "parts": 1121,
+          "cx": 210.63,
+          "cy": -0.0,
+          "w": 5.04,
+          "h": 5.28
+        }
+      ]
+    },
+    {
+      "source": "Trees.glb",
+      "name": "NormalTree_4",
+      "dims_xyz": [
+        5.67,
+        2.4,
+        5.1
+      ],
+      "loose_parts": 1431,
+      "materials": [
+        "NormalTree_Bark",
+        "NormalTree_Leaves"
+      ],
+      "clusters_by_link_dist": {
+        "1.5": 1,
+        "2.5": 1,
+        "4.0": 1,
+        "6.0": 1
+      },
+      "clusters_at_4m": 1,
+      "cluster_footprints": [
+        {
+          "parts": 1431,
+          "cx": 217.4,
+          "cy": 0.04,
+          "w": 5.67,
+          "h": 5.1
+        }
+      ]
+    },
+    {
+      "source": "Trees.glb",
+      "name": "NormalTree_5",
+      "dims_xyz": [
+        3.1,
+        2.57,
+        2.98
+      ],
+      "loose_parts": 421,
+      "materials": [
+        "NormalTree_Bark",
+        "NormalTree_Leaves"
+      ],
+      "clusters_by_link_dist": {
+        "1.5": 1,
+        "2.5": 1,
+        "4.0": 1,
+        "6.0": 1
+      },
+      "clusters_at_4m": 1,
+      "cluster_footprints": [
+        {
+          "parts": 421,
+          "cx": 221.73,
+          "cy": -0.09,
+          "w": 3.1,
+          "h": 2.98
+        }
+      ]
+    },
+    {
+      "source": "Acacia.glb",
+      "name": "Acacia_Mesh",
+      "dims_xyz": [
+        23.32,
+        12.76,
+        10.2
+      ],
+      "loose_parts": 1021,
+      "materials": [
+        "Acacia_Mat"
+      ],
+      "clusters_by_link_dist": {
+        "1.5": 1,
+        "2.5": 1,
+        "4.0": 1,
+        "6.0": 1
+      },
+      "clusters_at_4m": 1,
+      "cluster_footprints": [
+        {
+          "parts": 1021,
+          "cx": -0.4,
+          "cy": -0.03,
+          "w": 23.32,
+          "h": 10.2
+        }
+      ]
+    }
+  ]
+}

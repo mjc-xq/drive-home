@@ -9,6 +9,8 @@ exports/*
 !exports/stanton/
 !exports/meemaw/
 !exports/xq/
+!exports/_shared/
+
 exports/**/_renders/
 exports/**/*.verify.jpg
 exports/**/*.verify.png
