@@ -29,9 +29,9 @@ const { NodeIO } = await import('@gltf-transform/core');
 const io = new NodeIO();   // shared: reads the photoreal GLB (4b-ii) AND the exported scene (5)
 
 import { loadDEM, makeGeo, buildTerrainMesh } from './lib/terrain_mesh.mjs';
-import { gradeDemUnderRoads } from './lib/dem_road_grade.mjs';
+import { gradeDemUnderFootprint } from './lib/dem_road_grade.mjs';
 import { buildRoadNetwork, buildPlantingStripPoints } from './lib/road_network.mjs';
-import { buildRoadGeometryLayer } from './lib/road_geometry.mjs';
+import { buildRoadGeometryLayer, pavedFootprintRings } from './lib/road_geometry.mjs';
 import { buildManualStructures } from './lib/manual_structures.mjs';
 import { buildManualProps } from './lib/manual_props.mjs';
 import { curbLinesFromRoads } from './road_prep.mjs';
@@ -109,14 +109,31 @@ const aerialPath = pick('google_aerial.jpg');
 console.log(`\n=== single-surface export: ${SET.slug} ===`);
 console.log(`scene: ${SET.scene}  buildings=${(S.buildings || []).length} roads=${(S.roads || []).length}`);
 
-// ---- 1) terrain (the ONE welded surface) -------------------------------------------
+// ---- 1) DEM + geo, road network, then grade the bed UNDER the paved footprint ------
 const D = loadDEM(pick('dem_1m.json'));
-// Grade/smooth the RAW DEM under road corridors BEFORE the mesh is built, so undulations under a
-// road no longer read as bumps. Mutates D.h in place; preserves the slow real grade (only removes
-// high-frequency chatter, feathers to zero at the shoulder so there is no cliff at the corridor edge).
-const grade = gradeDemUnderRoads({ D, C, LAT0, LON0, COSLAT, roads: S.roads, w2, opts: {} });
-console.log(`terrain grade: ${grade.cellsModified} cells under roads (cut ${grade.maxCut.toFixed(2)}m / fill ${grade.maxFill.toFixed(2)}m)`);
-const geo = makeGeo(D, { C, LAT0, LON0, COSLAT });
+const geo = makeGeo(D, { C, LAT0, LON0, COSLAT });   // demHeight closes over D.h -> sees the grade below
+
+// Build the road + sidewalk network FIRST (it needs only S/MS/w2 + the DEM rect, not the mesh) so the
+// DEM can be flattened under the EXACT paved footprint before the mesh is built. Clip to the REAL
+// terrain extent (per level), clamped by patchHalf exactly like buildTerrainMesh does — else roads/
+// sidewalks generate far beyond the smaller school/xq terrains.
+const _ph = Number.isFinite(SET.patchHalf) ? SET.patchHalf : Infinity;
+const _g = geo.demRect;
+const demRectC = { x0: Math.max(_g.x0, -_ph), x1: Math.min(_g.x1, _ph), z0: Math.max(_g.z0, -_ph), z1: Math.min(_g.z1, _ph) };
+const clipHalf = Math.max(Math.abs(demRectC.x0), Math.abs(demRectC.x1), Math.abs(demRectC.z0), Math.abs(demRectC.z1));
+const network = buildRoadNetwork(S, MS, { w2, clipHalf, demRect: demRectC });
+const curbLines = curbLinesFromRoads(S.roads || [], w2, { clipHalf });
+console.log(`network: ${network.surfaces.length} surfaces, ${network.paint.length} paint groups, ${curbLines.length} curb lines`);
+
+// Flatten the RAW DEM under the EXACT paved FOOTPRINT (asphalt+driveway+sidewalk+curb+crosswalk —
+// the SAME polygons the road layer draws) BEFORE the mesh is built, so the drawn road and the
+// terrain it drapes on are the SAME surface and no bump pokes through ANYWHERE a road is drawn.
+// Replaces the old centreline-only grade that missed sidewalk/curb/driveway edges + skipped service
+// roads. Mutates D.h in place; geo.demHeight sees it (same array) so visual==collision==placement.
+const footprintRings = pavedFootprintRings({ network, curbLines });
+const grade = gradeDemUnderFootprint({ D, C, LAT0, LON0, COSLAT, rings: footprintRings, opts: {} });
+console.log(`terrain grade: ${grade.cellsModified} cells under ${grade.rings} paved rings (cut ${grade.maxCut.toFixed(2)}m / fill ${grade.maxFill.toFixed(2)}m)`);
+
 // ONE ground texture region over the whole DEM rect (texCoreHalf covers the full patch) so there
 // is NO core/far texture boundary — the visible white seam at ±300 m is gone by construction.
 // The mesh stays adaptive (1 m core + 4 m far) but samples a single texture/material.
@@ -124,15 +141,6 @@ const terrain = buildTerrainMesh({ D, geo, opts: { uniformStep: 2, texCoreHalf: 
 const terrainAt = terrain.terrainAt;
 console.log(`terrain: ${terrain.stats.verts} verts, ${terrain.stats.tris} tris ` +
   `(core ${terrain.stats.coreTris}, far ${terrain.stats.farTris}), Y[${terrain.stats.minY.toFixed(1)}..${terrain.stats.maxY.toFixed(1)}]`);
-
-// ---- 2) road + sidewalk network + inferred paint -----------------------------------
-// clip the road network + curbs to the REAL terrain extent (per level), not a fixed ±596 — else
-// roads/sidewalks are generated far beyond the smaller school/xq terrains (B1).
-const _dr = terrain.demRect;
-const clipHalf = Math.max(Math.abs(_dr.x0), Math.abs(_dr.x1), Math.abs(_dr.z0), Math.abs(_dr.z1));
-const network = buildRoadNetwork(S, MS, { w2, clipHalf, demRect: _dr });
-const curbLines = curbLinesFromRoads(S.roads || [], w2, { clipHalf });
-console.log(`network: ${network.surfaces.length} surfaces, ${network.paint.length} paint groups, ${curbLines.length} curb lines`);
 
 // ---- 3) bake ground textures (de-roaded aerial bed + painted features) -------------
 const groundDir = R(dataDir, '_ground');   // regenerable ground atlas (gitignored within data/)

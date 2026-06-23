@@ -19,10 +19,13 @@ import path from 'node:path';
 import { emitGroundRibbon, fanDisc, offsetLine, snapCreekToChannel } from '../road_prep.mjs';
 
 const CREEK_WIDTH = Number.isFinite(+process.env.CREEK_WIDTH_M) ? +process.env.CREEK_WIDTH_M : 7.5;
-// CREEK_DEPTH = how high the FLAT water surface sits ABOVE the channel floor (a ~2 ft creek ≈ 0.5 m).
+// CREEK_DEPTH = how high the FLAT water surface sits ABOVE the channel floor. Was 0.5 m (read ~1 m
+// too low in-game). Raised to 1.5 m so the surface sits where a real creek pool would; the ribbon
+// then marches each edge OUT to the waterline (terrain == surfaceY) and a little past, so the raised
+// flat plane FILLS the bed bank-to-bank and tucks UNDER the banks (no side gaps) instead of floating.
 // Water finds a level: a flat plane this far above the bed fills the channel bank-to-bank; the banks
 // (higher terrain) naturally occlude the ribbon edges. (Was 0.05 m BELOW the floor → a sliver puddle.)
-const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 0.5;
+const CREEK_DEPTH = Number.isFinite(+process.env.CREEK_DEPTH_M) ? +process.env.CREEK_DEPTH_M : 1.5;
 
 const inPoly = (x, z, ring) => {
   let inside = false;
@@ -162,11 +165,27 @@ function flatWaterRibbon(lineW, width, lift, terrainAt, posArr, idxArr) {
     const ys = run.map(k => elev[k]).sort((a, b) => a - b);
     const runFloor = ys[Math.floor(0.15 * (ys.length - 1))];
     const surfaceY = runFloor + lift;   // water surface sits ABOVE the channel floor (flat, fills the channel)
+    // March each cross-section edge OUTWARD from the centreline to the WATERLINE (where the bank
+    // terrain rises to surfaceY) and a little past, so the flat plane fills the bed cross-section
+    // and tucks UNDER the rising bank — no side gaps at the raised level. Keep a min half-width so
+    // a low/flat bank doesn't collapse the ribbon, and a max so it can't sprawl across a flood flat.
+    const MAXHW = Math.max(hw * 2.6, hw + 6), STEP = 0.3, OVER = 0.7;
+    const edge = (x, z, nx, nz, sign) => {
+      let d = hw;
+      for (let m = hw; m <= MAXHW; m += STEP) {
+        d = m;
+        if (terrainAt(x + nx * sign * m, z + nz * sign * m) >= surfaceY) break;
+      }
+      d = Math.min(MAXHW, d + OVER);
+      return [x + nx * sign * d, z + nz * sign * d];
+    };
     let prevOff = null;
     for (const k of run) {
       const [x, z] = dense[k], p = dense[Math.max(0, k - 1)], q = dense[Math.min(dense.length - 1, k + 1)];
       let dx = q[0] - p[0], dz = q[1] - p[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-      const nx = -dz, nz = dx, lx = x + nx * hw, lz = z + nz * hw, rx = x - nx * hw, rz = z - nz * hw;
+      const nx = -dz, nz = dx;
+      const [lx, lz] = edge(x, z, nx, nz, +1);
+      const [rx, rz] = edge(x, z, nx, nz, -1);
       const off = posArr.length / 3;
       posArr.push(lx, surfaceY, lz, rx, surfaceY, rz);
       if (prevOff !== null) { const a = prevOff, b = a + 1, c = off, d = off + 1; idxArr.push(a, c, b, b, c, d); }

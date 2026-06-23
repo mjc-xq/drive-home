@@ -223,3 +223,110 @@ export function gradeDemUnderRoads({ D, C, LAT0, LON0, COSLAT, roads, w2, opts =
 
   return { cellsModified, maxCut, maxFill, corridors: corridors.length };
 }
+
+// ---------------------------------------------------------------------------------------------
+// gradeDemUnderFootprint — flatten the DEM under the EXACT paved FOOTPRINT (the same asphalt /
+// sidewalk / curb / driveway / crosswalk polygons the road geometry layer DRAWS), not just road
+// centrelines. This is the fix for "the road is always an approximation / terrain pokes through":
+// the centreline grade above only covered carriageway±shoulder and skipped service roads, so the
+// drawn sidewalk/curb/driveway edges sat on un-graded bumps. Grading under the literal footprint
+// makes the drawn road and the terrain it drapes on the SAME surface (within the road layer's mm
+// lift), so nothing pokes through anywhere a road is drawn.
+//
+//   rings : array of closed world-XZ polylines [[x,z],...] (from road_geometry.pavedFootprintRings)
+// Mutates D.h in place. 2D low-pass target (kills sub-kernel bumps, keeps the slow real grade),
+// full weight inside the footprint, smoothstep feather over SHOULDER m so there's no cliff at the edge.
+export function gradeDemUnderFootprint({ D, C, LAT0, LON0, COSLAT, rings, opts = {} }) {
+  const SHOULDER = opts.shoulder ?? 2.0;       // m feather beyond the paved edge
+  const SMOOTH_M = opts.smoothM ?? 2.0;        // 2D low-pass half-kernel (m)
+  const MAX_CUTFILL = opts.maxCutFill ?? 2.5;  // clamp |target-raw| so a bad sample can't gouge
+  const { cols, rows, h } = D;
+  const dLat = D.latN - D.latS, dLon = D.lonE - D.lonW;
+  if (!Array.isArray(rings) || !rings.length || !cols || !rows || !Array.isArray(h)) {
+    return { cellsModified: 0, maxCut: 0, maxFill: 0, rings: 0 };
+  }
+  const raw = h.slice();   // snapshot: 2D smooth samples the UN-mutated field (no write feedback)
+
+  // bilinear height on the RAW snapshot at world (X,Z)
+  const rawHeight = (X, Z) => {
+    const e = X + C[0], n = C[1] - Z;
+    const lat = LAT0 + n / 110540, lon = LON0 + e / (COSLAT * 111320);
+    let fi = (lon - D.lonW) / dLon * cols - 0.5, fj = (D.latN - lat) / dLat * rows - 0.5;
+    fi = Math.max(0, Math.min(cols - 1.001, fi)); fj = Math.max(0, Math.min(rows - 1.001, fj));
+    const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
+    const a = raw[j * cols + i], b = raw[j * cols + i + 1], c = raw[(j + 1) * cols + i], d = raw[(j + 1) * cols + i + 1];
+    return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+  };
+  const cellWorld = (i, j) => {
+    const lon = D.lonW + (i + 0.5) / cols * dLon;
+    const lat = D.latN - (j + 0.5) / rows * dLat;
+    const e = (lon - LON0) * COSLAT * 111320, n = (lat - LAT0) * 110540;
+    return [e - C[0], -(n - C[1])];
+  };
+  // world XZ -> fractional DEM cell (i,j) — for rasterizing the rings into cell space
+  const cellIJ = (X, Z) => {
+    const e = X + C[0], n = C[1] - Z;
+    const lat = LAT0 + n / 110540, lon = LON0 + e / (COSLAT * 111320);
+    return [(lon - D.lonW) / dLon * cols - 0.5, (D.latN - lat) / dLat * rows - 0.5];
+  };
+
+  // 1) rasterize every ring into an inside-mask via even-odd scanline fill (cell space)
+  const inside = new Uint8Array(cols * rows);
+  for (const ring of rings) {
+    if (!Array.isArray(ring) || ring.length < 3) continue;
+    const pts = ring.map(([x, z]) => cellIJ(x, z));
+    let jmin = Infinity, jmax = -Infinity;
+    for (const p of pts) { if (p[1] < jmin) jmin = p[1]; if (p[1] > jmax) jmax = p[1]; }
+    const j0 = Math.max(0, Math.ceil(jmin - 0.5)), j1 = Math.min(rows - 1, Math.floor(jmax - 0.5));
+    for (let j = j0; j <= j1; j++) {
+      const yc = j + 0.5;
+      const xs = [];
+      for (let k = 0; k < pts.length; k++) {
+        const a = pts[k], b = pts[(k + 1) % pts.length];
+        const ya = a[1], yb = b[1];
+        if ((ya <= yc && yb > yc) || (yb <= yc && ya > yc)) xs.push(a[0] + (b[0] - a[0]) * (yc - ya) / (yb - ya));
+      }
+      xs.sort((p, q) => p - q);
+      for (let m = 0; m + 1 < xs.length; m += 2) {
+        const xi0 = Math.max(0, Math.ceil(xs[m] - 0.5)), xi1 = Math.min(cols - 1, Math.floor(xs[m + 1] - 0.5));
+        for (let i = xi0; i <= xi1; i++) inside[j * cols + i] = 1;
+      }
+    }
+  }
+
+  // 2) weight field: 1 inside the footprint, smoothstep feather to 0 over SHOULDER cells outside
+  const mPerCell = Math.abs((dLon / cols) * COSLAT * 111320) || 1;   // ~1 m for dem_1m
+  const shoulderCells = Math.max(1, Math.round(SHOULDER / mPerCell));
+  const weight = new Float32Array(cols * rows);
+  for (let idx = 0; idx < inside.length; idx++) if (inside[idx]) weight[idx] = 1;
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    if (!inside[j * cols + i]) continue;
+    for (let dj = -shoulderCells; dj <= shoulderCells; dj++) for (let di = -shoulderCells; di <= shoulderCells; di++) {
+      const ni = i + di, nj = j + dj;
+      if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
+      const k = nj * cols + ni;
+      if (inside[k]) continue;
+      const w = 1 - smoothstep(Math.hypot(di, dj) / (shoulderCells + 1e-6));
+      if (w > weight[k]) weight[k] = w;
+    }
+  }
+
+  // 3) write each weighted cell toward the 2D low-passed target
+  let cellsModified = 0, maxCut = 0, maxFill = 0;
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const k = j * cols + i; const w = weight[k];
+    if (w <= 0) continue;
+    const [x, z] = cellWorld(i, j);
+    let s = 0, c = 0;
+    for (let dz = -SMOOTH_M; dz <= SMOOTH_M; dz += 1) for (let dx = -SMOOTH_M; dx <= SMOOTH_M; dx += 1) { s += rawHeight(x + dx, z + dz); c++; }
+    let target = s / c;
+    const rawH = raw[k];
+    target = rawH + Math.max(-MAX_CUTFILL, Math.min(MAX_CUTFILL, target - rawH));
+    const newH = rawH * (1 - w) + target * w;
+    if (newH === rawH) continue;
+    h[k] = newH; cellsModified++;
+    const d = newH - rawH;
+    if (d < 0) { if (-d > maxCut) maxCut = -d; } else if (d > maxFill) maxFill = d;
+  }
+  return { cellsModified, maxCut, maxFill, rings: rings.length };
+}

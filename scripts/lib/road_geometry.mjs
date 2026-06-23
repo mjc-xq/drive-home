@@ -151,6 +151,21 @@ function meshFromPos(THREE, pos, name, rgb, rough = 0.9) {
   const mesh = new THREE.Mesh(g, m); mesh.name = name; return mesh;
 }
 
+// The EXACT closed rings of every paved thing this layer will DRAW (asphalt, driveways, sidewalks,
+// crosswalks, curbs). The DEM grader flattens the terrain bed under precisely these polygons so the
+// road geometry sits on the same (graded) surface it drapes on — no terrain bump pokes through the
+// drawn road, including the sidewalk/curb/driveway edges the centreline-only grade used to miss.
+export function pavedFootprintRings({ network, curbLines = [] }) {
+  const rings = [];
+  if (network && network.surfaces) for (const s of network.surfaces) {
+    if (s.kind === 'curb' && s.centerline) { const r = bandRing(s.centerline, (s.width || 0.55) + 1.0); if (r) rings.push(r); continue; }
+    const ring = s.polygon || (s.centerline ? bandRing(s.centerline, s.width || 4) : null);
+    if (ring && ring.length >= 3) rings.push(ring);
+  }
+  for (const cl of curbLines) { const line = cl.line || cl; if (Array.isArray(line) && line.length >= 2) { const r = bandRing(line, 1.6); if (r) rings.push(r); } }
+  return rings;
+}
+
 export function buildRoadGeometryLayer({ THREE, scene, network, curbLines = [], terrainAt }) {
   if (!network || !network.surfaces) return { added: 0 };
   const ShapeUtils = THREE.ShapeUtils;
