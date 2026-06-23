@@ -404,6 +404,13 @@ namespace DaHilg
         {
             if (input == null || m_MenuEntries.Count == 0) return false;
 
+            // Only CONSUME input when an overlay menu is genuinely open. The compact action bar is always
+            // visible, and hovering/clicking it focus-latches m_MenuFocused — without this gate, the
+            // Activate/Cancel branches below reported "consumed" during normal play, and since attack/
+            // roll/jump are gated by !menuConsumedInput in DaHilgGameManager, those actions got swallowed
+            // (worst on gamepad, where A=Jump=MenuActivate and B=Roll=MenuCancel share a button).
+            bool menuActive = m_CompactMenuOpen || m_LevelDialogOpen;
+
             if (input.MenuCancelPressed)
             {
                 if (m_LevelDialogOpen)
@@ -450,14 +457,14 @@ namespace DaHilg
                 return false;
             }
 
-            if (input.MenuCancelPressed && m_MenuFocused)
+            if (menuActive && input.MenuCancelPressed && m_MenuFocused)
             {
                 m_MenuFocused = false;
                 ApplyMenuSelectionStyles();
                 return true;
             }
 
-            if (input.MenuActivatePressed && m_MenuFocused)
+            if (menuActive && input.MenuActivatePressed && m_MenuFocused)
             {
                 ActivateSelectedMenuEntry();
                 return true;
@@ -1870,7 +1877,8 @@ namespace DaHilg
             m_MenuEntries.Add(entry);
 
             button.RegisterCallback<PointerDownEvent>(_ => SelectMenuButton(button, true));
-            button.RegisterCallback<PointerEnterEvent>(_ => SelectMenuButton(button, true));
+            // No PointerEnter hover-latch: a mere mouse-graze of the always-visible compact bar must NOT
+            // flip m_MenuFocused on desktop (that, with the consume gate, was eating gameplay input).
             button.RegisterCallback<FocusInEvent>(_ => SelectMenuButton(button, true));
         }
 
