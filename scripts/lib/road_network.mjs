@@ -215,8 +215,13 @@ function trimFrom(line, dist, fromEnd) {
 // C. curb returns — ALWAYS one filleted corner per adjacent walk-arm pair at every junction.
 //    VETO-FREE: never dropped, never NaN. Degenerate corners fall back to a quarter-disc cap.
 // =====================================================================================
-// filletCorner: returns a CLOSED concrete corner polygon for the wedge between two outward
-// arm directions A,B at junction centre c. Always valid. `widthA/widthB` are road widths.
+// filletCorner: returns a CLOSED concrete corner for the wedge between two outward arm
+// directions A,B at junction centre c. Always valid. `widthA/widthB` are road widths.
+// Returns { polygon, curb, tpA, tpB } where:
+//   polygon = closed concrete corner ring  [X, tpA, ...arc..., tpB]
+//   curb    = OUTER (street-side) edge polyline [tpA, ...arc..., tpB] (polygon minus inner X)
+//   tpA/tpB = the arc's tangent endpoints (exact weld targets for the adjoining runs)
+// Degenerate corners fall back to quarterDiscCap, which returns the same shape.
 export function filletCorner(c, A, B, widthA, widthB, klass) {
   const R = CURB_RETURN_R[klass] ?? CURB_RETURN_R.default;
   const dA = norm([A.dx ?? A[0], A.dz ?? A[1]]);
@@ -257,23 +262,31 @@ export function filletCorner(c, A, B, widthA, widthB, klass) {
   while (sweep > Math.PI) sweep -= Math.PI * 2;
   while (sweep < -Math.PI) sweep += Math.PI * 2;
   const steps = Math.max(2, Math.ceil(R * Math.abs(sweep) / 0.8));
-  const poly = [X, tpA, ...arcPts(F, R, a0, sweep, steps).slice(1, -1), tpB];
+  const arc = [tpA, ...arcPts(F, R, a0, sweep, steps).slice(1, -1), tpB]; // OUTER curb edge
+  const poly = [X, ...arc];                                              // closed corner ring
   const clean = poly.filter(finite);
-  return clean.length >= 3 ? clean : quarterDiscCap(c, dA, dB);
+  if (clean.length < 3) return quarterDiscCap(c, dA, dB);
+  const curb = arc.filter(finite);
+  return { polygon: clean, curb: curb.length >= 2 ? curb : null, tpA, tpB };
 }
 
 // Guaranteed-valid quarter-disc cap (radius R_MIN) seated between two arm dirs, pointing
-// into their wedge. Never NaN. Used for degenerate / hairpin corners.
+// into their wedge. Never NaN. Used for degenerate / hairpin corners. Returns the same
+// { polygon, curb, tpA, tpB } shape as filletCorner: the disc arc IS the outer curb edge,
+// and its endpoints are the weld targets.
 function quarterDiscCap(c, dA, dB) {
   let bis = norm([dA[0] + dB[0], dA[1] + dB[1]]);
   if (!finite(bis) || (bis[0] === 0 && bis[1] === 0)) bis = [-dA[1], dA[0]]; // perp fallback for opposite arms
   const C = [c[0] + bis[0] * (R_MIN + 0.6), c[1] + bis[1] * (R_MIN + 0.6)];
   const a0 = Math.atan2(-bis[1], -bis[0]) - Math.PI / 2;
-  return arcPts(C, R_MIN, a0, Math.PI, 8).filter(finite);
+  const arc = arcPts(C, R_MIN, a0, Math.PI, 8).filter(finite);
+  return { polygon: arc, curb: arc.length >= 2 ? arc : null, tpA: arc[0], tpB: arc[arc.length - 1] };
 }
 
 // buildCurbReturns: one filled concrete corner per ADJACENT walk-arm pair, at EVERY junction
-// with >=2 non-service arms. Veto-free. Returns array of CLOSED corner polygons.
+// with >=2 non-service arms. Veto-free. Returns array of corner objects
+// { polygon, curb, tpA, tpB } (see filletCorner). `curb` is the outer street-side arc that
+// stitchSidewalkNetwork emits as a continuous curb stroke; tpA/tpB are run weld targets.
 export function buildCurbReturns(junctions) {
   const corners = [];
   for (const j of junctions) {
@@ -287,8 +300,8 @@ export function buildCurbReturns(junctions) {
     for (const [i, k] of pairs) {
       const A = arms[i], B = arms[k];
       const klass = classOf(A.spec.width >= B.spec.width ? A : B);
-      const poly = filletCorner(c, A, B, A.spec.width, B.spec.width, klass);
-      if (poly && poly.length >= 3) corners.push(poly);
+      const corner = filletCorner(c, A, B, A.spec.width, B.spec.width, klass);
+      if (corner && corner.polygon && corner.polygon.length >= 3) corners.push(corner);
     }
   }
   return corners;
@@ -380,6 +393,8 @@ function clampPolyOutOfRoad(poly, cway) {
 // =====================================================================================
 // buildDeadEndCaps: a closed semicircle concrete polygon wrapping each ordinary residential
 // dead end (not a court). Outer arc at walk outer edge, inner arc at walk inner edge.
+// Returns [{ polygon, curb }] where `curb` is the OUTER (street-side) semicircle arc that
+// stitchSidewalkNetwork emits as a continuous curb stroke wrapping the dead end.
 export function buildDeadEndCaps(scene, env, junctions) {
   const roads = scene.roads || [];
   const w2 = env.w2, half = env.clipHalf;
@@ -412,14 +427,18 @@ export function buildDeadEndCaps(scene, env, junctions) {
       const outer = arcPts(tip, rOut, theta + Math.PI / 2, -Math.PI, 14);
       const inner = arcPts(tip, rIn, theta - Math.PI / 2, Math.PI, 14);
       const poly = outer.concat(inner).filter(finite);
-      if (poly.length >= 3) caps.push(poly);
+      if (poly.length < 3) continue;
+      const curb = outer.filter(finite);                  // street-side arc → continuous curb
+      caps.push({ polygon: poly, curb: curb.length >= 2 ? curb : null });
     }
   }
   return caps;
 }
 
 // buildCulDeSacRings: a concrete annulus ring polygon (outer ring + inner hole) around each
-// named court / cul-de-sac terminus. Returns [{ polygon, holes:[hole] }].
+// named court / cul-de-sac terminus. Returns [{ polygon, holes:[hole], curb }]. `curb` is the
+// INNER ring (the bulb-side / street-side edge of the annulus) emitted by stitchSidewalkNetwork
+// as a continuous curb stroke wrapping the cul-de-sac bulb (closed loop).
 export function buildCulDeSacRings(scene, env, junctions) {
   const roads = scene.roads || [];
   const w2 = env.w2, half = env.clipHalf;
@@ -444,7 +463,9 @@ export function buildCulDeSacRings(scene, env, junctions) {
       const rOut = bulbR + SW_GAP + SW_WIDTH / 2;
       const outer = arcPts(tip, rOut, 0, Math.PI * 2, 40).filter(finite);
       const inner = arcPts(tip, rIn, 0, Math.PI * 2, 40).filter(finite);
-      if (outer.length >= 3 && inner.length >= 3) rings.push({ polygon: outer, holes: [inner] });
+      // close the curb loop so the painted band has no seam at the 0/2π join
+      const curb = inner.length >= 3 ? inner.concat([inner[0]]) : null;
+      if (outer.length >= 3 && inner.length >= 3) rings.push({ polygon: outer, holes: [inner], curb });
     }
   }
   return rings;
@@ -453,33 +474,53 @@ export function buildCulDeSacRings(scene, env, junctions) {
 // =====================================================================================
 // E. stitch — weld run/fillet/cap geometry into connected concrete polygons + curb edge.
 // =====================================================================================
-// We weld the straight run endpoints to nearby fillet/cap geometry by SNAPPING endpoints
-// within STITCH_EPS, then emit each piece as a filled concrete band (sidewalk runs) plus the
-// corner/cap/ring polygons. The inner (curb-side) edge of every straight run is emitted as a
-// `curb` centerline. This keeps the network visually continuous while staying robust 2D.
+// We weld the straight run endpoints to nearby fillet/cap geometry, then emit each piece as a
+// filled concrete band (sidewalk runs) plus the corner/cap/ring polygons. The inner (curb-side)
+// edge of every straight run is emitted as a `curb` centreline; AND the outer (street-side)
+// arc of every corner / dead-end cap / cul-de-sac ring is emitted too — so the painted curb
+// band wraps every corner, dead end and bulb continuously instead of stopping at the runs.
+//
+// `corners` are { polygon, curb, tpA, tpB }, `caps` are { polygon, curb }, `culRings` are
+// { polygon, holes, curb } (see filletCorner / buildDeadEndCaps / buildCulDeSacRings).
 export function stitchSidewalkNetwork(runs, corners, caps, culRings, cway = null) {
-  // Build a snap registry of all corner/cap rim points so run ends weld to them.
+  // FIX A.1: the fillet tangent points (tpA/tpB) are the EXACT edge the run band must share
+  // with the corner band. Trimming + the old 0.6 m snap almost never coincided (TRIM≈6 m), so
+  // run and fillet ribbons gapped. Weld each run end to the nearest tangent point within a
+  // generous radius so the two bands share that vertex exactly.
+  const tps = [];
+  for (const cn of corners) { if (cn.tpA && finite(cn.tpA)) tps.push(cn.tpA); if (cn.tpB && finite(cn.tpB)) tps.push(cn.tpB); }
+  const WELD_R = 5.0;   // tangent-point weld radius (run ends land ~TRIM from junction centre)
+  const weld = (p) => {
+    let best = null, bd = WELD_R;
+    for (const a of tps) { const d = Math.hypot(a[0] - p[0], a[1] - p[1]); if (d < bd) { bd = d; best = a; } }
+    return best ? [best[0], best[1]] : null;
+  };
+  // Fallback rim snap (degenerate quarter-disc caps carry no usable tangent, dead-end caps have
+  // no tangents): snap to the nearest corner/cap rim point within STITCH_EPS.
   const anchors = [];
-  for (const poly of corners) for (const p of poly) anchors.push(p);
-  for (const poly of caps) for (const p of poly) anchors.push(p);
+  for (const cn of corners) for (const p of cn.polygon) anchors.push(p);
+  for (const cap of caps) for (const p of cap.polygon) anchors.push(p);
   const snap = (p) => {
     let best = null, bd = STITCH_EPS;
     for (const a of anchors) { const d = Math.hypot(a[0] - p[0], a[1] - p[1]); if (d < bd) { bd = d; best = a; } }
     return best ? [best[0], best[1]] : p;
   };
+  // Prefer an exact tangent weld; otherwise fall back to the small rim snap.
+  const weldOrSnap = (p) => weld(p) || snap(p);
   // Every concrete polygon is tucked back out of the carriageway so no sidewalk/fillet/cap
   // ever paints gray over the asphalt (bugs: concrete jutting into the road; sidewalk cutting
   // into the cul-de-sac bulb). No-op when cway is absent.
   const tuck = (poly) => cway ? clampPolyOutOfRoad(poly, cway) : poly;
+  const tuckLine = (line) => cway ? clampPolyOutOfRoad(line, cway) : line;
 
   const surfaces = [];   // concrete-sidewalk filled polygons
-  const curbLines = [];  // shared welded curb geometry (inner edge of each run)
+  const curbLines = [];  // shared welded curb geometry (run inner edges + corner/cap/ring arcs)
 
   for (const run of runs) {
     let line = run.line.map(p => [p[0], p[1]]);
     if (line.length < 2) continue;
-    line[0] = snap(line[0]);
-    line[line.length - 1] = snap(line[line.length - 1]);
+    line[0] = weldOrSnap(line[0]);
+    line[line.length - 1] = weldOrSnap(line[line.length - 1]);
     line = smoothLine(line, { lo: 4, hi: 160 });
     if (line.length < 2) continue;
     const ring = bandRing(line, SW_WIDTH);
@@ -488,13 +529,16 @@ export function stitchSidewalkNetwork(runs, corners, caps, culRings, cway = null
     // The road is on the side opposite `side`; walk centreline was offset by +d*side from
     // the road centreline, so the curb side is toward -side.
     const inner = offsetLine(line, -(SW_WIDTH / 2) * run.side);
-    if (inner.length >= 2) curbLines.push({ line: cway ? clampPolyOutOfRoad(inner, cway) : inner, side: run.side, spec: run.spec });
+    if (inner.length >= 2) curbLines.push({ line: tuckLine(inner), side: run.side, spec: run.spec });
   }
-  for (const poly of corners) surfaces.push({ polygon: tuck(poly) });
-  for (const poly of caps) surfaces.push({ polygon: tuck(poly) });
+  // FIX C: emit each corner / cap / ring street-side arc as a continuous curb stroke so the
+  // painted curb band wraps the corner/dead-end/bulb (ground_atlas paints every curbLine.line).
+  const pushCurb = (curb) => { if (curb && curb.length >= 2) curbLines.push({ line: tuckLine(curb) }); };
+  for (const cn of corners) { surfaces.push({ polygon: tuck(cn.polygon) }); pushCurb(cn.curb); }
+  for (const cap of caps) { surfaces.push({ polygon: tuck(cap.polygon) }); pushCurb(cap.curb); }
   // Cul-de-sac annulus: tuck the OUTER ring out of any carriageway, but leave the inner hole
   // as-is — the hole is the asphalt cutout and is already sized to the bulb radius.
-  for (const ring of culRings) surfaces.push({ polygon: tuck(ring.polygon), holes: ring.holes });
+  for (const ring of culRings) { surfaces.push({ polygon: tuck(ring.polygon), holes: ring.holes }); pushCurb(ring.curb); }
   return { surfaces, curbLines };
 }
 
