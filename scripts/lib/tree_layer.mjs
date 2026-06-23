@@ -174,12 +174,16 @@ function flatWaterRibbon(lineW, width, lift, terrainAt, posArr, idxArr) {
 
 export async function buildTreeLayer({
   THREE, scene, w2, terrainAt, demRect, ROOT, dir,
-  treesPlacedPath, creek, buildingPolys,
+  treesPlacedPath, creek, buildingPolys, pavedPolys = [],
 }) {
   const rng = (() => { let a = 1840; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
   const { x0, x1, z0, z1 } = demRect;
   const inRect = (x, z, m = 0) => x >= x0 + m && x <= x1 - m && z >= z0 + m && z <= z1 - m;
   const onBuilding = (x, z) => (buildingPolys || []).some(r => inPoly(x, z, r));
+  // a tree must never stand on a paved surface (road / intersection / crosswalk / driveway /
+  // sidewalk) — they belong on planting strips + yards. pavedPolys are world-XZ rings from
+  // ground_atlas; empty on road-less levels (no-op). Drops BEFORE pushTrunkBox so no orphan collider.
+  const onPaved = (x, z) => (pavedPolys || []).some(r => inPoly(x, z, r));
   const polys = buildingPolys || [];
 
   const mkMesh = (pos, idx, color, name, opts = {}) => {
@@ -314,6 +318,7 @@ export async function buildTreeLayer({
         // DEM; this frame's terrainAt is the authoritative surface, so sample it here).
         const base = terrainAt(x, z);
         if (!Number.isFinite(base)) continue;
+        if (onPaved(x, z)) continue;                          // no trees on roads/intersections/sidewalks
         const idxKey = t.i ?? nTrees;
         const h = hashOf(idxKey);
         const tmpl = pickTemplate(height, h);
