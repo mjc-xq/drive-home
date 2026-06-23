@@ -5,7 +5,7 @@
     { "id":"mike","body":"src/assets/mike-mx.glb","role":"player","isDefault":false,"label":"Mike","blurb":"Dad","accent":[0.36,0.68,1],"yawOffset":0,
       "clips":{ "attack":"Boxing_Leading_Hand_Jab", "attack2":"A_Cross_Punch", "attack3":"Boxing_Lead_Hand_Hook", "attack4":"Mma_Low_Kick", "attack5":"Standing_Left_Uppercut_Punch", "celebrate":"Victory_From_A_Boxing_Win", "dance":"Step_Hip_Hop_Dance" } },
     { "id":"kelli","body":"src/assets/kelli-mx.glb","role":"player","isDefault":false,"label":"Kelli","blurb":"Mom","accent":[1,0.67,0.35],"yawOffset":0,
-      "clips":{ "attack":"Mma_High_Kick", "attack2":"A_Roundhouse_Kick_To_The_Side_Of_An_Opponent", "attack3":"Double_Front_Snap_Kick", "attack4":"Kicking_With_Lead_Foot", "attack5":"Capoeira_High_Kick", "celebrate":"Victory_From_A_Boxing_Win", "dance":"Bboy_Hip_Hop_Variation_One" } },
+      "clips":{ "idle":"Nervously_Look_Around", "walk":"Female_Locomotion_Pose", "attack":"Mma_High_Kick", "attack2":"A_Roundhouse_Kick_To_The_Side_Of_An_Opponent", "attack3":"Double_Front_Snap_Kick", "attack4":"Kicking_With_Lead_Foot", "attack5":"Capoeira_High_Kick", "celebrate":"Victory_From_A_Boxing_Win", "dance":"Bboy_Hip_Hop_Variation_One" } },
     { "id":"drew","body":"src/assets/drew-mx.glb","role":"nibbler","isDefault":false,"label":"Drew","blurb":"Zombie","accent":[0.42,1,0.58],"yawOffset":0 }
   ]
 }

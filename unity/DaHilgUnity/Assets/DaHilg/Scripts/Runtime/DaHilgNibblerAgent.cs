@@ -101,10 +101,13 @@ namespace DaHilg
             // little RUN variety so the swarm doesn't read as one looped clip. ATTACHED nibblers BITE
             // (the player's flesh) instead of the old player Attack/Hit. These names map to the nibbler
             // controller's distinct state set (Idle/Run/Crawl/Climb/Bite/Jump/Knockdown).
-            m_PrimaryMoveClip = m_Seed < 0.68f ? "Crawl" : "Run";
+            // Most of the swarm CRAWLS (zombie ground approach); a smaller slice RUNS for variety.
+            m_PrimaryMoveClip = m_Seed < 0.82f ? "Crawl" : "Run";
             m_SecondaryMoveClip = m_PrimaryMoveClip == "Crawl" ? "Run" : "Crawl";
             m_CurrentMoveClip = m_PrimaryMoveClip;
-            m_ClingClip = m_Seed < 0.24f ? "Climb" : "Bite";
+            // Roughly half the clingers CLIMB the body (the rest BITE) so the pile reads as a mix of
+            // creatures scaling you and gnawing — more crawls/climbs than the old 1-in-4.
+            m_ClingClip = m_Seed < 0.5f ? "Climb" : "Bite";
 
             // Controller root stays UNSCALED; the character is a CHILD that we scale. This matches the
             // player (capsule in metres on a scale-1 transform + native-scaled visual child) and avoids

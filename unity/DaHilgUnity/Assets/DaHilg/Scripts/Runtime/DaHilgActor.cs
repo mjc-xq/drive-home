@@ -65,6 +65,7 @@ namespace DaHilg
         static readonly string[] s_ComboStates = { "Attack", "Attack2", "Attack3", "Attack4", "Attack5" };
         static readonly string[] s_DanceStates = { "Dance", "DanceAlt", "DanceAlt2" };
         static readonly string[] s_WalkStates = { "Walk", "WalkAlt" };
+        static readonly string[] s_IdleStates = { "Idle", "IdleAlt" };
         float m_StaggerUntil;
         Vector3 m_HitVel;
         float m_HitVelUntil;
@@ -75,6 +76,8 @@ namespace DaHilg
         float m_NextIdleDanceAt;
         float m_WalkVariantUntil;
         int m_WalkVariant;
+        float m_IdleVariantUntil;
+        int m_IdleVariant;
         int m_LastDanceVariant = -1;
         bool m_WasMoving;
 
@@ -858,7 +861,14 @@ namespace DaHilg
         string PickIdleState()
         {
             if (!HasAnimState("IdleAlt")) return "Idle";
-            return (Role == DaHilgActorRole.Npc && m_AnimSeed > 0.58f) ? "IdleAlt" : "Idle";
+            // Rotate idle variants over time for BOTH the player and NPCs (mirrors PickWalkState) so a
+            // standing character cycles through different idle clips instead of holding one looped pose.
+            if (!IsOneOf(m_CurrentAnim, s_IdleStates) || Time.time >= m_IdleVariantUntil)
+            {
+                m_IdleVariant = Random.value < 0.55f ? 0 : 1;
+                m_IdleVariantUntil = Time.time + Random.Range(2.6f, 6.5f);
+            }
+            return s_IdleStates[Mathf.Clamp(m_IdleVariant, 0, s_IdleStates.Length - 1)];
         }
 
         string PickDanceState()
