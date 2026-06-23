@@ -209,19 +209,38 @@ export async function fillMissingBuildings({ S, parcels, aerialPath, aerialBound
     // fit an oriented bounding rect to the blob, but ORIENT to the lot's long axis (street frontage
     // follows the parcel), and SIZE to the blob extent along that axis, clipped to the lot + inset.
     const pts = best.map(k => cell(k % nx, (k / nx) | 0));
-    const ang = lotLongAxisAngle(ring);                          // radians
+    // prefer the roof blob's OWN axis when it's decisively elongated; else the (edge-weighted) lot axis
+    const blob = pcaAxis(pts);
+    const ang = blob.ratio > 1.4 ? blob.angle : lotLongAxisAngle(ring);
     return fitOrientedRect(pts, ang, ring);
   }
 
   // long-axis orientation of the lot (angle of the parcel's dominant edge direction via PCA on
   // the ring vertices) — inferred houses face along this so they parallel the street frontage.
   function lotLongAxisAngle(ring) {
-    const c = centroid(ring);
+    // length-weighted dominant edge direction (doubled-angle so opposite edges agree). Weighting by
+    // EDGE LENGTH (not vertex count) stops a densely-tessellated curved/clipped boundary — common on
+    // across-the-street frontages — from hijacking the axis and rotating the house to a weird angle.
+    let sx = 0, sy = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const dx = ring[i][0] - ring[j][0], dz = ring[i][1] - ring[j][1];
+      const len = Math.hypot(dx, dz); if (len < 1e-6) continue;
+      const a = Math.atan2(dz, dx);
+      sx += len * Math.cos(2 * a); sy += len * Math.sin(2 * a);
+    }
+    return 0.5 * Math.atan2(sy, sx);
+  }
+  // principal axis of the roof-blob point cloud -> { angle, ratio = major/minor eigenvalue }. A
+  // decisively elongated blob knows its own orientation better than a possibly-irregular parcel ring.
+  function pcaAxis(pts) {
+    if (!pts || pts.length < 3) return { angle: 0, ratio: 1 };
+    let mx = 0, mz = 0; for (const [x, z] of pts) { mx += x; mz += z; } mx /= pts.length; mz /= pts.length;
     let sxx = 0, sxz = 0, szz = 0;
-    for (const [x, z] of ring) { const dx = x - c[0], dz = z - c[1]; sxx += dx * dx; sxz += dx * dz; szz += dz * dz; }
-    // principal eigenvector of the 2×2 covariance -> long axis angle
-    const theta = 0.5 * Math.atan2(2 * sxz, sxx - szz);
-    return theta;
+    for (const [x, z] of pts) { const dx = x - mx, dz = z - mz; sxx += dx * dx; sxz += dx * dz; szz += dz * dz; }
+    const n = pts.length; sxx /= n; sxz /= n; szz /= n;
+    const tr = sxx + szz, disc = Math.sqrt(Math.max(0, tr * tr / 4 - (sxx * szz - sxz * sxz)));
+    const l1 = tr / 2 + disc, l2 = tr / 2 - disc;
+    return { angle: 0.5 * Math.atan2(2 * sxz, sxx - szz), ratio: l2 > 1e-6 ? l1 / l2 : Infinity };
   }
   // fit an axis-aligned (in the rotated frame) rect to point cloud `pts`, rotated by `ang`, then
   // inset and clip to the lot. Returns { ringWorld, rect:[cx,cz,w,d,degCompassFromN] } or null.

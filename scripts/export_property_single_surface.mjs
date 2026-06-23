@@ -390,7 +390,7 @@ const bres = buildBuildingLayer({ THREE, scene, S, w2, terrainAt, demRect: terra
   photorealFootprints });
 console.log(`buildings: emitted=${bres.counts.emitted} skipped=${bres.counts.skipped} clipped=${bres.counts.clipped} (drop ${(100 * bres.counts.skipped / Math.max(1, bres.counts.emitted + bres.counts.skipped)).toFixed(1)}%)`);
 
-const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys });
+const tres = await buildTreeLayer({ THREE, scene, w2, terrainAt, demRect: terrain.demRect, ROOT, dir: SET.dir, treesPlacedPath: pick('trees_placed.json'), creek: S.creek, buildingPolys: bres.buildingPolys, pavedPolys: ground.pavedPolys });
 console.log(`trees: ${tres.nTrees} (own 'Trees' layer), shrubs: ${tres.nShrubs}, creek: ${tres.hasCreek}`);
 
 // ---- collision proxies (invisible; runtime bakes a trimesh + hides these) -----------
@@ -425,6 +425,10 @@ const coreOrm = texOf(ground.core.orm);
 const farAlb = await jtex(ground.far.albedo, 84);
 const facadeTexes = await Promise.all(facade.pages.map((p) => jtex(p, 85)));
 const stuccoTex = existsSync(facade.stuccoTile) ? await jtex(facade.stuccoTile, 88) : null;
+// shared roof-tile texture (clay/shingle), tinted per-building by the real roof colour (roofColor
+// factor) the same way the stucco tile is tinted by wallColor — fixes the flat untextured "wood" roofs.
+const roofTilePath = R('exports/roof_tile.png');
+const roofTex = existsSync(roofTilePath) ? await jtex(roofTilePath, 90) : null;
 // photoreal tower textures: re-create each group's baseColor image (raw bytes from the source GLB)
 // as a doc texture, keyed by the THREE material name we gave it, to attach in the loop below.
 const photorealTexByMat = new Map();
@@ -453,6 +457,9 @@ for (const m of doc.getRoot().listMaterials()) {
       m.getBaseColorTextureInfo().setWrapS(CLAMP).setWrapT(CLAMP);
     } else if (/^Stucco_b\d+_mat$/.test(n) && stuccoTex) {   // tiled window/stucco x per-building wallColor (the always-present wall)
       m.setBaseColorTexture(stuccoTex);
+      m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
+    } else if (/^(Buildings_roofs|House_roof)_\d+$/.test(n) && roofTex) {   // tiled roof tile x per-building roofColor — KEEP the factor so the real roof colour tints the tile
+      m.setBaseColorTexture(roofTex);
       m.getBaseColorTextureInfo().setWrapS(REPEAT).setWrapT(REPEAT);
     } else if (photorealTexByMat.has(n)) {   // Google-photoreal tower: re-attach the baked baseColor texture
       m.setBaseColorFactor([1, 1, 1, 1]).setBaseColorTexture(photorealTexByMat.get(n));
