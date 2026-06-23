@@ -301,6 +301,14 @@ async function buildUnityStreamingGlb(lv) {
 
   const out = path.join(STREAM_BUILD_DIR, `${lv.slug}.glb`);
   const doc = await io.read(rawSource);
+  // The single-surface export still bakes in grass-like veg (Creek_Reeds, Shrubs). The user wants NO
+  // grass on any level, so strip it from the base env too (the overlay strip alone isn't enough).
+  // Trees, fences, buildings, terrain, and the creek WATER/banks/rocks stay.
+  let strippedVeg = 0;
+  for (const node of doc.getRoot().listNodes()) {
+    if (/reed|shrub|grass|clump|weed/i.test(node.getName() || '')) { node.dispose(); strippedVeg++; }
+  }
+  if (strippedVeg) console.log(`  ${lv.slug}: stripped ${strippedVeg} grass-like node(s) from base env`);
   await doc.transform(
     dedup(),
     prune({ keepLeaves: true }),
