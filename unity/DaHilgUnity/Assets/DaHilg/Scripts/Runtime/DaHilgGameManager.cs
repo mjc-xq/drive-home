@@ -570,15 +570,9 @@ namespace DaHilg
 
         void RefreshProceduralGrassTarget()
         {
-            bool outdoor = m_CurrentLevel != null && m_CurrentLevel.Slug != "house";
-            if (!outdoor || m_ActiveActor == null)
-            {
-                if (m_ProceduralGrass != null) m_ProceduralGrass.SetTarget(null);
-                return;
-            }
-
-            if (m_ProceduralGrass == null) m_ProceduralGrass = gameObject.AddComponent<DaHilgProceduralGrass>();
-            m_ProceduralGrass.SetTarget(m_ActiveActor.transform);
+            // Grass disabled across all levels (user request): never spawn the procedural grass field.
+            // The component is no longer created; clear any target if one somehow exists.
+            if (m_ProceduralGrass != null) m_ProceduralGrass.SetTarget(null);
         }
 
         void TickNpc(DaHilgActor actor, float dt)

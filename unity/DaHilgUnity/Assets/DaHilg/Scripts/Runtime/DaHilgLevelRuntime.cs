@@ -451,61 +451,104 @@ namespace DaHilg
         {
             if (bits == null || bits.Length == 0) return false;
 
-            // Flat creek surface. Roads/sidewalks drape over the ground (floor + lift), but standing
-            // water needs ONE flat waterline filling the channel — draping the sheet over the uneven
-            // channel floor is exactly why it never read as a creek. Sample the channel floor under every
-            // water cell, then set the surface near the top of that range so the channel reads as filled
-            // with a flat top (a real creek's surface). Logged so the fill depth can be tuned in-engine.
-            float waterline = 0f;
+            // Creek water surface. "Da Hill": the creek descends a long hillside (bed spans tens of metres),
+            // so a single flat plane floats in mid-air and a thin bed-hugging drape is invisible. Build a
+            // LOCALLY-flat fill instead: each water cell's surface = (lowest bed in a small neighbourhood =
+            // the channel bottom) + a few-feet depth. That fills the channel flat ACROSS its width while
+            // stepping DOWN the slope along the flow. Shared corner heights are averaged so the surface is
+            // continuous (no terracing). Logged for in-engine tuning.
+            Dictionary<int, float> waterCornerY = null;
+            const float k_WaterDepth = 0.7f;
+            int stride = n + 1;
             if (water)
             {
-                List<float> floorYs = new List<float>(2048);
+                Dictionary<int, float> bed = new Dictionary<int, float>(2048);
                 for (int wr = 0; wr < n; wr++)
                     for (int wc = 0; wc < n; wc++)
                         if (RoadBit(bits, n, wc, wr))
                         {
                             float cx = Mathf.Lerp(minX, maxX, (wc + 0.5f) / n);
                             float cz = Mathf.Lerp(minZ, maxZ, (wr + 0.5f) / n);
-                            floorYs.Add(GroundSpawn(new Vector3(cx, 0f, cz)).y);
+                            bed[wr * n + wc] = GroundSpawn(new Vector3(cx, 0f, cz)).y;
                         }
-                if (floorYs.Count == 0) return false;
-                floorYs.Sort();
-                float Pct(float p) => floorYs[Mathf.Clamp(Mathf.RoundToInt(p * (floorYs.Count - 1)), 0, floorYs.Count - 1)];
-                float floorMin = floorYs[0];
-                // Fill ~82% of the channel footprint (flat top), but guarantee a creek-like minimum depth
-                // at the deepest point so it never collapses back to a thin floor-hugging skin.
-                waterline = Mathf.Max(Pct(0.82f), floorMin + 0.6f);
-                Debug.Log($"[DaHilg] Creek water: cells={floorYs.Count} floorMin={floorMin:F2} median={Pct(0.5f):F2} p82={Pct(0.82f):F2} floorMax={floorYs[floorYs.Count - 1]:F2} -> waterline={waterline:F2} (maxDepth={waterline - floorMin:F2}m)");
+                if (bed.Count == 0) return false;
+                const int R = 3;
+                Dictionary<int, float> level = new Dictionary<int, float>(bed.Count);
+                foreach (KeyValuePair<int, float> kv in bed)
+                {
+                    int wr = kv.Key / n, wc = kv.Key % n;
+                    float localMin = float.PositiveInfinity;
+                    for (int dr = -R; dr <= R; dr++)
+                        for (int dc = -R; dc <= R; dc++)
+                            if (bed.TryGetValue((wr + dr) * n + (wc + dc), out float b) && b < localMin) localMin = b;
+                    level[kv.Key] = localMin + k_WaterDepth;
+                }
+                Dictionary<int, float> sum = new Dictionary<int, float>(level.Count * 2);
+                Dictionary<int, int> cnt = new Dictionary<int, int>(level.Count * 2);
+                void Acc(int k, float y)
+                {
+                    sum[k] = (sum.TryGetValue(k, out float s) ? s : 0f) + y;
+                    cnt[k] = (cnt.TryGetValue(k, out int c) ? c : 0) + 1;
+                }
+                foreach (KeyValuePair<int, float> kv in level)
+                {
+                    int wr = kv.Key / n, wc = kv.Key % n; float y = kv.Value;
+                    Acc(wr * stride + wc, y); Acc(wr * stride + wc + 1, y);
+                    Acc((wr + 1) * stride + wc, y); Acc((wr + 1) * stride + wc + 1, y);
+                }
+                waterCornerY = new Dictionary<int, float>(sum.Count);
+                foreach (KeyValuePair<int, float> kv in sum) waterCornerY[kv.Key] = kv.Value / cnt[kv.Key];
+                List<float> bv = new List<float>(bed.Values); bv.Sort();
+                List<float> lv = new List<float>(level.Values); lv.Sort();
+                Debug.Log($"[DaHilg] Creek water: cells={bed.Count} bed[min={bv[0]:F2} med={bv[bv.Count / 2]:F2} max={bv[bv.Count - 1]:F2}] level[min={lv[0]:F2} med={lv[lv.Count / 2]:F2} max={lv[lv.Count - 1]:F2}] depth={k_WaterDepth:F2}");
             }
 
             List<Vector3> vertices = new List<Vector3>(8192);
             List<int> triangles = new List<int>(12288);
-            for (int row = 0; row < n; row++)
+            if (water)
             {
-                int col = 0;
-                while (col < n)
-                {
-                    while (col < n && !RoadBit(bits, n, col, row)) col++;
-                    if (col >= n) break;
-                    int start = col;
-                    while (col < n && RoadBit(bits, n, col, row)) col++;
-                    int end = col;
-
-                    float x0 = Mathf.Lerp(minX, maxX, start / (float)n);
-                    float x1 = Mathf.Lerp(minX, maxX, end / (float)n);
-                    float z0 = Mathf.Lerp(minZ, maxZ, row / (float)n);
-                    float z1 = Mathf.Lerp(minZ, maxZ, (row + 1) / (float)n);
-
-                    if (water)
+                // one quad per water cell using the shared averaged corner heights -> continuous fill
+                for (int row = 0; row < n; row++)
+                    for (int col = 0; col < n; col++)
+                    {
+                        if (!RoadBit(bits, n, col, row)) continue;
+                        float x0 = Mathf.Lerp(minX, maxX, col / (float)n);
+                        float x1 = Mathf.Lerp(minX, maxX, (col + 1) / (float)n);
+                        float z0 = Mathf.Lerp(minZ, maxZ, row / (float)n);
+                        float z1 = Mathf.Lerp(minZ, maxZ, (row + 1) / (float)n);
+                        float y00 = waterCornerY[row * stride + col];
+                        float y10 = waterCornerY[row * stride + col + 1];
+                        float y01 = waterCornerY[(row + 1) * stride + col];
+                        float y11 = waterCornerY[(row + 1) * stride + col + 1];
                         AddSurfaceQuad(vertices, triangles,
-                            new Vector3(x0, waterline, z0), new Vector3(x1, waterline, z0),
-                            new Vector3(x1, waterline, z1), new Vector3(x0, waterline, z1));
-                    else
+                            new Vector3(x0, y00, z0), new Vector3(x1, y10, z0),
+                            new Vector3(x1, y11, z1), new Vector3(x0, y01, z1));
+                    }
+            }
+            else
+            {
+                for (int row = 0; row < n; row++)
+                {
+                    int col = 0;
+                    while (col < n)
+                    {
+                        while (col < n && !RoadBit(bits, n, col, row)) col++;
+                        if (col >= n) break;
+                        int start = col;
+                        while (col < n && RoadBit(bits, n, col, row)) col++;
+                        int end = col;
+
+                        float x0 = Mathf.Lerp(minX, maxX, start / (float)n);
+                        float x1 = Mathf.Lerp(minX, maxX, end / (float)n);
+                        float z0 = Mathf.Lerp(minZ, maxZ, row / (float)n);
+                        float z1 = Mathf.Lerp(minZ, maxZ, (row + 1) / (float)n);
+
                         AddSurfaceQuad(vertices, triangles,
                             GroundSpawn(new Vector3(x0, 0f, z0)) + Vector3.up * lift,
                             GroundSpawn(new Vector3(x1, 0f, z0)) + Vector3.up * lift,
                             GroundSpawn(new Vector3(x1, 0f, z1)) + Vector3.up * lift,
                             GroundSpawn(new Vector3(x0, 0f, z1)) + Vector3.up * lift);
+                    }
                 }
             }
 
