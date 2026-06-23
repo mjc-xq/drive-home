@@ -57,8 +57,14 @@ export function makeGeo(D, { C, LAT0, LON0, COSLAT }) {
 export function buildTerrainMesh({ D, geo, opts = {} }) {
   const coreHalf = opts.coreHalf ?? 200;
   const farStep = opts.farStep ?? 4;
-  const texCoreHalf = opts.texCoreHalf ?? 300;
-  const { demHeight, demRect } = geo;
+  // opts.patchHalf clamps the level to ±patchHalf m. The fetched DEM rect can be far larger than the
+  // playable neighborhood (dahill is ±600m); clamping cuts the mesh + texture extent + the returned
+  // rect, so roads/buildings/trees/ground all use the smaller extent (real content beyond it is dropped).
+  const _ph = Number.isFinite(opts.patchHalf) ? opts.patchHalf : Infinity;
+  const texCoreHalf = Math.min(opts.texCoreHalf ?? 300, _ph);
+  const { demHeight } = geo;
+  const _dr = geo.demRect;
+  const demRect = { x0: Math.max(_dr.x0, -_ph), x1: Math.min(_dr.x1, _ph), z0: Math.max(_dr.z0, -_ph), z1: Math.min(_dr.z1, _ph) };
   const { x0: X0, x1: X1, z0: Z0, z1: Z1 } = demRect;
   // snap the patch extent to the far grid so cells tile cleanly
   const gx0 = Math.ceil(X0 / farStep) * farStep, gx1 = Math.floor(X1 / farStep) * farStep;

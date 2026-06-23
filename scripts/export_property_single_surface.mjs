@@ -52,7 +52,7 @@ const LEVEL = process.argv[2] || 'dahill';
 // Per-level folder layout: exports/<slug>/{<slug>.level.glb (the final master at top), data/ (inputs +
 // regenerable atlases), logs/, game/}. dahill keeps its working scene at src/assets/scene.json.
 const SETS = {
-  dahill:  { scene: 'src/assets/scene.json',          dir: 'exports/dahill',  slug: 'dahill' },
+  dahill:  { scene: 'src/assets/scene.json',          dir: 'exports/dahill',  slug: 'dahill', patchHalf: 400 },
   canyon:  { scene: 'exports/canyon/data/scene.json',  dir: 'exports/canyon',  slug: 'canyon' },
   stanton: { scene: 'exports/stanton/data/scene.json', dir: 'exports/stanton', slug: 'stanton' },
   meemaw:  { scene: 'exports/meemaw/data/scene.json',  dir: 'exports/meemaw',  slug: 'meemaw' },
@@ -120,7 +120,7 @@ const geo = makeGeo(D, { C, LAT0, LON0, COSLAT });
 // ONE ground texture region over the whole DEM rect (texCoreHalf covers the full patch) so there
 // is NO core/far texture boundary — the visible white seam at ±300 m is gone by construction.
 // The mesh stays adaptive (1 m core + 4 m far) but samples a single texture/material.
-const terrain = buildTerrainMesh({ D, geo, opts: { uniformStep: 2, texCoreHalf: 600 } });
+const terrain = buildTerrainMesh({ D, geo, opts: { uniformStep: 2, texCoreHalf: 600, patchHalf: SET.patchHalf } });
 const terrainAt = terrain.terrainAt;
 console.log(`terrain: ${terrain.stats.verts} verts, ${terrain.stats.tris} tris ` +
   `(core ${terrain.stats.coreTris}, far ${terrain.stats.farTris}), Y[${terrain.stats.minY.toFixed(1)}..${terrain.stats.maxY.toFixed(1)}]`);
