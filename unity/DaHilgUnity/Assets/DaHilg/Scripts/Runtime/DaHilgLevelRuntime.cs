@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using GLTFast;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.Rendering;
 
 namespace DaHilg
@@ -15,6 +16,9 @@ namespace DaHilg
         const float k_SpawnProbeHeight = 80f;
         const float k_SpawnProbeDistance = 220f;
         const float k_SpawnGroundSkin = 0.08f;
+        // Max samples per axis for the heightfield ground collider (mirrors the master terrain
+        // collider decimation target in BuildSimplifiedGridColliderMesh). 160x160 = ~51k tris.
+        const int k_HeightfieldColliderSide = 160;
         static readonly int s_BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int s_ColorId = Shader.PropertyToID("_Color");
         static readonly int s_BaseMapId = Shader.PropertyToID("_BaseMap");
@@ -80,6 +84,10 @@ namespace DaHilg
         // by the caller's level root and destroyed alongside it).
         static GltfImport s_ActiveImport;
         static GltfImport s_ActiveOverlayImport;
+        // Separated game set imports (one GltfImport per layer GLB: terrain/roads/buildings/...).
+        // Tracked so their CPU buffers are freed on the next level switch, exactly like the single
+        // master import above.
+        static readonly List<GltfImport> s_ActiveGameSetImports = new List<GltfImport>();
 
         public static bool IsStreamedLevel(string slug)
         {
@@ -90,7 +98,16 @@ namespace DaHilg
         // http(s) URL, on desktop a file path; the URL-based GltfImport.Load handles both.
         public static string StreamGlbUrl(string slug)
         {
-            string file = slug + ".glb";
+            return StreamAssetUrl(slug + ".glb");
+        }
+
+        // Resolve an arbitrary StreamingAssets-relative path (e.g. "dahill/terrain.glb" or
+        // "dahill/manifest.json") to a fetchable URL. Generalised from StreamGlbUrl so the
+        // separated game set (StreamingAssets/<slug>/<file>) reuses the SAME WebGL absolute-URL
+        // resolution that the single-master path already relies on. `relativePath` uses '/'.
+        public static string StreamAssetUrl(string relativePath)
+        {
+            string file = relativePath;
 #if UNITY_WEBGL && !UNITY_EDITOR
             // glTFast needs an ABSOLUTE url to fetch on WebGL. Application.streamingAssetsPath may be
             // relative ("StreamingAssets") or root-relative ("/.../StreamingAssets"); resolve it
@@ -122,6 +139,11 @@ namespace DaHilg
         public static void ReleaseStreamedImport()
         {
             if (s_ActiveOverlayImport != null) { s_ActiveOverlayImport.Dispose(); s_ActiveOverlayImport = null; }
+            for (int i = 0; i < s_ActiveGameSetImports.Count; i++)
+            {
+                s_ActiveGameSetImports[i]?.Dispose();
+            }
+            s_ActiveGameSetImports.Clear();
             if (s_ActiveImport == null) return;
             s_ActiveImport.Dispose();
             s_ActiveImport = null;
@@ -141,6 +163,15 @@ namespace DaHilg
             }
 
             ReleaseStreamedImport();
+
+            // Prefer the compressed, SEPARATED game set (StreamingAssets/<slug>/manifest.json + per-layer
+            // GLBs + heightfield.bin) when present: it is ~6x smaller than the single master and builds
+            // collision from a heightfield + box proxies instead of a full terrain mesh collider. If the
+            // manifest is missing or any required layer fails, fall straight through to the single-master
+            // path below — the master remains the safety net so a missing/partial game set never bricks a level.
+            bool gameSetReady = false;
+            yield return LoadGameSetLevel(profile, ok => gameSetReady = ok, onReady);
+            if (gameSetReady) yield break;
 
             // Dedicated container so the streamed scene root is unambiguous (no reliance on sibling
             // ordering) and the caller can Destroy it cleanly on the next switch.
@@ -199,15 +230,359 @@ namespace DaHilg
             }
         }
 
-        static async Task<GltfImport> LoadStreamedGltfAsync(string slug, Transform parent)
+        // =====================================================================================
+        // SEPARATED GAME SET (StreamingAssets/<slug>/): a manifest.json describing per-layer GLBs
+        // (terrain/roads/buildings/trees/creek/fences/collision) + a uint16 heightfield.bin. Loaded
+        // additively under one root so layers stay separable (toggleable roads/trees/fences) and
+        // collision is a lightweight heightfield mesh + the box-proxy collision.glb — NOT a full
+        // terrain mesh collider. Reports success via onResult(true) and hands the root to onReady;
+        // on ANY failure it cleans up and reports onResult(false) so the caller uses the master path.
+        // -------------------------------------------------------------------------------------
+        static IEnumerator LoadGameSetLevel(DaHilgLevelProfile profile, Action<bool> onResult, Action<GameObject> onReady)
         {
-            string url = StreamGlbUrl(slug);
+            string manifestUrl = StreamAssetUrl(profile.Slug + "/manifest.json");
+            Task<string> manifestTask = FetchTextAsync(manifestUrl);
+            while (!manifestTask.IsCompleted) yield return null;
+            string manifestJson = manifestTask.IsFaulted ? null : manifestTask.Result;
+            if (string.IsNullOrEmpty(manifestJson)) { onResult(false); yield break; }
+
+            GameSetManifest manifest = ParseGameSetManifest(manifestJson);
+            if (manifest == null || manifest.Layers.Count == 0) { onResult(false); yield break; }
+
+            GameObject root = new GameObject("Level_" + profile.Slug);
+
+            // Load each layer GLB as a separable child of root. Required layers (terrain/buildings/
+            // collision) must load or the whole game set is abandoned; optional layers (roads/trees/
+            // creek/fences) just log + skip. Each lands under its own child so SetLayerVisible can
+            // toggle the toggleable ones without disturbing geometry.
+            foreach (GameSetLayer layer in manifest.Layers)
+            {
+                GameObject layerRoot = new GameObject(layer.Name);
+                layerRoot.transform.SetParent(root.transform, false);
+                Task<GltfImport> layerTask = LoadStreamedGltfAsync(profile.Slug + "/" + layer.File, layerRoot.transform, url: true);
+                while (!layerTask.IsCompleted) yield return null;
+                GltfImport import = layerTask.IsFaulted ? null : layerTask.Result;
+                if (import == null)
+                {
+                    UnityEngine.Object.Destroy(layerRoot);
+                    if (layer.Required)
+                    {
+                        Debug.LogWarning("[DaHilg] Game set required layer '" + layer.Name + "' failed for '" +
+                            profile.Slug + "'; abandoning game set, using single master.");
+                        ReleaseStreamedImport();
+                        UnityEngine.Object.Destroy(root);
+                        onResult(false);
+                        yield break;
+                    }
+                    continue;
+                }
+                s_ActiveGameSetImports.Add(import);
+            }
+
+            ApplyLevelOffset(root, profile);
+
+            // Fetch the heightfield payload (raw little-endian uint16, row-major rows*cols) now that the
+            // header is parsed. A missing/short payload is non-fatal — BuildHeightfieldCollider no-ops and
+            // ground collision falls back to the building box proxies (player just lacks terrain ground
+            // collision, which the master path would have provided; logged inside the builder).
+            if (manifest.Heightfield != null && manifest.Heightfield.Cols >= 2 && manifest.Heightfield.Rows >= 2)
+            {
+                Task<byte[]> hfTask = FetchBytesAsync(StreamAssetUrl(profile.Slug + "/heightfield.bin"));
+                while (!hfTask.IsCompleted) yield return null;
+                manifest.Heightfield.Data = hfTask.IsFaulted ? null : hfTask.Result;
+            }
+
+            // Collision: run the standard collider/material prep FIRST (it resets s_LevelColliders and
+            // wires the building box proxies (collision.glb -> Collision_Buildings) + solid walls), THEN
+            // add the heightfield ground collider into the now-populated registry. Order matters:
+            // PrepareLevelColliders clears s_LevelColliders, so adding the heightfield before it would
+            // wipe the heightfield entry. The terrain visual GLB carries no Collision_ prefix, so
+            // PrepareLevelColliders treats the box proxies as the collision source and does NOT bake a
+            // full mesh collider over the (decimated) terrain — the heightfield owns ground collision.
+            PrepareLevelColliders(root);
+            BuildHeightfieldCollider(root, manifest.Heightfield);
+            BuildPavedOverlay(root, profile);
+
+            // Vegetation/water overlay — same as the master path. Optional; absence is fine.
+            GameObject overlayRoot = new GameObject("Overlay");
+            overlayRoot.transform.SetParent(root.transform, false);
+            Task<GltfImport> overlayTask = LoadStreamedGltfAsync(profile.Slug + "_overlay", overlayRoot.transform);
+            while (!overlayTask.IsCompleted) yield return null;
+            GltfImport overlayImport = overlayTask.IsFaulted ? null : overlayTask.Result;
+            if (overlayImport != null)
+            {
+                s_ActiveOverlayImport = overlayImport;
+                PrepareLevelColliders(overlayRoot, addColliders: false);
+                GroundVegetationOverlay(overlayRoot, profile.WaterHeightOffset);
+            }
+            else if (overlayRoot != null)
+            {
+                UnityEngine.Object.Destroy(overlayRoot);
+            }
+
+            Debug.Log("[DaHilg] Loaded separated game set for '" + profile.Slug + "' (" +
+                manifest.Layers.Count + " layers, heightfield " +
+                (manifest.Heightfield != null ? manifest.Heightfield.Cols + "x" + manifest.Heightfield.Rows : "none") + ").");
+            onReady?.Invoke(root);
+            onResult(true);
+        }
+
+        // Build a MeshCollider from the uint16 heightfield.bin (row-major grid[r*cols+c]; col->world X,
+        // row->world Z; value dequantized linearly across [minY,maxY]). The grid is in the SAME pre-offset
+        // frame as the layer GLBs, so parenting the collider under `root` (which carries -LevelOffset)
+        // lands it exactly on the visual terrain. Added under root as a non-rendered collider object and
+        // registered as a level collider so TryFindGround/spawn probing see it. No-op if no heightfield.
+        static void BuildHeightfieldCollider(GameObject root, GameSetHeightfield hf)
+        {
+            if (root == null || hf == null || hf.Cols < 2 || hf.Rows < 2) return;
+            if (hf.Data == null || hf.Data.Length < hf.Cols * hf.Rows * 2)
+            {
+                Debug.LogWarning("[DaHilg] Heightfield data missing/short for game set; ground collision will rely on box proxies only.");
+                return;
+            }
+
+            int cols = hf.Cols, rows = hf.Rows;
+            float posting = hf.Posting > 0f ? hf.Posting : 1f;
+            float originX = hf.OriginX, originZ = hf.OriginZ;
+            float minY = hf.MinY, span = Mathf.Max(1e-6f, hf.MaxY - hf.MinY);
+
+            // Decimate to at most k_HeightfieldColliderSide samples per axis. dahill's 600x600 grid
+            // (=2.1M collider tris) is needlessly dense for capsule/ray queries; the master terrain
+            // collider path decimates to ~160 per axis (BuildSimplifiedGridColliderMesh) for the same
+            // reason. Sampling stride keeps the full extent (always includes the last row/col) so the
+            // collider spans the whole terrain. The grid stays REGULAR so a stride sample is exact.
+            int stepC = Mathf.Max(1, Mathf.CeilToInt((cols - 1) / (float)(k_HeightfieldColliderSide - 1)));
+            int stepR = Mathf.Max(1, Mathf.CeilToInt((rows - 1) / (float)(k_HeightfieldColliderSide - 1)));
+            List<int> sampleC = SampleGridAxis(cols, stepC);
+            List<int> sampleR = SampleGridAxis(rows, stepR);
+            int outW = sampleC.Count, outH = sampleR.Count;
+
+            Vector3[] vertices = new Vector3[outW * outH];
+            for (int ri = 0; ri < outH; ri++)
+            {
+                int r = sampleR[ri];
+                for (int ci = 0; ci < outW; ci++)
+                {
+                    int c = sampleC[ci];
+                    int idx = r * cols + c;
+                    int lo = hf.Data[idx * 2];
+                    int hi = hf.Data[idx * 2 + 1]; // little-endian uint16
+                    float y = minY + ((lo | (hi << 8)) / 65535f) * span;
+                    vertices[ri * outW + ci] = new Vector3(originX + c * posting, y, originZ + r * posting);
+                }
+            }
+
+            int[] triangles = new int[(outW - 1) * (outH - 1) * 6];
+            int t = 0;
+            for (int r = 0; r < outH - 1; r++)
+            {
+                for (int c = 0; c < outW - 1; c++)
+                {
+                    int a = r * outW + c;
+                    int b = a + 1;
+                    int d = a + outW;
+                    int e = d + 1;
+                    // Winding so the surface normal points +Y (up).
+                    triangles[t++] = a; triangles[t++] = d; triangles[t++] = b;
+                    triangles[t++] = b; triangles[t++] = d; triangles[t++] = e;
+                }
+            }
+
+            Mesh mesh = new Mesh
+            {
+                name = "Collision_Terrain_Heightfield",
+                indexFormat = vertices.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16
+            };
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+            mesh.RecalculateBounds();
+
+            GameObject colliderObject = new GameObject("Collision_Terrain_Heightfield");
+            colliderObject.transform.SetParent(root.transform, false);
+            colliderObject.isStatic = true;
+            MeshCollider collider = colliderObject.AddComponent<MeshCollider>();
+            collider.sharedMesh = mesh;
+            collider.convex = false;
+            s_LevelColliders.Add(collider);
+        }
+
+        // Decimate a heightfield axis of `count` postings to indices [0, step, 2*step, ..., count-1],
+        // always including the final index so the sampled collider spans the full extent.
+        static List<int> SampleGridAxis(int count, int step)
+        {
+            List<int> samples = new List<int>(count / Mathf.Max(1, step) + 2);
+            for (int i = 0; i < count; i += step) samples.Add(i);
+            if (samples[samples.Count - 1] != count - 1) samples.Add(count - 1);
+            return samples;
+        }
+
+        // ---- manifest model + parser ----------------------------------------------------------
+        sealed class GameSetManifest
+        {
+            public readonly List<GameSetLayer> Layers = new List<GameSetLayer>();
+            public GameSetHeightfield Heightfield;
+        }
+
+        sealed class GameSetLayer
+        {
+            public string Name;
+            public string File;
+            public bool Required;
+            public bool Toggleable;
+            public int Priority;
+        }
+
+        sealed class GameSetHeightfield
+        {
+            public int Cols, Rows;
+            public float Posting;
+            public float OriginX, OriginZ;
+            public float MinY, MaxY;
+            public byte[] Data; // filled lazily inside LoadGameSetLevel via FetchBytesAsync
+        }
+
+        // Parse the manifest with the same lightweight regex approach used elsewhere in this file
+        // (ExtractFloat/ExtractBase64) rather than pulling in a JSON dependency. Reads each layer's
+        // {name,file,required,toggleable,priority} from the "layers":[ ... ] array and the heightfield
+        // header. The heightfield byte payload is fetched separately (see LoadGameSetLevel). Returns
+        // null only when there is no usable layer list.
+        static GameSetManifest ParseGameSetManifest(string json)
+        {
+            try
+            {
+                GameSetManifest manifest = new GameSetManifest();
+
+                Match layersBlock = Regex.Match(json, "\"layers\"\\s*:\\s*\\[(.*?)\\]\\s*,\\s*\"loadOrder\"", RegexOptions.Singleline);
+                string layersText = layersBlock.Success ? layersBlock.Groups[1].Value : null;
+                if (string.IsNullOrEmpty(layersText)) return null;
+
+                foreach (Match obj in Regex.Matches(layersText, "\\{(.*?)\\}", RegexOptions.Singleline))
+                {
+                    string body = obj.Groups[1].Value;
+                    string file = MatchString(body, "file");
+                    if (string.IsNullOrEmpty(file)) continue;
+                    manifest.Layers.Add(new GameSetLayer
+                    {
+                        Name = MatchString(body, "name"),
+                        File = file,
+                        Required = MatchBool(body, "required"),
+                        Toggleable = MatchBool(body, "toggleable"),
+                        Priority = Mathf.RoundToInt(MatchNumber(body, "priority", 0f)),
+                    });
+                }
+                if (manifest.Layers.Count == 0) return null;
+
+                Match hfBlock = Regex.Match(json, "\"heightfield\"\\s*:\\s*\\{(.*?)\\}\\s*,\\s*\"layers\"", RegexOptions.Singleline);
+                if (hfBlock.Success)
+                {
+                    string hf = hfBlock.Groups[1].Value;
+                    float[] origin = MatchNumberArray(hf, "origin");
+                    manifest.Heightfield = new GameSetHeightfield
+                    {
+                        Cols = Mathf.RoundToInt(MatchNumber(hf, "cols", 0f)),
+                        Rows = Mathf.RoundToInt(MatchNumber(hf, "rows", 0f)),
+                        Posting = MatchNumber(hf, "posting", 1f),
+                        OriginX = origin != null && origin.Length > 0 ? origin[0] : 0f,
+                        OriginZ = origin != null && origin.Length > 1 ? origin[1] : 0f,
+                        MinY = MatchNumber(hf, "minY", 0f),
+                        MaxY = MatchNumber(hf, "maxY", 0f),
+                    };
+                }
+
+                return manifest;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[DaHilg] Game set manifest parse failed: " + e.Message);
+                return null;
+            }
+        }
+
+        static string MatchString(string json, string key)
+        {
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([^\"]*)\"");
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
+        static bool MatchBool(string json, string key)
+        {
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(true|false)");
+            return m.Success && m.Groups[1].Value == "true";
+        }
+
+        static float MatchNumber(string json, string key, float fallback)
+        {
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+            if (m.Success && float.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float v)) return v;
+            return fallback;
+        }
+
+        static float[] MatchNumberArray(string json, string key)
+        {
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\\[([^\\]]*)\\]");
+            if (!m.Success) return null;
+            MatchCollection nums = Regex.Matches(m.Groups[1].Value, "-?\\d+(?:\\.\\d+)?");
+            float[] result = new float[nums.Count];
+            for (int i = 0; i < nums.Count; i++)
+            {
+                float.TryParse(nums[i].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out result[i]);
+            }
+            return result;
+        }
+
+        // Fetch a text resource (manifest.json) from a StreamingAssets URL. UnityWebRequest handles
+        // both the WebGL http(s) path and the desktop file:// path uniformly.
+        static async Task<string> FetchTextAsync(string url)
+        {
+            try
+            {
+                using (UnityWebRequest request = UnityWebRequest.Get(url))
+                {
+                    UnityWebRequestAsyncOperation op = request.SendWebRequest();
+                    while (!op.isDone) await Task.Yield();
+                    if (request.result != UnityWebRequest.Result.Success) return null;
+                    return request.downloadHandler.text;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[DaHilg] FetchText failed for " + url + ": " + e.Message);
+                return null;
+            }
+        }
+
+        // Fetch a binary resource (heightfield.bin) from a StreamingAssets URL.
+        static async Task<byte[]> FetchBytesAsync(string url)
+        {
+            try
+            {
+                using (UnityWebRequest request = UnityWebRequest.Get(url))
+                {
+                    UnityWebRequestAsyncOperation op = request.SendWebRequest();
+                    while (!op.isDone) await Task.Yield();
+                    if (request.result != UnityWebRequest.Result.Success) return null;
+                    return request.downloadHandler.data;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[DaHilg] FetchBytes failed for " + url + ": " + e.Message);
+                return null;
+            }
+        }
+
+        // `url == false` (default): `slug` is a level slug and the URL is <slug>.glb (legacy callers).
+        // `url == true`: `slug` is a StreamingAssets-relative path that ALREADY includes the extension
+        // (e.g. "dahill/terrain.glb"), resolved verbatim — used by the separated game set loader.
+        static async Task<GltfImport> LoadStreamedGltfAsync(string slug, Transform parent, bool url = false)
+        {
+            string requestUrl = url ? StreamAssetUrl(slug) : StreamGlbUrl(slug);
             GltfImport import = null;
             try
             {
                 // Attach glTFast's ConsoleLogger so its own failure reason surfaces in the browser console.
                 import = new GltfImport(null, null, null, new GLTFast.Logging.ConsoleLogger());
-                bool loaded = await import.Load(url);
+                bool loaded = await import.Load(requestUrl);
                 if (!loaded)
                 {
                     import.Dispose();
@@ -225,7 +600,7 @@ namespace DaHilg
             }
             catch (Exception e)
             {
-                Debug.LogError("[DaHilg] glTFast stream load failed for '" + slug + "' at " + url + ": " + e.GetType().Name + ": " + e.Message);
+                Debug.LogError("[DaHilg] glTFast stream load failed for '" + slug + "' at " + requestUrl + ": " + e.GetType().Name + ": " + e.Message);
                 import?.Dispose();
                 return null;
             }

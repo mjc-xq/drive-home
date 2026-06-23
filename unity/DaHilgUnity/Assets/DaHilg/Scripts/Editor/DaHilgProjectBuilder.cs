@@ -1734,6 +1734,7 @@ body {
                 // mesh into the WebGL data file. Geometry validation falls back to the prefab.
                 StageStreamingLevelGlb(slug, levelGlbPath);
                 StageStreamingOverlayGlb(slug);
+                StageStreamingGameSet(slug);
                 profile.LevelPrefab = null;
             }
             else
@@ -2870,6 +2871,41 @@ body {
             Directory.CreateDirectory(streamingDir);
             File.Copy(overlay, Path.Combine(streamingDir, slug + "_overlay.glb"), true);
             Debug.Log("[DaHilg] Staged vegetation/water overlay for '" + slug + "'.");
+        }
+
+        // Ship the compressed, SEPARATED game set (exports/<slug>/game/: per-layer GLBs +
+        // heightfield.bin + manifest.json built by scripts/build_level_game.mjs) to
+        // StreamingAssets/<slug>/. The runtime (DaHilgLevelRuntime.LoadGameSetLevel) PREFERS this set
+        // over the single StreamingAssets/<slug>.glb master and builds heightfield + box-proxy collision
+        // from it. Additive + optional: a missing game set just means the runtime uses the master GLB,
+        // so this never blocks a build. Mirrors stageGameSet() in build_dahilg_unity_assets.mjs so a
+        // plain node build and a Unity editor build stage the same files.
+        static readonly string[] s_GameSetFiles =
+        {
+            "manifest.json", "heightfield.bin",
+            "terrain.glb", "roads.glb", "buildings.glb", "trees.glb", "creek.glb", "fences.glb", "collision.glb"
+        };
+        static void StageStreamingGameSet(string slug)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
+            string repoRoot = Directory.GetParent(Directory.GetParent(projectRoot)!.FullName)!.FullName;
+            string gameDir = Path.Combine(repoRoot, "exports", slug, "game");
+            string manifest = Path.Combine(gameDir, "manifest.json");
+            if (!File.Exists(manifest)) return; // no game set — runtime uses the single master GLB
+
+            string destDir = Path.Combine(Application.streamingAssetsPath, slug);
+            // Clear a stale set so a layer removed upstream doesn't linger in the build output.
+            if (Directory.Exists(destDir)) Directory.Delete(destDir, true);
+            Directory.CreateDirectory(destDir);
+            int copied = 0;
+            foreach (string f in s_GameSetFiles)
+            {
+                string src = Path.Combine(gameDir, f);
+                if (!File.Exists(src)) continue; // optional layers (roads/trees/creek/fences) may be absent
+                File.Copy(src, Path.Combine(destDir, f), true);
+                copied++;
+            }
+            Debug.Log("[DaHilg] Staged separated game set for '" + slug + "' (" + copied + " files).");
         }
 
         // Load a streamed level's source GLB prefab straight from Assets (used for editor-time
