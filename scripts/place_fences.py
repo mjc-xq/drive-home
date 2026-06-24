@@ -90,37 +90,37 @@ def terrain_at(X, Z):
 #   interior divider (shared edge, dropped from ring):
 #     (-13.51,-0.98) (-7.64,-5.02) (-3.47,-10.29) (0.06,-17.9)            <- PINK picket
 #
-# --- ACTUAL fenced-yard lines (owner-annotated 2026-06, traced in Blender over the
-# aerial) -----------------------------------------------------------------------
-# The earlier runs traced the legal PARCEL UNION (too big — it walled off the front
-# setback/driveway). These runs trace the REAL fence positions the owner drew as red
-# annotation strokes, snapped to shared corners. Blender stroke (Xb,Yb) -> world
-# (x = Xb, z = -Yb), per emit()'s glTF<->Blender mapping.
+# --- ACTUAL fenced-yard lines (owner-annotated 2026-06, 2nd pass over the aerial) ----
+# The HOUSE is not touched here — only fence objects are placed. Blender stroke (Xb,Yb)
+# -> world (x = Xb, z = -Yb), per emit()'s glTF<->Blender mapping.
 #
-# The yard closes as: NW corner --R7 WEST--> front-of-house --R3 FRONT--> [front gate
-# gap] --kept SE/east side--> back-east corner --R2 BACK--> NW corner, with R1 as the
-# interior picket divider spanning the west line to the east line. The SE/east side is
-# the one fence the owner did NOT redraw (it was already right), so it is KEPT verbatim
-# from the parcel boundary; everything else is replaced by the red lines.
+# Layout the owner drew + described:
+#   - W + E side fences run ON the property lines (the NW + SE parcel edges).
+#   - BACK fence is the owner's NEW back edge (cuts in from the parcel rear corner).
+#   - The W fence runs to ~the front of the house; the gap from its end to the house is
+#     the side GATE (no asset -> represented as an opening to the house wall).
+#   - The E side leaves the front open as the DRIVEWAY to the garage.
+#   - LOW FRONT picket: house front -> straight out -> 90° across the front -> 90° back
+#     to the garage corner (~6.9,6.9). Picket = the low fence.
+#   - DIVIDER picket spans the full width so it MEETS both side fences (no back-yard gap).
 RUNS = [
-    # WEST side (creek side): NW corner -> down to the front of the house   [red R7]
+    # WEST property-line fence (NW parcel edge): back-west corner -> ~front of house.
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[-27.5, -19.0], [-13.4, -0.1], [-6.6, 9.4]]},
-    # FRONT wrap (south of house): front-west -> front-east, ENDS before the entrance
-    # gate (gap between here and the kept SE side's front corner)              [red R3]
+     "polyline": [[-22.2, -13.25], [-13.51, -0.98], [-6.3, 9.3]]},
+    # BACK fence (owner's new back edge): west corner -> back-east corner.
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[-6.6, 9.4], [-5.0, 8.1], [0.7, 14.4], [6.2, 7.0]]},
-    # SE / EAST side: front-east corner -> back-east corner. KEPT from the parcel
-    # boundary (the one side the owner did not redraw). The [6.2,7.0]->[18.26,5.17]
-    # gap left of it is the FRONT ENTRANCE GATE.
+     "polyline": [[-22.2, -13.25], [-17.09, -39.75]]},
+    # EAST property-line fence (SE parcel edge): back-east corner -> front-east
+    # (driveway to the garage left open at the front).
     {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[18.26, 5.17], [0.06, -17.9], [-17.09, -39.75]]},
-    # BACK / north: back-east corner -> NW corner (closes the perimeter)      [red R2]
-    {"name": "FenceGreen", "glb": f"{DL}/Fence Section.glb",
-     "polyline": [[-17.2, -39.7], [-21.0, -29.0], [-27.5, -19.0]]},
-    # INTERIOR picket divider: west line -> east line                         [red R1]
+     "polyline": [[-17.09, -39.75], [0.06, -17.9], [18.26, 5.17]]},
+    # LOW FRONT picket: house front -> out -> across in front of the door -> garage
+    # corner. Right-angled rectangle aligned to the house front, ~4 m bump-out.
     {"name": "FencePink", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
-     "polyline": [[-16.3, -5.8], [-9.0, -13.0], [-3.2, -21.2]]},
+     "polyline": [[-6.36, 8.95], [-5.75, 12.9], [7.55, 10.84], [6.94, 6.89]]},
+    # INTERIOR picket divider: spans the full width to MEET both side fences.
+    {"name": "FencePink", "glb": f"{DL}/Picket fence.glb", "even_fit": True,
+     "polyline": [[-16.3, -4.92], [-3.2, -22.05]]},
 ]
 
 # per-asset unit scale (-> meters), whether the native run axis is Y not X, and a
