@@ -331,26 +331,25 @@ def place(run):
     src, L = templates[os.path.basename(run["glb"])]
     name, pl = run["name"], run["polyline"]
     n = counts.get(name, 0)
-    # Treat the WHOLE run as one continuous path and tile EQUAL panels along arc
-    # length. This absorbs tiny OSM/parcel micro-segments (the red creek run has two
-    # ~0.35 m stubs) into full-length panels instead of crushing each segment to a
-    # spiky fragment, and gives clean even panels that terminate exactly at the end.
-    # Cap the panel length at PANEL_MAX so panels stay short enough to TRACK CORNERS
-    # AND the terrain (each panel is a straight chord between two grade samples; a long
-    # chord floats over bumps / buries in dips between its endpoints). 3 m hugs a yard's
-    # gentle undulation closely while keeping picket spacing believable.
+    # Tile EQUAL panels WITHIN EACH SEGMENT so every polyline vertex (corner) is a panel
+    # boundary -> corners stay SHARP. (Tiling the whole run by arc length let a single panel
+    # straddle a corner as a diagonal chord, which rounded off the intentional 90° front-fence
+    # corners. Gentle property-line bends hid it; the small front rectangle exposed it.)
+    # PANEL_MAX caps the panel chord so panels still hug the terrain between grade samples.
     PANEL_MAX = 3.0
-    cum, total = cum_lengths(pl)
-    if total < 1e-6:
-        counts[name] = n
-        return
     target = min(L, PANEL_MAX)
-    count = max(1, round(total / target))
-    panel = total / count
-    for c in range(count):
-        n += 1
-        emit(src, name, point_at(pl, cum, c * panel),
-             point_at(pl, cum, (c + 1) * panel), L, n)
+    for k in range(len(pl) - 1):
+        a, b = pl[k], pl[k + 1]
+        seg = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg < 1e-6:
+            continue
+        count = max(1, round(seg / target))
+        for c in range(count):
+            t0, t1 = c / count, (c + 1) / count
+            p0 = (a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0)
+            p1 = (a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1)
+            n += 1
+            emit(src, name, p0, p1, L, n)
     counts[name] = n
 
 
